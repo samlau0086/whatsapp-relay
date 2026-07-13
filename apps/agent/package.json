@@ -1,0 +1,23 @@
+{
+  "name": "@relaydesk/windows-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "npm run build && electron .",
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "6.7.23",
+    "electron": "43.1.0",
+    "pino": "9.7.0",
+    "ws": "8.18.2"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.30",
+    "@types/ws": "8.18.1",
+    "typescript": "5.8.3"
+  }
+}

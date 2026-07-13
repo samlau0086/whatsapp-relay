@@ -1,0 +1,12 @@
+INSERT INTO whatsapp_accounts (id,display_name,phone_e164,status,last_connected_at) VALUES
+('10000000-0000-4000-8000-000000000001','新加坡销售','+6581238890','online',now()),
+('10000000-0000-4000-8000-000000000002','美国售后','+14155550188','online',now())
+ON CONFLICT DO NOTHING;
+
+INSERT INTO contacts (id,account_id,wa_jid,phone_e164,display_name) VALUES
+('20000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000001','6581238890@s.whatsapp.net','+6581238890','Pharah House')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO conversations (id,account_id,contact_id,last_message_at,unread_count) VALUES
+('30000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000001','20000000-0000-4000-8000-000000000001',now(),2)
+ON CONFLICT DO NOTHING;

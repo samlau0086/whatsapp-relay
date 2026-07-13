@@ -1,0 +1,55 @@
+name: relaydesk
+services:
+  postgres:
+    image: postgres:17.5-alpine
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"], interval: 10s, timeout: 5s, retries: 10 }
+  redis:
+    image: redis:8.0.2-alpine
+    restart: unless-stopped
+    command: ["redis-server","--appendonly","yes","--appendfsync","everysec"]
+    volumes: ["redis-data:/data"]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 10s, timeout: 3s, retries: 10 }
+  minio:
+    image: minio/minio:RELEASE.2025-05-24T17-08-30Z
+    restart: unless-stopped
+    env_file: .env
+    command: server /data --console-address :9001
+    volumes: ["minio-data:/data"]
+    healthcheck: { test: ["CMD", "mc", "ready", "local"], interval: 10s, timeout: 5s, retries: 10 }
+  minio-init:
+    image: minio/mc:RELEASE.2025-05-21T01-59-54Z
+    depends_on: { minio: { condition: service_healthy } }
+    env_file: .env
+    entrypoint: ["/bin/sh","-c"]
+    command: ["mc alias set relay http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD && mc mb --ignore-existing relay/relay-media"]
+  api:
+    build: ./services/api
+    restart: unless-stopped
+    env_file: .env
+    depends_on: { postgres: { condition: service_healthy }, minio-init: { condition: service_completed_successfully }, redis: { condition: service_healthy } }
+    ports: ["8080:8080"]
+    healthcheck: { test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r=>{if(!r.ok)process.exit(1)})"], interval: 15s, timeout: 5s, retries: 10 }
+  worker:
+    build: ./services/api
+    restart: unless-stopped
+    command: ["node","dist/worker.js"]
+    env_file: .env
+    depends_on: { postgres: { condition: service_healthy }, minio-init: { condition: service_completed_successfully } }
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        NEXT_PUBLIC_RELAY_API_URL: ${PUBLIC_API_URL:-http://localhost:8080}
+    restart: unless-stopped
+    depends_on: { api: { condition: service_healthy } }
+    ports: ["3000:3000"]
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
