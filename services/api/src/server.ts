@@ -24,7 +24,7 @@ app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"Rel
 app.post("/api/v1/auth/login", async (request, reply) => {
   const parsed = loginSchema.safeParse(request.body);
   if (!parsed.success) return reply.code(400).send({ error:"invalid_request", details:parsed.error.flatten() });
-  const user = await pool.query("SELECT id,email,display_name,password_hash,role FROM users WHERE lower(email)=lower($1) AND disabled_at IS NULL", [parsed.data.email]);
+  const user = await pool.query("SELECT id,email,display_name,password_hash,role FROM users WHERE lower(email)=lower($1) AND disabled_at IS NULL ORDER BY updated_at DESC,id LIMIT 1", [parsed.data.email]);
   if (!user.rowCount || !verifyPassword(parsed.data.password,user.rows[0].password_hash)) return reply.code(401).send({ error:"invalid_credentials" });
   const token = signToken({ sub:user.rows[0].id, role:user.rows[0].role, email:user.rows[0].email }, config.JWT_SECRET);
   const refreshToken=`rdr_${randomBytes(48).toString("base64url")}`;await pool.query("INSERT INTO refresh_tokens(user_id,token_hash,expires_at) VALUES($1,$2,now()+interval '30 days')",[user.rows[0].id,hashSecret(refreshToken)]);
@@ -134,15 +134,12 @@ app.setErrorHandler((error,_request,reply)=>{app.log.error(error);void reply.cod
 await registerAgentHub(app);
 
 async function ensureAdmin():Promise<void>{
-  const existing=await pool.query("SELECT id,password_hash,role,disabled_at FROM users WHERE lower(email)=lower($1)",[config.ADMIN_EMAIL]);
+  const existing=await pool.query("SELECT id FROM users WHERE lower(email)=lower($1)",[config.ADMIN_EMAIL]);
   if(!existing.rowCount){
     await pool.query("INSERT INTO users(email,display_name,password_hash,role) VALUES($1,'系统管理员',$2,'admin')",[config.ADMIN_EMAIL,hashPassword(config.ADMIN_PASSWORD)]);
     return;
   }
-  const user=existing.rows[0];
-  if(!verifyPassword(config.ADMIN_PASSWORD,user.password_hash)||user.role!=="admin"||user.disabled_at){
-    await pool.query("UPDATE users SET password_hash=$2,role='admin',disabled_at=NULL,updated_at=now() WHERE id=$1",[user.id,hashPassword(config.ADMIN_PASSWORD)]);
-  }
+  await pool.query("UPDATE users SET password_hash=$2,role='admin',disabled_at=NULL,updated_at=now() WHERE lower(email)=lower($1)",[config.ADMIN_EMAIL,hashPassword(config.ADMIN_PASSWORD)]);
 }
 
 await ensureAdmin();

@@ -240,6 +240,23 @@ jobs:
             sleep 2
           done
 
+          WEB_PORT="$web_port" docker compose -p relaydesk exec -T api node --input-type=module -e '
+            const response = await fetch("http://127.0.0.1:8080/api/v1/auth/login", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ email: process.env.ADMIN_EMAIL, password: process.env.ADMIN_PASSWORD }),
+            });
+            if (!response.ok) {
+              console.error(`Admin credential self-check failed with HTTP ${response.status}`);
+              process.exit(1);
+            }
+            const cookie = response.headers.get("set-cookie")?.split(";", 1)[0];
+            if (cookie) {
+              await fetch("http://127.0.0.1:8080/api/v1/auth/logout", { method: "POST", headers: { cookie } });
+            }
+            console.log("Admin credential self-check passed");
+          '
+
           ln -sfn "$release" "$root/current"
           rm -f "$archive" "$incoming_env" "$env_backup"
           trap - ERR
