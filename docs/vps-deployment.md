@@ -60,7 +60,7 @@ openssl rand -hex 32
 
 ## 3. 配置 HTTPS 反向代理
 
-只应通过 HTTPS/WSS 对外提供 Web、API 和 Agent WebSocket。反向代理需要将 `/api/`、`/agent/ws` 和 `/health` 转发到 `127.0.0.1:8080`，其余请求转发到 `127.0.0.1:3200`（或 `WEB_PORT` 配置的端口），并为 `/agent/ws` 启用 WebSocket Upgrade。防火墙不要向公网开放 PostgreSQL、Redis 或 MinIO。
+Compose 内置的 Nginx 网关会在 `WEB_PORT`（默认 `3200`）上统一提供 Web、REST API、健康检查和 Agent WebSocket：`/api/`、`/agent/` 与 `/health` 会转发到 API，其余请求转发到 Web。Cloudflare Tunnel 或 VPS 外层 HTTPS 代理只需把整个域名转发到 `127.0.0.1:3200`（或 `WEB_PORT` 配置的端口），不需要再单独配置路径规则。防火墙不要向公网开放 PostgreSQL、Redis 或 MinIO。
 
 ## 4. 部署与回退
 
