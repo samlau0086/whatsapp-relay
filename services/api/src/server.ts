@@ -133,7 +133,17 @@ app.setErrorHandler((error,_request,reply)=>{app.log.error(error);void reply.cod
 
 await registerAgentHub(app);
 
-async function ensureAdmin():Promise<void>{const existing=await pool.query("SELECT 1 FROM users WHERE lower(email)=lower($1)",[config.ADMIN_EMAIL]);if(!existing.rowCount)await pool.query("INSERT INTO users(email,display_name,password_hash,role) VALUES($1,'系统管理员',$2,'admin')",[config.ADMIN_EMAIL,hashPassword(config.ADMIN_PASSWORD)]);}
+async function ensureAdmin():Promise<void>{
+  const existing=await pool.query("SELECT id,password_hash,role,disabled_at FROM users WHERE lower(email)=lower($1)",[config.ADMIN_EMAIL]);
+  if(!existing.rowCount){
+    await pool.query("INSERT INTO users(email,display_name,password_hash,role) VALUES($1,'系统管理员',$2,'admin')",[config.ADMIN_EMAIL,hashPassword(config.ADMIN_PASSWORD)]);
+    return;
+  }
+  const user=existing.rows[0];
+  if(!verifyPassword(config.ADMIN_PASSWORD,user.password_hash)||user.role!=="admin"||user.disabled_at){
+    await pool.query("UPDATE users SET password_hash=$2,role='admin',disabled_at=NULL,updated_at=now() WHERE id=$1",[user.id,hashPassword(config.ADMIN_PASSWORD)]);
+  }
+}
 
 await ensureAdmin();
 await app.listen({port:config.PORT,host:"0.0.0.0"});

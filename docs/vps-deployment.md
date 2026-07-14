@@ -56,6 +56,8 @@ openssl rand -hex 32
 
 修改任何 Secret/Variable 后，在 Actions 页面重新运行部署即可同步到 VPS。
 
+`ADMIN_EMAIL` 标识由部署配置维护的管理员账号；修改 `ADMIN_PASSWORD` 并重新部署后，API 启动时会同步更新该账号的数据库密码。
+
 ## 3. 配置 HTTPS 反向代理
 
 只应通过 HTTPS/WSS 对外提供 Web、API 和 Agent WebSocket。反向代理需要将 `/api/`、`/agent/ws` 和 `/health` 转发到 `127.0.0.1:8080`，其余请求转发到 `127.0.0.1:3200`（或 `WEB_PORT` 配置的端口），并为 `/agent/ws` 启用 WebSocket Upgrade。防火墙不要向公网开放 PostgreSQL、Redis 或 MinIO。
