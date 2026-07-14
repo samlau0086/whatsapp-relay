@@ -58,8 +58,21 @@ jobs:
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
       WEB_PORT: ${{ secrets.WEB_PORT || '3200' }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      DATA_ENCRYPTION_KEY: ${{ secrets.DATA_ENCRYPTION_KEY }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+      S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
       VPS_PORT: ${{ vars.VPS_PORT || '22' }}
       VPS_DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH || '/opt/relaydesk' }}
+      POSTGRES_DB: ${{ vars.POSTGRES_DB || 'relay' }}
+      POSTGRES_USER: ${{ vars.POSTGRES_USER || 'relay' }}
+      ADMIN_EMAIL: ${{ vars.ADMIN_EMAIL || 'admin@example.com' }}
+      S3_REGION: ${{ vars.S3_REGION || 'us-east-1' }}
+      S3_BUCKET: ${{ vars.S3_BUCKET || 'relay-media' }}
+      S3_ACCESS_KEY: ${{ vars.S3_ACCESS_KEY || 'relay' }}
+      PUBLIC_API_URL: ${{ vars.PUBLIC_API_URL }}
+      CORS_ORIGIN: ${{ vars.CORS_ORIGIN || vars.PUBLIC_API_URL }}
     steps:
       - name: Check out source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -84,6 +97,65 @@ jobs:
       - name: Package tracked source
         run: git archive --format=tar.gz --output=release.tar.gz "$GITHUB_SHA"
 
+      - name: Create production environment file
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require("node:fs");
+
+          const required = [
+            "POSTGRES_PASSWORD",
+            "JWT_SECRET",
+            "DATA_ENCRYPTION_KEY",
+            "ADMIN_PASSWORD",
+            "S3_SECRET_KEY",
+            "PUBLIC_API_URL",
+            "CORS_ORIGIN",
+          ];
+          const missing = required.filter((name) => !process.env[name]);
+          if (missing.length) {
+            throw new Error(`Missing GitHub Secrets/Variables: ${missing.join(", ")}`);
+          }
+
+          for (const name of required) {
+            if (/[\r\n]/.test(process.env[name])) {
+              throw new Error(`${name} must be a single-line value`);
+            }
+          }
+          if (process.env.JWT_SECRET.length < 32 || process.env.DATA_ENCRYPTION_KEY.length < 32) {
+            throw new Error("JWT_SECRET and DATA_ENCRYPTION_KEY must each contain at least 32 characters");
+          }
+          if (process.env.ADMIN_PASSWORD.length < 10) {
+            throw new Error("ADMIN_PASSWORD must contain at least 10 characters");
+          }
+
+          const quote = (value) => `'${value.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
+          const databaseUrl = `postgres://${encodeURIComponent(process.env.POSTGRES_USER)}:${encodeURIComponent(process.env.POSTGRES_PASSWORD)}@postgres:5432/${encodeURIComponent(process.env.POSTGRES_DB)}`;
+          const values = {
+            NODE_ENV: "production",
+            POSTGRES_DB: process.env.POSTGRES_DB,
+            POSTGRES_USER: process.env.POSTGRES_USER,
+            POSTGRES_PASSWORD: process.env.POSTGRES_PASSWORD,
+            DATABASE_URL: databaseUrl,
+            JWT_SECRET: process.env.JWT_SECRET,
+            DATA_ENCRYPTION_KEY: process.env.DATA_ENCRYPTION_KEY,
+            ADMIN_EMAIL: process.env.ADMIN_EMAIL,
+            ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
+            S3_ENDPOINT: "http://minio:9000",
+            S3_REGION: process.env.S3_REGION,
+            S3_BUCKET: process.env.S3_BUCKET,
+            S3_ACCESS_KEY: process.env.S3_ACCESS_KEY,
+            S3_SECRET_KEY: process.env.S3_SECRET_KEY,
+            CORS_ORIGIN: process.env.CORS_ORIGIN,
+            PUBLIC_API_URL: process.env.PUBLIC_API_URL,
+            MINIO_ROOT_USER: process.env.S3_ACCESS_KEY,
+            MINIO_ROOT_PASSWORD: process.env.S3_SECRET_KEY,
+            BIND_ADDRESS: "127.0.0.1",
+          };
+          fs.writeFileSync("production.env", `${Object.entries(values).map(([key, value]) => `${key}=${quote(value)}`).join("\n")}\n`, { mode: 0o600 });
+          NODE
+
       - name: Upload release
         shell: bash
         run: |
@@ -92,6 +164,8 @@ jobs:
             "$VPS_USER@$VPS_HOST" "mkdir -p '$VPS_DEPLOY_PATH/incoming'"
           scp -i ~/.ssh/id_ed25519 -P "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
             release.tar.gz "$VPS_USER@$VPS_HOST:$VPS_DEPLOY_PATH/incoming/$GITHUB_SHA.tar.gz"
+          scp -i ~/.ssh/id_ed25519 -P "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            production.env "$VPS_USER@$VPS_HOST:$VPS_DEPLOY_PATH/incoming/$GITHUB_SHA.env"
 
       - name: Activate release
         shell: bash
@@ -105,9 +179,13 @@ jobs:
           sha=$2
           web_port=$3
           archive="$root/incoming/$sha.tar.gz"
+          incoming_env="$root/incoming/$sha.env"
           release="$root/releases/$sha"
           shared_env="$root/shared/.env"
+          env_backup="$root/shared/.env.backup-$sha"
           previous=""
+          had_shared_env=0
+          env_changed=0
 
           if [ -L "$root/current" ]; then
             previous=$(readlink -f "$root/current")
@@ -116,6 +194,13 @@ jobs:
           rollback() {
             status=$?
             trap - ERR
+            if [ "$env_changed" -eq 1 ]; then
+              if [ "$had_shared_env" -eq 1 ] && [ -f "$env_backup" ]; then
+                install -m 600 "$env_backup" "$shared_env"
+              else
+                rm -f "$shared_env"
+              fi
+            fi
             if [ -n "$previous" ] && [ -f "$previous/compose.yaml" ]; then
               echo "Deployment failed; restoring the previous release."
               cd "$previous"
@@ -128,12 +213,15 @@ jobs:
           command -v docker >/dev/null
           docker compose version >/dev/null
           test -f "$archive"
-          if [ ! -f "$shared_env" ]; then
-            echo "Missing $shared_env. Create it from .env.example before the first deployment." >&2
-            exit 1
+          test -f "$incoming_env"
+          mkdir -p "$root/shared" "$release"
+          if [ -f "$shared_env" ]; then
+            cp -p "$shared_env" "$env_backup"
+            had_shared_env=1
           fi
+          install -m 600 "$incoming_env" "$shared_env"
+          env_changed=1
 
-          mkdir -p "$release"
           tar -xzf "$archive" -C "$release"
           ln -sfn "$shared_env" "$release/.env"
           cd "$release"
@@ -153,7 +241,7 @@ jobs:
           done
 
           ln -sfn "$release" "$root/current"
-          rm -f "$archive"
+          rm -f "$archive" "$incoming_env" "$env_backup"
           trap - ERR
           WEB_PORT="$web_port" docker compose -p relaydesk ps
           REMOTE

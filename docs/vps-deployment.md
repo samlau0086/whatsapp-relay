@@ -4,27 +4,14 @@
 
 ## 1. 准备 VPS
 
-VPS 需要安装 Docker Engine、Docker Compose 插件、`curl` 和 `tar`。部署用户必须能运行 `docker compose`，并且应只允许使用专用 SSH 密钥登录。
-
-首次部署前创建服务器端环境文件：
+VPS 需要安装 Docker Engine、Docker Compose 插件、`curl` 和 `tar`。部署用户必须能运行 `docker compose`，并且应只允许使用专用 SSH 密钥登录。首次部署前只需创建有写权限的部署目录：
 
 ```bash
-sudo mkdir -p /opt/relaydesk/shared
+sudo mkdir -p /opt/relaydesk
 sudo chown -R "$USER":"$USER" /opt/relaydesk
-curl -fsSL https://raw.githubusercontent.com/OWNER/REPOSITORY/main/.env.example \
-  -o /opt/relaydesk/shared/.env
-chmod 600 /opt/relaydesk/shared/.env
-nano /opt/relaydesk/shared/.env
 ```
 
-将 `OWNER/REPOSITORY` 换成实际仓库。必须替换全部示例密码，并设置：
-
-- `PUBLIC_API_URL=https://你的域名`（该值会在构建 Web 镜像时写入前端）
-- `CORS_ORIGIN=https://你的域名`
-- `BIND_ADDRESS=127.0.0.1`（让 Web 和 API 只监听 VPS 回环地址，由反向代理对外提供服务）
-- 独立且足够长的 `POSTGRES_PASSWORD`、`JWT_SECRET`、`DATA_ENCRYPTION_KEY`、`ADMIN_PASSWORD`、`S3_SECRET_KEY` 和 `MINIO_ROOT_PASSWORD`
-
-如果修改了 `.env` 中会进入 Web 构建的值，手动重新运行一次部署工作流即可。
+生产环境文件由 GitHub Actions 根据 Secrets/Variables 自动生成并以 `0600` 权限上传，不需要登录 VPS 编辑。每次部署都会同步最新配置；部署失败时会恢复上一份配置。
 
 ## 2. 配置 GitHub production 环境
 
@@ -38,6 +25,11 @@ nano /opt/relaydesk/shared/.env
 | `VPS_USER` | 专用部署用户 |
 | `VPS_SSH_KEY` | 专用 SSH 私钥的完整内容 |
 | `WEB_PORT` | VPS 上的 Web 监听端口；未配置时默认为 `3200` |
+| `POSTGRES_PASSWORD` | PostgreSQL 密码；建议使用随机十六进制字符串 |
+| `JWT_SECRET` | JWT 签名密钥，至少 32 个字符 |
+| `DATA_ENCRYPTION_KEY` | 数据加密密钥，至少 32 个字符且不要与 JWT 密钥相同 |
+| `ADMIN_PASSWORD` | 初始管理员密码，至少 10 个字符 |
+| `S3_SECRET_KEY` | MinIO/S3 密钥，同时作为 MinIO root 密码 |
 
 工作流会在部署时自动获取 VPS 的 SSH 主机公钥，无需额外配置主机指纹 Secret。这简化了首次配置，但不会通过独立渠道预先核验服务器指纹。
 
@@ -47,6 +39,22 @@ nano /opt/relaydesk/shared/.env
 | --- | --- | --- |
 | `VPS_PORT` | `22` | SSH 端口 |
 | `VPS_DEPLOY_PATH` | `/opt/relaydesk` | 服务器部署根目录；只使用不含空格的绝对路径 |
+| `PUBLIC_API_URL` | 无，必须配置 | 公网 API 地址，例如 `https://relay.example.com` |
+| `CORS_ORIGIN` | `PUBLIC_API_URL` | 允许访问 API 的 Web 来源 |
+| `ADMIN_EMAIL` | `admin@example.com` | 初始管理员邮箱 |
+| `POSTGRES_DB` | `relay` | PostgreSQL 数据库名 |
+| `POSTGRES_USER` | `relay` | PostgreSQL 用户名 |
+| `S3_REGION` | `us-east-1` | S3 区域 |
+| `S3_BUCKET` | `relay-media` | 媒体 Bucket 名称 |
+| `S3_ACCESS_KEY` | `relay` | MinIO/S3 Access Key |
+
+可用以下命令分别生成 `POSTGRES_PASSWORD`、`JWT_SECRET`、`DATA_ENCRYPTION_KEY` 和 `S3_SECRET_KEY`：
+
+```bash
+openssl rand -hex 32
+```
+
+修改任何 Secret/Variable 后，在 Actions 页面重新运行部署即可同步到 VPS。
 
 ## 3. 配置 HTTPS 反向代理
 
