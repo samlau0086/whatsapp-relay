@@ -52,11 +52,11 @@ Get-ChildItem release
 - Actions 页面手动运行 `Build Windows Agent`：构建未签名安装包并保存 14 天的 workflow artifact，适合内部测试。
 - 推送版本标签：校验标签与 `apps/agent/package.json` 的版本一致，构建安装包、生成 `SHA256SUMS.txt`，并创建 GitHub Release。
 
-发布 `0.1.0` 示例：
+发布 `0.1.1` 示例：
 
 ```powershell
-git tag agent-v0.1.0
-git push origin agent-v0.1.0
+git tag agent-v0.1.1
+git push origin agent-v0.1.1
 ```
 
 升级版本时先修改 `apps/agent/package.json` 和 lockfile，完成兼容测试后再创建对应标签。不要让 Agent 自动跨版本升级 Baileys；每个版本都应使用测试账号观察后再灰度分发。

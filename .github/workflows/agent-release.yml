@@ -72,14 +72,17 @@ jobs:
         shell: pwsh
         run: |
           Get-ChildItem release -File |
-            Where-Object Name -NotLike "SHA256SUMS.txt" |
+            Where-Object { $_.Name -like "RelayDesk-Agent-*.exe" -or $_.Name -like "RelayDesk-Agent-*.exe.blockmap" } |
             ForEach-Object { "$(($_ | Get-FileHash -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } |
             Set-Content release/SHA256SUMS.txt -Encoding utf8NoBOM
       - name: Upload workflow artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: RelayDesk-Agent-${{ github.ref_name }}
-          path: apps/agent/release/*
+          path: |
+            apps/agent/release/RelayDesk-Agent-*.exe
+            apps/agent/release/RelayDesk-Agent-*.exe.blockmap
+            apps/agent/release/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
       - name: Publish GitHub Release
@@ -87,4 +90,11 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME release/* --verify-tag --generate-notes --title "RelayDesk Agent $env:GITHUB_REF_NAME"
+        run: >-
+          gh release create $env:GITHUB_REF_NAME
+          release/RelayDesk-Agent-*.exe
+          release/RelayDesk-Agent-*.exe.blockmap
+          release/SHA256SUMS.txt
+          --verify-tag
+          --generate-notes
+          --title "RelayDesk Agent $env:GITHUB_REF_NAME"
