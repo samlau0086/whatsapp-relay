@@ -1,0 +1,155 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-vps
+  cancel-in-progress: false
+
+jobs:
+  validate-web:
+    name: Validate web
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run lint
+      - run: npm test
+
+  validate-api:
+    name: Validate API and worker
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22.13.0
+          cache: npm
+          cache-dependency-path: services/api/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm run build
+
+  deploy:
+    name: Deploy production
+    needs: [validate-web, validate-api]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      VPS_PORT: ${{ vars.VPS_PORT || '22' }}
+      VPS_DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH || '/opt/relaydesk' }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$VPS_HOST"
+          test -n "$VPS_USER"
+          test -n "$VPS_SSH_KEY"
+          [[ "$VPS_PORT" =~ ^[0-9]+$ ]]
+          [[ "$VPS_DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]]
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "$VPS_PORT" -H "$VPS_HOST" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Package tracked source
+        run: git archive --format=tar.gz --output=release.tar.gz "$GITHUB_SHA"
+
+      - name: Upload release
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$VPS_USER@$VPS_HOST" "mkdir -p '$VPS_DEPLOY_PATH/incoming'"
+          scp -i ~/.ssh/id_ed25519 -P "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            release.tar.gz "$VPS_USER@$VPS_HOST:$VPS_DEPLOY_PATH/incoming/$GITHUB_SHA.tar.gz"
+
+      - name: Activate release
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$VPS_USER@$VPS_HOST" "bash -s -- '$VPS_DEPLOY_PATH' '$GITHUB_SHA'" <<'REMOTE'
+          set -Eeuo pipefail
+
+          root=$1
+          sha=$2
+          archive="$root/incoming/$sha.tar.gz"
+          release="$root/releases/$sha"
+          shared_env="$root/shared/.env"
+          previous=""
+
+          if [ -L "$root/current" ]; then
+            previous=$(readlink -f "$root/current")
+          fi
+
+          rollback() {
+            status=$?
+            trap - ERR
+            if [ -n "$previous" ] && [ -f "$previous/compose.yaml" ]; then
+              echo "Deployment failed; restoring the previous release."
+              cd "$previous"
+              docker compose -p relaydesk up --detach --build --remove-orphans --wait --wait-timeout 180 || true
+            fi
+            exit "$status"
+          }
+          trap rollback ERR
+
+          command -v docker >/dev/null
+          docker compose version >/dev/null
+          test -f "$archive"
+          if [ ! -f "$shared_env" ]; then
+            echo "Missing $shared_env. Create it from .env.example before the first deployment." >&2
+            exit 1
+          fi
+
+          mkdir -p "$release"
+          tar -xzf "$archive" -C "$release"
+          ln -sfn "$shared_env" "$release/.env"
+          cd "$release"
+          docker compose -p relaydesk config --quiet
+          docker compose -p relaydesk up --detach --build --remove-orphans --wait --wait-timeout 180
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:8080/health >/dev/null \
+              && curl --fail --silent --show-error http://127.0.0.1:3000/ >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "Services did not pass their health checks." >&2
+              false
+            fi
+            sleep 2
+          done
+
+          ln -sfn "$release" "$root/current"
+          rm -f "$archive"
+          trap - ERR
+          docker compose -p relaydesk ps
+          REMOTE
