@@ -1,5 +1,7 @@
 # RelayDesk
 
+> Windows Agent 的安装包发布、注册、扫码和断网恢复验收见 [`docs/windows-agent.md`](docs/windows-agent.md)。VPS 已上线后，建议先按该文档用测试 WhatsApp 账号完成一轮端到端验证，再接入正式账号。
+
 ## 远程连接方式与部署架构
 
 RelayDesk 采用“公网中心服务器 + 家庭/办公室 Windows Agent”的边缘执行架构。你在外部访问中心服务器上的 Web 工作台，中心服务器负责身份验证、消息存储、API、队列和坐席协作；真正连接 WhatsApp 并执行收发操作的是家里或办公室电脑上的 Windows Agent。
@@ -143,6 +145,16 @@ npm run dev
 ```
 
 管理员先登录中心 API，再调用 `POST /api/v1/agents/enrollment` 创建 15 分钟有效的一次性注册码。把注册码粘贴到 Agent，注册后即可添加 WhatsApp 账号并扫码。
+
+生成 Windows 安装包：
+
+```powershell
+cd apps/agent
+npm ci
+npm run package:win
+```
+
+安装包输出到 `apps/agent/release/`。推送 `agent-v<package.json version>` 标签会由 GitHub Actions 构建安装包、生成 SHA-256 校验文件并创建 GitHub Release；详细发布和测试流程见 [`docs/windows-agent.md`](docs/windows-agent.md)。
 
 ## 外部系统调用
 

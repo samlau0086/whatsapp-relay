@@ -1,0 +1,90 @@
+name: Build Windows Agent
+
+on:
+  pull_request:
+    paths:
+      - apps/agent/**
+      - packages/protocol/**
+      - .github/workflows/agent-release.yml
+  push:
+    tags:
+      - agent-v*
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-agent-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate Agent
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: apps/agent
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22.13.0
+          cache: npm
+          cache-dependency-path: apps/agent/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+
+  package:
+    name: Package unsigned installer
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/agent-v')
+    needs: validate
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: apps/agent
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22.13.0
+          cache: npm
+          cache-dependency-path: apps/agent/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify release tag
+        if: startsWith(github.ref, 'refs/tags/agent-v')
+        shell: pwsh
+        run: |
+          $expected = "agent-v$((Get-Content package.json | ConvertFrom-Json).version)"
+          if ($env:GITHUB_REF_NAME -ne $expected) {
+            throw "Tag $env:GITHUB_REF_NAME does not match package version; expected $expected"
+          }
+      - name: Build Windows installer
+        run: npm run package:win
+      - name: Create SHA-256 checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem release -File |
+            Where-Object Name -NotLike "SHA256SUMS.txt" |
+            ForEach-Object { "$(($_ | Get-FileHash -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } |
+            Set-Content release/SHA256SUMS.txt -Encoding utf8NoBOM
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: RelayDesk-Agent-${{ github.ref_name }}
+          path: apps/agent/release/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/agent-v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME release/* --verify-tag --generate-notes --title "RelayDesk Agent $env:GITHUB_REF_NAME"

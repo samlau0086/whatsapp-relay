@@ -19,7 +19,7 @@ export class AgentStore {
   get(key:string):string|undefined { return (this.db.prepare("SELECT value FROM settings WHERE key=?").get(key) as {value:string}|undefined)?.value; }
   set(key:string,value:string):void { this.db.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key,value); }
   upsertAccount(id:string,name:string,status:string):void { this.db.prepare("INSERT INTO accounts(id,name,status,created_at) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,status=excluded.status").run(id,name,status,new Date().toISOString()); }
-  accounts():unknown[] { return this.db.prepare("SELECT * FROM accounts ORDER BY created_at").all(); }
+  accounts():Array<{id:string;name:string;status:string;last_error:string|null;created_at:string}> { return this.db.prepare("SELECT * FROM accounts ORDER BY created_at").all() as Array<{id:string;name:string;status:string;last_error:string|null;created_at:string}>; }
   setAccountStatus(id:string,status:string,error?:string):void { this.db.prepare("UPDATE accounts SET status=?,last_error=? WHERE id=?").run(status,error??null,id); }
   enqueueEvent(eventId:string,kind:string,payload:unknown):number { const result=this.db.prepare("INSERT OR IGNORE INTO event_outbox(event_id,event_kind,payload,created_at) VALUES(?,?,?,?)").run(eventId,kind,JSON.stringify(payload),new Date().toISOString()); if(result.changes===0){const row=this.db.prepare("SELECT cursor FROM event_outbox WHERE event_id=?").get(eventId) as {cursor:number};return row.cursor;} return Number(result.lastInsertRowid); }
   pendingEvents(limit=100):Array<{cursor:number;event_id:string;event_kind:string;payload:string}> { return this.db.prepare("SELECT cursor,event_id,event_kind,payload FROM event_outbox WHERE acked=0 ORDER BY cursor LIMIT ?").all(limit) as Array<{cursor:number;event_id:string;event_kind:string;payload:string}>; }
@@ -27,4 +27,9 @@ export class AgentStore {
   saveCommand(sequence:number,commandId:string,accountId:string,payload:unknown):boolean { return this.db.prepare("INSERT OR IGNORE INTO command_inbox(sequence,command_id,account_id,payload,created_at) VALUES(?,?,?,?,?)").run(sequence,commandId,accountId,JSON.stringify(payload),new Date().toISOString()).changes===1; }
   completeCommand(commandId:string,result:unknown):void { this.db.prepare("UPDATE command_inbox SET state='completed',result=? WHERE command_id=?").run(JSON.stringify(result),commandId); }
   priorResult(commandId:string):unknown|undefined { const row=this.db.prepare("SELECT result FROM command_inbox WHERE command_id=? AND state='completed'").get(commandId) as {result:string}|undefined; return row?JSON.parse(row.result):undefined; }
+  diagnostics():{pendingEvents:number;pendingCommands:number;lastAckedCursor:number} {
+    const pendingEvents=Number((this.db.prepare("SELECT COUNT(*) AS count FROM event_outbox WHERE acked=0").get() as {count:number}).count);
+    const pendingCommands=Number((this.db.prepare("SELECT COUNT(*) AS count FROM command_inbox WHERE state<>'completed'").get() as {count:number}).count);
+    return {pendingEvents,pendingCommands,lastAckedCursor:Number(this.get("lastAckedCursor")??0)};
+  }
 }

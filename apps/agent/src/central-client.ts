@@ -5,7 +5,7 @@ type CommandHandler = (command:{sequence:number;commandId:string;accountId:strin
 
 export class CentralClient {
   private socket?:WebSocket; private retry=0; private stopped=false; private heartbeat?:NodeJS.Timeout;
-  constructor(private store:AgentStore,private baseUrl:string,private agentId:string,private credential:string,private onCommand:CommandHandler,private onStatus:(value:string)=>void){}
+  constructor(private store:AgentStore,private baseUrl:string,private agentId:string,private credential:string,private agentVersion:string,private protocolVersion:number,private onCommand:CommandHandler,private onStatus:(value:string)=>void){}
   start():void{this.stopped=false;this.connect();}
   stop():void{this.stopped=true;clearInterval(this.heartbeat);this.socket?.close();}
   flush():void{
@@ -16,7 +16,7 @@ export class CentralClient {
   private connect():void{
     const url=new URL("/agent/ws",this.baseUrl.replace(/^http/,"ws"));
     this.socket=new WebSocket(url,{headers:{authorization:`Bearer ${this.credential}`}});
-    this.socket.on("open",()=>{this.retry=0;this.onStatus("online");this.socket?.send(JSON.stringify({type:"hello",protocolVersion:1,agentId:this.agentId,agentVersion:"0.1.0",platform:`win32-${process.arch}`,lastAckedCursor:Number(this.store.get("lastAckedCursor")??0)}));this.heartbeat=setInterval(()=>{this.socket?.send(JSON.stringify({type:"heartbeat",at:new Date().toISOString(),accounts:this.store.accounts()}));this.flush();},10_000);this.flush();});
+    this.socket.on("open",()=>{this.retry=0;this.onStatus("online");this.socket?.send(JSON.stringify({type:"hello",protocolVersion:this.protocolVersion,agentId:this.agentId,agentVersion:this.agentVersion,platform:`win32-${process.arch}`,lastAckedCursor:Number(this.store.get("lastAckedCursor")??0)}));this.heartbeat=setInterval(()=>{this.socket?.send(JSON.stringify({type:"heartbeat",at:new Date().toISOString(),accounts:this.store.accounts().map((account)=>({accountId:account.id,status:account.status,queueDepth:0}))}));this.flush();},10_000);this.flush();});
     this.socket.on("message",(data)=>void this.handle(JSON.parse(data.toString())));
     this.socket.on("close",()=>{clearInterval(this.heartbeat);this.onStatus("offline");if(!this.stopped)setTimeout(()=>this.connect(),this.nextDelay());});
     this.socket.on("error",()=>this.socket?.close());
