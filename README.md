@@ -127,7 +127,7 @@ npm run dev
 docker compose up --build -d
 ```
 
-- 工作台：`http://localhost:3000`
+- 工作台：`http://localhost:3200`
 - API：`http://localhost:8080`
 - 健康检查：`http://localhost:8080/health`
 - OpenAPI：`http://localhost:8080/api/v1/openapi.json`

@@ -37,6 +37,7 @@ nano /opt/relaydesk/shared/.env
 | `VPS_HOST` | VPS 域名或 IP |
 | `VPS_USER` | 专用部署用户 |
 | `VPS_SSH_KEY` | 专用 SSH 私钥的完整内容 |
+| `WEB_PORT` | VPS 上的 Web 监听端口；未配置时默认为 `3200` |
 
 工作流会在部署时自动获取 VPS 的 SSH 主机公钥，无需额外配置主机指纹 Secret。这简化了首次配置，但不会通过独立渠道预先核验服务器指纹。
 
@@ -49,7 +50,7 @@ nano /opt/relaydesk/shared/.env
 
 ## 3. 配置 HTTPS 反向代理
 
-只应通过 HTTPS/WSS 对外提供 Web、API 和 Agent WebSocket。反向代理需要将 `/api/`、`/agent/ws` 和 `/health` 转发到 `127.0.0.1:8080`，其余请求转发到 `127.0.0.1:3000`，并为 `/agent/ws` 启用 WebSocket Upgrade。防火墙不要向公网开放 PostgreSQL、Redis 或 MinIO。
+只应通过 HTTPS/WSS 对外提供 Web、API 和 Agent WebSocket。反向代理需要将 `/api/`、`/agent/ws` 和 `/health` 转发到 `127.0.0.1:8080`，其余请求转发到 `127.0.0.1:3200`（或 `WEB_PORT` 配置的端口），并为 `/agent/ws` 启用 WebSocket Upgrade。防火墙不要向公网开放 PostgreSQL、Redis 或 MinIO。
 
 ## 4. 部署与回退
 

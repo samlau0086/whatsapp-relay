@@ -57,6 +57,7 @@ jobs:
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      WEB_PORT: ${{ secrets.WEB_PORT || '3200' }}
       VPS_PORT: ${{ vars.VPS_PORT || '22' }}
       VPS_DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH || '/opt/relaydesk' }}
     steps:
@@ -70,6 +71,8 @@ jobs:
           test -n "$VPS_HOST"
           test -n "$VPS_USER"
           test -n "$VPS_SSH_KEY"
+          [[ "$WEB_PORT" =~ ^[0-9]+$ ]]
+          (( WEB_PORT >= 1 && WEB_PORT <= 65535 ))
           [[ "$VPS_PORT" =~ ^[0-9]+$ ]]
           [[ "$VPS_DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]]
           install -d -m 700 ~/.ssh
@@ -95,11 +98,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            "$VPS_USER@$VPS_HOST" "bash -s -- '$VPS_DEPLOY_PATH' '$GITHUB_SHA'" <<'REMOTE'
+            "$VPS_USER@$VPS_HOST" "bash -s -- '$VPS_DEPLOY_PATH' '$GITHUB_SHA' '$WEB_PORT'" <<'REMOTE'
           set -Eeuo pipefail
 
           root=$1
           sha=$2
+          web_port=$3
           archive="$root/incoming/$sha.tar.gz"
           release="$root/releases/$sha"
           shared_env="$root/shared/.env"
@@ -115,7 +119,7 @@ jobs:
             if [ -n "$previous" ] && [ -f "$previous/compose.yaml" ]; then
               echo "Deployment failed; restoring the previous release."
               cd "$previous"
-              docker compose -p relaydesk up --detach --build --remove-orphans --wait --wait-timeout 180 || true
+              WEB_PORT="$web_port" docker compose -p relaydesk up --detach --build --remove-orphans --wait --wait-timeout 180 || true
             fi
             exit "$status"
           }
@@ -133,12 +137,12 @@ jobs:
           tar -xzf "$archive" -C "$release"
           ln -sfn "$shared_env" "$release/.env"
           cd "$release"
-          docker compose -p relaydesk config --quiet
-          docker compose -p relaydesk up --detach --build --remove-orphans --wait --wait-timeout 180
+          WEB_PORT="$web_port" docker compose -p relaydesk config --quiet
+          WEB_PORT="$web_port" docker compose -p relaydesk up --detach --build --remove-orphans --wait --wait-timeout 180
 
           for attempt in $(seq 1 30); do
             if curl --fail --silent --show-error http://127.0.0.1:8080/health >/dev/null \
-              && curl --fail --silent --show-error http://127.0.0.1:3000/ >/dev/null; then
+              && curl --fail --silent --show-error "http://127.0.0.1:$web_port/" >/dev/null; then
               break
             fi
             if [ "$attempt" -eq 30 ]; then
@@ -151,5 +155,5 @@ jobs:
           ln -sfn "$release" "$root/current"
           rm -f "$archive"
           trap - ERR
-          docker compose -p relaydesk ps
+          WEB_PORT="$web_port" docker compose -p relaydesk ps
           REMOTE
