@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { fork, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, safeStorage, session, Tray } from "electron";
 import QRCode from "qrcode";
@@ -18,6 +18,9 @@ let masterKey = "";
 let quitting = false;
 const workers = new Map<string, ChildProcess>();
 const intentionalRestarts = new Set<string>();
+const removedWorkers = new Set<string>();
+const repairWorkers = new Set<string>();
+const qrCodes = new Map<string,{dataUrl:string;generatedAt:number}>();
 
 app.whenReady().then(async () => {
   if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: true });
@@ -78,6 +81,7 @@ ipcMain.handle("agent:state", async () => ({
   protocolVersion: PROTOCOL_VERSION,
   accounts: store.accounts(),
   proxy: await proxyState(),
+  latestQr: latestQr(),
 }));
 
 ipcMain.handle("agent:diagnostics", async () => ({
@@ -139,6 +143,35 @@ ipcMain.handle("account:add", async (_event, input: {id:string;name:string}) => 
   return { ok: true };
 });
 
+ipcMain.handle("account:update", async (_event, input: {id:string;name:string}) => {
+  const name=input.name.trim();if(name.length<2||name.length>80)throw new Error("账号名称需要 2–80 个字符");
+  await accountRequest(input.id,"PATCH",{name});
+  store.renameAccount(input.id,name);
+  return {ok:true};
+});
+
+ipcMain.handle("account:repair", async (_event, input: {id:string}) => {
+  const account=store.accounts().find(item=>item.id===input.id);if(!account)throw new Error("账号不存在");
+  await accountRequest(input.id,"PATCH",{status:"pairing"});
+  store.setAccountStatus(input.id,"pairing");
+  qrCodes.delete(input.id);
+  const worker=workers.get(input.id);
+  if(worker){repairWorkers.add(input.id);worker.send({type:"shutdown",logout:true});setTimeout(()=>{if(workers.get(input.id)===worker)worker.kill();},3000);}
+  else await resetAccountAuthAndStart(input.id,account.name,app.getPath("userData"));
+  return {ok:true};
+});
+
+ipcMain.handle("account:remove", async (_event, input: {id:string}) => {
+  const account=store.accounts().find(item=>item.id===input.id);if(!account)throw new Error("账号不存在");
+  await accountRequest(input.id,"DELETE");
+  const worker=workers.get(input.id);
+  if(worker){removedWorkers.add(input.id);worker.send({type:"shutdown",logout:true});setTimeout(()=>{if(workers.get(input.id)===worker)worker.kill();},3000);}
+  store.deleteAccount(input.id);
+  qrCodes.delete(input.id);
+  await rm(join(app.getPath("userData"),"accounts",input.id),{recursive:true,force:true});
+  return {ok:true};
+});
+
 function startCentral(baseUrl: string, agentId: string, credential: string): void {
   client?.stop();
   client = new CentralClient(
@@ -189,6 +222,7 @@ async function startAccount(accountId: string, name: string, dataDir: string): P
     }
     if (message.type === "status") {
       const status = String(message.status);
+      if(status==="online"||status==="logged_out")qrCodes.delete(accountId);
       const reason = typeof message.reason === "string" ? message.reason : undefined;
       const eventId = `status:${accountId}:${Date.now()}`;
       store.setAccountStatus(accountId, status, reason);
@@ -197,6 +231,7 @@ async function startAccount(accountId: string, name: string, dataDir: string): P
     }
     if (message.type === "qr") {
       void QRCode.toDataURL(String(message.qr), { width: 280, margin: 1 }).then((qrDataUrl) => {
+        qrCodes.set(accountId,{dataUrl:qrDataUrl,generatedAt:Date.now()});
         window?.webContents.send("agent:event", { ...message, qrDataUrl });
       });
       return;
@@ -205,6 +240,14 @@ async function startAccount(accountId: string, name: string, dataDir: string): P
   });
   worker.on("exit", () => {
     workers.delete(accountId);
+    if (removedWorkers.delete(accountId)) {
+      void rm(join(dataDir,"accounts",accountId),{recursive:true,force:true});
+      return;
+    }
+    if (repairWorkers.delete(accountId)) {
+      void resetAccountAuthAndStart(accountId, name, dataDir);
+      return;
+    }
     if (intentionalRestarts.delete(accountId)) {
       store.setAccountStatus(accountId, "offline", "正在应用代理设置");
       setTimeout(() => void startAccount(accountId, name, dataDir), 500);
@@ -222,6 +265,20 @@ async function startAccount(accountId: string, name: string, dataDir: string): P
     credential: store.get("credential") ?? "",
     proxyUrl,
   });
+}
+
+async function resetAccountAuthAndStart(accountId:string,name:string,dataDir:string):Promise<void>{
+  try{
+    await rm(join(dataDir,"accounts",accountId),{recursive:true,force:true});
+    store.setAccountStatus(accountId,"pairing");
+    await startAccount(accountId,name,dataDir);
+  }catch(error){store.setAccountStatus(accountId,"error",error instanceof Error?error.message:String(error));}
+}
+
+async function accountRequest(accountId:string,method:"PATCH"|"DELETE",body?:Record<string,unknown>):Promise<void>{
+  const baseUrl=store.get("baseUrl")??DEFAULT_CENTRAL_URL;const credential=store.get("credential");if(!credential)throw new Error("设备尚未注册到中心平台");
+  const response=await fetch(new URL(`/agent/accounts/${encodeURIComponent(accountId)}`,baseUrl),{method,headers:{authorization:`Bearer ${credential}`,...(body?{"content-type":"application/json"}:{})},body:body?JSON.stringify(body):undefined});
+  if(!response.ok)throw new Error(response.status===404?"中心平台尚未部署账号管理接口，或账号不存在":"中心账号操作失败，请检查连接后重试");
 }
 
 async function resolveProxyUrl(targetUrl: string): Promise<string | undefined> {
@@ -259,6 +316,15 @@ function normalizeManualProxy(value: string): string {
   if (parsed.username || parsed.password) throw new Error("当前版本暂不支持需要用户名或密码的代理");
   parsed.pathname = ""; parsed.search = ""; parsed.hash = "";
   return parsed.toString().replace(/\/$/, "");
+}
+
+function latestQr():{accountId:string;qrDataUrl:string}|null{
+  const now=Date.now();
+  for(const [accountId,qr] of [...qrCodes].reverse()){
+    if(now-qr.generatedAt<=70_000)return {accountId,qrDataUrl:qr.dataUrl};
+    qrCodes.delete(accountId);
+  }
+  return null;
 }
 
 async function loadMasterKey(dataDir: string): Promise<string> {

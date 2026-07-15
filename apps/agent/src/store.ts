@@ -19,6 +19,8 @@ export class AgentStore {
   get(key:string):string|undefined { return (this.db.prepare("SELECT value FROM settings WHERE key=?").get(key) as {value:string}|undefined)?.value; }
   set(key:string,value:string):void { this.db.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key,value); }
   upsertAccount(id:string,name:string,status:string):void { this.db.prepare("INSERT INTO accounts(id,name,status,created_at) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,status=excluded.status").run(id,name,status,new Date().toISOString()); }
+  renameAccount(id:string,name:string):void { this.db.prepare("UPDATE accounts SET name=? WHERE id=?").run(name,id); }
+  deleteAccount(id:string):void { this.db.prepare("DELETE FROM accounts WHERE id=?").run(id); }
   accounts():Array<{id:string;name:string;status:string;last_error:string|null;created_at:string}> { return this.db.prepare("SELECT * FROM accounts ORDER BY created_at").all() as Array<{id:string;name:string;status:string;last_error:string|null;created_at:string}>; }
   setAccountStatus(id:string,status:string,error?:string):void { this.db.prepare("UPDATE accounts SET status=?,last_error=? WHERE id=?").run(status,error??null,id); }
   enqueueEvent(eventId:string,kind:string,payload:unknown):number { const result=this.db.prepare("INSERT OR IGNORE INTO event_outbox(event_id,event_kind,payload,created_at) VALUES(?,?,?,?)").run(eventId,kind,JSON.stringify(payload),new Date().toISOString()); if(result.changes===0){const row=this.db.prepare("SELECT cursor FROM event_outbox WHERE event_id=?").get(eventId) as {cursor:number};return row.cursor;} return Number(result.lastInsertRowid); }

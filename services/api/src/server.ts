@@ -68,6 +68,32 @@ app.post("/agent/accounts", async(request,reply)=>{
   return reply.code(201).send(created.rows[0]);
 });
 
+app.patch("/agent/accounts/:id", async(request,reply)=>{
+  const credential=request.headers.authorization?.replace(/^Bearer /,"");
+  if(!credential)return reply.code(401).send({error:"unauthorized"});
+  const agent=await pool.query("SELECT id FROM agents WHERE credential_hash=$1 AND status<>'revoked'",[hashSecret(credential)]);
+  if(!agent.rowCount)return reply.code(401).send({error:"unauthorized"});
+  const {id}=request.params as {id:string};const body=request.body as {name?:string;status?:string};const name=body.name?.trim();
+  if(name!==undefined&&(name.length<2||name.length>80))return reply.code(400).send({error:"invalid_request"});
+  if(body.status!==undefined&&body.status!=="pairing")return reply.code(400).send({error:"invalid_request"});
+  const updated=await pool.query("UPDATE whatsapp_accounts SET display_name=COALESCE($3,display_name),status=CASE WHEN $4='pairing' THEN 'pairing' ELSE status END,status_reason=CASE WHEN $4='pairing' THEN NULL ELSE status_reason END WHERE id=$1 AND agent_id=$2 RETURNING id,display_name,status",[id,agent.rows[0].id,name??null,body.status??null]);
+  if(!updated.rowCount)return reply.code(404).send({error:"not_found"});
+  await pool.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('agent',$1,$2,'whatsapp_account',$3,$4)",[agent.rows[0].id,body.status==="pairing"?"account.repair":"account.rename",id,JSON.stringify({displayName:name})]);
+  return updated.rows[0];
+});
+
+app.delete("/agent/accounts/:id", async(request,reply)=>{
+  const credential=request.headers.authorization?.replace(/^Bearer /,"");
+  if(!credential)return reply.code(401).send({error:"unauthorized"});
+  const agent=await pool.query("SELECT id FROM agents WHERE credential_hash=$1 AND status<>'revoked'",[hashSecret(credential)]);
+  if(!agent.rowCount)return reply.code(401).send({error:"unauthorized"});
+  const {id}=request.params as {id:string};
+  const removed=await pool.query("UPDATE whatsapp_accounts SET agent_id=NULL,status='logged_out',status_reason='removed_from_agent' WHERE id=$1 AND agent_id=$2 RETURNING id",[id,agent.rows[0].id]);
+  if(!removed.rowCount)return reply.code(404).send({error:"not_found"});
+  await pool.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id) VALUES('agent',$1,'account.remove','whatsapp_account',$2)",[agent.rows[0].id,id]);
+  return reply.code(204).send();
+});
+
 app.post("/api/v1/api-keys", {preHandler:authenticate}, async(request,reply)=>{
   if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});const body=request.body as {name?:string;scopes?:string[];accountIds?:string[]};const secret=`rdk_${randomBytes(32).toString("base64url")}`;
   const created=await pool.query("INSERT INTO api_keys(name,key_prefix,secret_hash,scopes,account_ids) VALUES($1,$2,$3,$4,$5) RETURNING id,name,scopes,account_ids,created_at",[body.name?.trim()||"External system",secret.slice(0,12),hashSecret(secret),body.scopes??["messages:read","messages:send"],body.accountIds??null]);

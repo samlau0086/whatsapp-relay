@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import { join } from "node:path";
 
-const expectedMethods = ["state", "diagnostics", "enroll", "addAccount", "saveProxy", "onEvent"];
+const expectedMethods = ["state", "diagnostics", "enroll", "addAccount", "updateAccount", "repairAccount", "removeAccount", "saveProxy", "onEvent"];
 app.disableHardwareAcceleration();
 const timeout = setTimeout(() => {
   console.error("Preload smoke test timed out");
@@ -12,6 +12,9 @@ ipcMain.handle("agent:state", () => ({baseUrl:"https://relay.test",enrolled:true
 ipcMain.handle("agent:diagnostics", () => ({ok:true}));
 ipcMain.handle("agent:enroll", () => ({ok:true}));
 ipcMain.handle("account:add", () => ({ok:true}));
+ipcMain.handle("account:update", () => ({ok:true}));
+ipcMain.handle("account:repair", () => ({ok:true}));
+ipcMain.handle("account:remove", () => ({ok:true}));
 ipcMain.handle("proxy:save", () => ({ok:true}));
 
 console.log("Waiting for Electron app readiness");

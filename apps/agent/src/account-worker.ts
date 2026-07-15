@@ -7,13 +7,20 @@ import { pino } from "pino";
 
 type Init = {type:"init";accountId:string;dataDir:string;masterKey:string;baseUrl:string;credential:string;proxyUrl?:string};
 type Command = {type:"command";sequence:number;commandId:string;payload:Record<string,unknown>};
+type Control = {type:"shutdown";logout?:boolean};
 let socket:ReturnType<typeof makeWASocket>|undefined;let init:Init|undefined;let sendChain=Promise.resolve();let reconnectAttempt=0;let reconnectTimer:NodeJS.Timeout|undefined;
 const emit=(message:unknown):void=>{process.send?.(message);};
 
-process.on("message",(message:Init|Command)=>{
+process.on("message",(message:Init|Command|Control)=>{
   if(message.type==="init"){init=message;void connect(message);}
   if(message.type==="command")sendChain=sendChain.then(()=>execute(message)).catch((error)=>emit({type:"command_result",sequence:message.sequence,commandId:message.commandId,outcome:"failed",errorCode:"send_failed",errorMessage:String(error),completedAt:new Date().toISOString()}));
+  if(message.type==="shutdown")void shutdown(message.logout===true);
 });
+
+async function shutdown(logout:boolean):Promise<void>{
+  if(reconnectTimer)clearTimeout(reconnectTimer);
+  try{if(logout&&socket)await socket.logout();else socket?.end(undefined);}catch{}finally{process.exit(0);}
+}
 
 async function connect(options:Init):Promise<void>{
   try{
@@ -22,7 +29,7 @@ async function connect(options:Init):Promise<void>{
   const axiosOptions=proxyAgent?{httpsAgent:proxyAgent,proxy:false as const}:{};
   const {version}=await fetchLatestBaileysVersion(axiosOptions);
   const logger=pino({level:"warn"});
-  socket=makeWASocket({version,auth:auth.state,logger,browser:Browsers.windows("RelayDesk Agent"),syncFullHistory:true,markOnlineOnConnect:false,generateHighQualityLinkPreview:false,agent:proxyAgent,fetchAgent:proxyAgent,options:axiosOptions});
+  socket=makeWASocket({version,auth:auth.state,logger,browser:Browsers.windows("RelayDesk Agent"),syncFullHistory:false,markOnlineOnConnect:false,generateHighQualityLinkPreview:false,agent:proxyAgent,fetchAgent:proxyAgent,options:axiosOptions});
   socket.ev.on("creds.update",auth.saveCreds);
   socket.ev.on("connection.update",({connection,lastDisconnect,qr})=>{
     if(qr)emit({type:"qr",accountId:options.accountId,qr});
@@ -57,11 +64,12 @@ function scheduleReconnect(options:Init):void{
 }
 
 function disconnectReason(error:unknown):string{
-  const value=error as {message?:string;code?:string;data?:{code?:string;address?:string;port?:number};cause?:{code?:string}}|undefined;
+  const value=error as {message?:string;code?:string;data?:{code?:string;address?:string;port?:number};cause?:{code?:string};output?:{statusCode?:number}}|undefined;
   const code=value?.data?.code??value?.code??value?.cause?.code;
+  const status=value?.output?.statusCode;
   const target=value?.data?.address&&value.data.port?` ${value.data.address}:${value.data.port}`:"";
   const message=value?.message??String(error??"connection_closed");
-  return `${code?`${code}: `:""}${message}${target}`.replace(/\s+/g," ").slice(0,300);
+  return `${status?`[${status}] `:""}${code?`${code}: `:""}${message}${target}`.replace(/\s+/g," ").slice(0,300);
 }
 
 async function execute(command:Command):Promise<void>{
