@@ -2,11 +2,12 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import makeWASocket, { Browsers, BufferJSON, DisconnectReason, downloadMediaMessage, fetchLatestBaileysVersion, initAuthCreds, proto, type AnyMessageContent, type AuthenticationState, type SignalDataTypeMap } from "@whiskeysockets/baileys";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import { pino } from "pino";
 
-type Init = {type:"init";accountId:string;dataDir:string;masterKey:string;baseUrl:string;credential:string};
+type Init = {type:"init";accountId:string;dataDir:string;masterKey:string;baseUrl:string;credential:string;proxyUrl?:string};
 type Command = {type:"command";sequence:number;commandId:string;payload:Record<string,unknown>};
-let socket:ReturnType<typeof makeWASocket>|undefined;let init:Init|undefined;let sendChain=Promise.resolve();
+let socket:ReturnType<typeof makeWASocket>|undefined;let init:Init|undefined;let sendChain=Promise.resolve();let reconnectAttempt=0;let reconnectTimer:NodeJS.Timeout|undefined;
 const emit=(message:unknown):void=>{process.send?.(message);};
 
 process.on("message",(message:Init|Command)=>{
@@ -15,18 +16,21 @@ process.on("message",(message:Init|Command)=>{
 });
 
 async function connect(options:Init):Promise<void>{
+  try{
   const auth=await encryptedAuthState(join(options.dataDir,options.accountId),Buffer.from(options.masterKey,"hex"));
-  const {version}=await fetchLatestBaileysVersion();
+  const proxyAgent=options.proxyUrl?new HttpsProxyAgent(options.proxyUrl):undefined;
+  const axiosOptions=proxyAgent?{httpsAgent:proxyAgent,proxy:false as const}:{};
+  const {version}=await fetchLatestBaileysVersion(axiosOptions);
   const logger=pino({level:"warn"});
-  socket=makeWASocket({version,auth:auth.state,logger,browser:Browsers.windows("RelayDesk Agent"),syncFullHistory:true,markOnlineOnConnect:false,generateHighQualityLinkPreview:false});
+  socket=makeWASocket({version,auth:auth.state,logger,browser:Browsers.windows("RelayDesk Agent"),syncFullHistory:true,markOnlineOnConnect:false,generateHighQualityLinkPreview:false,agent:proxyAgent,fetchAgent:proxyAgent,options:axiosOptions});
   socket.ev.on("creds.update",auth.saveCreds);
   socket.ev.on("connection.update",({connection,lastDisconnect,qr})=>{
     if(qr)emit({type:"qr",accountId:options.accountId,qr});
-    if(connection==="open")emit({type:"status",accountId:options.accountId,status:"online"});
+    if(connection==="open"){reconnectAttempt=0;emit({type:"status",accountId:options.accountId,status:"online"});}
     if(connection==="close"){
       const status=(lastDisconnect?.error as {output?:{statusCode?:number}}|undefined)?.output?.statusCode;
       if(status===DisconnectReason.loggedOut){emit({type:"status",accountId:options.accountId,status:"logged_out"});return;}
-      emit({type:"status",accountId:options.accountId,status:"offline"});setTimeout(()=>void connect(options),3000+Math.random()*2000);
+      emit({type:"status",accountId:options.accountId,status:"offline",reason:disconnectReason(lastDisconnect?.error)});scheduleReconnect(options);
     }
   });
   socket.ev.on("messages.upsert",({messages})=>{void (async()=>{
@@ -43,6 +47,21 @@ async function connect(options:Init):Promise<void>{
     }
   })();});
   socket.ev.on("messages.update",(updates)=>{for(const update of updates){if(!update.key.id||!update.update.status)continue;const mapped=update.update.status>=4?"read":update.update.status>=3?"delivered":"sent";emit({type:"event",kind:"message_status",payload:{eventId:`status:${options.accountId}:${update.key.id}:${mapped}`,accountId:options.accountId,whatsappMessageId:update.key.id,status:mapped,at:new Date().toISOString()}});}});
+  }catch(error){emit({type:"status",accountId:options.accountId,status:"offline",reason:disconnectReason(error)});scheduleReconnect(options);}
+}
+
+function scheduleReconnect(options:Init):void{
+  if(reconnectTimer)clearTimeout(reconnectTimer);
+  const delay=Math.min(60_000,3_000*(2**Math.min(reconnectAttempt++,5)))+Math.floor(Math.random()*1_000);
+  reconnectTimer=setTimeout(()=>{reconnectTimer=undefined;void connect(options);},delay);
+}
+
+function disconnectReason(error:unknown):string{
+  const value=error as {message?:string;code?:string;data?:{code?:string;address?:string;port?:number};cause?:{code?:string}}|undefined;
+  const code=value?.data?.code??value?.code??value?.cause?.code;
+  const target=value?.data?.address&&value.data.port?` ${value.data.address}:${value.data.port}`:"";
+  const message=value?.message??String(error??"connection_closed");
+  return `${code?`${code}: `:""}${message}${target}`.replace(/\s+/g," ").slice(0,300);
 }
 
 async function execute(command:Command):Promise<void>{

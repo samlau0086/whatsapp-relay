@@ -3,7 +3,7 @@ import { fork, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, safeStorage, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, safeStorage, session, Tray } from "electron";
 import QRCode from "qrcode";
 import { AgentStore } from "./store.js";
 import { CentralClient } from "./central-client.js";
@@ -17,6 +17,7 @@ let client: CentralClient | undefined;
 let masterKey = "";
 let quitting = false;
 const workers = new Map<string, ChildProcess>();
+const intentionalRestarts = new Set<string>();
 
 app.whenReady().then(async () => {
   if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: true });
@@ -29,7 +30,7 @@ app.whenReady().then(async () => {
   const credential = store.get("credential");
   const baseUrl = store.get("baseUrl");
   if (agentId && credential && baseUrl) startCentral(baseUrl, agentId, credential);
-  for (const account of store.accounts()) startAccount(account.id, account.name, dataDir);
+  for (const account of store.accounts()) await startAccount(account.id, account.name, dataDir);
 });
 
 function createWindow(): void {
@@ -69,16 +70,17 @@ function createTray(): void {
   tray.on("double-click", () => window?.show());
 }
 
-ipcMain.handle("agent:state", () => ({
+ipcMain.handle("agent:state", async () => ({
   baseUrl: store.get("baseUrl") ?? DEFAULT_CENTRAL_URL,
   enrolled: Boolean(store.get("credential")),
   connection: store.get("connection") ?? "offline",
   version: app.getVersion(),
   protocolVersion: PROTOCOL_VERSION,
   accounts: store.accounts(),
+  proxy: await proxyState(),
 }));
 
-ipcMain.handle("agent:diagnostics", () => ({
+ipcMain.handle("agent:diagnostics", async () => ({
   generatedAt: new Date().toISOString(),
   appVersion: app.getVersion(),
   protocolVersion: PROTOCOL_VERSION,
@@ -87,8 +89,22 @@ ipcMain.handle("agent:diagnostics", () => ({
   baseUrl: store.get("baseUrl") ?? "",
   enrolled: Boolean(store.get("credential")),
   accounts: store.accounts().map(({ id, name, status, last_error }) => ({ id, name, status, lastError: last_error })),
+  proxy: await proxyState(),
   queue: store.diagnostics(),
 }));
+
+ipcMain.handle("proxy:save", async (_event, input: {mode:string;url?:string}) => {
+  const mode = input.mode;
+  if (!['auto', 'direct', 'manual'].includes(mode)) throw new Error("代理模式无效");
+  const url = mode === "manual" ? normalizeManualProxy(input.url ?? "") : "";
+  store.set("proxyMode", mode);
+  store.set("proxyUrl", url);
+  for (const [accountId, worker] of workers) {
+    intentionalRestarts.add(accountId);
+    worker.kill();
+  }
+  return { ok: true, proxy: await proxyState() };
+});
 
 ipcMain.handle("agent:enroll", async (_event, input: {baseUrl:string;code:string;name:string}) => {
   const response = await fetch(new URL("/api/v1/agents/enroll", input.baseUrl), {
@@ -119,7 +135,7 @@ ipcMain.handle("account:add", async (_event, input: {id:string;name:string}) => 
     throw new Error(body.error === "account_conflict" ? "账号 ID 已被其他 Agent 使用" : "中心账号登记失败，请检查连接后重试");
   }
   store.upsertAccount(input.id, input.name, "pairing");
-  startAccount(input.id, input.name, app.getPath("userData"));
+  await startAccount(input.id, input.name, app.getPath("userData"));
   return { ok: true };
 });
 
@@ -156,8 +172,9 @@ function startCentral(baseUrl: string, agentId: string, credential: string): voi
   client.start();
 }
 
-function startAccount(accountId: string, name: string, dataDir: string): void {
+async function startAccount(accountId: string, name: string, dataDir: string): Promise<void> {
   if (workers.has(accountId)) return;
+  const proxyUrl = await resolveProxyUrl("https://web.whatsapp.com");
   const worker = fork(join(import.meta.dirname, "account-worker.js"), [], {
     execPath: process.execPath,
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
@@ -172,9 +189,10 @@ function startAccount(accountId: string, name: string, dataDir: string): void {
     }
     if (message.type === "status") {
       const status = String(message.status);
+      const reason = typeof message.reason === "string" ? message.reason : undefined;
       const eventId = `status:${accountId}:${Date.now()}`;
-      store.setAccountStatus(accountId, status);
-      store.enqueueEvent(eventId, "account_status", { eventId, accountId, status, at: new Date().toISOString() });
+      store.setAccountStatus(accountId, status, reason);
+      store.enqueueEvent(eventId, "account_status", { eventId, accountId, status, reason, at: new Date().toISOString() });
       client?.flush();
     }
     if (message.type === "qr") {
@@ -187,8 +205,13 @@ function startAccount(accountId: string, name: string, dataDir: string): void {
   });
   worker.on("exit", () => {
     workers.delete(accountId);
+    if (intentionalRestarts.delete(accountId)) {
+      store.setAccountStatus(accountId, "offline", "正在应用代理设置");
+      setTimeout(() => void startAccount(accountId, name, dataDir), 500);
+      return;
+    }
     store.setAccountStatus(accountId, "error", "worker_exited");
-    setTimeout(() => startAccount(accountId, name, dataDir), 5000);
+    setTimeout(() => void startAccount(accountId, name, dataDir), 5000);
   });
   worker.send({
     type: "init",
@@ -197,7 +220,45 @@ function startAccount(accountId: string, name: string, dataDir: string): void {
     masterKey,
     baseUrl: store.get("baseUrl") ?? DEFAULT_CENTRAL_URL,
     credential: store.get("credential") ?? "",
+    proxyUrl,
   });
+}
+
+async function resolveProxyUrl(targetUrl: string): Promise<string | undefined> {
+  const mode = store.get("proxyMode") ?? "auto";
+  if (mode === "direct") return undefined;
+  if (mode === "manual") return normalizeManualProxy(store.get("proxyUrl") ?? "");
+  try {
+    const rules = await session.defaultSession.resolveProxy(targetUrl);
+    for (const rule of rules.split(";")) {
+      const [kind, address] = rule.trim().split(/\s+/, 2);
+      if ((kind === "PROXY" || kind === "HTTPS") && address) return `http://${address}`;
+    }
+  } catch {
+    // A direct connection remains available when Windows has no usable proxy rule.
+  }
+  return undefined;
+}
+
+async function proxyState(): Promise<{mode:string;url:string;effective:string}> {
+  const mode = store.get("proxyMode") ?? "auto";
+  const url = store.get("proxyUrl") ?? "";
+  const resolved = await resolveProxyUrl("https://web.whatsapp.com");
+  const effective = resolved
+    ? `${mode === "manual" ? "手动代理" : "系统代理"}：${new URL(resolved).host}`
+    : mode === "direct" ? "强制直连" : "直连（未检测到系统代理）";
+  return { mode, url, effective };
+}
+
+function normalizeManualProxy(value: string): string {
+  let parsed: URL;
+  try { parsed = new URL(value.trim()); } catch { throw new Error("请输入有效代理地址，例如 http://127.0.0.1:7897"); }
+  if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || !parsed.port) {
+    throw new Error("当前支持带端口的 HTTP/HTTPS 代理，例如 http://127.0.0.1:7897");
+  }
+  if (parsed.username || parsed.password) throw new Error("当前版本暂不支持需要用户名或密码的代理");
+  parsed.pathname = ""; parsed.search = ""; parsed.hash = "";
+  return parsed.toString().replace(/\/$/, "");
 }
 
 async function loadMasterKey(dataDir: string): Promise<string> {

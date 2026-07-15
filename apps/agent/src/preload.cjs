@@ -6,5 +6,6 @@ contextBridge.exposeInMainWorld("relayAgent", {
   diagnostics: () => ipcRenderer.invoke("agent:diagnostics"),
   enroll: (input) => ipcRenderer.invoke("agent:enroll", input),
   addAccount: (input) => ipcRenderer.invoke("account:add", input),
+  saveProxy: (input) => ipcRenderer.invoke("proxy:save", input),
   onEvent: (callback) => ipcRenderer.on("agent:event", (_event, value) => callback(value)),
 });
