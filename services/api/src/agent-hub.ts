@@ -77,8 +77,8 @@ async function processBatch(agentId: string, frame: AgentFrame): Promise<void> {
       if (event.kind === "message") await ingestMessage(client, event.payload);
       if (event.kind === "message_status") await updateMessageStatus(client, event.payload);
       if (event.kind === "account_status") {
-        await client.query("UPDATE whatsapp_accounts SET status=$2,status_reason=$3,last_event_at=now(),last_connected_at=CASE WHEN $2='online' THEN now() ELSE last_connected_at END WHERE id=$1 AND agent_id=$4", [event.payload.accountId,event.payload.status,event.payload.reason ?? null,agentId]);
-        await createWebhookEvent(client,"account.status_changed",String(event.payload.accountId),event.payload);
+        const updated=await client.query("UPDATE whatsapp_accounts SET status=$2,status_reason=$3,last_event_at=now(),last_connected_at=CASE WHEN $2='online' THEN now() ELSE last_connected_at END WHERE id=$1 AND agent_id=$4 RETURNING id", [event.payload.accountId,event.payload.status,event.payload.reason ?? null,agentId]);
+        if(updated.rowCount)await createWebhookEvent(client,"account.status_changed",String(event.payload.accountId),event.payload);
       }
     }
     await client.query("UPDATE agents SET last_acked_cursor=GREATEST(last_acked_cursor,$2),last_seen_at=now() WHERE id=$1", [agentId,Number(frame.toCursor)]);

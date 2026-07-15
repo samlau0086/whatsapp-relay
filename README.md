@@ -114,6 +114,8 @@ RelayDesk 是一个自托管的 WhatsApp 多账号消息聚合平台。它由中
 
 ### 工作台预览
 
+工作台不再注入演示账号、联系人或消息。页面必须登录中心 API，并只展示 PostgreSQL 中由 Windows Agent 同步的真实数据；没有会话时会显示真实空状态。若 Web 与 API 不同域，请在构建 Web 时设置 `NEXT_PUBLIC_RELAY_API_URL`，同时确保 API 的 `CORS_ORIGIN` 指向工作台域名。
+
 ```powershell
 npm install
 npm run dev
@@ -144,7 +146,7 @@ npm install
 npm run dev
 ```
 
-管理员先登录中心 API，再调用 `POST /api/v1/agents/enrollment` 创建 15 分钟有效的一次性注册码。把注册码粘贴到 Agent，注册后即可添加 WhatsApp 账号并扫码。
+管理员登录 Web 工作台后，点击左下角“设置”，即可创建 15 分钟有效的一次性注册码。也可以直接调用 `POST /api/v1/agents/enrollment`。把注册码粘贴到 Agent，注册后即可添加 WhatsApp 账号并扫码。
 
 生成 Windows 安装包：
 

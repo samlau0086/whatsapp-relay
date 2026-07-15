@@ -26,6 +26,7 @@ app.whenReady().then(async () => {
   if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: true });
   const dataDir = app.getPath("userData");
   store = new AgentStore(join(dataDir, "relay-agent.db"));
+  store.discardRemovedAccountStatusEvents();
   masterKey = await loadMasterKey(dataDir);
   createWindow();
   createTray();
@@ -167,6 +168,7 @@ ipcMain.handle("account:remove", async (_event, input: {id:string}) => {
   const worker=workers.get(input.id);
   if(worker){removedWorkers.add(input.id);worker.send({type:"shutdown",logout:true});setTimeout(()=>{if(workers.get(input.id)===worker)worker.kill();},3000);}
   store.deleteAccount(input.id);
+  store.discardRemovedAccountStatusEvents();
   qrCodes.delete(input.id);
   window?.webContents.send("agent:event",{type:"qr_cleared",accountId:input.id});
   await rm(join(app.getPath("userData"),"accounts",input.id),{recursive:true,force:true});

@@ -1,6 +1,6 @@
 {
   "name": "@relaydesk/windows-agent",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "RelayDesk local Windows executor for reliable WhatsApp account synchronization",
   "author": "RelayDesk",
   "private": true,
@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "npm run build && electron .",
     "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "test:store": "npm run build && node --test test/store.test.mjs",
     "test:preload": "npm run build && electron scripts/preload-smoke-main.mjs",
     "start": "electron .",
     "package:win": "npm run build && electron-builder --win nsis --x64 --publish never"

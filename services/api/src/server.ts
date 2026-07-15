@@ -19,7 +19,7 @@ await app.register(multipart, { limits:{ fileSize:64 * 1024 * 1024, files:1 } })
 await app.register(websocket, { options:{ maxPayload:2_000_000 } });
 
 app.get("/health", async () => { await pool.query("SELECT 1"); return { status:"ok", version:"0.1.0", time:new Date().toISOString() }; });
-app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"RelayDesk API",version:"0.1.0"}, paths:{ "/api/v1/messages":{post:{summary:"发送单条消息",responses:{"202":{description:"已进入持久队列"}}}}, "/api/v1/conversations":{get:{summary:"分页查询会话"}}, "/api/v1/media":{post:{summary:"上传媒体"}} } }));
+app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"RelayDesk API",version:"0.1.0"}, paths:{ "/api/v1/messages":{post:{summary:"发送单条消息",responses:{"202":{description:"已进入持久队列"}}}}, "/api/v1/conversations":{get:{summary:"分页查询会话"}}, "/api/v1/conversations/{id}":{patch:{summary:"认领、收藏、关闭或标记已读"}}, "/api/v1/media":{post:{summary:"上传媒体"}} } }));
 
 app.post("/api/v1/auth/login", async (request, reply) => {
   const parsed = loginSchema.safeParse(request.body);
@@ -136,12 +136,24 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request) =>
   return { data, nextCursor:hasMore ? data[data.length-1]?.last_message_at : null };
 });
 
+app.patch("/api/v1/conversations/:id", { preHandler:authenticate }, async (request,reply) => {
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const {id}=request.params as {id:string};const body=(request.body??{}) as {assignedToMe?:boolean;favorite?:boolean;status?:string;read?:boolean};
+  if(body.assignedToMe!==undefined&&typeof body.assignedToMe!=="boolean"||body.favorite!==undefined&&typeof body.favorite!=="boolean"||body.read!==undefined&&typeof body.read!=="boolean")return reply.code(400).send({error:"invalid_request"});
+  if(body.status!==undefined&&!['open','closed','archived'].includes(body.status))return reply.code(400).send({error:"invalid_status"});
+  const current=await pool.query("SELECT account_id FROM conversations WHERE id=$1",[id]);
+  if(!current.rowCount||!canAccessAccount(request.principal,current.rows[0].account_id))return reply.code(404).send({error:"not_found"});
+  const updated=await pool.query("UPDATE conversations SET assigned_user_id=CASE WHEN $2::boolean IS NULL THEN assigned_user_id WHEN $2 THEN $6::uuid ELSE NULL END,favorite=COALESCE($3,favorite),status=COALESCE($4::conversation_status,status),closed_at=CASE WHEN $4='closed' THEN now() WHEN $4='open' THEN NULL ELSE closed_at END,unread_count=CASE WHEN $5 THEN 0 ELSE unread_count END WHERE id=$1 RETURNING id,account_id,status,favorite,assigned_user_id,unread_count,closed_at",[id,body.assignedToMe??null,body.favorite??null,body.status??null,body.read??false,request.principal.id]);
+  await pool.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'conversation.update','conversation',$2,$3)",[request.principal.id,id,JSON.stringify(body)]);
+  return updated.rows[0];
+});
+
 app.get("/api/v1/conversations/:id/messages", { preHandler:authenticate }, async (request, reply) => {
   const { id } = request.params as {id:string}; const query = request.query as { before?:string; limit?:string };
   const conversation = await pool.query("SELECT account_id FROM conversations WHERE id=$1",[id]);
   if (!conversation.rowCount || !canAccessAccount(request.principal,conversation.rows[0].account_id)) return reply.code(404).send({error:"not_found"});
   const limit=Math.min(100,Math.max(1,Number(query.limit??50)));
-  const result=await pool.query("SELECT id,direction,kind,text_content,status,whatsapp_message_id,media_id,quoted_message_id,occurred_at FROM messages WHERE conversation_id=$1 AND ($2::timestamptz IS NULL OR occurred_at<$2) ORDER BY occurred_at DESC,id DESC LIMIT $3",[id,query.before??null,limit]);
+  const result=await pool.query("SELECT msg.id,msg.direction,msg.kind,msg.text_content,msg.status,msg.whatsapp_message_id,msg.media_id,msg.quoted_message_id,msg.occurred_at,media.file_name,media.mime_type,media.byte_size FROM messages msg LEFT JOIN media ON media.id=msg.media_id WHERE msg.conversation_id=$1 AND ($2::timestamptz IS NULL OR msg.occurred_at<$2) ORDER BY msg.occurred_at DESC,msg.id DESC LIMIT $3",[id,query.before??null,limit]);
   return {data:result.rows.reverse(),nextCursor:result.rows.length===limit?result.rows[result.rows.length-1]?.occurred_at:null};
 });
 

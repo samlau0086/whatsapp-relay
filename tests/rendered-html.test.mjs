@@ -16,5 +16,5 @@ test("server-renders the RelayDesk inbox", async () => {
 
 test("workspace includes the reliable-sync UI and responsive breakpoints", async()=>{
   const [component,css]=await Promise.all([readFile(new URL("../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),readFile(new URL("../app/globals.css",import.meta.url),"utf8")]);
-  assert.match(component,/离线队列已启用/);assert.match(component,/可靠同步已启用/);assert.match(component,/aria-live="polite"/);assert.match(component,/生成一次性注册码/);assert.match(component,/\/api\/v1\/agents\/enrollment/);assert.match(css,/@media\(max-width:980px\)/);assert.match(css,/prefers-reduced-motion/);
+  assert.match(component,/离线队列已启用/);assert.match(component,/中心真实数据/);assert.match(component,/aria-live="polite"/);assert.match(component,/生成一次性注册码/);assert.match(component,/\/api\/v1\/agents\/enrollment/);assert.match(component,/\/api\/v1\/conversations/);assert.doesNotMatch(component,/Pharah House|Penny Valeria|Richard Hammon/);assert.match(css,/@media\(max-width:980px\)/);assert.match(css,/prefers-reduced-motion/);
 });

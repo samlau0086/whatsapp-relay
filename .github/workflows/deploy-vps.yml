@@ -64,6 +64,7 @@ jobs:
           cache-dependency-path: apps/agent/package-lock.json
       - run: npm ci --ignore-scripts
       - run: npm run build
+      - run: npm run test:store
 
   deploy:
     name: Deploy production

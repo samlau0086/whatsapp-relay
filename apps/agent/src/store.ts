@@ -21,6 +21,23 @@ export class AgentStore {
   upsertAccount(id:string,name:string,status:string):void { this.db.prepare("INSERT INTO accounts(id,name,status,created_at) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,status=excluded.status").run(id,name,status,new Date().toISOString()); }
   renameAccount(id:string,name:string):void { this.db.prepare("UPDATE accounts SET name=? WHERE id=?").run(name,id); }
   deleteAccount(id:string):void { this.db.prepare("DELETE FROM accounts WHERE id=?").run(id); }
+  discardRemovedAccountStatusEvents():number {
+    const accounts=new Set(this.accounts().map(account=>account.id));
+    const rows=this.db.prepare("SELECT cursor,event_kind,payload FROM event_outbox WHERE acked=0 ORDER BY cursor").all() as Array<{cursor:number;event_kind:string;payload:string}>;
+    let cursor=0;
+    for(const row of rows){
+      if(row.event_kind!=="account_status")break;
+      let accountId="";
+      try { accountId=String((JSON.parse(row.payload) as {accountId?:string}).accountId??""); }
+      catch { break; }
+      if(!accountId||accounts.has(accountId))break;
+      cursor=row.cursor;
+    }
+    if(!cursor)return 0;
+    const result=this.db.prepare("UPDATE event_outbox SET acked=1 WHERE acked=0 AND cursor<=?").run(cursor);
+    this.set("lastAckedCursor",String(cursor));
+    return Number(result.changes);
+  }
   accounts():Array<{id:string;name:string;status:string;last_error:string|null;created_at:string}> { return this.db.prepare("SELECT * FROM accounts ORDER BY created_at").all() as Array<{id:string;name:string;status:string;last_error:string|null;created_at:string}>; }
   setAccountStatus(id:string,status:string,error?:string):void { this.db.prepare("UPDATE accounts SET status=?,last_error=? WHERE id=?").run(status,error??null,id); }
   enqueueEvent(eventId:string,kind:string,payload:unknown):number { const result=this.db.prepare("INSERT OR IGNORE INTO event_outbox(event_id,event_kind,payload,created_at) VALUES(?,?,?,?)").run(eventId,kind,JSON.stringify(payload),new Date().toISOString()); if(result.changes===0){const row=this.db.prepare("SELECT cursor FROM event_outbox WHERE event_id=?").get(eventId) as {cursor:number};return row.cursor;} return Number(result.lastInsertRowid); }
@@ -34,4 +51,5 @@ export class AgentStore {
     const pendingCommands=Number((this.db.prepare("SELECT COUNT(*) AS count FROM command_inbox WHERE state<>'completed'").get() as {count:number}).count);
     return {pendingEvents,pendingCommands,lastAckedCursor:Number(this.get("lastAckedCursor")??0)};
   }
+  close():void { this.db.close(); }
 }
