@@ -37,10 +37,12 @@ app.whenReady().then(async () => {
   const missing = expectedMethods.filter((method) => !exposed.includes(method));
   const addFormOpened = await window.webContents.executeJavaScript("document.getElementById('add-account').click(); !document.getElementById('add-account-form').classList.contains('hidden')");
   const proxyControlsReady = await window.webContents.executeJavaScript("document.getElementById('proxy-mode').value === 'auto' && document.getElementById('proxy-effective').textContent.includes('系统代理')");
+  const staleQrHidden = await window.webContents.executeJavaScript("document.getElementById('qr-wrap').classList.contains('hidden') && document.getElementById('qr').getAttribute('src') === ''");
   clearTimeout(timeout);
-  if (missing.length || !addFormOpened || !proxyControlsReady) {
+  if (missing.length || !addFormOpened || !proxyControlsReady || !staleQrHidden) {
     if (!addFormOpened) console.error("Add-account form did not open");
     if (!proxyControlsReady) console.error("Proxy controls did not initialize");
+    if (!staleQrHidden) console.error("Stale QR was not cleared");
     console.error(`Preload bridge is missing: ${missing.join(", ")}`);
     app.exit(1);
   } else {

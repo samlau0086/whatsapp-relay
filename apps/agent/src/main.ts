@@ -168,6 +168,7 @@ ipcMain.handle("account:remove", async (_event, input: {id:string}) => {
   if(worker){removedWorkers.add(input.id);worker.send({type:"shutdown",logout:true});setTimeout(()=>{if(workers.get(input.id)===worker)worker.kill();},3000);}
   store.deleteAccount(input.id);
   qrCodes.delete(input.id);
+  window?.webContents.send("agent:event",{type:"qr_cleared",accountId:input.id});
   await rm(join(app.getPath("userData"),"accounts",input.id),{recursive:true,force:true});
   return {ok:true};
 });
@@ -230,7 +231,9 @@ async function startAccount(accountId: string, name: string, dataDir: string): P
       client?.flush();
     }
     if (message.type === "qr") {
+      if(removedWorkers.has(accountId)||!store.accounts().some(account=>account.id===accountId))return;
       void QRCode.toDataURL(String(message.qr), { width: 280, margin: 1 }).then((qrDataUrl) => {
+        if(removedWorkers.has(accountId)||!store.accounts().some(account=>account.id===accountId))return;
         qrCodes.set(accountId,{dataUrl:qrDataUrl,generatedAt:Date.now()});
         window?.webContents.send("agent:event", { ...message, qrDataUrl });
       });
@@ -320,7 +323,9 @@ function normalizeManualProxy(value: string): string {
 
 function latestQr():{accountId:string;qrDataUrl:string}|null{
   const now=Date.now();
+  const accountIds=new Set(store.accounts().map(account=>account.id));
   for(const [accountId,qr] of [...qrCodes].reverse()){
+    if(!accountIds.has(accountId)){qrCodes.delete(accountId);continue;}
     if(now-qr.generatedAt<=70_000)return {accountId,qrDataUrl:qr.dataUrl};
     qrCodes.delete(accountId);
   }
