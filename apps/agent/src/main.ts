@@ -106,6 +106,18 @@ ipcMain.handle("agent:enroll", async (_event, input: {baseUrl:string;code:string
 });
 
 ipcMain.handle("account:add", async (_event, input: {id:string;name:string}) => {
+  const baseUrl = store.get("baseUrl") ?? DEFAULT_CENTRAL_URL;
+  const credential = store.get("credential");
+  if (!credential) throw new Error("设备尚未注册到中心平台");
+  const response = await fetch(new URL("/agent/accounts", baseUrl), {
+    method: "POST",
+    headers: { authorization: `Bearer ${credential}`, "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as {error?:string};
+    throw new Error(body.error === "account_conflict" ? "账号 ID 已被其他 Agent 使用" : "中心账号登记失败，请检查连接后重试");
+  }
   store.upsertAccount(input.id, input.name, "pairing");
   startAccount(input.id, input.name, app.getPath("userData"));
   return { ok: true };

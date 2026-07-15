@@ -8,9 +8,10 @@ const timeout = setTimeout(() => {
   app.exit(1);
 }, 45_000);
 
-for (const channel of ["agent:state", "agent:diagnostics", "agent:enroll", "account:add"]) {
-  ipcMain.handle(channel, () => ({ ok: true }));
-}
+ipcMain.handle("agent:state", () => ({baseUrl:"https://relay.test",enrolled:true,connection:"online",version:"smoke",protocolVersion:1,accounts:[]}));
+ipcMain.handle("agent:diagnostics", () => ({ok:true}));
+ipcMain.handle("agent:enroll", () => ({ok:true}));
+ipcMain.handle("account:add", () => ({ok:true}));
 
 console.log("Waiting for Electron app readiness");
 app.whenReady().then(async () => {
@@ -26,12 +27,14 @@ app.whenReady().then(async () => {
   });
 
   window.webContents.on("did-fail-load", (_event, code, description) => console.error(`Page load failed: ${code} ${description}`));
-  await window.loadURL("data:text/html,<html><body>RelayDesk preload smoke test</body></html>");
+  await window.loadFile(join(import.meta.dirname, "..", "dist", "renderer", "index.html"));
   console.log("Smoke page loaded; checking bridge");
   const exposed = await window.webContents.executeJavaScript("Object.keys(window.relayAgent ?? {}).sort()");
   const missing = expectedMethods.filter((method) => !exposed.includes(method));
+  const addFormOpened = await window.webContents.executeJavaScript("document.getElementById('add-account').click(); !document.getElementById('add-account-form').classList.contains('hidden')");
   clearTimeout(timeout);
-  if (missing.length) {
+  if (missing.length || !addFormOpened) {
+    if (!addFormOpened) console.error("Add-account form did not open");
     console.error(`Preload bridge is missing: ${missing.join(", ")}`);
     app.exit(1);
   } else {

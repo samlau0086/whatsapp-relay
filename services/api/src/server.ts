@@ -54,6 +54,20 @@ app.post("/api/v1/agents/enrollment", {preHandler:authenticate}, async(request,r
   return reply.code(201).send({agentId:agent.rows[0].id,enrollmentCode:code,expiresAt:agent.rows[0].enrollment_expires_at});
 });
 
+app.post("/agent/accounts", async(request,reply)=>{
+  const credential=request.headers.authorization?.replace(/^Bearer /,"");
+  if(!credential)return reply.code(401).send({error:"unauthorized"});
+  const agent=await pool.query("SELECT id FROM agents WHERE credential_hash=$1 AND status<>'revoked'",[hashSecret(credential)]);
+  if(!agent.rowCount)return reply.code(401).send({error:"unauthorized"});
+  const body=request.body as {id?:string;name?:string};
+  const id=body.id?.trim(),name=body.name?.trim();
+  if(!id||!name||name.length<2||name.length>80||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))return reply.code(400).send({error:"invalid_request"});
+  const created=await pool.query("INSERT INTO whatsapp_accounts(id,agent_id,display_name,status) VALUES($1,$2,$3,'pairing') ON CONFLICT(id) DO UPDATE SET display_name=EXCLUDED.display_name,status='pairing' WHERE whatsapp_accounts.agent_id=$2 RETURNING id,display_name,status",[id,agent.rows[0].id,name]);
+  if(!created.rowCount)return reply.code(409).send({error:"account_conflict"});
+  await pool.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('agent',$1,'account.create','whatsapp_account',$2,$3)",[agent.rows[0].id,id,JSON.stringify({displayName:name})]);
+  return reply.code(201).send(created.rows[0]);
+});
+
 app.post("/api/v1/api-keys", {preHandler:authenticate}, async(request,reply)=>{
   if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});const body=request.body as {name?:string;scopes?:string[];accountIds?:string[]};const secret=`rdk_${randomBytes(32).toString("base64url")}`;
   const created=await pool.query("INSERT INTO api_keys(name,key_prefix,secret_hash,scopes,account_ids) VALUES($1,$2,$3,$4,$5) RETURNING id,name,scopes,account_ids,created_at",[body.name?.trim()||"External system",secret.slice(0,12),hashSecret(secret),body.scopes??["messages:read","messages:send"],body.accountIds??null]);
