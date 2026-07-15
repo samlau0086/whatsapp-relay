@@ -9,7 +9,7 @@ import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount } from "./auth.js";
 import { enrollmentSchema, loginSchema, messageSchema } from "./schemas.js";
 import { encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
-import { registerAgentHub, dispatchPending } from "./agent-hub.js";
+import { registerAgentHub, dispatchPending, disconnectAgent } from "./agent-hub.js";
 
 const app = Fastify({ logger: { level: config.NODE_ENV === "production" ? "info" : "debug", redact:["req.headers.authorization","password"] }, bodyLimit: 2_000_000 });
 const s3 = new S3Client({ region:config.S3_REGION, endpoint:config.S3_ENDPOINT, forcePathStyle:true, credentials:{ accessKeyId:config.S3_ACCESS_KEY, secretAccessKey:config.S3_SECRET_KEY } });
@@ -19,7 +19,7 @@ await app.register(multipart, { limits:{ fileSize:64 * 1024 * 1024, files:1 } })
 await app.register(websocket, { options:{ maxPayload:2_000_000 } });
 
 app.get("/health", async () => { await pool.query("SELECT 1"); return { status:"ok", version:"0.1.0", time:new Date().toISOString() }; });
-app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"RelayDesk API",version:"0.1.0"}, paths:{ "/api/v1/messages":{post:{summary:"发送单条消息",responses:{"202":{description:"已进入持久队列"}}}}, "/api/v1/conversations":{get:{summary:"分页查询会话"}}, "/api/v1/conversations/{id}":{patch:{summary:"认领、收藏、关闭或标记已读"}}, "/api/v1/media":{post:{summary:"上传媒体"}} } }));
+app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"RelayDesk API",version:"0.1.0"}, paths:{ "/api/v1/messages":{post:{summary:"发送单条消息",responses:{"202":{description:"已进入持久队列"}}}}, "/api/v1/conversations":{get:{summary:"分页查询会话"}}, "/api/v1/conversations/{id}":{patch:{summary:"认领、收藏、关闭或标记已读"}}, "/api/v1/agents":{get:{summary:"查询已注册 Agent"}}, "/api/v1/agents/{id}":{patch:{summary:"重命名或撤销 Agent"},delete:{summary:"删除 Agent 登记"}}, "/api/v1/media":{post:{summary:"上传媒体"}} } }));
 
 app.post("/api/v1/auth/login", async (request, reply) => {
   const parsed = loginSchema.safeParse(request.body);
@@ -52,6 +52,39 @@ app.post("/api/v1/agents/enrollment", {preHandler:authenticate}, async(request,r
   const body=request.body as {name?:string};const code=`rde_${randomBytes(24).toString("base64url")}`;
   const agent=await pool.query("INSERT INTO agents(name,enrollment_code_hash,enrollment_expires_at) VALUES($1,$2,now()+interval '15 minutes') RETURNING id,enrollment_expires_at",[body.name?.trim()||"Windows Agent",hashSecret(code)]);
   return reply.code(201).send({agentId:agent.rows[0].id,enrollmentCode:code,expiresAt:agent.rows[0].enrollment_expires_at});
+});
+
+app.get("/api/v1/agents", {preHandler:authenticate}, async(request,reply)=>{
+  if(!["admin","supervisor"].includes(request.principal?.role??""))return reply.code(403).send({error:"supervisor_required"});
+  const [agents,accounts]=await Promise.all([
+    pool.query("SELECT id,name,status,version,protocol_version,platform,last_seen_at,last_acked_cursor,enrollment_expires_at,created_at FROM agents ORDER BY created_at DESC"),
+    pool.query("SELECT id,agent_id,display_name,phone_e164,status,status_reason,last_event_at FROM whatsapp_accounts WHERE agent_id IS NOT NULL ORDER BY display_name"),
+  ]);
+  return {data:agents.rows.map(agent=>({...agent,accounts:accounts.rows.filter(account=>account.agent_id===agent.id)}))};
+});
+
+app.patch("/api/v1/agents/:id", {preHandler:authenticate}, async(request,reply)=>{
+  if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
+  const {id}=request.params as {id:string};const body=(request.body??{}) as {name?:string;revoke?:boolean};const name=body.name?.trim();
+  if(name!==undefined&&(name.length<2||name.length>80)||body.revoke!==undefined&&typeof body.revoke!=="boolean")return reply.code(400).send({error:"invalid_request"});
+  const updated=await pool.query("UPDATE agents SET name=COALESCE($2,name),status=CASE WHEN $3 THEN 'revoked' ELSE status END,credential_hash=CASE WHEN $3 THEN NULL ELSE credential_hash END,enrollment_code_hash=CASE WHEN $3 THEN NULL ELSE enrollment_code_hash END,enrollment_expires_at=CASE WHEN $3 THEN NULL ELSE enrollment_expires_at END WHERE id=$1 RETURNING id,name,status,version,protocol_version,platform,last_seen_at,last_acked_cursor,created_at",[id,name??null,body.revoke===true]);
+  if(!updated.rowCount)return reply.code(404).send({error:"not_found"});
+  if(body.revoke)disconnectAgent(id);
+  await pool.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,$2,'agent',$3,$4)",[request.principal.id,body.revoke?"agent.revoke":"agent.rename",id,JSON.stringify({name})]);
+  return updated.rows[0];
+});
+
+app.delete("/api/v1/agents/:id", {preHandler:authenticate}, async(request,reply)=>{
+  if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
+  const {id}=request.params as {id:string};
+  const removed=await transaction(async client=>{
+    const agent=await client.query("SELECT id FROM agents WHERE id=$1",[id]);if(!agent.rowCount)return false;
+    await client.query("UPDATE whatsapp_accounts SET agent_id=NULL,status='offline',status_reason='agent_removed' WHERE agent_id=$1",[id]);
+    await client.query("DELETE FROM agents WHERE id=$1",[id]);
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id) VALUES('user',$1,'agent.delete','agent',$2)",[request.principal?.id,id]);
+    return true;
+  });
+  if(!removed)return reply.code(404).send({error:"not_found"});disconnectAgent(id,"deleted");return reply.code(204).send();
 });
 
 app.post("/agent/accounts", async(request,reply)=>{
@@ -123,7 +156,7 @@ app.post("/agent/media", async(request,reply)=>{
 
 app.get("/api/v1/accounts", { preHandler:authenticate }, async (request) => {
   const ids = request.principal?.accountIds;
-  const result = await pool.query("SELECT id,display_name,phone_e164,status,status_reason,last_connected_at,last_event_at FROM whatsapp_accounts WHERE $1::uuid[] IS NULL OR id=ANY($1) ORDER BY display_name", [ids ?? null]);
+  const result = await pool.query("SELECT id,display_name,phone_e164,status,status_reason,last_connected_at,last_event_at FROM whatsapp_accounts WHERE agent_id IS NOT NULL AND ($1::uuid[] IS NULL OR id=ANY($1)) ORDER BY display_name", [ids ?? null]);
   return { data:result.rows };
 });
 
@@ -131,7 +164,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request) =>
   const query = request.query as { accountId?:string; status?:string; q?:string; limit?:string; before?:string };
   const limit = Math.min(100,Math.max(1,Number(query.limit ?? 30)));
   if (query.accountId && !canAccessAccount(request.principal,query.accountId)) return { data:[], nextCursor:null };
-  const result = await pool.query(`SELECT c.id,c.status,c.favorite,c.unread_count,c.last_message_at,c.assigned_user_id,co.display_name,co.phone_e164,co.avatar_url,a.id account_id,a.display_name account_name,a.status account_status,m.text_content last_message,m.kind last_message_kind FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN whatsapp_accounts a ON a.id=c.account_id LEFT JOIN LATERAL (SELECT text_content,kind FROM messages WHERE conversation_id=c.id ORDER BY occurred_at DESC LIMIT 1)m ON true WHERE ($1::uuid IS NULL OR c.account_id=$1) AND ($2::text IS NULL OR c.status::text=$2) AND ($3::text IS NULL OR co.display_name ILIKE '%'||$3||'%' OR co.phone_e164 ILIKE '%'||$3||'%') AND ($4::timestamptz IS NULL OR c.last_message_at<$4) ORDER BY c.last_message_at DESC NULLS LAST LIMIT $5`, [query.accountId ?? null,query.status ?? null,query.q ?? null,query.before ?? null,limit+1]);
+  const result = await pool.query(`SELECT c.id,c.status,c.favorite,c.unread_count,c.last_message_at,c.assigned_user_id,co.display_name,co.phone_e164,co.avatar_url,a.id account_id,a.display_name account_name,a.status account_status,m.text_content last_message,m.kind last_message_kind FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN whatsapp_accounts a ON a.id=c.account_id LEFT JOIN LATERAL (SELECT text_content,kind FROM messages WHERE conversation_id=c.id ORDER BY occurred_at DESC LIMIT 1)m ON true WHERE a.agent_id IS NOT NULL AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::text IS NULL OR c.status::text=$2) AND ($3::text IS NULL OR co.display_name ILIKE '%'||$3||'%' OR co.phone_e164 ILIKE '%'||$3||'%') AND ($4::timestamptz IS NULL OR c.last_message_at<$4) ORDER BY c.last_message_at DESC NULLS LAST LIMIT $5`, [query.accountId ?? null,query.status ?? null,query.q ?? null,query.before ?? null,limit+1]);
   const hasMore = result.rows.length > limit; const data = result.rows.slice(0,limit);
   return { data, nextCursor:hasMore ? data[data.length-1]?.last_message_at : null };
 });
@@ -194,5 +227,11 @@ async function ensureAdmin():Promise<void>{
   await pool.query("UPDATE users SET password_hash=$2,role='admin',disabled_at=NULL,updated_at=now() WHERE lower(email)=lower($1)",[config.ADMIN_EMAIL,hashPassword(config.ADMIN_PASSWORD)]);
 }
 
+async function removeLegacyDemoData():Promise<void>{
+  const removed=await pool.query("DELETE FROM whatsapp_accounts WHERE id=ANY($1::uuid[]) RETURNING id",[["10000000-0000-4000-8000-000000000001","10000000-0000-4000-8000-000000000002"]]);
+  if(removed.rowCount)await pool.query("INSERT INTO audit_log(actor_type,action,target_type,metadata) VALUES('system','legacy_demo.remove','whatsapp_account',$1)",[JSON.stringify({accountIds:removed.rows.map(row=>row.id)})]);
+}
+
+await removeLegacyDemoData();
 await ensureAdmin();
 await app.listen({port:config.PORT,host:"0.0.0.0"});

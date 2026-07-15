@@ -21,10 +21,17 @@ export async function registerAgentHub(app: FastifyInstance): Promise<void> {
     }));
     socket.on("close", () => {
       if (liveAgents.get(agent.id) === socket) liveAgents.delete(agent.id);
-      void pool.query("UPDATE agents SET status='offline' WHERE id=$1", [agent.id]);
+      void pool.query("UPDATE agents SET status=CASE WHEN status='revoked' THEN status ELSE 'offline' END WHERE id=$1", [agent.id]);
     });
     await dispatchPending(agent.id, socket);
   });
+}
+
+export function disconnectAgent(agentId:string,reason="revoked"):void {
+  const socket=liveAgents.get(agentId);
+  if(!socket)return;
+  liveAgents.delete(agentId);
+  socket.close(4003,reason);
 }
 
 async function authenticateAgent(request: FastifyRequest): Promise<{ id: string } | null> {

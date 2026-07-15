@@ -105,6 +105,7 @@ RelayDesk 是一个自托管的 WhatsApp 多账号消息聚合平台。它由中
 - 中文四栏共享收件箱，会话筛选、搜索、联系人详情、离线状态与发送排队反馈。
 - 多坐席角色、账号权限、联系人、会话、消息、回执、标签、备注和审计数据模型。
 - `/api/v1` 登录、账号/会话/消息查询、幂等发送、媒体上传、API Key、Webhook 和 Agent 注册接口。
+- Web 左侧 Agent 管理页可查看设备版本、协议、在线状态、同步游标与绑定账号，并支持注册、重命名、撤销和删除。
 - 中心与 Agent 的版本化 WebSocket 协议；PostgreSQL 发件箱与本地 SQLite WAL 共同提供至少一次传输和幂等落库。
 - Windows Electron Agent、DPAPI 保护的本地主密钥、按账号子进程、扫码配对、断网重连和串行发送。
 - Webhook HMAC-SHA256 签名、24 小时重试、人工重放；不确定发送会停止自动重试以避免重复消息。
@@ -115,6 +116,8 @@ RelayDesk 是一个自托管的 WhatsApp 多账号消息聚合平台。它由中
 ### 工作台预览
 
 工作台不再注入演示账号、联系人或消息。页面必须登录中心 API，并只展示 PostgreSQL 中由 Windows Agent 同步的真实数据；没有会话时会显示真实空状态。若 Web 与 API 不同域，请在构建 Web 时设置 `NEXT_PUBLIC_RELAY_API_URL`，同时确保 API 的 `CORS_ORIGIN` 指向工作台域名。
+
+历史版本曾通过 `002_seed_demo.sql` 写入 `Pharah House` 等演示记录。当前版本已移除该种子，并在中心 API 启动时自动删除这些固定 ID 的旧记录；不会删除真实账号或消息。
 
 ```powershell
 npm install
