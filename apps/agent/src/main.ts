@@ -129,14 +129,14 @@ ipcMain.handle("account:add", async (_event, input: {id:string;name:string}) => 
   const baseUrl = store.get("baseUrl") ?? DEFAULT_CENTRAL_URL;
   const credential = store.get("credential");
   if (!credential) throw new Error("设备尚未注册到中心平台");
-  const response = await fetch(new URL("/agent/accounts", baseUrl), {
+  const response = await fetchWithRetry(new URL("/agent/accounts", baseUrl), {
     method: "POST",
     headers: { authorization: `Bearer ${credential}`, "content-type": "application/json" },
     body: JSON.stringify(input),
   });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({})) as {error?:string};
-    throw new Error(body.error === "account_conflict" ? "账号 ID 已被其他 Agent 使用" : "中心账号登记失败，请检查连接后重试");
+    const body = await response.json().catch(() => ({})) as {error?:string;message?:string};
+    throw new Error(body.error === "account_conflict" ? "账号 ID 已被其他 Agent 使用" : `中心账号登记失败（HTTP ${response.status}${body.error?` · ${body.error}`:""}）`);
   }
   store.upsertAccount(input.id, input.name, "pairing");
   await startAccount(input.id, input.name, app.getPath("userData"));
@@ -282,6 +282,21 @@ async function accountRequest(accountId:string,method:"PATCH"|"DELETE",body?:Rec
   const baseUrl=store.get("baseUrl")??DEFAULT_CENTRAL_URL;const credential=store.get("credential");if(!credential)throw new Error("设备尚未注册到中心平台");
   const response=await fetch(new URL(`/agent/accounts/${encodeURIComponent(accountId)}`,baseUrl),{method,headers:{authorization:`Bearer ${credential}`,...(body?{"content-type":"application/json"}:{})},body:body?JSON.stringify(body):undefined});
   if(!response.ok)throw new Error(response.status===404?"中心平台尚未部署账号管理接口，或账号不存在":"中心账号操作失败，请检查连接后重试");
+}
+
+async function fetchWithRetry(url:URL,init:RequestInit):Promise<Response>{
+  let lastError:unknown;
+  for(let attempt=0;attempt<3;attempt++){
+    try{
+      const response=await fetch(url,{...init,signal:AbortSignal.timeout(15_000)});
+      if(![429,502,503,504].includes(response.status)||attempt===2)return response;
+      await response.arrayBuffer().catch(()=>undefined);
+      lastError=new Error(`HTTP ${response.status}`);
+    }catch(error){lastError=error;if(attempt===2)break;}
+    await new Promise(resolve=>setTimeout(resolve,500*(2**attempt)+Math.floor(Math.random()*250)));
+  }
+  const detail=lastError instanceof Error?lastError.message:String(lastError??"unknown_error");
+  throw new Error(`无法连接中心账号接口：${detail}`);
 }
 
 async function resolveProxyUrl(targetUrl: string): Promise<string | undefined> {
