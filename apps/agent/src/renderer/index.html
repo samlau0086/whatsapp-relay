@@ -16,7 +16,7 @@
     </section>
     <section class="card" id="enroll-card">
       <b>注册这台设备</b><p class="hint">在中心平台创建一次性注册码，然后在这里完成绑定。</p>
-      <label>中心平台地址</label><input id="base-url" value="http://localhost:8080">
+      <label>中心平台地址</label><input id="base-url" value="https://whatsapp.geekmt.com">
       <label>设备名称</label><input id="agent-name" value="办公室 Windows Agent">
       <label>一次性注册码</label><input id="code" placeholder="粘贴注册码">
       <button id="enroll">注册设备</button><p class="error" id="error"></p>
@@ -34,14 +34,20 @@
   </main>
   <script>
     const api=window.relayAgent;const $=id=>document.getElementById(id);
-    async function refresh(){const s=await api.state();$("base-url").value=s.baseUrl;$("enroll-card").classList.toggle("hidden",s.enrolled);$("accounts-card").classList.toggle("hidden",!s.enrolled);$("central-label").textContent=s.baseUrl;$("version").textContent=`Agent v${s.version} · 协议 v${s.protocolVersion}`;status(s.connection);render(s.accounts)}
+    async function refresh(){const s=await api.state();$("base-url").value=s.baseUrl;$("enroll-card").classList.toggle("hidden",s.enrolled);$("accounts-card").classList.toggle("hidden",!s.enrolled);$("central-label").textContent=s.enrolled?s.baseUrl:`尚未注册 · ${s.baseUrl}`;$("version").textContent=`Agent v${s.version} · 协议 v${s.protocolVersion}`;status(s.connection);render(s.accounts)}
     function status(value){$("central-status").textContent=value==="online"?"已连接":value==="incompatible"?"版本不兼容":"离线";$("central-dot").classList.toggle("online",value==="online")}
     function escapeHtml(value){return String(value).replace(/[&<>'"]/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"})[char])}
     function render(items){$("accounts").innerHTML=items.length?items.map(a=>`<div class="account"><span><b>${escapeHtml(a.name)}</b><br><small>${escapeHtml(a.id)}</small></span><span class="status"><i class="dot ${a.status==='online'?'online':''}"></i>${escapeHtml(a.status)}</span></div>`).join(""):'<p class="hint">尚未添加账号</p>'}
-    $("enroll").onclick=async()=>{try{$("error").textContent="";await api.enroll({baseUrl:$("base-url").value,code:$("code").value,name:$("agent-name").value});await refresh()}catch(e){$("error").textContent=e.message}};
-    $("add-account").onclick=async()=>{const name=prompt("账号显示名称","新 WhatsApp 账号");if(!name)return;await api.addAccount({id:crypto.randomUUID(),name});await refresh()};
-    $("diagnostics").onclick=async()=>{try{const data=await api.diagnostics();const text=JSON.stringify(data,null,2);$("diagnostics-output").textContent=text;$("diagnostics-output").classList.remove("hidden");$("diagnostics-error").textContent="";await navigator.clipboard.writeText(text);$("diagnostics").textContent="已复制";setTimeout(()=>$("diagnostics").textContent="生成并复制",1500)}catch(e){$("diagnostics-error").textContent=`诊断已生成，但复制失败：${e.message}`}};
-    api.onEvent(e=>{if(e.type==="central_status")status(e.status);if(e.type==="qr"&&e.qrDataUrl){$("qr-wrap").classList.remove("hidden");$("qr").src=e.qrDataUrl}refresh()});refresh();
+    if(!api){
+      const message="Agent 安全桥接加载失败。请安装修复版本后完全退出并重新打开 Agent。";
+      $("central-label").textContent=message;$("error").textContent=message;$("diagnostics-error").textContent=message;
+      $("enroll").disabled=true;$("diagnostics").disabled=true;
+    }else{
+      $("enroll").onclick=async()=>{try{$("error").textContent="";const baseUrl=$("base-url").value.trim().replace(/\/$/,"");if(!/^https:\/\//.test(baseUrl)&&!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(baseUrl))throw new Error("公网中心地址必须使用 HTTPS");await api.enroll({baseUrl,code:$("code").value.trim(),name:$("agent-name").value.trim()});await refresh()}catch(e){$("error").textContent=e.message}};
+      $("add-account").onclick=async()=>{const name=prompt("账号显示名称","新 WhatsApp 账号");if(!name)return;await api.addAccount({id:crypto.randomUUID(),name});await refresh()};
+      $("diagnostics").onclick=async()=>{try{const data=await api.diagnostics();const text=JSON.stringify(data,null,2);$("diagnostics-output").textContent=text;$("diagnostics-output").classList.remove("hidden");$("diagnostics-error").textContent="";try{await navigator.clipboard.writeText(text);$("diagnostics").textContent="已复制";setTimeout(()=>$("diagnostics").textContent="生成并复制",1500)}catch{$("diagnostics-error").textContent="诊断已生成，但系统剪贴板不可用；可从下方手动复制。"}}catch(e){$("diagnostics-error").textContent=`诊断生成失败：${e.message}`}};
+      api.onEvent(e=>{if(e.type==="central_status")status(e.status);if(e.type==="qr"&&e.qrDataUrl){$("qr-wrap").classList.remove("hidden");$("qr").src=e.qrDataUrl}refresh()});refresh().catch(e=>{$("central-label").textContent=`状态读取失败：${e.message}`});
+    }
   </script>
 </body>
 </html>

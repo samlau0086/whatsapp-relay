@@ -9,6 +9,7 @@ import { AgentStore } from "./store.js";
 import { CentralClient } from "./central-client.js";
 
 const PROTOCOL_VERSION = 1;
+const DEFAULT_CENTRAL_URL = "https://whatsapp.geekmt.com";
 let window: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let store: AgentStore;
@@ -40,9 +41,10 @@ function createWindow(): void {
     title: "RelayDesk Agent",
     backgroundColor: "#f4f7f5",
     webPreferences: {
-      preload: join(import.meta.dirname, "preload.js"),
+      preload: join(import.meta.dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
   });
   void window.loadFile(join(import.meta.dirname, "renderer", "index.html"));
@@ -68,7 +70,7 @@ function createTray(): void {
 }
 
 ipcMain.handle("agent:state", () => ({
-  baseUrl: store.get("baseUrl") ?? "http://localhost:8080",
+  baseUrl: store.get("baseUrl") ?? DEFAULT_CENTRAL_URL,
   enrolled: Boolean(store.get("credential")),
   connection: store.get("connection") ?? "offline",
   version: app.getVersion(),
@@ -181,7 +183,7 @@ function startAccount(accountId: string, name: string, dataDir: string): void {
     accountId,
     dataDir: join(dataDir, "accounts"),
     masterKey,
-    baseUrl: store.get("baseUrl") ?? "http://localhost:8080",
+    baseUrl: store.get("baseUrl") ?? DEFAULT_CENTRAL_URL,
     credential: store.get("credential") ?? "",
   });
 }

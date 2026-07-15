@@ -52,19 +52,19 @@ Get-ChildItem release
 - Actions 页面手动运行 `Build Windows Agent`：构建未签名安装包并保存 14 天的 workflow artifact，适合内部测试。
 - 推送版本标签：校验标签与 `apps/agent/package.json` 的版本一致，构建安装包、生成 `SHA256SUMS.txt`，并创建 GitHub Release。
 
-发布 `0.1.1` 示例：
+发布 `0.1.2` 示例：
 
 ```powershell
-git tag agent-v0.1.1
-git push origin agent-v0.1.1
+git tag agent-v0.1.2
+git push origin agent-v0.1.2
 ```
 
 升级版本时先修改 `apps/agent/package.json` 和 lockfile，完成兼容测试后再创建对应标签。不要让 Agent 自动跨版本升级 Baileys；每个版本都应使用测试账号观察后再灰度分发。
 
 ## 4. 首次注册和扫码
 
-1. 在中心后台创建一次性 Agent 注册码；若暂时没有管理界面，可由管理员凭据调用 `POST /api/v1/agents/enrollment`。
-2. 安装并打开 RelayDesk Agent，中心地址填写公网 HTTPS 根地址，例如 `https://relay.example.com`，不要填写 VPS 内网容器地址。
+1. 打开中心工作台，点击左下角“设置”，使用管理员账号登录；登录后填写 Agent 设备名称并点击“生成一次性注册码”。注册码有效期为 15 分钟。
+2. 安装并打开 RelayDesk Agent，中心地址填写 `https://whatsapp.geekmt.com`，不要填写 `localhost:8080` 或 VPS 内网容器地址。
 3. 输入设备名和一次性注册码完成注册。状态应从“离线”变为“已连接”。
 4. 点击“添加账号”，输入便于识别的测试账号名称。
 5. 手机 WhatsApp 打开“关联设备”并扫描 Agent 窗口中的二维码。
