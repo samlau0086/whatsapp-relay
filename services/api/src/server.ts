@@ -7,7 +7,7 @@ import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount } from "./auth.js";
-import { enrollmentSchema, loginSchema, messageSchema } from "./schemas.js";
+import { enrollmentSchema, loginSchema, messageSchema, newConversationSchema } from "./schemas.js";
 import { encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
 import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline } from "./agent-hub.js";
 
@@ -19,7 +19,7 @@ await app.register(multipart, { limits:{ fileSize:64 * 1024 * 1024, files:1 } })
 await app.register(websocket, { options:{ maxPayload:2_000_000 } });
 
 app.get("/health", async () => { await pool.query("SELECT 1"); return { status:"ok", version:"0.1.0", time:new Date().toISOString() }; });
-app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"RelayDesk API",version:"0.1.0"}, paths:{ "/api/v1/messages":{post:{summary:"发送单条消息",responses:{"202":{description:"已进入持久队列"}}}}, "/api/v1/conversations":{get:{summary:"分页查询会话"}}, "/api/v1/conversations/{id}":{patch:{summary:"认领、收藏、关闭或标记已读"}}, "/api/v1/agents":{get:{summary:"查询已注册 Agent"}}, "/api/v1/agents/{id}":{patch:{summary:"重命名或撤销 Agent"},delete:{summary:"删除 Agent 登记"}}, "/api/v1/media":{post:{summary:"上传媒体"}} } }));
+app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"RelayDesk API",version:"0.1.0"}, paths:{ "/api/v1/messages":{post:{summary:"发送单条消息",responses:{"202":{description:"已进入持久队列"}}}}, "/api/v1/conversations":{get:{summary:"分页查询会话"},post:{summary:"创建或复用单个联系人会话并发送首条文本消息"}}, "/api/v1/conversations/{id}":{patch:{summary:"认领、收藏、关闭或标记已读"}}, "/api/v1/agents":{get:{summary:"查询已注册 Agent"}}, "/api/v1/agents/{id}":{patch:{summary:"重命名或撤销 Agent"},delete:{summary:"删除 Agent 登记"}}, "/api/v1/media":{post:{summary:"上传媒体"}} } }));
 
 app.post("/api/v1/auth/login", async (request, reply) => {
   const parsed = loginSchema.safeParse(request.body);
@@ -182,6 +182,26 @@ app.patch("/api/v1/conversations/:id", { preHandler:authenticate }, async (reque
   return updated.rows[0];
 });
 
+app.post("/api/v1/conversations", {preHandler:authenticate}, async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const principal=request.principal;
+  const parsed=newConversationSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  if(!canAccessAccount(principal,parsed.data.accountId))return reply.code(403).send({error:"account_forbidden"});
+  const result=await transaction(async client=>{
+    const account=await client.query("SELECT id,agent_id,status FROM whatsapp_accounts WHERE id=$1 AND agent_id IS NOT NULL",[parsed.data.accountId]);if(!account.rowCount)return null;
+    const existing=await client.query("SELECT m.id message_id,m.status,c.id conversation_id FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.account_id=$1 AND m.client_message_id=$2",[parsed.data.accountId,parsed.data.clientMessageId]);
+    if(existing.rowCount)return {conversationId:existing.rows[0].conversation_id,messageId:existing.rows[0].message_id,status:existing.rows[0].status,deduplicated:true,agentId:account.rows[0].agent_id};
+    const phone=`+${parsed.data.phone}`,waJid=`${parsed.data.phone}@s.whatsapp.net`,displayName=parsed.data.displayName||phone;
+    const contact=await client.query("INSERT INTO contacts(account_id,wa_jid,phone_e164,display_name) VALUES($1,$2,$3,$4) ON CONFLICT(account_id,wa_jid) DO UPDATE SET phone_e164=EXCLUDED.phone_e164,display_name=CASE WHEN $5 THEN EXCLUDED.display_name ELSE COALESCE(contacts.display_name,EXCLUDED.display_name) END RETURNING id",[parsed.data.accountId,waJid,phone,displayName,Boolean(parsed.data.displayName)]);
+    const conversation=await client.query("INSERT INTO conversations(account_id,contact_id,status,last_message_at) VALUES($1,$2,'open',now()) ON CONFLICT(account_id,contact_id) DO UPDATE SET status='open',closed_at=NULL,last_message_at=now() RETURNING id",[parsed.data.accountId,contact.rows[0].id]);
+    const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,status,occurred_at) VALUES($1,$2,$3,$4,'out','text',$5,'queued',now()) RETURNING id,status",[conversation.rows[0].id,parsed.data.accountId,principal.id,parsed.data.clientMessageId,parsed.data.firstMessage]);
+    const command=await client.query("INSERT INTO outbound_commands(agent_id,account_id,message_id,command,payload) VALUES($1,$2,$3,'send_message',$4) RETURNING id",[account.rows[0].agent_id,parsed.data.accountId,message.rows[0].id,JSON.stringify({accountId:parsed.data.accountId,conversationId:conversation.rows[0].id,clientMessageId:parsed.data.clientMessageId,type:"text",text:parsed.data.firstMessage,messageId:message.rows[0].id,toJid:waJid})]);
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'conversation.initiate','conversation',$2,$3)",[principal.id,conversation.rows[0].id,JSON.stringify({contactId:contact.rows[0].id,messageId:message.rows[0].id,commandId:command.rows[0].id,phone})]);
+    return {conversationId:conversation.rows[0].id,messageId:message.rows[0].id,status:message.rows[0].status,deduplicated:false,agentId:account.rows[0].agent_id};
+  });
+  if(!result)return reply.code(404).send({error:"account_not_found"});if(result.agentId)void dispatchPending(result.agentId);return reply.code(202).send(result);
+});
+
 app.get("/api/v1/conversations/:id/messages", { preHandler:authenticate }, async (request, reply) => {
   const { id } = request.params as {id:string}; const query = request.query as { before?:string; limit?:string };
   const conversation = await pool.query("SELECT account_id FROM conversations WHERE id=$1",[id]);
@@ -199,6 +219,7 @@ app.post("/api/v1/messages", { preHandler:authenticate }, async (request, reply)
     if(!conversation.rowCount) return null;
     const existing=await client.query("SELECT id,status FROM messages WHERE account_id=$1 AND client_message_id=$2",[parsed.data.accountId,parsed.data.clientMessageId]); if(existing.rowCount)return {messageId:existing.rows[0].id,status:existing.rows[0].status,deduplicated:true,agentId:conversation.rows[0].agent_id};
     const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,media_id,quoted_message_id,status,occurred_at) VALUES($1,$2,$3,$4,'out',$5,$6,$7,$8,'queued',now()) RETURNING id,status",[parsed.data.conversationId,parsed.data.accountId,request.principal?.kind==='user'?request.principal.id:null,parsed.data.clientMessageId,parsed.data.type,parsed.data.text??null,parsed.data.mediaId??null,parsed.data.quotedMessageId??null]);
+    await client.query("UPDATE conversations SET status='open',closed_at=NULL,last_message_at=now() WHERE id=$1",[parsed.data.conversationId]);
     const command=await client.query("INSERT INTO outbound_commands(agent_id,account_id,message_id,command,payload) VALUES($1,$2,$3,'send_message',$4) RETURNING id,sequence",[conversation.rows[0].agent_id,parsed.data.accountId,message.rows[0].id,JSON.stringify({...parsed.data,messageId:message.rows[0].id,toJid:conversation.rows[0].wa_jid})]);
     await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'message.queue','message',$3,$4)",[request.principal?.kind,request.principal?.id,message.rows[0].id,JSON.stringify({commandId:command.rows[0].id})]);
     return {messageId:message.rows[0].id,status:"queued",deduplicated:false,agentId:conversation.rows[0].agent_id};
