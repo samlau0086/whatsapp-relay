@@ -4,7 +4,9 @@ import { pool, transaction } from "./db.js";
 import { hashSecret } from "./security.js";
 
 const PROTOCOL_VERSION = 1;
+const HEARTBEAT_TIMEOUT_SECONDS = 45;
 const liveAgents = new Map<string, WebSocket>();
+let watchdog:NodeJS.Timeout|undefined;
 
 type AgentFrame = { type: string; [key: string]: unknown };
 
@@ -20,11 +22,14 @@ export async function registerAgentHub(app: FastifyInstance): Promise<void> {
       socket.send(JSON.stringify({ type:"error", code:"frame_failed" }));
     }));
     socket.on("close", () => {
-      if (liveAgents.get(agent.id) === socket) liveAgents.delete(agent.id);
-      void pool.query("UPDATE agents SET status=CASE WHEN status='revoked' THEN status ELSE 'offline' END WHERE id=$1", [agent.id]);
+      if (liveAgents.get(agent.id) !== socket) return;
+      liveAgents.delete(agent.id);
+      void markAgentOffline(agent.id,"agent_disconnected");
     });
     await dispatchPending(agent.id, socket);
   });
+  watchdog??=setInterval(()=>void markStaleAgentsOffline().catch(error=>app.log.error({error},"agent heartbeat watchdog failed")),15_000);
+  app.addHook("onClose",async()=>{if(watchdog){clearInterval(watchdog);watchdog=undefined;}});
 }
 
 export function disconnectAgent(agentId:string,reason="revoked"):void {
@@ -32,6 +37,27 @@ export function disconnectAgent(agentId:string,reason="revoked"):void {
   if(!socket)return;
   liveAgents.delete(agentId);
   socket.close(4003,reason);
+}
+
+export async function markStaleAgentsOffline():Promise<number>{
+  return transaction(async client=>{
+    const stale=await client.query(`UPDATE agents SET status='offline' WHERE status='online' AND last_seen_at<now()-($1::text||' seconds')::interval RETURNING id`,[HEARTBEAT_TIMEOUT_SECONDS]);
+    const offline=await client.query("SELECT id FROM agents WHERE status IN ('offline','revoked')");
+    for(const row of offline.rows)await markAgentAccountsOffline(client,row.id,stale.rows.some(item=>item.id===row.id)?"agent_heartbeat_timeout":"agent_offline");
+    return stale.rowCount??0;
+  });
+}
+
+async function markAgentOffline(agentId:string,reason:string):Promise<void>{
+  await transaction(async client=>{
+    await client.query("UPDATE agents SET status=CASE WHEN status='revoked' THEN status ELSE 'offline' END WHERE id=$1",[agentId]);
+    await markAgentAccountsOffline(client,agentId,reason);
+  });
+}
+
+async function markAgentAccountsOffline(client:import("pg").PoolClient,agentId:string,reason:string):Promise<void>{
+  const accounts=await client.query("UPDATE whatsapp_accounts SET status='offline',status_reason=$2,last_event_at=now() WHERE agent_id=$1 AND status IN ('online','pairing') RETURNING id",[agentId,reason]);
+  for(const account of accounts.rows)await createWebhookEvent(client,"account.status_changed",account.id,{accountId:account.id,status:"offline",reason,at:new Date().toISOString()});
 }
 
 async function authenticateAgent(request: FastifyRequest): Promise<{ id: string } | null> {

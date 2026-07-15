@@ -9,7 +9,7 @@ import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount } from "./auth.js";
 import { enrollmentSchema, loginSchema, messageSchema } from "./schemas.js";
 import { encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
-import { registerAgentHub, dispatchPending, disconnectAgent } from "./agent-hub.js";
+import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline } from "./agent-hub.js";
 
 const app = Fastify({ logger: { level: config.NODE_ENV === "production" ? "info" : "debug", redact:["req.headers.authorization","password"] }, bodyLimit: 2_000_000 });
 const s3 = new S3Client({ region:config.S3_REGION, endpoint:config.S3_ENDPOINT, forcePathStyle:true, credentials:{ accessKeyId:config.S3_ACCESS_KEY, secretAccessKey:config.S3_SECRET_KEY } });
@@ -56,6 +56,7 @@ app.post("/api/v1/agents/enrollment", {preHandler:authenticate}, async(request,r
 
 app.get("/api/v1/agents", {preHandler:authenticate}, async(request,reply)=>{
   if(!["admin","supervisor"].includes(request.principal?.role??""))return reply.code(403).send({error:"supervisor_required"});
+  await markStaleAgentsOffline();
   const [agents,accounts]=await Promise.all([
     pool.query("SELECT id,name,status,version,protocol_version,platform,last_seen_at,last_acked_cursor,enrollment_expires_at,created_at FROM agents ORDER BY created_at DESC"),
     pool.query("SELECT id,agent_id,display_name,phone_e164,status,status_reason,last_event_at FROM whatsapp_accounts WHERE agent_id IS NOT NULL ORDER BY display_name"),
