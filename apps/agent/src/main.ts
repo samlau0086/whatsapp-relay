@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { fork, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, safeStorage, session, Tray } from "electron";
@@ -10,6 +10,9 @@ import { CentralClient } from "./central-client.js";
 
 const PROTOCOL_VERSION = 1;
 const DEFAULT_CENTRAL_URL = "https://whatsapp.geekmt.com";
+const STABLE_USER_DATA = join(app.getPath("appData"), "@relaydesk", "windows-agent");
+mkdirSync(STABLE_USER_DATA,{recursive:true});
+app.setPath("userData", STABLE_USER_DATA);
 let window: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let store: AgentStore;
@@ -43,7 +46,7 @@ function createWindow(): void {
     height: 660,
     minWidth: 620,
     minHeight: 520,
-    title: "RelayDesk Agent",
+    title: `RelayDesk Agent v${app.getVersion()}`,
     backgroundColor: "#f4f7f5",
     webPreferences: {
       preload: join(import.meta.dirname, "preload.cjs"),
@@ -65,7 +68,7 @@ function createTray(): void {
   const traySvg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="#167b50"/><path d="M9 10h14v9H15l-5 4v-4H9z" fill="white"/><circle cx="13" cy="14.5" r="1" fill="#167b50"/><circle cx="16" cy="14.5" r="1" fill="#167b50"/><circle cx="19" cy="14.5" r="1" fill="#167b50"/></svg>`;
   const icon = nativeImage.createFromDataURL(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(traySvg)}`).resize({ width: 16, height: 16 });
   tray = new Tray(icon);
-  tray.setToolTip("RelayDesk WhatsApp Agent");
+  tray.setToolTip(`RelayDesk WhatsApp Agent v${app.getVersion()}`);
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "打开 RelayDesk Agent", click: () => window?.show() },
     { type: "separator" },
@@ -92,6 +95,7 @@ ipcMain.handle("agent:diagnostics", async () => ({
   platform: `${process.platform}-${process.arch}`,
   centralConnection: store.get("connection") ?? "offline",
   baseUrl: store.get("baseUrl") ?? "",
+  userDataPath: app.getPath("userData"),
   enrolled: Boolean(store.get("credential")),
   accounts: store.accounts().map(({ id, name, status, last_error }) => ({ id, name, status, lastError: last_error })),
   proxy: await proxyState(),
