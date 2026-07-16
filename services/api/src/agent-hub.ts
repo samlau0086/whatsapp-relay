@@ -112,7 +112,7 @@ async function processBatch(agentId: string, frame: AgentFrame): Promise<{ackedC
           if(event.kind==="message")await ingestMessage(client,agentId,event.payload);
           else if(event.kind==="message_status")await updateMessageStatus(client,event.payload);
           else if(event.kind==="account_status"){
-            const updated=await client.query("UPDATE whatsapp_accounts SET status=$2,status_reason=$3,last_event_at=now(),last_connected_at=CASE WHEN $2='online' THEN now() ELSE last_connected_at END WHERE id=$1 AND agent_id=$4 RETURNING id",[event.payload.accountId,event.payload.status,event.payload.reason??null,agentId]);
+            const updated=await client.query("UPDATE whatsapp_accounts SET status=$2::wa_account_status,status_reason=$3,last_event_at=now(),last_connected_at=CASE WHEN $2::wa_account_status='online'::wa_account_status THEN now() ELSE last_connected_at END WHERE id=$1 AND agent_id=$4 RETURNING id",[event.payload.accountId,event.payload.status,event.payload.reason??null,agentId]);
             if(updated.rowCount)await createWebhookEvent(client,"account.status_changed",String(event.payload.accountId),event.payload);
           }else throw new Error("unsupported_event_kind");
         }

@@ -28,12 +28,11 @@ async function connect(options:Init):Promise<void>{
   const auth=await encryptedAuthState(join(options.dataDir,options.accountId),Buffer.from(options.masterKey,"hex"));
   messageCache=auth;
   const proxyAgent=options.proxyUrl?new HttpsProxyAgent(options.proxyUrl):undefined;
-  const axiosOptions=proxyAgent?{httpsAgent:proxyAgent,proxy:false as const}:{};
-  const {version}=await fetchLatestBaileysVersion(axiosOptions);
+  const {version}=await fetchLatestBaileysVersion();
   const logger=pino({level:"warn"});
-  socket=makeWASocket({version,auth:auth.state,logger,browser:Browsers.windows("RelayDesk Agent"),syncFullHistory:false,markOnlineOnConnect:false,generateHighQualityLinkPreview:false,agent:proxyAgent,fetchAgent:proxyAgent,options:axiosOptions,getMessage:async key=>key.id?auth.getMessage(key.id):undefined});
+  socket=makeWASocket({version,auth:auth.state,logger,browser:Browsers.windows("RelayDesk Agent"),syncFullHistory:false,markOnlineOnConnect:false,generateHighQualityLinkPreview:false,agent:proxyAgent,fetchAgent:proxyAgent,getMessage:async key=>key.id?auth.getMessage(key.id):undefined});
   socket.ev.on("creds.update",auth.saveCreds);
-  socket.ev.on("chats.phoneNumberShare",({lid,jid})=>{void auth.saveLidMapping(lid,jid);});
+  socket.ev.on("lid-mapping.update",({lid,pn})=>{void auth.saveLidMapping(lid,pn);});
   socket.ev.on("connection.update",({connection,lastDisconnect,qr})=>{
     if(qr)emit({type:"qr",accountId:options.accountId,qr});
     if(connection==="open"){connectionOpen=true;reconnectAttempt=0;emit({type:"status",accountId:options.accountId,status:"online"});}

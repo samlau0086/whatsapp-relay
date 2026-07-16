@@ -1,6 +1,6 @@
 {
   "name": "@relaydesk/windows-agent",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "RelayDesk local Windows executor for reliable WhatsApp account synchronization",
   "author": "RelayDesk",
   "private": true,
@@ -16,7 +16,7 @@
     "verify:package": "node scripts/verify-package.mjs"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "6.7.23",
+    "@whiskeysockets/baileys": "7.0.0-rc13",
     "https-proxy-agent": "7.0.6",
     "pino": "9.7.0",
     "qrcode": "1.5.4",

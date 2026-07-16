@@ -20,6 +20,8 @@ test("agent management routes and legacy demo cleanup are shipped", async () => 
   assert.match(hub,/event\.cursor\?\?start\+index/);
   assert.match(hub,/failedCursor/);
   assert.match(hub,/unsupported_event_kind/);
+  assert.match(hub,/status=\$2::wa_account_status/);
+  assert.match(hub,/\$2::wa_account_status='online'::wa_account_status/);
   assert.match(cleanup,/10000000-0000-4000-8000-000000000001/);
   await assert.rejects(access(new URL("../../../infra/postgres/migrations/002_seed_demo.sql",import.meta.url)));
 });
