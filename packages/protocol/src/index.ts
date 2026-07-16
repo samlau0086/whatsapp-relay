@@ -24,6 +24,7 @@ export interface NormalizedMessage {
   accountId: string;
   whatsappMessageId: string;
   chatJid: string;
+  rawChatJid?: string;
   senderJid: string;
   direction: "in" | "out";
   kind: MessageKind;
@@ -41,6 +42,7 @@ export interface AgentEventBatch {
     | { cursor:number; kind: "message"; payload: NormalizedMessage }
     | { cursor:number; kind: "message_status"; payload: { accountId: string; whatsappMessageId: string; status: DeliveryStatus; at: string } }
     | { cursor:number; kind: "account_status"; payload: { accountId: string; status: AccountStatus; reason?: string; at: string } }
+    | { cursor:number; kind: "contact_identity"; payload: { eventId:string; accountId:string; phoneJid:string; lidJid:string; displayName?:string; at:string } }
   >;
 }
 

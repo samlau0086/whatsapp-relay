@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import makeWASocket, { Browsers, BufferJSON, DisconnectReason, downloadMediaMessage, fetchLatestBaileysVersion, initAuthCreds, jidNormalizedUser, normalizeMessageContent, proto, type AnyMessageContent, type AuthenticationState, type SignalDataTypeMap } from "@whiskeysockets/baileys";
 import { HttpsProxyAgent } from "https-proxy-agent";
@@ -10,6 +10,7 @@ type Command = {type:"command";sequence:number;commandId:string;payload:Record<s
 type Control = {type:"shutdown";logout?:boolean};
 let socket:ReturnType<typeof makeWASocket>|undefined;let init:Init|undefined;let sendChain=Promise.resolve();let reconnectAttempt=0;let reconnectTimer:NodeJS.Timeout|undefined;let connectionOpen=false;let messageCache:Awaited<ReturnType<typeof encryptedAuthState>>|undefined;
 const emit=(message:unknown):void=>{process.send?.(message);};
+const emitIdentity=(accountId:string,lid:string,pn:string,displayName?:string):void=>{const lidJid=jidNormalizedUser(lid),phoneJid=jidNormalizedUser(pn);if(!lidJid.endsWith("@lid")||!phoneJid.endsWith("@s.whatsapp.net"))return;emit({type:"event",kind:"contact_identity",payload:{eventId:`identity:${accountId}:${lidJid}:${phoneJid}`,accountId,lidJid,phoneJid,displayName,at:new Date().toISOString()}});};
 
 process.on("message",(message:Init|Command|Control)=>{
   if(message.type==="init"){init=message;void connect(message);}
@@ -27,12 +28,14 @@ async function connect(options:Init):Promise<void>{
   connectionOpen=false;
   const auth=await encryptedAuthState(join(options.dataDir,options.accountId),Buffer.from(options.masterKey,"hex"));
   messageCache=auth;
+  for(const mapping of await auth.listLidMappings())emitIdentity(options.accountId,mapping.lid,mapping.pn);
   const proxyAgent=options.proxyUrl?new HttpsProxyAgent(options.proxyUrl):undefined;
   const {version}=await fetchLatestBaileysVersion();
   const logger=pino({level:"warn"});
   socket=makeWASocket({version,auth:auth.state,logger,browser:Browsers.windows("RelayDesk Agent"),syncFullHistory:false,markOnlineOnConnect:false,generateHighQualityLinkPreview:false,agent:proxyAgent,fetchAgent:proxyAgent,getMessage:async key=>key.id?auth.getMessage(key.id):undefined});
   socket.ev.on("creds.update",auth.saveCreds);
-  socket.ev.on("lid-mapping.update",({lid,pn})=>{void auth.saveLidMapping(lid,pn);});
+  socket.ev.on("lid-mapping.update",({lid,pn})=>{void auth.saveLidMapping(lid,pn);emitIdentity(options.accountId,lid,pn);});
+  socket.ev.on("messaging-history.set",({lidPnMappings})=>{for(const mapping of lidPnMappings??[])emitIdentity(options.accountId,mapping.lid,mapping.pn);});
   socket.ev.on("connection.update",({connection,lastDisconnect,qr})=>{
     if(qr)emit({type:"qr",accountId:options.accountId,qr});
     if(connection==="open"){connectionOpen=true;reconnectAttempt=0;emit({type:"status",accountId:options.accountId,status:"online"});}
@@ -46,7 +49,9 @@ async function connect(options:Init):Promise<void>{
   socket.ev.on("messages.upsert",({messages})=>{void (async()=>{
     for(const item of messages){
       const rawJid=jidNormalizedUser(item.key.remoteJid??undefined);if(!rawJid||rawJid.endsWith("@g.us")||!item.key.id||!item.message)continue;
-      const jid=await auth.resolveJid(rawJid);
+      const repositoryJid=rawJid.endsWith("@lid")?await socket?.signalRepository.lidMapping.getPNForLID(rawJid):null;
+      const jid=jidNormalizedUser(repositoryJid??await auth.resolveJid(rawJid));
+      if(rawJid.endsWith("@lid")&&jid.endsWith("@s.whatsapp.net"))emitIdentity(options.accountId,rawJid,jid,item.pushName??undefined);
       const content=normalizeMessageContent(item.message);if(!content)continue;
       const text=content.conversation??content.extendedTextMessage?.text??content.imageMessage?.caption??content.videoMessage?.caption??content.buttonsResponseMessage?.selectedDisplayText??content.listResponseMessage?.title??undefined;
       const kind=content.imageMessage?"image":content.videoMessage?"video":content.audioMessage?"audio":content.documentMessage?"document":content.locationMessage?"location":content.contactMessage?"contact":"text";
@@ -57,7 +62,7 @@ async function connect(options:Init):Promise<void>{
         try{const bytes=await downloadMediaMessage(item,"buffer",{},{logger,reuploadRequest:async(message)=>socket!.updateMediaMessage(message)});const mime=content.imageMessage?.mimetype??content.videoMessage?.mimetype??content.audioMessage?.mimetype??content.documentMessage?.mimetype??"application/octet-stream";const fileName=content.documentMessage?.fileName??`${item.key.id}.${kind}`;const form=new FormData();form.append("file",new Blob([bytes],{type:mime}),fileName);const response=await fetch(new URL(`/agent/media?accountId=${encodeURIComponent(options.accountId)}`,options.baseUrl),{method:"POST",headers:{authorization:`Bearer ${options.credential}`,"x-content-sha256":createHash("sha256").update(bytes).digest("hex")},body:form});if(response.ok){const uploaded=await response.json() as {mediaId:string;size:number;sha256:string};media={uploadId:uploaded.mediaId,mimeType:mime,fileName,size:uploaded.size,sha256:uploaded.sha256};}}
         catch(error){emit({type:"diagnostic",level:"warn",accountId:options.accountId,message:"media_upload_failed",detail:String(error)});}
       }
-      emit({type:"event",kind:"message",payload:{eventId:`message:${options.accountId}:${item.key.id}`,accountId:options.accountId,whatsappMessageId:item.key.id,chatJid:jid,senderJid:jidNormalizedUser(item.key.participant??jid),senderName:item.pushName??undefined,direction:item.key.fromMe?"out":"in",kind,text,occurredAt:messageTime(item.messageTimestamp),media}});
+      emit({type:"event",kind:"message",payload:{eventId:`message:${options.accountId}:${item.key.id}`,accountId:options.accountId,whatsappMessageId:item.key.id,chatJid:jid,rawChatJid:rawJid,senderJid:jidNormalizedUser(item.key.participant??jid),senderName:item.pushName??undefined,direction:item.key.fromMe?"out":"in",kind,text,occurredAt:messageTime(item.messageTimestamp),media}});
     }
   })().catch(error=>emit({type:"diagnostic",level:"error",accountId:options.accountId,message:"message_normalize_failed",detail:String(error)}));});
   socket.ev.on("messages.update",(updates)=>{for(const update of updates){if(!update.key.id||!update.update.status)continue;const mapped=update.update.status>=4?"read":update.update.status>=3?"delivered":"sent";emit({type:"event",kind:"message_status",payload:{eventId:`status:${options.accountId}:${update.key.id}:${mapped}`,accountId:options.accountId,whatsappMessageId:update.key.id,status:mapped,at:new Date().toISOString()}});}});
@@ -90,10 +95,10 @@ function messageTime(value:unknown):string{
   const seconds=Number(value);const date=new Date(Number.isFinite(seconds)&&seconds>0?seconds*1000:Date.now());return date.toISOString();
 }
 
-async function encryptedAuthState(directory:string,key:Buffer):Promise<{state:AuthenticationState;saveCreds:()=>Promise<void>;getMessage:(id:string)=>Promise<proto.IMessage|undefined>;saveMessage:(id:string,message:proto.IMessage)=>Promise<void>;resolveJid:(jid:string)=>Promise<string>;saveLidMapping:(lid:string,jid:string)=>Promise<void>}>{
+async function encryptedAuthState(directory:string,key:Buffer):Promise<{state:AuthenticationState;saveCreds:()=>Promise<void>;getMessage:(id:string)=>Promise<proto.IMessage|undefined>;saveMessage:(id:string,message:proto.IMessage)=>Promise<void>;resolveJid:(jid:string)=>Promise<string>;saveLidMapping:(lid:string,jid:string)=>Promise<void>;listLidMappings:()=>Promise<Array<{lid:string;pn:string}>>}>{
   await mkdir(directory,{recursive:true});const file=(name:string)=>join(directory,encodeURIComponent(name));
   const read=async(name:string)=>{try{const packed=await readFile(file(name));const iv=packed.subarray(0,12);const tag=packed.subarray(12,28);const decipher=createDecipheriv("aes-256-gcm",key,iv);decipher.setAuthTag(tag);return JSON.parse(Buffer.concat([decipher.update(packed.subarray(28)),decipher.final()]).toString(),BufferJSON.reviver);}catch{return null;}};
   const write=async(name:string,value:unknown)=>{const iv=randomBytes(12);const cipher=createCipheriv("aes-256-gcm",key,iv);const encrypted=Buffer.concat([cipher.update(JSON.stringify(value,BufferJSON.replacer)),cipher.final()]);await writeFile(file(name),Buffer.concat([iv,cipher.getAuthTag(),encrypted]));};
   const remove=async(name:string)=>{await rm(file(name),{force:true});};const creds=await read("creds")??initAuthCreds();
-  return {state:{creds,keys:{get:async(type,ids)=>{const data:Record<string,unknown>={};for(const id of ids){let value=await read(`${type}-${id}`);if(type==="app-state-sync-key"&&value)value=proto.Message.AppStateSyncKeyData.fromObject(value);data[id]=value;}return data as {[id:string]:SignalDataTypeMap[typeof type]};},set:async(data)=>{for(const category of Object.keys(data) as Array<keyof SignalDataTypeMap>){for(const id of Object.keys(data[category]??{})){const value=data[category]?.[id];if(value)await write(`${category}-${id}`,value);else await remove(`${category}-${id}`);}}}}},saveCreds:()=>write("creds",creds),getMessage:async id=>(await read(`message-${id}`))??undefined,saveMessage:(id,message)=>write(`message-${id}`,message),resolveJid:async jid=>jid.endsWith("@lid")?(await read(`lid-${jid}`) as string|null)??jid:jid,saveLidMapping:async(lid,jid)=>{await write(`lid-${jidNormalizedUser(lid)}`,jidNormalizedUser(jid));}};
+  return {state:{creds,keys:{get:async(type,ids)=>{const data:Record<string,unknown>={};for(const id of ids){let value=await read(`${type}-${id}`);if(type==="app-state-sync-key"&&value)value=proto.Message.AppStateSyncKeyData.fromObject(value);data[id]=value;}return data as {[id:string]:SignalDataTypeMap[typeof type]};},set:async(data)=>{for(const category of Object.keys(data) as Array<keyof SignalDataTypeMap>){for(const id of Object.keys(data[category]??{})){const value=data[category]?.[id];if(value)await write(`${category}-${id}`,value);else await remove(`${category}-${id}`);}}}}},saveCreds:()=>write("creds",creds),getMessage:async id=>(await read(`message-${id}`))??undefined,saveMessage:(id,message)=>write(`message-${id}`,message),resolveJid:async jid=>jid.endsWith("@lid")?(await read(`lid-${jid}`) as string|null)??jid:jid,saveLidMapping:async(lid,jid)=>{await write(`lid-${jidNormalizedUser(lid)}`,jidNormalizedUser(jid));},listLidMappings:async()=>{const mappings:Array<{lid:string;pn:string}>=[];for(const encoded of await readdir(directory)){const name=decodeURIComponent(encoded),match=/^lid-mapping-(\d+)$/.exec(name);if(!match)continue;const lidUser=await read(name);if(typeof lidUser==="string"&&/^\d+$/.test(lidUser))mappings.push({lid:`${lidUser}@lid`,pn:`${match[1]}@s.whatsapp.net`});}return mappings;}};
 }

@@ -111,6 +111,7 @@ async function processBatch(agentId: string, frame: AgentFrame): Promise<{ackedC
         if(inserted.rowCount){
           if(event.kind==="message")await ingestMessage(client,agentId,event.payload);
           else if(event.kind==="message_status")await updateMessageStatus(client,event.payload);
+          else if(event.kind==="contact_identity")await mergeContactIdentity(client,agentId,event.payload);
           else if(event.kind==="account_status"){
             const updated=await client.query("UPDATE whatsapp_accounts SET status=$2::wa_account_status,status_reason=$3,last_event_at=now(),last_connected_at=CASE WHEN $2::wa_account_status='online'::wa_account_status THEN now() ELSE last_connected_at END WHERE id=$1 AND agent_id=$4 RETURNING id",[event.payload.accountId,event.payload.status,event.payload.reason??null,agentId]);
             if(updated.rowCount)await createWebhookEvent(client,"account.status_changed",String(event.payload.accountId),event.payload);
@@ -124,6 +125,39 @@ async function processBatch(agentId: string, frame: AgentFrame): Promise<{ackedC
   return{ackedCursor};
 }
 
+async function mergeContactIdentity(client:import("pg").PoolClient,agentId:string,payload:Record<string,unknown>):Promise<string|null>{
+  const accountId=String(payload.accountId??""),lidJid=normalizedIdentityJid(payload.lidJid,"lid"),phoneJid=normalizedIdentityJid(payload.phoneJid,"s.whatsapp.net");
+  if(!accountId||!lidJid||!phoneJid)throw new Error("invalid_contact_identity");
+  const owned=await client.query("SELECT id FROM whatsapp_accounts WHERE id=$1 AND agent_id=$2",[accountId,agentId]);if(!owned.rowCount)throw new Error("contact_identity_account_not_owned_by_agent");
+  const phone=`+${phoneJid.split("@")[0]}`;
+  const found=await client.query("SELECT id,wa_jid,phone_e164,display_name FROM contacts WHERE account_id=$1 AND (wa_jid=ANY($2::text[]) OR phone_e164=$3) ORDER BY CASE WHEN wa_jid=$4 THEN 0 WHEN phone_e164=$3 THEN 1 ELSE 2 END,id FOR UPDATE",[accountId,[phoneJid,lidJid],phone,phoneJid]);
+  if(!found.rowCount)return null;
+  const target=found.rows[0];
+  const suppliedName=typeof payload.displayName==="string"&&!/^\+?\d+$/.test(payload.displayName)?payload.displayName:null;
+  const bestName=suppliedName??found.rows.map(row=>String(row.display_name??"")).find(name=>name&&!/^\+?\d+$/.test(name))??target.display_name??phone;
+  for(const source of found.rows.slice(1)){
+    const targetConversation=await client.query("SELECT id FROM conversations WHERE account_id=$1 AND contact_id=$2",[accountId,target.id]);
+    const sourceConversation=await client.query("SELECT id FROM conversations WHERE account_id=$1 AND contact_id=$2",[accountId,source.id]);
+    if(sourceConversation.rowCount&&targetConversation.rowCount){
+      const targetId=targetConversation.rows[0].id,sourceId=sourceConversation.rows[0].id;
+      await client.query("UPDATE messages SET conversation_id=$1 WHERE conversation_id=$2",[targetId,sourceId]);
+      await client.query("UPDATE notes SET conversation_id=$1 WHERE conversation_id=$2",[targetId,sourceId]);
+      await client.query("INSERT INTO conversation_tags(conversation_id,tag_id) SELECT $1,tag_id FROM conversation_tags WHERE conversation_id=$2 ON CONFLICT DO NOTHING",[targetId,sourceId]);
+      await client.query("UPDATE conversations t SET unread_count=t.unread_count+s.unread_count,favorite=t.favorite OR s.favorite,last_message_at=GREATEST(t.last_message_at,s.last_message_at),assigned_user_id=COALESCE(t.assigned_user_id,s.assigned_user_id),status=CASE WHEN t.status='open' OR s.status='open' THEN 'open'::conversation_status WHEN t.status='closed' OR s.status='closed' THEN 'closed'::conversation_status ELSE 'archived'::conversation_status END,closed_at=CASE WHEN t.status='open' OR s.status='open' THEN NULL ELSE GREATEST(t.closed_at,s.closed_at) END FROM conversations s WHERE t.id=$1 AND s.id=$2",[targetId,sourceId]);
+      await client.query("DELETE FROM conversations WHERE id=$1",[sourceId]);
+    }else if(sourceConversation.rowCount)await client.query("UPDATE conversations SET contact_id=$1 WHERE id=$2",[target.id,sourceConversation.rows[0].id]);
+    await client.query("UPDATE messages SET sender_contact_id=$1 WHERE sender_contact_id=$2",[target.id,source.id]);
+    await client.query("DELETE FROM contacts WHERE id=$1",[source.id]);
+  }
+  await client.query("UPDATE contacts SET wa_jid=$2,phone_e164=$3,display_name=$4,last_seen_at=COALESCE(last_seen_at,now()) WHERE id=$1",[target.id,phoneJid,phone,bestName]);
+  return String(target.id);
+}
+
+function normalizedIdentityJid(value:unknown,server:"lid"|"s.whatsapp.net"):string|null{
+  const raw=String(value??"").trim().toLowerCase(),parts=raw.split("@");if(parts.length!==2||parts[1]!==server)return null;
+  const user=parts[0].split(":")[0];return /^\d{7,15}$/.test(user)?`${user}@${server}`:null;
+}
+
 async function ingestMessage(client: import("pg").PoolClient, agentId:string, payload: Record<string,unknown>): Promise<void> {
   const chatJid = String(payload.chatJid);
   if (chatJid.endsWith("@g.us")) return;
@@ -133,7 +167,9 @@ async function ingestMessage(client: import("pg").PoolClient, agentId:string, pa
   if(!account.rowCount)throw new Error("message_account_not_owned_by_agent");
   const phonePart=chatJid.endsWith("@s.whatsapp.net")?chatJid.split("@")[0].split(":")[0]:null;
   const phone=phonePart&&/^\d{7,15}$/.test(phonePart)?`+${phonePart}`:null;
-  const contact = await client.query("INSERT INTO contacts(account_id,wa_jid,phone_e164,display_name,last_seen_at) VALUES($1,$2,$3,$4,now()) ON CONFLICT(account_id,wa_jid) DO UPDATE SET phone_e164=COALESCE(contacts.phone_e164,EXCLUDED.phone_e164),display_name=COALESCE(NULLIF(EXCLUDED.display_name,''),contacts.display_name),last_seen_at=now() RETURNING id", [accountId,chatJid,phone,String(payload.senderName ?? phone ?? chatJid.split("@")[0])]);
+  const rawChatJid=String(payload.rawChatJid??"");
+  const mergedContactId=phone&&rawChatJid.endsWith("@lid")?await mergeContactIdentity(client,agentId,{accountId,lidJid:rawChatJid,phoneJid:chatJid,displayName:payload.senderName}):null;
+  const contact = mergedContactId?await client.query("UPDATE contacts SET display_name=COALESCE(NULLIF($2,''),display_name),last_seen_at=now() WHERE id=$1 RETURNING id",[mergedContactId,String(payload.senderName??"")]):await client.query("INSERT INTO contacts(account_id,wa_jid,phone_e164,display_name,last_seen_at) VALUES($1,$2,$3,$4,now()) ON CONFLICT(account_id,wa_jid) DO UPDATE SET phone_e164=COALESCE(contacts.phone_e164,EXCLUDED.phone_e164),display_name=COALESCE(NULLIF(EXCLUDED.display_name,''),contacts.display_name),last_seen_at=now() RETURNING id", [accountId,chatJid,phone,String(payload.senderName ?? phone ?? chatJid.split("@")[0])]);
   const conversation = await client.query("INSERT INTO conversations(account_id,contact_id,last_message_at,unread_count) VALUES($1,$2,$3,CASE WHEN $4='in' THEN 1 ELSE 0 END) ON CONFLICT(account_id,contact_id) DO UPDATE SET last_message_at=EXCLUDED.last_message_at,unread_count=conversations.unread_count+CASE WHEN $4='in' THEN 1 ELSE 0 END,status='open' RETURNING id", [accountId,contact.rows[0].id,payload.occurredAt,payload.direction]);
   const media=payload.media as {uploadId?:string}|undefined;
   const message = await client.query("INSERT INTO messages(conversation_id,account_id,sender_contact_id,whatsapp_message_id,direction,kind,text_content,media_id,status,occurred_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(account_id,whatsapp_message_id) DO NOTHING RETURNING id", [conversation.rows[0].id,accountId,payload.direction === "in" ? contact.rows[0].id : null,payload.whatsappMessageId,payload.direction,payload.kind,payload.text ?? null,media?.uploadId??null,payload.direction === "in" ? "received" : "sent",payload.occurredAt]);

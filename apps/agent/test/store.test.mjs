@@ -50,6 +50,10 @@ test("inbound WhatsApp replies are normalized before entering the durable outbox
   assert.match(worker,/senderName: item\.pushName/);
   assert.match(worker,/getMessage:/);
   assert.match(worker,/saveMessage/);
+  assert.match(worker,/listLidMappings/);
+  assert.match(worker,/contact_identity/);
+  assert.match(worker,/signalRepository\.lidMapping\.getPNForLID/);
+  assert.match(worker,/rawChatJid/);
   assert.match(client,/cursor: event\.cursor/);
 });
 
