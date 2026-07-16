@@ -85,9 +85,9 @@ async function handleFrame(agentId: string, socket: WebSocket, raw: string): Pro
     return;
   }
   if (frame.type === "event_batch") {
-    await processBatch(agentId, frame);
-    const cursor = Number(frame.toCursor);
-    socket.send(JSON.stringify({ type:"ack", cursor }));
+    const result=await processBatch(agentId, frame);
+    if(result.ackedCursor>=Number(frame.fromCursor))socket.send(JSON.stringify({ type:"ack", cursor:result.ackedCursor }));
+    if(result.failedCursor!==undefined){socket.send(JSON.stringify({type:"error",code:"event_rejected",cursor:result.failedCursor,detail:result.error}));return;}
     await dispatchPending(agentId, socket);
     return;
   }
@@ -97,31 +97,37 @@ async function handleFrame(agentId: string, socket: WebSocket, raw: string): Pro
   }
 }
 
-async function processBatch(agentId: string, frame: AgentFrame): Promise<void> {
+async function processBatch(agentId: string, frame: AgentFrame): Promise<{ackedCursor:number;failedCursor?:number;error?:string}> {
   const events = Array.isArray(frame.events) ? frame.events as Array<{cursor?:number;kind:string;payload:Record<string,unknown>}> : [];
   const start = Number(frame.fromCursor);
-  await transaction(async (client) => {
-    for (let index = 0; index < events.length; index++) {
-      const event = events[index];
-      const cursor = Number(event.cursor ?? start + index);
-      if(!Number.isSafeInteger(cursor)||cursor<start||cursor>Number(frame.toCursor))throw new Error("invalid_event_cursor");
-      const eventId = String(event.payload.eventId ?? `${event.kind}:${cursor}`);
-      const inserted = await client.query("INSERT INTO agent_inbox(agent_id,cursor,event_id,event_kind) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING RETURNING cursor", [agentId,cursor,eventId,event.kind]);
-      if (!inserted.rowCount) continue;
-      if (event.kind === "message") await ingestMessage(client, agentId, event.payload);
-      if (event.kind === "message_status") await updateMessageStatus(client, event.payload);
-      if (event.kind === "account_status") {
-        const updated=await client.query("UPDATE whatsapp_accounts SET status=$2,status_reason=$3,last_event_at=now(),last_connected_at=CASE WHEN $2='online' THEN now() ELSE last_connected_at END WHERE id=$1 AND agent_id=$4 RETURNING id", [event.payload.accountId,event.payload.status,event.payload.reason ?? null,agentId]);
-        if(updated.rowCount)await createWebhookEvent(client,"account.status_changed",String(event.payload.accountId),event.payload);
-      }
-    }
-    await client.query("UPDATE agents SET last_acked_cursor=GREATEST(last_acked_cursor,$2),last_seen_at=now() WHERE id=$1", [agentId,Number(frame.toCursor)]);
-  });
+  let ackedCursor=start-1;
+  for(let index=0;index<events.length;index++){
+    const event=events[index];const cursor=Number(event.cursor??start+index);
+    try{
+      if(!Number.isSafeInteger(cursor)||cursor<start||cursor>Number(frame.toCursor)||cursor<=ackedCursor)throw new Error("invalid_event_cursor");
+      await transaction(async client=>{
+        const eventId=String(event.payload.eventId??`${event.kind}:${cursor}`);
+        const inserted=await client.query("INSERT INTO agent_inbox(agent_id,cursor,event_id,event_kind) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING RETURNING cursor",[agentId,cursor,eventId,event.kind]);
+        if(inserted.rowCount){
+          if(event.kind==="message")await ingestMessage(client,agentId,event.payload);
+          else if(event.kind==="message_status")await updateMessageStatus(client,event.payload);
+          else if(event.kind==="account_status"){
+            const updated=await client.query("UPDATE whatsapp_accounts SET status=$2,status_reason=$3,last_event_at=now(),last_connected_at=CASE WHEN $2='online' THEN now() ELSE last_connected_at END WHERE id=$1 AND agent_id=$4 RETURNING id",[event.payload.accountId,event.payload.status,event.payload.reason??null,agentId]);
+            if(updated.rowCount)await createWebhookEvent(client,"account.status_changed",String(event.payload.accountId),event.payload);
+          }else throw new Error("unsupported_event_kind");
+        }
+        await client.query("UPDATE agents SET last_acked_cursor=GREATEST(last_acked_cursor,$2),last_seen_at=now() WHERE id=$1",[agentId,cursor]);
+      });
+      ackedCursor=cursor;
+    }catch(error){return{ackedCursor,failedCursor:cursor,error:(error instanceof Error?error.message:String(error)).slice(0,240)};}
+  }
+  return{ackedCursor};
 }
 
 async function ingestMessage(client: import("pg").PoolClient, agentId:string, payload: Record<string,unknown>): Promise<void> {
   const chatJid = String(payload.chatJid);
   if (chatJid.endsWith("@g.us")) return;
+  if(String(payload.kind??"text")==="text"&&!payload.text&&!payload.media)return;
   const accountId = String(payload.accountId);
   const account=await client.query("SELECT id FROM whatsapp_accounts WHERE id=$1 AND agent_id=$2",[accountId,agentId]);
   if(!account.rowCount)throw new Error("message_account_not_owned_by_agent");

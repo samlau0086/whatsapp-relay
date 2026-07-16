@@ -30,6 +30,7 @@ app.whenReady().then(async () => {
   const dataDir = app.getPath("userData");
   store = new AgentStore(join(dataDir, "relay-agent.db"));
   store.discardRemovedAccountStatusEvents();
+  store.discardUnsupportedMessageEvents();
   masterKey = await loadMasterKey(dataDir);
   createWindow();
   createTray();
@@ -100,6 +101,7 @@ ipcMain.handle("agent:diagnostics", async () => ({
   accounts: store.accounts().map(({ id, name, status, last_error }) => ({ id, name, status, lastError: last_error })),
   proxy: await proxyState(),
   queue: store.diagnostics(),
+  lastSyncError: store.get("lastSyncError")||null,
 }));
 
 ipcMain.handle("proxy:save", async (_event, input: {mode:string;url?:string}) => {

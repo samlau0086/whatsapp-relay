@@ -48,5 +48,21 @@ test("inbound WhatsApp replies are normalized before entering the durable outbox
   assert.match(worker,/normalizeMessageContent/);
   assert.match(worker,/jidNormalizedUser/);
   assert.match(worker,/senderName: item\.pushName/);
+  assert.match(worker,/getMessage:/);
+  assert.match(worker,/saveMessage/);
   assert.match(client,/cursor: event\.cursor/);
+});
+
+test("protocol placeholders can be removed without dropping real replies", () => {
+  const directory=mkdtempSync(join(tmpdir(),"relaydesk-store-"));
+  const store=new AgentStore(join(directory,"agent.db"));
+  try {
+    store.enqueueEvent("empty","message",{accountId:"a",kind:"text"});
+    store.enqueueEvent("reply","message",{accountId:"a",kind:"text",text:"hello"});
+    assert.equal(store.discardUnsupportedMessageEvents(),1);
+    assert.deepEqual(store.pendingEvents().map(event=>event.event_id),["reply"]);
+  } finally {
+    store.close();
+    rmSync(directory,{recursive:true,force:true});
+  }
 });

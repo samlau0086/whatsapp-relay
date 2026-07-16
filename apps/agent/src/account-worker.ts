@@ -8,7 +8,7 @@ import { pino } from "pino";
 type Init = {type:"init";accountId:string;dataDir:string;masterKey:string;baseUrl:string;credential:string;proxyUrl?:string};
 type Command = {type:"command";sequence:number;commandId:string;payload:Record<string,unknown>};
 type Control = {type:"shutdown";logout?:boolean};
-let socket:ReturnType<typeof makeWASocket>|undefined;let init:Init|undefined;let sendChain=Promise.resolve();let reconnectAttempt=0;let reconnectTimer:NodeJS.Timeout|undefined;let connectionOpen=false;
+let socket:ReturnType<typeof makeWASocket>|undefined;let init:Init|undefined;let sendChain=Promise.resolve();let reconnectAttempt=0;let reconnectTimer:NodeJS.Timeout|undefined;let connectionOpen=false;let messageCache:Awaited<ReturnType<typeof encryptedAuthState>>|undefined;
 const emit=(message:unknown):void=>{process.send?.(message);};
 
 process.on("message",(message:Init|Command|Control)=>{
@@ -26,12 +26,14 @@ async function connect(options:Init):Promise<void>{
   try{
   connectionOpen=false;
   const auth=await encryptedAuthState(join(options.dataDir,options.accountId),Buffer.from(options.masterKey,"hex"));
+  messageCache=auth;
   const proxyAgent=options.proxyUrl?new HttpsProxyAgent(options.proxyUrl):undefined;
   const axiosOptions=proxyAgent?{httpsAgent:proxyAgent,proxy:false as const}:{};
   const {version}=await fetchLatestBaileysVersion(axiosOptions);
   const logger=pino({level:"warn"});
-  socket=makeWASocket({version,auth:auth.state,logger,browser:Browsers.windows("RelayDesk Agent"),syncFullHistory:false,markOnlineOnConnect:false,generateHighQualityLinkPreview:false,agent:proxyAgent,fetchAgent:proxyAgent,options:axiosOptions});
+  socket=makeWASocket({version,auth:auth.state,logger,browser:Browsers.windows("RelayDesk Agent"),syncFullHistory:false,markOnlineOnConnect:false,generateHighQualityLinkPreview:false,agent:proxyAgent,fetchAgent:proxyAgent,options:axiosOptions,getMessage:async key=>key.id?auth.getMessage(key.id):undefined});
   socket.ev.on("creds.update",auth.saveCreds);
+  socket.ev.on("chats.phoneNumberShare",({lid,jid})=>{void auth.saveLidMapping(lid,jid);});
   socket.ev.on("connection.update",({connection,lastDisconnect,qr})=>{
     if(qr)emit({type:"qr",accountId:options.accountId,qr});
     if(connection==="open"){connectionOpen=true;reconnectAttempt=0;emit({type:"status",accountId:options.accountId,status:"online"});}
@@ -44,10 +46,13 @@ async function connect(options:Init):Promise<void>{
   });
   socket.ev.on("messages.upsert",({messages})=>{void (async()=>{
     for(const item of messages){
-      const jid=jidNormalizedUser(item.key.remoteJid??undefined);if(!jid||jid.endsWith("@g.us")||!item.key.id||!item.message)continue;
+      const rawJid=jidNormalizedUser(item.key.remoteJid??undefined);if(!rawJid||rawJid.endsWith("@g.us")||!item.key.id||!item.message)continue;
+      const jid=await auth.resolveJid(rawJid);
       const content=normalizeMessageContent(item.message);if(!content)continue;
       const text=content.conversation??content.extendedTextMessage?.text??content.imageMessage?.caption??content.videoMessage?.caption??content.buttonsResponseMessage?.selectedDisplayText??content.listResponseMessage?.title??undefined;
       const kind=content.imageMessage?"image":content.videoMessage?"video":content.audioMessage?"audio":content.documentMessage?"document":content.locationMessage?"location":content.contactMessage?"contact":"text";
+      if(kind==="text"&&!text)continue;
+      if(item.key.fromMe)await auth.saveMessage(item.key.id,item.message);
       let media:Record<string,unknown>|undefined;
       if(["image","video","audio","document"].includes(kind)){
         try{const bytes=await downloadMediaMessage(item,"buffer",{},{logger,reuploadRequest:async(message)=>socket!.updateMediaMessage(message)});const mime=content.imageMessage?.mimetype??content.videoMessage?.mimetype??content.audioMessage?.mimetype??content.documentMessage?.mimetype??"application/octet-stream";const fileName=content.documentMessage?.fileName??`${item.key.id}.${kind}`;const form=new FormData();form.append("file",new Blob([bytes],{type:mime}),fileName);const response=await fetch(new URL(`/agent/media?accountId=${encodeURIComponent(options.accountId)}`,options.baseUrl),{method:"POST",headers:{authorization:`Bearer ${options.credential}`,"x-content-sha256":createHash("sha256").update(bytes).digest("hex")},body:form});if(response.ok){const uploaded=await response.json() as {mediaId:string;size:number;sha256:string};media={uploadId:uploaded.mediaId,mimeType:mime,fileName,size:uploaded.size,sha256:uploaded.sha256};}}
@@ -79,17 +84,17 @@ async function execute(command:Command):Promise<void>{
   if(!socket||!init||!connectionOpen){emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"deferred",errorCode:"account_offline",errorMessage:"WhatsApp account is offline; command remains queued",completedAt:new Date().toISOString()});return;}const toJid=String(command.payload.toJid??"");if(!toJid)throw new Error("Missing destination JID");
   const type=String(command.payload.type??"text");let content:AnyMessageContent;
   if(type==="text")content={text:String(command.payload.text??"")};else{const mediaId=String(command.payload.mediaId??"");const response=await fetch(new URL(`/agent/media/${mediaId}`,init.baseUrl),{headers:{authorization:`Bearer ${init.credential}`}});if(!response.ok)throw new Error(`Media download failed: ${response.status}`);const bytes=Buffer.from(await response.arrayBuffer());const mime=response.headers.get("content-type")??"application/octet-stream";const name=response.headers.get("x-file-name")??"attachment";const caption=command.payload.text?String(command.payload.text):undefined;if(type==="image")content={image:bytes,mimetype:mime,caption};else if(type==="video")content={video:bytes,mimetype:mime,caption};else if(type==="audio")content={audio:bytes,mimetype:mime,ptt:true};else content={document:bytes,mimetype:mime,fileName:name,caption};}
-  try{const sent=await socket.sendMessage(toJid,content);emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",whatsappMessageId:sent?.key.id,completedAt:new Date().toISOString()});}catch(error){emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"failed",errorCode:"whatsapp_rejected",errorMessage:error instanceof Error?error.message:String(error),completedAt:new Date().toISOString()});}
+  try{const sent=await socket.sendMessage(toJid,content);if(sent?.key.id&&sent.message)await messageCache?.saveMessage(sent.key.id,sent.message);emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",whatsappMessageId:sent?.key.id,completedAt:new Date().toISOString()});}catch(error){emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"failed",errorCode:"whatsapp_rejected",errorMessage:error instanceof Error?error.message:String(error),completedAt:new Date().toISOString()});}
 }
 
 function messageTime(value:unknown):string{
   const seconds=Number(value);const date=new Date(Number.isFinite(seconds)&&seconds>0?seconds*1000:Date.now());return date.toISOString();
 }
 
-async function encryptedAuthState(directory:string,key:Buffer):Promise<{state:AuthenticationState;saveCreds:()=>Promise<void>}>{
+async function encryptedAuthState(directory:string,key:Buffer):Promise<{state:AuthenticationState;saveCreds:()=>Promise<void>;getMessage:(id:string)=>Promise<proto.IMessage|undefined>;saveMessage:(id:string,message:proto.IMessage)=>Promise<void>;resolveJid:(jid:string)=>Promise<string>;saveLidMapping:(lid:string,jid:string)=>Promise<void>}>{
   await mkdir(directory,{recursive:true});const file=(name:string)=>join(directory,encodeURIComponent(name));
   const read=async(name:string)=>{try{const packed=await readFile(file(name));const iv=packed.subarray(0,12);const tag=packed.subarray(12,28);const decipher=createDecipheriv("aes-256-gcm",key,iv);decipher.setAuthTag(tag);return JSON.parse(Buffer.concat([decipher.update(packed.subarray(28)),decipher.final()]).toString(),BufferJSON.reviver);}catch{return null;}};
   const write=async(name:string,value:unknown)=>{const iv=randomBytes(12);const cipher=createCipheriv("aes-256-gcm",key,iv);const encrypted=Buffer.concat([cipher.update(JSON.stringify(value,BufferJSON.replacer)),cipher.final()]);await writeFile(file(name),Buffer.concat([iv,cipher.getAuthTag(),encrypted]));};
   const remove=async(name:string)=>{await rm(file(name),{force:true});};const creds=await read("creds")??initAuthCreds();
-  return {state:{creds,keys:{get:async(type,ids)=>{const data:Record<string,unknown>={};for(const id of ids){let value=await read(`${type}-${id}`);if(type==="app-state-sync-key"&&value)value=proto.Message.AppStateSyncKeyData.fromObject(value);data[id]=value;}return data as {[id:string]:SignalDataTypeMap[typeof type]};},set:async(data)=>{for(const category of Object.keys(data) as Array<keyof SignalDataTypeMap>){for(const id of Object.keys(data[category]??{})){const value=data[category]?.[id];if(value)await write(`${category}-${id}`,value);else await remove(`${category}-${id}`);}}}}},saveCreds:()=>write("creds",creds)};
+  return {state:{creds,keys:{get:async(type,ids)=>{const data:Record<string,unknown>={};for(const id of ids){let value=await read(`${type}-${id}`);if(type==="app-state-sync-key"&&value)value=proto.Message.AppStateSyncKeyData.fromObject(value);data[id]=value;}return data as {[id:string]:SignalDataTypeMap[typeof type]};},set:async(data)=>{for(const category of Object.keys(data) as Array<keyof SignalDataTypeMap>){for(const id of Object.keys(data[category]??{})){const value=data[category]?.[id];if(value)await write(`${category}-${id}`,value);else await remove(`${category}-${id}`);}}}}},saveCreds:()=>write("creds",creds),getMessage:async id=>(await read(`message-${id}`))??undefined,saveMessage:(id,message)=>write(`message-${id}`,message),resolveJid:async jid=>jid.endsWith("@lid")?(await read(`lid-${jid}`) as string|null)??jid:jid,saveLidMapping:async(lid,jid)=>{await write(`lid-${jidNormalizedUser(lid)}`,jidNormalizedUser(jid));}};
 }

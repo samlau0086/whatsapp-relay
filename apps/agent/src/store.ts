@@ -38,6 +38,18 @@ export class AgentStore {
     this.set("lastAckedCursor",String(cursor));
     return Number(result.changes);
   }
+  discardUnsupportedMessageEvents():number {
+    const rows=this.db.prepare("SELECT cursor,payload FROM event_outbox WHERE acked=0 AND event_kind='message'").all() as Array<{cursor:number;payload:string}>;
+    let removed=0;
+    const remove=this.db.prepare("DELETE FROM event_outbox WHERE cursor=? AND acked=0");
+    for(const row of rows){
+      try{
+        const payload=JSON.parse(row.payload) as {kind?:string;text?:string;media?:unknown};
+        if((payload.kind??"text")==="text"&&!payload.text&&!payload.media)removed+=Number(remove.run(row.cursor).changes);
+      }catch{}
+    }
+    return removed;
+  }
   accounts():Array<{id:string;name:string;status:string;last_error:string|null;created_at:string}> { return this.db.prepare("SELECT * FROM accounts ORDER BY created_at").all() as Array<{id:string;name:string;status:string;last_error:string|null;created_at:string}>; }
   setAccountStatus(id:string,status:string,error?:string):void { this.db.prepare("UPDATE accounts SET status=?,last_error=? WHERE id=?").run(status,error??null,id); }
   enqueueEvent(eventId:string,kind:string,payload:unknown):number { const result=this.db.prepare("INSERT OR IGNORE INTO event_outbox(event_id,event_kind,payload,created_at) VALUES(?,?,?,?)").run(eventId,kind,JSON.stringify(payload),new Date().toISOString()); if(result.changes===0){const row=this.db.prepare("SELECT cursor FROM event_outbox WHERE event_id=?").get(eventId) as {cursor:number};return row.cursor;} return Number(result.lastInsertRowid); }

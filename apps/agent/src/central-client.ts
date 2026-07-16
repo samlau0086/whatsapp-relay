@@ -22,7 +22,8 @@ export class CentralClient {
     this.socket.on("error",()=>this.socket?.close());
   }
   private async handle(frame:Record<string,unknown>):Promise<void>{
-    if(frame.type==="ack"){this.store.ack(Number(frame.cursor));this.flush();return;}
+    if(frame.type==="ack"){this.store.ack(Number(frame.cursor));this.store.set("lastSyncError","");this.flush();return;}
+    if(frame.type==="error"){this.store.set("lastSyncError",JSON.stringify({code:frame.code,cursor:frame.cursor,detail:frame.detail,at:new Date().toISOString()}));return;}
     if(frame.type==="incompatible"){this.onStatus("incompatible");this.stop();return;}
     if(frame.type!=="command")return;
     const command=frame as {type:string;sequence:number;commandId:string;accountId:string;command:string;payload:Record<string,unknown>};
