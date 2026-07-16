@@ -45,6 +45,7 @@ export class AgentStore {
   ack(cursor:number):void { this.db.prepare("UPDATE event_outbox SET acked=1 WHERE cursor<=?").run(cursor); this.set("lastAckedCursor",String(cursor)); }
   saveCommand(sequence:number,commandId:string,accountId:string,payload:unknown):boolean { return this.db.prepare("INSERT OR IGNORE INTO command_inbox(sequence,command_id,account_id,payload,created_at) VALUES(?,?,?,?,?)").run(sequence,commandId,accountId,JSON.stringify(payload),new Date().toISOString()).changes===1; }
   completeCommand(commandId:string,result:unknown):void { this.db.prepare("UPDATE command_inbox SET state='completed',result=? WHERE command_id=?").run(JSON.stringify(result),commandId); }
+  deferCommand(commandId:string):void { this.db.prepare("DELETE FROM command_inbox WHERE command_id=? AND state<>'completed'").run(commandId); }
   priorResult(commandId:string):unknown|undefined { const row=this.db.prepare("SELECT result FROM command_inbox WHERE command_id=? AND state='completed'").get(commandId) as {result:string}|undefined; return row?JSON.parse(row.result):undefined; }
   diagnostics():{pendingEvents:number;pendingCommands:number;lastAckedCursor:number} {
     const pendingEvents=Number((this.db.prepare("SELECT COUNT(*) AS count FROM event_outbox WHERE acked=0").get() as {count:number}).count);

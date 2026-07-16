@@ -190,7 +190,7 @@ Webhook 请求包含：
 
 ## 可靠性边界
 
-Agent 收到的 WhatsApp 事件先写入本地 SQLite WAL，中心事务提交后才确认游标；重复批次通过 Agent 游标、事件 ID 以及 `(account_id, whatsapp_message_id)` 唯一约束消除。发送命令先写 PostgreSQL，再派发到 Agent。若明确失败可重试；若进程在 WhatsApp 可能已经接受消息后中断，则标记为 `uncertain` 并要求人工确认。
+Agent 收到的 WhatsApp 事件先写入本地 SQLite WAL，中心事务提交后才确认游标；每条事件携带原始游标，重复批次通过 Agent 游标、事件 ID 以及 `(account_id, whatsapp_message_id)` 唯一约束消除。发送命令先写 PostgreSQL，只有 Agent 与对应 WhatsApp 账号都在线时才派发；断线前明确未执行的命令会恢复为 `queued`，不会标记失败。若进程在 WhatsApp 可能已经接受消息后中断，则标记为 `uncertain` 并要求人工确认。
 
 首次扫码的历史消息只按 WhatsApp 多设备协议实际提供的范围尽力导入。系统无法保证 WhatsApp 从未向关联设备投递的消息，也无法保证完整旧历史。
 

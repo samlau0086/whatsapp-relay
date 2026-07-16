@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -25,4 +25,28 @@ test("removed-account status cleanup never skips a message event", () => {
     store.close();
     rmSync(directory,{recursive:true,force:true});
   }
+});
+
+test("a definitely unsent command can be deferred and accepted again", () => {
+  const directory=mkdtempSync(join(tmpdir(),"relaydesk-store-"));
+  const store=new AgentStore(join(directory,"agent.db"));
+  try {
+    const command={type:"command",sequence:9,commandId:"command-9",accountId:"account-1"};
+    assert.equal(store.saveCommand(9,"command-9","account-1",command),true);
+    store.deferCommand("command-9");
+    assert.equal(store.diagnostics().pendingCommands,0);
+    assert.equal(store.saveCommand(9,"command-9","account-1",command),true);
+  } finally {
+    store.close();
+    rmSync(directory,{recursive:true,force:true});
+  }
+});
+
+test("inbound WhatsApp replies are normalized before entering the durable outbox", () => {
+  const worker=readFileSync(new URL("../dist/account-worker.js",import.meta.url),"utf8");
+  const client=readFileSync(new URL("../dist/central-client.js",import.meta.url),"utf8");
+  assert.match(worker,/normalizeMessageContent/);
+  assert.match(worker,/jidNormalizedUser/);
+  assert.match(worker,/senderName: item\.pushName/);
+  assert.match(client,/cursor: event\.cursor/);
 });

@@ -38,9 +38,9 @@ export interface AgentEventBatch {
   fromCursor: number;
   toCursor: number;
   events: Array<
-    | { kind: "message"; payload: NormalizedMessage }
-    | { kind: "message_status"; payload: { accountId: string; whatsappMessageId: string; status: DeliveryStatus; at: string } }
-    | { kind: "account_status"; payload: { accountId: string; status: AccountStatus; reason?: string; at: string } }
+    | { cursor:number; kind: "message"; payload: NormalizedMessage }
+    | { cursor:number; kind: "message_status"; payload: { accountId: string; whatsappMessageId: string; status: DeliveryStatus; at: string } }
+    | { cursor:number; kind: "account_status"; payload: { accountId: string; status: AccountStatus; reason?: string; at: string } }
   >;
 }
 
@@ -58,7 +58,7 @@ export interface AgentCommandResult {
   type: "command_result";
   sequence: number;
   commandId: string;
-  outcome: "succeeded" | "failed" | "uncertain";
+  outcome: "succeeded" | "failed" | "uncertain" | "deferred";
   whatsappMessageId?: string;
   errorCode?: string;
   errorMessage?: string;

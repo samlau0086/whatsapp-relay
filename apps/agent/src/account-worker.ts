@@ -1,14 +1,14 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import makeWASocket, { Browsers, BufferJSON, DisconnectReason, downloadMediaMessage, fetchLatestBaileysVersion, initAuthCreds, proto, type AnyMessageContent, type AuthenticationState, type SignalDataTypeMap } from "@whiskeysockets/baileys";
+import makeWASocket, { Browsers, BufferJSON, DisconnectReason, downloadMediaMessage, fetchLatestBaileysVersion, initAuthCreds, jidNormalizedUser, normalizeMessageContent, proto, type AnyMessageContent, type AuthenticationState, type SignalDataTypeMap } from "@whiskeysockets/baileys";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { pino } from "pino";
 
 type Init = {type:"init";accountId:string;dataDir:string;masterKey:string;baseUrl:string;credential:string;proxyUrl?:string};
 type Command = {type:"command";sequence:number;commandId:string;payload:Record<string,unknown>};
 type Control = {type:"shutdown";logout?:boolean};
-let socket:ReturnType<typeof makeWASocket>|undefined;let init:Init|undefined;let sendChain=Promise.resolve();let reconnectAttempt=0;let reconnectTimer:NodeJS.Timeout|undefined;
+let socket:ReturnType<typeof makeWASocket>|undefined;let init:Init|undefined;let sendChain=Promise.resolve();let reconnectAttempt=0;let reconnectTimer:NodeJS.Timeout|undefined;let connectionOpen=false;
 const emit=(message:unknown):void=>{process.send?.(message);};
 
 process.on("message",(message:Init|Command|Control)=>{
@@ -24,6 +24,7 @@ async function shutdown(logout:boolean):Promise<void>{
 
 async function connect(options:Init):Promise<void>{
   try{
+  connectionOpen=false;
   const auth=await encryptedAuthState(join(options.dataDir,options.accountId),Buffer.from(options.masterKey,"hex"));
   const proxyAgent=options.proxyUrl?new HttpsProxyAgent(options.proxyUrl):undefined;
   const axiosOptions=proxyAgent?{httpsAgent:proxyAgent,proxy:false as const}:{};
@@ -33,8 +34,9 @@ async function connect(options:Init):Promise<void>{
   socket.ev.on("creds.update",auth.saveCreds);
   socket.ev.on("connection.update",({connection,lastDisconnect,qr})=>{
     if(qr)emit({type:"qr",accountId:options.accountId,qr});
-    if(connection==="open"){reconnectAttempt=0;emit({type:"status",accountId:options.accountId,status:"online"});}
+    if(connection==="open"){connectionOpen=true;reconnectAttempt=0;emit({type:"status",accountId:options.accountId,status:"online"});}
     if(connection==="close"){
+      connectionOpen=false;
       const status=(lastDisconnect?.error as {output?:{statusCode?:number}}|undefined)?.output?.statusCode;
       if(status===DisconnectReason.loggedOut){emit({type:"status",accountId:options.accountId,status:"logged_out"});return;}
       emit({type:"status",accountId:options.accountId,status:"offline",reason:disconnectReason(lastDisconnect?.error)});scheduleReconnect(options);
@@ -42,19 +44,20 @@ async function connect(options:Init):Promise<void>{
   });
   socket.ev.on("messages.upsert",({messages})=>{void (async()=>{
     for(const item of messages){
-      const jid=item.key.remoteJid;if(!jid||jid.endsWith("@g.us")||!item.key.id||!item.message)continue;
-      const content=item.message;const text=content.conversation??content.extendedTextMessage?.text??content.imageMessage?.caption??content.videoMessage?.caption??undefined;
+      const jid=jidNormalizedUser(item.key.remoteJid??undefined);if(!jid||jid.endsWith("@g.us")||!item.key.id||!item.message)continue;
+      const content=normalizeMessageContent(item.message);if(!content)continue;
+      const text=content.conversation??content.extendedTextMessage?.text??content.imageMessage?.caption??content.videoMessage?.caption??content.buttonsResponseMessage?.selectedDisplayText??content.listResponseMessage?.title??undefined;
       const kind=content.imageMessage?"image":content.videoMessage?"video":content.audioMessage?"audio":content.documentMessage?"document":content.locationMessage?"location":content.contactMessage?"contact":"text";
       let media:Record<string,unknown>|undefined;
       if(["image","video","audio","document"].includes(kind)){
         try{const bytes=await downloadMediaMessage(item,"buffer",{},{logger,reuploadRequest:async(message)=>socket!.updateMediaMessage(message)});const mime=content.imageMessage?.mimetype??content.videoMessage?.mimetype??content.audioMessage?.mimetype??content.documentMessage?.mimetype??"application/octet-stream";const fileName=content.documentMessage?.fileName??`${item.key.id}.${kind}`;const form=new FormData();form.append("file",new Blob([bytes],{type:mime}),fileName);const response=await fetch(new URL(`/agent/media?accountId=${encodeURIComponent(options.accountId)}`,options.baseUrl),{method:"POST",headers:{authorization:`Bearer ${options.credential}`,"x-content-sha256":createHash("sha256").update(bytes).digest("hex")},body:form});if(response.ok){const uploaded=await response.json() as {mediaId:string;size:number;sha256:string};media={uploadId:uploaded.mediaId,mimeType:mime,fileName,size:uploaded.size,sha256:uploaded.sha256};}}
         catch(error){emit({type:"diagnostic",level:"warn",accountId:options.accountId,message:"media_upload_failed",detail:String(error)});}
       }
-      emit({type:"event",kind:"message",payload:{eventId:`message:${options.accountId}:${item.key.id}`,accountId:options.accountId,whatsappMessageId:item.key.id,chatJid:jid,senderJid:item.key.participant??jid,direction:item.key.fromMe?"out":"in",kind,text,occurredAt:new Date(Number(item.messageTimestamp)*1000).toISOString(),media}});
+      emit({type:"event",kind:"message",payload:{eventId:`message:${options.accountId}:${item.key.id}`,accountId:options.accountId,whatsappMessageId:item.key.id,chatJid:jid,senderJid:jidNormalizedUser(item.key.participant??jid),senderName:item.pushName??undefined,direction:item.key.fromMe?"out":"in",kind,text,occurredAt:messageTime(item.messageTimestamp),media}});
     }
-  })();});
+  })().catch(error=>emit({type:"diagnostic",level:"error",accountId:options.accountId,message:"message_normalize_failed",detail:String(error)}));});
   socket.ev.on("messages.update",(updates)=>{for(const update of updates){if(!update.key.id||!update.update.status)continue;const mapped=update.update.status>=4?"read":update.update.status>=3?"delivered":"sent";emit({type:"event",kind:"message_status",payload:{eventId:`status:${options.accountId}:${update.key.id}:${mapped}`,accountId:options.accountId,whatsappMessageId:update.key.id,status:mapped,at:new Date().toISOString()}});}});
-  }catch(error){emit({type:"status",accountId:options.accountId,status:"offline",reason:disconnectReason(error)});scheduleReconnect(options);}
+  }catch(error){connectionOpen=false;emit({type:"status",accountId:options.accountId,status:"offline",reason:disconnectReason(error)});scheduleReconnect(options);}
 }
 
 function scheduleReconnect(options:Init):void{
@@ -73,10 +76,14 @@ function disconnectReason(error:unknown):string{
 }
 
 async function execute(command:Command):Promise<void>{
-  if(!socket||!init)throw new Error("WhatsApp account is not connected");const toJid=String(command.payload.toJid??"");if(!toJid)throw new Error("Missing destination JID");
+  if(!socket||!init||!connectionOpen){emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"deferred",errorCode:"account_offline",errorMessage:"WhatsApp account is offline; command remains queued",completedAt:new Date().toISOString()});return;}const toJid=String(command.payload.toJid??"");if(!toJid)throw new Error("Missing destination JID");
   const type=String(command.payload.type??"text");let content:AnyMessageContent;
   if(type==="text")content={text:String(command.payload.text??"")};else{const mediaId=String(command.payload.mediaId??"");const response=await fetch(new URL(`/agent/media/${mediaId}`,init.baseUrl),{headers:{authorization:`Bearer ${init.credential}`}});if(!response.ok)throw new Error(`Media download failed: ${response.status}`);const bytes=Buffer.from(await response.arrayBuffer());const mime=response.headers.get("content-type")??"application/octet-stream";const name=response.headers.get("x-file-name")??"attachment";const caption=command.payload.text?String(command.payload.text):undefined;if(type==="image")content={image:bytes,mimetype:mime,caption};else if(type==="video")content={video:bytes,mimetype:mime,caption};else if(type==="audio")content={audio:bytes,mimetype:mime,ptt:true};else content={document:bytes,mimetype:mime,fileName:name,caption};}
   try{const sent=await socket.sendMessage(toJid,content);emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",whatsappMessageId:sent?.key.id,completedAt:new Date().toISOString()});}catch(error){emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"failed",errorCode:"whatsapp_rejected",errorMessage:error instanceof Error?error.message:String(error),completedAt:new Date().toISOString()});}
+}
+
+function messageTime(value:unknown):string{
+  const seconds=Number(value);const date=new Date(Number.isFinite(seconds)&&seconds>0?seconds*1000:Date.now());return date.toISOString();
 }
 
 async function encryptedAuthState(directory:string,key:Buffer):Promise<{state:AuthenticationState;saveCreds:()=>Promise<void>}>{

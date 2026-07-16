@@ -11,7 +11,7 @@ export class CentralClient {
   flush():void{
     if(this.socket?.readyState!==WebSocket.OPEN)return;
     const events=this.store.pendingEvents();if(!events.length)return;
-    this.socket.send(JSON.stringify({type:"event_batch",fromCursor:events[0].cursor,toCursor:events[events.length-1].cursor,events:events.map((event)=>({kind:event.event_kind,payload:JSON.parse(event.payload)}))}));
+    this.socket.send(JSON.stringify({type:"event_batch",fromCursor:events[0].cursor,toCursor:events[events.length-1].cursor,events:events.map((event)=>({cursor:event.cursor,kind:event.event_kind,payload:JSON.parse(event.payload)}))}));
   }
   private connect():void{
     const url=new URL("/agent/ws",this.baseUrl.replace(/^http/,"ws"));
@@ -30,7 +30,8 @@ export class CentralClient {
     this.store.saveCommand(command.sequence,command.commandId,command.accountId,command);
     let result:Record<string,unknown>;
     try{result=await this.onCommand(command);}catch(error){result={type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"uncertain",errorCode:"executor_interrupted",errorMessage:error instanceof Error?error.message:String(error),completedAt:new Date().toISOString()};}
-    this.store.completeCommand(command.commandId,result);this.socket?.send(JSON.stringify(result));
+    if(result.outcome==="deferred")this.store.deferCommand(command.commandId);else this.store.completeCommand(command.commandId,result);
+    this.socket?.send(JSON.stringify(result));
   }
   private nextDelay():number{this.retry++;const base=Math.min(60_000,1000*2**Math.min(this.retry,6));return Math.round(base*(.75+Math.random()*.5));}
 }

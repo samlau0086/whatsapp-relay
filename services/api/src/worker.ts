@@ -47,8 +47,16 @@ async function retryWebhook(item:Delivery,error:string,status?:number,body?:stri
 }
 
 async function requeueCommands():Promise<void>{
-  await pool.query("UPDATE outbound_commands SET state='pending',available_at=now()+interval '5 seconds',last_error='Agent disconnected before confirmation' WHERE state='dispatched' AND claimed_at<now()-interval '2 minutes' AND attempt<5");
-  await pool.query("UPDATE outbound_commands SET state='uncertain',completed_at=now(),last_error='No execution confirmation; automatic retry stopped to prevent duplicates' WHERE state='dispatched' AND claimed_at<now()-interval '2 minutes' AND attempt>=5");
+  await transaction(async client=>{
+    await client.query(`WITH requeued AS (
+      UPDATE outbound_commands SET state='pending',available_at=now()+interval '5 seconds',claimed_at=NULL,last_error='Agent disconnected before confirmation'
+      WHERE state='dispatched' AND claimed_at<now()-interval '2 minutes' AND attempt<5 RETURNING message_id
+    ) UPDATE messages SET status='queued' WHERE id IN (SELECT message_id FROM requeued WHERE message_id IS NOT NULL) AND status='dispatching'`);
+    await client.query(`WITH stopped AS (
+      UPDATE outbound_commands SET state='uncertain',completed_at=now(),last_error='No execution confirmation; automatic retry stopped to prevent duplicates'
+      WHERE state='dispatched' AND claimed_at<now()-interval '2 minutes' AND attempt>=5 RETURNING message_id
+    ) UPDATE messages SET status='uncertain' WHERE id IN (SELECT message_id FROM stopped WHERE message_id IS NOT NULL) AND status='dispatching'`);
+  });
 }
 
 let lastRetention=0;
