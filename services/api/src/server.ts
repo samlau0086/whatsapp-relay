@@ -3,7 +3,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import websocket from "@fastify/websocket";
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount } from "./auth.js";
@@ -217,6 +217,7 @@ app.post("/api/v1/messages", { preHandler:authenticate }, async (request, reply)
   const result=await transaction(async(client)=>{
     const conversation=await client.query("SELECT c.id,c.account_id,a.agent_id,a.status,co.wa_jid FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id JOIN contacts co ON co.id=c.contact_id WHERE c.id=$1 AND c.account_id=$2",[parsed.data.conversationId,parsed.data.accountId]);
     if(!conversation.rowCount) return null;
+    if(parsed.data.mediaId){const media=await client.query("SELECT id FROM media WHERE id=$1 AND (account_id=$2 OR account_id IS NULL) AND status='ready'",[parsed.data.mediaId,parsed.data.accountId]);if(!media.rowCount)throw Object.assign(new Error("media_not_found"),{statusCode:404});}
     const existing=await client.query("SELECT id,status FROM messages WHERE account_id=$1 AND client_message_id=$2",[parsed.data.accountId,parsed.data.clientMessageId]); if(existing.rowCount)return {messageId:existing.rows[0].id,status:existing.rows[0].status,deduplicated:true,agentId:conversation.rows[0].agent_id};
     const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,media_id,quoted_message_id,status,occurred_at) VALUES($1,$2,$3,$4,'out',$5,$6,$7,$8,'queued',now()) RETURNING id,status",[parsed.data.conversationId,parsed.data.accountId,request.principal?.kind==='user'?request.principal.id:null,parsed.data.clientMessageId,parsed.data.type,parsed.data.text??null,parsed.data.mediaId??null,parsed.data.quotedMessageId??null]);
     await client.query("UPDATE conversations SET status='open',closed_at=NULL,last_message_at=now() WHERE id=$1",[parsed.data.conversationId]);
@@ -228,12 +229,22 @@ app.post("/api/v1/messages", { preHandler:authenticate }, async (request, reply)
   if(result.agentId)void dispatchPending(result.agentId); return reply.code(202).send(result);
 });
 
+app.get("/api/v1/media", {preHandler:authenticate}, async(request,reply)=>{
+  const query=request.query as {accountId?:string;q?:string;limit?:string};if(!query.accountId)return reply.code(400).send({error:"account_required"});if(!canAccessAccount(request.principal,query.accountId))return reply.code(403).send({error:"account_forbidden"});
+  const limit=Math.min(100,Math.max(1,Number(query.limit??60)));const result=await pool.query("SELECT m.id,m.file_name,m.mime_type,m.byte_size,m.sha256,m.created_at,COUNT(msg.id)::int usage_count FROM media m LEFT JOIN messages msg ON msg.media_id=m.id WHERE (m.account_id=$1 OR m.account_id IS NULL) AND m.status='ready' AND ($2::text IS NULL OR m.file_name ILIKE '%'||$2||'%') GROUP BY m.id ORDER BY m.created_at DESC LIMIT $3",[query.accountId,query.q?.trim()||null,limit]);return{data:result.rows};
+});
+
+app.delete("/api/v1/media/:id", {preHandler:authenticate}, async(request,reply)=>{
+  const {id}=request.params as {id:string};const found=await pool.query("SELECT m.id,m.account_id,m.object_key,COUNT(msg.id)::int usage_count FROM media m LEFT JOIN messages msg ON msg.media_id=m.id WHERE m.id=$1 GROUP BY m.id",[id]);if(!found.rowCount)return reply.code(404).send({error:"not_found"});const item=found.rows[0];if(!canAccessAccount(request.principal,item.account_id))return reply.code(403).send({error:"account_forbidden"});if(Number(item.usage_count)>0)return reply.code(409).send({error:"media_in_use"});await s3.send(new DeleteObjectCommand({Bucket:config.S3_BUCKET,Key:item.object_key}));await transaction(async client=>{await client.query("DELETE FROM media WHERE id=$1",[id]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'media.delete','media',$3,$4)",[request.principal?.kind,request.principal?.id,id,JSON.stringify({accountId:item.account_id,objectKey:item.object_key})]);});return reply.code(204).send();
+});
+
 app.post("/api/v1/media", { preHandler:authenticate }, async (request,reply) => {
+  const query=request.query as {accountId?:string};if(!query.accountId)return reply.code(400).send({error:"account_required"});if(!canAccessAccount(request.principal,query.accountId))return reply.code(403).send({error:"account_forbidden"});
   const file=await request.file(); if(!file)return reply.code(400).send({error:"file_required"});
-  const allowed=new Set(["image/jpeg","image/png","image/webp","video/mp4","audio/ogg","audio/mpeg","application/pdf","application/zip"]); if(!allowed.has(file.mimetype))return reply.code(415).send({error:"unsupported_media_type"});
-  const bytes=await file.toBuffer(); const sha256=createHash("sha256").update(bytes).digest("hex"); const id=randomBytes(16).toString("hex"); const objectKey=`uploads/${new Date().toISOString().slice(0,10)}/${id}`;
+  const allowed=new Set(["image/jpeg","image/png","image/webp","video/mp4","audio/ogg","audio/mpeg","application/pdf","application/zip","text/plain","text/csv","application/msword","application/vnd.openxmlformats-officedocument.wordprocessingml.document","application/vnd.ms-excel","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","application/vnd.ms-powerpoint","application/vnd.openxmlformats-officedocument.presentationml.presentation"]); if(!allowed.has(file.mimetype))return reply.code(415).send({error:"unsupported_media_type"});
+  const bytes=await file.toBuffer(); const sha256=createHash("sha256").update(bytes).digest("hex");const existing=await pool.query("SELECT id,file_name,mime_type,byte_size,sha256 FROM media WHERE account_id=$1 AND sha256=$2 AND status='ready' ORDER BY created_at DESC LIMIT 1",[query.accountId,sha256]);if(existing.rowCount)return reply.code(200).send({mediaId:existing.rows[0].id,fileName:existing.rows[0].file_name,mimeType:existing.rows[0].mime_type,size:Number(existing.rows[0].byte_size),sha256,deduplicated:true}); const id=randomBytes(16).toString("hex"); const objectKey=`uploads/${query.accountId}/${new Date().toISOString().slice(0,10)}/${id}`;
   await s3.send(new PutObjectCommand({Bucket:config.S3_BUCKET,Key:objectKey,Body:bytes,ContentType:file.mimetype,Metadata:{sha256}}));
-  const media=await pool.query("INSERT INTO media(object_key,file_name,mime_type,byte_size,sha256) VALUES($1,$2,$3,$4,$5) RETURNING id",[objectKey,file.filename,file.mimetype,bytes.length,sha256]); return reply.code(201).send({mediaId:media.rows[0].id,fileName:file.filename,mimeType:file.mimetype,size:bytes.length,sha256});
+  const media=await transaction(async client=>{const created=await client.query("INSERT INTO media(account_id,object_key,file_name,mime_type,byte_size,sha256) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",[query.accountId,objectKey,file.filename,file.mimetype,bytes.length,sha256]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'media.upload','media',$3,$4)",[request.principal?.kind,request.principal?.id,created.rows[0].id,JSON.stringify({accountId:query.accountId,fileName:file.filename,mimeType:file.mimetype,byteSize:bytes.length,sha256})]);return created;}); return reply.code(201).send({mediaId:media.rows[0].id,fileName:file.filename,mimeType:file.mimetype,size:bytes.length,sha256});
 });
 
 app.setErrorHandler((error,_request,reply)=>{app.log.error(error);void reply.code((error as {statusCode?:number}).statusCode??500).send({error:"internal_error",message:config.NODE_ENV==="production"?"服务暂时不可用":error.message});});
