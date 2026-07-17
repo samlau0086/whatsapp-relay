@@ -18,13 +18,15 @@ export async function generateMetadata(): Promise<Metadata> {
   const host = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host") ?? "localhost:3000";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
   const origin = `${protocol}://${host}`;
-  const title = "RelayDesk · WhatsApp 消息聚合平台";
-  const description = "统一管理多个 WhatsApp 账号、会话、坐席与外部系统消息。";
+  const title = "RelayDesk | GeekMT 私有消息工作台";
+  const description = "由 GeekMT 运营、仅供获授权团队成员使用的私有消息工作台。RelayDesk 与 Meta 或 WhatsApp 无隶属、赞助或背书关系。";
   return {
     title,
     description,
     icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
-    openGraph: { title, description, type: "website", images: [{ url: `${origin}/og.png`, width: 1200, height: 630, alt: "RelayDesk WhatsApp 多账号消息聚合平台" }] },
+    robots: { index: false, follow: false, noarchive: true },
+    referrer: "no-referrer",
+    openGraph: { title, description, type: "website", images: [{ url: `${origin}/og.png`, width: 1200, height: 630, alt: "RelayDesk by GeekMT private messaging workspace" }] },
     twitter: { card: "summary_large_image", title, description, images: [`${origin}/og.png`] },
   };
 }
