@@ -62,12 +62,13 @@ async function connect(options:Init):Promise<void>{
       if(rawJid.endsWith("@lid")&&jid.endsWith("@s.whatsapp.net"))emitIdentity(options.accountId,rawJid,jid,item.pushName??undefined);
       const content=normalizeMessageContent(item.message);if(!content)continue;
       const text=content.conversation??content.extendedTextMessage?.text??content.imageMessage?.caption??content.videoMessage?.caption??content.buttonsResponseMessage?.selectedDisplayText??content.listResponseMessage?.title??undefined;
-      const kind=content.imageMessage?"image":content.videoMessage?"video":content.audioMessage?"audio":content.documentMessage?"document":content.locationMessage?"location":content.contactMessage?"contact":"text";
+      const sticker=Boolean(content.stickerMessage);
+      const kind=content.imageMessage||sticker?"image":content.videoMessage?"video":content.audioMessage?"audio":content.documentMessage?"document":content.locationMessage?"location":content.contactMessage?"contact":"text";
       if(kind==="text"&&!text)continue;
       if(item.key.fromMe)await auth.saveMessage(item.key.id,item.message);
       let media:Record<string,unknown>|undefined;
       if(["image","video","audio","document"].includes(kind)){
-        try{const bytes=await downloadMediaMessage(item,"buffer",{},{logger,reuploadRequest:async(message)=>activeSocket.updateMediaMessage(message)});const mime=content.imageMessage?.mimetype??content.videoMessage?.mimetype??content.audioMessage?.mimetype??content.documentMessage?.mimetype??"application/octet-stream";const fileName=content.documentMessage?.fileName??`${item.key.id}.${kind}`;const form=new FormData();form.append("file",new Blob([bytes],{type:mime}),fileName);const response=await fetch(new URL(`/agent/media?accountId=${encodeURIComponent(options.accountId)}`,options.baseUrl),{method:"POST",headers:{authorization:`Bearer ${options.credential}`,"x-content-sha256":createHash("sha256").update(bytes).digest("hex")},body:form});if(response.ok){const uploaded=await response.json() as {mediaId:string;size:number;sha256:string};media={uploadId:uploaded.mediaId,mimeType:mime,fileName,size:uploaded.size,sha256:uploaded.sha256};}}
+        try{const bytes=await downloadMediaMessage(item,"buffer",{},{logger,reuploadRequest:async(message)=>activeSocket.updateMediaMessage(message)});const mime=content.stickerMessage?.mimetype??content.imageMessage?.mimetype??content.videoMessage?.mimetype??content.audioMessage?.mimetype??content.documentMessage?.mimetype??(sticker?"image/webp":"application/octet-stream");const fileName=sticker?`sticker-${item.key.id}.webp`:content.documentMessage?.fileName??`${item.key.id}.${kind}`;const uploaded=await uploadInboundMedia(options,bytes,mime,fileName);media={uploadId:uploaded.mediaId,mimeType:mime,fileName,size:uploaded.size,sha256:uploaded.sha256,isSticker:sticker};}
         catch(error){emit({type:"diagnostic",level:"warn",accountId:options.accountId,message:"media_upload_failed",detail:String(error)});}
       }
       emit({type:"event",kind:"message",payload:{eventId:`message:${options.accountId}:${item.key.id}`,accountId:options.accountId,whatsappMessageId:item.key.id,chatJid:jid,rawChatJid:rawJid,senderJid:jidNormalizedUser(item.key.participant??jid),senderName:item.pushName??undefined,direction:item.key.fromMe?"out":"in",kind,text,occurredAt:messageTime(item.messageTimestamp),media}});
@@ -91,6 +92,14 @@ function disconnectReason(error:unknown):string{
   const target=value?.data?.address&&value.data.port?` ${value.data.address}:${value.data.port}`:"";
   const message=value?.message??String(error??"connection_closed");
   return `${status?`[${status}] `:""}${code?`${code}: `:""}${message}${target}`.replace(/\s+/g," ").slice(0,300);
+}
+
+async function uploadInboundMedia(options:Init,bytes:Buffer,mime:string,fileName:string):Promise<{mediaId:string;size:number;sha256:string}>{
+  const sha256=createHash("sha256").update(bytes).digest("hex");let lastError:unknown;
+  for(let attempt=0;attempt<5;attempt++){
+    try{const form=new FormData();form.append("file",new Blob([bytes],{type:mime}),fileName);const response=await fetch(new URL(`/agent/media?accountId=${encodeURIComponent(options.accountId)}`,options.baseUrl),{method:"POST",headers:{authorization:`Bearer ${options.credential}`,"x-content-sha256":sha256},body:form,signal:AbortSignal.timeout(120_000)});if(!response.ok)throw new Error(`HTTP ${response.status}: ${(await response.text()).slice(0,160)}`);return await response.json() as {mediaId:string;size:number;sha256:string};}catch(error){lastError=error;if(attempt<4)await new Promise(resolve=>setTimeout(resolve,Math.min(30_000,2_000*(2**attempt))));}
+  }
+  throw lastError;
 }
 
 async function execute(command:Command):Promise<void>{

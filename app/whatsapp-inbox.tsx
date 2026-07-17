@@ -7,6 +7,7 @@ import {
   Users, Wifi, WifiOff, X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 
 const API_URL = (process.env.NEXT_PUBLIC_RELAY_API_URL ?? "").replace(/\/$/, "");
 const COLORS = ["#6b4f3a", "#305f72", "#9b5f72", "#477a62", "#705b86"];
@@ -21,7 +22,7 @@ type Conversation = {
 type ChatMessage = {
   id:string; direction:"in"|"out"; kind:string; text:string; time:string;
   status?:"received"|"queued"|"dispatching"|"sent"|"delivered"|"read"|"failed"|"uncertain";
-  attachment?:{name:string;size:string;mime:string};
+  attachment?:{id:string;name:string;size:string;mime:string};
 };
 type User = {id:string;email:string;displayName:string;role:string};
 type WorkspaceView = "inbox"|"agents"|"help";
@@ -144,7 +145,7 @@ export function WhatsAppInbox() {
   async function sendMediaAsset(asset:MediaAsset,caption:string){
     if(!active||!apiToken)return;
     const kind=mediaKind(asset.mimeType),clientMessageId=crypto.randomUUID();setDraft("");
-    setMessages(all=>({...all,[active.id]:[...(all[active.id]??[]),{id:clientMessageId,direction:"out",kind,text:caption||kindText(kind),time:formatTime(new Date()),status:"queued",attachment:{name:asset.fileName,mime:asset.mimeType,size:formatBytes(asset.size)}}]}));
+    setMessages(all=>({...all,[active.id]:[...(all[active.id]??[]),{id:clientMessageId,direction:"out",kind,text:caption,time:formatTime(new Date()),status:"queued",attachment:{id:asset.id,name:asset.fileName,mime:asset.mimeType,size:formatBytes(asset.size)}}]}));
     const queued=await authorizedFetch("/api/v1/messages",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId:active.accountId,conversationId:active.id,clientMessageId,type:kind,text:caption||undefined,mediaId:asset.id})});if(queued.token!==apiToken)setApiToken(queued.token);
     if(!queued.response.ok){setToast(`附件消息入队失败（HTTP ${queued.response.status}）`);setMessages(all=>({...all,[active.id]:(all[active.id]??[]).map(item=>item.id===clientMessageId?{...item,status:"failed"}:item)}));return;}
     setMediaOpen(false);setToast(active.accountStatus==="online"?"附件已进入发送队列":"账号离线，附件已持久化排队");void loadMessages(queued.token,active.id);
@@ -181,7 +182,7 @@ export function WhatsAppInbox() {
     <section className="chat-panel">{active?<>
       <header className="chat-head"><div className="chat-person"><span className="avatar" style={{background:active.color}}>{active.initials}</span><span><b>{active.name}</b><small><i className={`status-dot ${active.accountStatus==="online"?"online":""}`}/>{active.account} · {statusText(active.accountStatus)}</small></span></div><div className="chat-actions"><button onClick={()=>void updateConversation({assignedToMe:active.assignedUserId!==userId})} className="assign-button"><UserPlus size={15}/>{active.assignedUserId===userId?"取消认领":active.assignedUserId?"转为我负责":"认领"}</button><button onClick={()=>void updateConversation({favorite:!active.favorite})} className="icon-button" aria-label="收藏"><Bookmark size={17} fill={active.favorite?"currentColor":"none"}/></button><button onClick={()=>setDetailsOpen(!detailsOpen)} className="icon-button" aria-label="联系人详情"><Info size={17}/></button></div></header>
       {active.accountStatus!=="online"&&<div className="offline-banner"><WifiOff size={15}/><span>该账号当前离线；发送请求仍会进入持久队列。</span></div>}
-      <div className="messages" aria-live="polite"><div className="day-separator"><span>真实消息记录</span></div>{currentMessages.length?currentMessages.map(message=><article key={message.id} className={`message-row ${message.direction}`}>{message.direction==="in"&&<span className="avatar message-avatar" style={{background:active.color}}>{active.initials}</span>}<div className="message-bubble"><p>{message.text}</p>{message.attachment&&<div className="attachment-card"><span><FileText size={20}/></span><span><b>{message.attachment.name}</b><small>{message.attachment.mime} · {message.attachment.size}</small></span></div>}<footer><time>{message.time}</time>{message.direction==="out"&&<MessageStatus status={message.status}/>}</footer></div></article>):<EmptyState title="暂无消息" text="收到或发送的消息将显示在这里"/>}</div>
+      <div className="messages" aria-live="polite"><div className="day-separator"><span>真实消息记录</span></div>{currentMessages.length?currentMessages.map(message=><article key={message.id} className={`message-row ${message.direction}`}>{message.direction==="in"&&<span className="avatar message-avatar" style={{background:active.color}}>{active.initials}</span>}<div className={`message-bubble ${message.attachment?.name.startsWith("sticker-")?"sticker-bubble":""}`}>{message.text&&<p>{message.text}</p>}{message.attachment&&<MessageMedia attachment={message.attachment} token={apiToken} onToken={setApiToken}/>}<footer><time>{message.time}</time>{message.direction==="out"&&<MessageStatus status={message.status}/>}</footer></div></article>):<EmptyState title="暂无消息" text="收到或发送的消息将显示在这里"/>}</div>
       <div className="composer-wrap">
         <div className="composer-tools"><button onClick={()=>setMediaOpen(true)} aria-label="打开媒体与附件" title="媒体与附件"><Paperclip size={17}/></button><span>回复给 {active.name}</span></div>
         {emojiOpen&&<EmojiPicker category={emojiCategory} onCategory={setEmojiCategory} onSelect={insertEmoji} onClose={()=>setEmojiOpen(false)}/>}
@@ -234,7 +235,7 @@ function mapMediaAsset(item:Record<string,unknown>):MediaAsset{return{id:String(
 function mediaKind(mime:string){return mime.startsWith("image/")?"image":mime.startsWith("video/")?"video":mime.startsWith("audio/")?"audio":"document";}
 
 function mapConversation(item:Record<string,unknown>,index:number):Conversation {const name=String(item.display_name??item.phone_e164??"未知联系人");return{id:String(item.id),name,initials:name.slice(0,2).toUpperCase(),color:COLORS[index%COLORS.length],account:String(item.account_name??"未知账号"),accountId:String(item.account_id),phone:String(item.phone_e164??""),preview:String(item.last_message??kindText(String(item.last_message_kind??""))),time:item.last_message_at?formatTime(new Date(String(item.last_message_at))):"",unread:Number(item.unread_count??0),accountStatus:String(item.account_status??"offline"),assignedUserId:item.assigned_user_id?String(item.assigned_user_id):null,favorite:Boolean(item.favorite),conversationStatus:String(item.status??"open")};}
-function mapMessage(item:Record<string,unknown>):ChatMessage {const kind=String(item.kind??"text");return{id:String(item.id),direction:item.direction as "in"|"out",kind,text:String(item.text_content??kindText(kind)),time:formatTime(new Date(String(item.occurred_at))),status:item.status as ChatMessage["status"],attachment:item.file_name?{name:String(item.file_name),mime:String(item.mime_type??"文件"),size:formatBytes(Number(item.byte_size??0))}:undefined};}
+function mapMessage(item:Record<string,unknown>):ChatMessage {const kind=String(item.kind??"text"),mediaId=String(item.media_id??"");return{id:String(item.id),direction:item.direction as "in"|"out",kind,text:String(item.text_content??(mediaId?"":kindText(kind))),time:formatTime(new Date(String(item.occurred_at))),status:item.status as ChatMessage["status"],attachment:item.file_name&&mediaId?{id:mediaId,name:String(item.file_name),mime:String(item.mime_type??"文件"),size:formatBytes(Number(item.byte_size??0))}:undefined};}
 function kindText(kind:string){return({audio:"[语音消息]",image:"[图片]",video:"[视频]",document:"[文档]",location:"[位置]",contact:"[联系人名片]"} as Record<string,string>)[kind]??"暂无消息";}
 function statusText(status:string){return({online:"在线",pairing:"等待配对",offline:"离线",logged_out:"已退出",error:"异常"} as Record<string,string>)[status]??status;}
 function formatTime(date:Date){return Number.isNaN(date.getTime())?"":date.toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"});}
@@ -254,6 +255,16 @@ async function refreshAccessToken(){const response=await fetch(`${API_URL}/api/v
 function EmptyState({title,text}:{title:string;text:string}){return <div className="empty-state"><b>{title}</b><span>{text}</span></div>;}
 function AccountStatus({initials,color,name,detail,online=false}:{initials:string;color:string;name:string;detail:string;online?:boolean}){return <div className={`account-status ${online?"":"muted"}`}><span className={`avatar tiny ${color}`}>{initials}</span><span><b>{name}</b><small><i className={`status-dot ${online?"online":""}`}/>{detail}</small></span></div>;}
 function MessageStatus({status}:{status?:ChatMessage["status"]}){if(status==="queued"||status==="dispatching")return <span className="message-state queued"><Clock3 size={12}/>{status==="queued"?"排队中":"发送中"}</span>;if(status==="failed"||status==="uncertain")return <span className="message-state failed"><X size={12}/>{status==="failed"?"失败":"待确认"}</span>;if(status==="read")return <span className="message-state read"><CheckCheck size={13}/>已读</span>;if(status==="delivered")return <span className="message-state"><CheckCheck size={13}/>已送达</span>;return <span className="message-state"><Check size={13}/>已发送</span>;}
+
+function MessageMedia({attachment,token,onToken}:{attachment:{id:string;name:string;size:string;mime:string};token:string;onToken:(token:string)=>void}){
+  const [url,setUrl]=useState("");const [error,setError]=useState("");
+  useEffect(()=>{const controller=new AbortController();let objectUrl="";void (async()=>{try{const result=await authorizedFetch(`/api/v1/media/${attachment.id}`,token,{signal:controller.signal});if(result.token!==token)onToken(result.token);if(!result.response.ok)throw new Error(`HTTP ${result.response.status}`);objectUrl=URL.createObjectURL(await result.response.blob());setUrl(objectUrl);setError("");}catch(reason){if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:"媒体加载失败");}})();return()=>{controller.abort();if(objectUrl)URL.revokeObjectURL(objectUrl);};},[attachment.id,token,onToken]);
+  if(error)return <div className="message-media message-media-error">媒体加载失败 · {error}</div>;if(!url)return <div className="message-media message-media-loading">正在加载媒体…</div>;
+  if(attachment.mime.startsWith("image/"))return <div className="message-media"><button className="message-media-preview" onClick={()=>window.open(url,"_blank","noopener,noreferrer")} aria-label={`查看图片 ${attachment.name}`}><Image src={url} alt={attachment.name} width={440} height={440} unoptimized/></button></div>;
+  if(attachment.mime.startsWith("video/"))return <div className="message-media"><video src={url} controls preload="metadata" aria-label={attachment.name}/></div>;
+  if(attachment.mime.startsWith("audio/"))return <div className="message-media"><audio src={url} controls preload="metadata" aria-label={attachment.name}/></div>;
+  return <button className="attachment-card" onClick={()=>{const link=document.createElement("a");link.href=url;link.download=attachment.name;link.click();}}><span><FileText size={20}/></span><span><b>{attachment.name}</b><small>{attachment.mime} · {attachment.size}</small></span></button>;
+}
 
 function AgentManagement({token,role,onToken,onToast}:{token:string;role:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){
   const [agents,setAgents]=useState<ManagedAgent[]>([]);const [loading,setLoading]=useState(true);const [error,setError]=useState("");const [enrollment,setEnrollment]=useState<{code:string;expiresAt:string}|null>(null);

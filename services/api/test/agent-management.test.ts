@@ -10,6 +10,7 @@ test("agent management routes and legacy demo cleanup are shipped", async () => 
   assert.match(server,/app\.patch\("\/api\/v1\/agents\/:id"/);
   assert.match(server,/app\.delete\("\/api\/v1\/agents\/:id"/);
   assert.match(server,/app\.get\("\/api\/v1\/media"/);
+  assert.match(server,/app\.get\("\/api\/v1\/media\/:id"/);
   assert.match(server,/app\.delete\("\/api\/v1\/media\/:id"/);
   assert.match(server,/media_in_use/);
   assert.match(server,/account_id=\$2 OR account_id IS NULL/);
