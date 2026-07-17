@@ -59,6 +59,8 @@ test("inbound WhatsApp replies are normalized before entering the durable outbox
   assert.match(worker,/uploadInboundMedia/);
   assert.match(worker,/attempt < 5/);
   assert.match(worker,/AbortSignal\.timeout\(120_000\)/);
+  assert.match(worker,/UndiciProxyAgent/);
+  assert.match(worker,/dispatcher: mediaProxyAgent/);
   assert.match(client,/cursor: event\.cursor/);
 });
 
