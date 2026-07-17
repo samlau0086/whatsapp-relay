@@ -52,6 +52,7 @@ export function WhatsAppInbox() {
   const [emojiOpen,setEmojiOpen]=useState(false);
   const [emojiCategory,setEmojiCategory]=useState("常用");
   const textareaRef=useRef<HTMLTextAreaElement>(null);
+  const messagesRef=useRef<HTMLDivElement>(null);
 
   const userId=user?.id??tokenSubject(apiToken);
   const counts=useMemo(()=>({
@@ -75,6 +76,21 @@ export function WhatsAppInbox() {
   const effectiveActiveId=visible.some(item=>item.id===activeId)?activeId:(visible[0]?.id??"");
   const active=visible.find(item=>item.id===effectiveActiveId)??null;
   const currentMessages=active?messages[active.id]??[]:[];
+  const latestMessageId=currentMessages.at(-1)?.id??"";
+  const scrollMessagesToEnd=useCallback((behavior:ScrollBehavior="smooth")=>{
+    window.requestAnimationFrame(()=>{
+      const container=messagesRef.current;
+      if(container)container.scrollTo({top:container.scrollHeight,behavior});
+    });
+  },[]);
+
+  useEffect(()=>{
+    if(effectiveActiveId)scrollMessagesToEnd("auto");
+  },[effectiveActiveId,scrollMessagesToEnd]);
+
+  useEffect(()=>{
+    if(latestMessageId)scrollMessagesToEnd("smooth");
+  },[latestMessageId,scrollMessagesToEnd]);
 
   const logout=useCallback(()=>{
     sessionStorage.removeItem("relayAccessToken");sessionStorage.removeItem("relayUser");
@@ -182,7 +198,7 @@ export function WhatsAppInbox() {
     <section className="chat-panel">{active?<>
       <header className="chat-head"><div className="chat-person"><span className="avatar" style={{background:active.color}}>{active.initials}</span><span><b>{active.name}</b><small><i className={`status-dot ${active.accountStatus==="online"?"online":""}`}/>{active.account} · {statusText(active.accountStatus)}</small></span></div><div className="chat-actions"><button onClick={()=>void updateConversation({assignedToMe:active.assignedUserId!==userId})} className="assign-button"><UserPlus size={15}/>{active.assignedUserId===userId?"取消认领":active.assignedUserId?"转为我负责":"认领"}</button><button onClick={()=>void updateConversation({favorite:!active.favorite})} className="icon-button" aria-label="收藏"><Bookmark size={17} fill={active.favorite?"currentColor":"none"}/></button><button onClick={()=>setDetailsOpen(!detailsOpen)} className="icon-button" aria-label="联系人详情"><Info size={17}/></button></div></header>
       {active.accountStatus!=="online"&&<div className="offline-banner"><WifiOff size={15}/><span>该账号当前离线；发送请求仍会进入持久队列。</span></div>}
-      <div className="messages" aria-live="polite"><div className="day-separator"><span>真实消息记录</span></div>{currentMessages.length?currentMessages.map(message=><article key={message.id} className={`message-row ${message.direction}`}>{message.direction==="in"&&<span className="avatar message-avatar" style={{background:active.color}}>{active.initials}</span>}<div className={`message-bubble ${message.attachment?.name.startsWith("sticker-")?"sticker-bubble":""}`}>{message.text&&<p>{message.text}</p>}{message.attachment&&<MessageMedia attachment={message.attachment} token={apiToken} onToken={setApiToken}/>}<footer><time>{message.time}</time>{message.direction==="out"&&<MessageStatus status={message.status}/>}</footer></div></article>):<EmptyState title="暂无消息" text="收到或发送的消息将显示在这里"/>}</div>
+      <div ref={messagesRef} className="messages" aria-live="polite"><div className="day-separator"><span>真实消息记录</span></div>{currentMessages.length?currentMessages.map(message=><article key={message.id} className={`message-row ${message.direction}`}>{message.direction==="in"&&<span className="avatar message-avatar" style={{background:active.color}}>{active.initials}</span>}<div className={`message-bubble ${message.attachment?.name.startsWith("sticker-")?"sticker-bubble":""}`}>{message.text&&<p>{message.text}</p>}{message.attachment&&<MessageMedia attachment={message.attachment} token={apiToken} onToken={setApiToken} onReady={scrollMessagesToEnd}/>}<footer><time>{message.time}</time>{message.direction==="out"&&<MessageStatus status={message.status}/>}</footer></div></article>):<EmptyState title="暂无消息" text="收到或发送的消息将显示在这里"/>}</div>
       <div className="composer-wrap">
         <div className="composer-tools"><button onClick={()=>setMediaOpen(true)} aria-label="打开媒体与附件" title="媒体与附件"><Paperclip size={17}/></button><span>回复给 {active.name}</span></div>
         {emojiOpen&&<EmojiPicker category={emojiCategory} onCategory={setEmojiCategory} onSelect={insertEmoji} onClose={()=>setEmojiOpen(false)}/>}
@@ -256,13 +272,13 @@ function EmptyState({title,text}:{title:string;text:string}){return <div classNa
 function AccountStatus({initials,color,name,detail,online=false}:{initials:string;color:string;name:string;detail:string;online?:boolean}){return <div className={`account-status ${online?"":"muted"}`}><span className={`avatar tiny ${color}`}>{initials}</span><span><b>{name}</b><small><i className={`status-dot ${online?"online":""}`}/>{detail}</small></span></div>;}
 function MessageStatus({status}:{status?:ChatMessage["status"]}){if(status==="queued"||status==="dispatching")return <span className="message-state queued"><Clock3 size={12}/>{status==="queued"?"排队中":"发送中"}</span>;if(status==="failed"||status==="uncertain")return <span className="message-state failed"><X size={12}/>{status==="failed"?"失败":"待确认"}</span>;if(status==="read")return <span className="message-state read"><CheckCheck size={13}/>已读</span>;if(status==="delivered")return <span className="message-state"><CheckCheck size={13}/>已送达</span>;return <span className="message-state"><Check size={13}/>已发送</span>;}
 
-function MessageMedia({attachment,token,onToken}:{attachment:{id:string;name:string;size:string;mime:string};token:string;onToken:(token:string)=>void}){
+function MessageMedia({attachment,token,onToken,onReady}:{attachment:{id:string;name:string;size:string;mime:string};token:string;onToken:(token:string)=>void;onReady:()=>void}){
   const [url,setUrl]=useState("");const [error,setError]=useState("");
   useEffect(()=>{const controller=new AbortController();let objectUrl="";void (async()=>{try{const result=await authorizedFetch(`/api/v1/media/${attachment.id}`,token,{signal:controller.signal});if(result.token!==token)onToken(result.token);if(!result.response.ok)throw new Error(`HTTP ${result.response.status}`);objectUrl=URL.createObjectURL(await result.response.blob());setUrl(objectUrl);setError("");}catch(reason){if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:"媒体加载失败");}})();return()=>{controller.abort();if(objectUrl)URL.revokeObjectURL(objectUrl);};},[attachment.id,token,onToken]);
   if(error)return <div className="message-media message-media-error">媒体加载失败 · {error}</div>;if(!url)return <div className="message-media message-media-loading">正在加载媒体…</div>;
-  if(attachment.mime.startsWith("image/"))return <div className="message-media"><button className="message-media-preview" onClick={()=>window.open(url,"_blank","noopener,noreferrer")} aria-label={`查看图片 ${attachment.name}`}><Image src={url} alt={attachment.name} width={440} height={440} unoptimized/></button></div>;
-  if(attachment.mime.startsWith("video/"))return <div className="message-media"><video src={url} controls preload="metadata" aria-label={attachment.name}/></div>;
-  if(attachment.mime.startsWith("audio/"))return <div className="message-media"><audio src={url} controls preload="metadata" aria-label={attachment.name}/></div>;
+  if(attachment.mime.startsWith("image/"))return <div className="message-media"><button className="message-media-preview" onClick={()=>window.open(url,"_blank","noopener,noreferrer")} aria-label={`查看图片 ${attachment.name}`}><Image src={url} alt={attachment.name} width={440} height={440} unoptimized onLoad={onReady}/></button></div>;
+  if(attachment.mime.startsWith("video/"))return <div className="message-media"><video src={url} controls preload="metadata" aria-label={attachment.name} onLoadedMetadata={onReady}/></div>;
+  if(attachment.mime.startsWith("audio/"))return <div className="message-media"><audio src={url} controls preload="metadata" aria-label={attachment.name} onLoadedMetadata={onReady}/></div>;
   return <button className="attachment-card" onClick={()=>{const link=document.createElement("a");link.href=url;link.download=attachment.name;link.click();}}><span><FileText size={20}/></span><span><b>{attachment.name}</b><small>{attachment.mime} · {attachment.size}</small></span></button>;
 }
 
