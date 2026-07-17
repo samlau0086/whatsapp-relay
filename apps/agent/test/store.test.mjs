@@ -57,6 +57,16 @@ test("inbound WhatsApp replies are normalized before entering the durable outbox
   assert.match(client,/cursor: event\.cursor/);
 });
 
+test("stale WhatsApp sockets and stale renderer refreshes cannot overwrite current status", () => {
+  const worker=readFileSync(new URL("../dist/account-worker.js",import.meta.url),"utf8");
+  const renderer=readFileSync(new URL("../dist/renderer/index.html",import.meta.url),"utf8");
+  assert.match(worker,/connectionGeneration/);
+  assert.match(worker,/generation\s*!==\s*connectionGeneration/);
+  assert.match(worker,/previousSocket\?\.end/);
+  assert.match(renderer,/refreshSequence/);
+  assert.match(renderer,/sequence\s*!==\s*refreshSequence/);
+});
+
 test("protocol placeholders can be removed without dropping real replies", () => {
   const directory=mkdtempSync(join(tmpdir(),"relaydesk-store-"));
   const store=new AgentStore(join(directory,"agent.db"));
