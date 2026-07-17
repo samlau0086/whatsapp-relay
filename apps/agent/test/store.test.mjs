@@ -4,6 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { AgentStore } from "../dist/store.js";
+import { isTransientSendConnectionError } from "../dist/send-errors.js";
+
+test("temporary WhatsApp disconnects remain queued instead of becoming permanent failures",()=>{
+  assert.equal(isTransientSendConnectionError(new Error("1006")),true);
+  assert.equal(isTransientSendConnectionError({output:{statusCode:428},message:"Connection Terminated"}),true);
+  assert.equal(isTransientSendConnectionError(Object.assign(new Error("socket hang up"),{code:"ECONNRESET"})),true);
+  assert.equal(isTransientSendConnectionError(new Error("not-authorized")),false);
+});
 
 test("removed-account status cleanup never skips a message event", () => {
   const directory=mkdtempSync(join(tmpdir(),"relaydesk-store-"));
