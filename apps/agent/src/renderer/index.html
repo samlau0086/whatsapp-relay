@@ -14,6 +14,11 @@
     <section class="card">
       <div class="row"><div><b>中心平台</b><p class="hint" id="central-label">正在检查连接...</p><div class="meta" id="version"></div></div><span class="status"><i class="dot" id="central-dot"></i><span id="central-status">离线</span></span></div>
     </section>
+    <section class="card hidden" id="central-settings-card">
+      <b>中心地址</b><p class="hint">仅在原中心更换域名时修改。Agent 将保留现有凭据并立即连接新地址。</p>
+      <label for="central-base-url">中心平台地址</label><input id="central-base-url" placeholder="https://relay.example.com">
+      <button class="secondary" id="save-central-url">保存并重新连接</button><p class="error" id="central-url-error"></p>
+    </section>
     <section class="card">
       <b>WhatsApp 网络代理</b><p class="hint">仅用于 WhatsApp 连接。自动模式会读取 Windows 系统代理；未检测到代理时自动直连。</p>
       <label for="proxy-mode">连接方式</label><select id="proxy-mode"><option value="auto">自动（推荐）</option><option value="direct">强制直连</option><option value="manual">手动代理</option></select>
@@ -46,7 +51,7 @@
   <script>
     const api=window.relayAgent;const $=id=>document.getElementById(id);
     let refreshSequence=0;
-    async function refresh(){const sequence=++refreshSequence;const s=await api.state();if(sequence!==refreshSequence)return;$("base-url").value=s.baseUrl;$("enroll-card").classList.toggle("hidden",s.enrolled);$("accounts-card").classList.toggle("hidden",!s.enrolled);$("central-label").textContent=s.enrolled?s.baseUrl:`尚未注册 · ${s.baseUrl}`;$("version").textContent=`Agent v${s.version} · 协议 v${s.protocolVersion}`;$("proxy-mode").value=s.proxy.mode;$("proxy-url").value=s.proxy.url;$("manual-proxy").classList.toggle("hidden",s.proxy.mode!=="manual");$("proxy-effective").textContent=`当前：${s.proxy.effective}`;$("qr-wrap").classList.toggle("hidden",!s.latestQr);$("qr").src=s.latestQr?.qrDataUrl??"";status(s.connection);render(s.accounts)}
+    async function refresh(){const sequence=++refreshSequence;const s=await api.state();if(sequence!==refreshSequence)return;$("base-url").value=s.baseUrl;if(document.activeElement!==$("central-base-url"))$("central-base-url").value=s.baseUrl;$("enroll-card").classList.toggle("hidden",s.enrolled);$("central-settings-card").classList.toggle("hidden",!s.enrolled);$("accounts-card").classList.toggle("hidden",!s.enrolled);$("central-label").textContent=s.enrolled?s.baseUrl:`尚未注册 · ${s.baseUrl}`;$("version").textContent=`Agent v${s.version} · 协议 v${s.protocolVersion}`;$("proxy-mode").value=s.proxy.mode;$("proxy-url").value=s.proxy.url;$("manual-proxy").classList.toggle("hidden",s.proxy.mode!=="manual");$("proxy-effective").textContent=`当前：${s.proxy.effective}`;$("qr-wrap").classList.toggle("hidden",!s.latestQr);$("qr").src=s.latestQr?.qrDataUrl??"";status(s.connection);render(s.accounts)}
     function status(value){$("central-status").textContent=value==="online"?"已连接":value==="incompatible"?"版本不兼容":"离线";$("central-dot").classList.toggle("online",value==="online")}
     function escapeHtml(value){return String(value).replace(/[&<>'"]/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"})[char])}
     function render(items){$("accounts").innerHTML=items.length?items.map(a=>`<div class="account"><span><b>${escapeHtml(a.name)}</b><br><small>${escapeHtml(a.id)}</small>${a.last_error?`<br><small class="error">${escapeHtml(a.last_error)}</small>`:""}</span><span class="account-actions"><span class="status"><i class="dot ${a.status==='online'?'online':''}"></i>${escapeHtml(a.status)}</span><button class="secondary" data-action="edit" data-id="${escapeHtml(a.id)}">编辑</button><button class="secondary" data-action="repair" data-id="${escapeHtml(a.id)}">重新配对</button><button class="danger" data-action="remove" data-id="${escapeHtml(a.id)}">移除</button></span></div>`).join(""):'<p class="hint">尚未添加账号</p>'}
@@ -56,6 +61,7 @@
       $("enroll").disabled=true;$("diagnostics").disabled=true;
     }else{
       $("enroll").onclick=async()=>{try{$("error").textContent="";const baseUrl=$("base-url").value.trim().replace(/\/$/,"");if(!/^https:\/\//.test(baseUrl)&&!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(baseUrl))throw new Error("公网中心地址必须使用 HTTPS");await api.enroll({baseUrl,code:$("code").value.trim(),name:$("agent-name").value.trim()});await refresh()}catch(e){$("error").textContent=e.message}};
+      $("save-central-url").onclick=async()=>{const button=$("save-central-url");button.disabled=true;$("central-url-error").textContent="";try{const result=await api.updateCentralUrl({baseUrl:$("central-base-url").value.trim()});$("central-base-url").value=result.baseUrl;await refresh();button.textContent="已保存，正在连接";setTimeout(()=>button.textContent="保存并重新连接",1500)}catch(e){$("central-url-error").textContent=e.message}finally{button.disabled=false}};
       $("proxy-mode").onchange=()=>$("manual-proxy").classList.toggle("hidden",$("proxy-mode").value!=="manual");
       $("save-proxy").onclick=async()=>{const button=$("save-proxy");button.disabled=true;$("proxy-error").textContent="";try{await api.saveProxy({mode:$("proxy-mode").value,url:$("proxy-url").value.trim()});await refresh();button.textContent="已保存";setTimeout(()=>button.textContent="保存并重新连接",1500)}catch(e){$("proxy-error").textContent=e.message}finally{button.disabled=false}};
       $("add-account").onclick=()=>{$("account-error").textContent="";$("add-account-form").classList.remove("hidden");$("new-account-name").focus()};

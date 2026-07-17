@@ -73,13 +73,27 @@ test("inbound WhatsApp replies are normalized before entering the durable outbox
 });
 
 test("stale WhatsApp sockets and stale renderer refreshes cannot overwrite current status", () => {
+  const main=readFileSync(new URL("../dist/main.js",import.meta.url),"utf8");
   const worker=readFileSync(new URL("../dist/account-worker.js",import.meta.url),"utf8");
   const renderer=readFileSync(new URL("../dist/renderer/index.html",import.meta.url),"utf8");
+  assert.match(main,/client\s*!==\s*nextClient/);
   assert.match(worker,/connectionGeneration/);
   assert.match(worker,/generation\s*!==\s*connectionGeneration/);
   assert.match(worker,/previousSocket\?\.end/);
   assert.match(renderer,/refreshSequence/);
   assert.match(renderer,/sequence\s*!==\s*refreshSequence/);
+});
+
+test("an enrolled agent can change its central URL without replacing credentials", () => {
+  const main=readFileSync(new URL("../dist/main.js",import.meta.url),"utf8");
+  const preload=readFileSync(new URL("../dist/preload.cjs",import.meta.url),"utf8");
+  const renderer=readFileSync(new URL("../dist/renderer/index.html",import.meta.url),"utf8");
+  assert.match(main,/agent:update-central-url/);
+  assert.match(main,/store\.set\("baseUrl", baseUrl\)/);
+  assert.match(main,/startCentral\(baseUrl, agentId, credential\)/);
+  assert.match(preload,/updateCentralUrl/);
+  assert.match(renderer,/central-settings-card/);
+  assert.match(renderer,/save-central-url/);
 });
 
 test("protocol placeholders can be removed without dropping real replies", () => {

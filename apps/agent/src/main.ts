@@ -9,7 +9,7 @@ import { AgentStore } from "./store.js";
 import { CentralClient } from "./central-client.js";
 
 const PROTOCOL_VERSION = 1;
-const DEFAULT_CENTRAL_URL = "https://whatsapp.geekmt.com";
+const DEFAULT_CENTRAL_URL = "https://wsdesk.geekmt.com";
 const STABLE_USER_DATA = join(app.getPath("appData"), "@relaydesk", "windows-agent");
 mkdirSync(STABLE_USER_DATA,{recursive:true});
 app.setPath("userData", STABLE_USER_DATA);
@@ -132,6 +132,17 @@ ipcMain.handle("agent:enroll", async (_event, input: {baseUrl:string;code:string
   return { ok: true };
 });
 
+ipcMain.handle("agent:update-central-url", async (_event, input: {baseUrl:string}) => {
+  const agentId = store.get("agentId");
+  const credential = store.get("credential");
+  if (!agentId || !credential) throw new Error("设备尚未注册到中心平台");
+  const baseUrl = normalizeCentralUrl(input.baseUrl);
+  store.set("baseUrl", baseUrl);
+  store.set("connection", "offline");
+  startCentral(baseUrl, agentId, credential);
+  return { ok:true, baseUrl };
+});
+
 ipcMain.handle("account:add", async (_event, input: {id:string;name:string}) => {
   const baseUrl = store.get("baseUrl") ?? DEFAULT_CENTRAL_URL;
   const credential = store.get("credential");
@@ -183,7 +194,7 @@ ipcMain.handle("account:remove", async (_event, input: {id:string}) => {
 
 function startCentral(baseUrl: string, agentId: string, credential: string): void {
   client?.stop();
-  client = new CentralClient(
+  const nextClient = new CentralClient(
     store,
     baseUrl,
     agentId,
@@ -207,11 +218,25 @@ function startCentral(baseUrl: string, agentId: string, credential: string): voi
       });
     },
     (status) => {
+      if (client !== nextClient) return;
       store.set("connection", status);
       window?.webContents.send("agent:event", { type: "central_status", status });
     },
   );
-  client.start();
+  client = nextClient;
+  nextClient.start();
+}
+
+function normalizeCentralUrl(value: string): string {
+  let url: URL;
+  try { url = new URL(value.trim()); }
+  catch { throw new Error("请输入有效的中心平台地址"); }
+  const localHttp = url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1");
+  if (url.protocol !== "https:" && !localHttp) throw new Error("公网中心地址必须使用 HTTPS");
+  if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("中心地址只填写域名根地址，不要包含路径、参数或账号信息");
+  }
+  return url.origin;
 }
 
 async function startAccount(accountId: string, name: string, dataDir: string): Promise<void> {

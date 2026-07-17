@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld("relayAgent", {
   state: () => ipcRenderer.invoke("agent:state"),
   diagnostics: () => ipcRenderer.invoke("agent:diagnostics"),
   enroll: (input) => ipcRenderer.invoke("agent:enroll", input),
+  updateCentralUrl: (input) => ipcRenderer.invoke("agent:update-central-url", input),
   addAccount: (input) => ipcRenderer.invoke("account:add", input),
   updateAccount: (input) => ipcRenderer.invoke("account:update", input),
   repairAccount: (input) => ipcRenderer.invoke("account:repair", input),
