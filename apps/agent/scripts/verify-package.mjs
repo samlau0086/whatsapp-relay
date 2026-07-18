@@ -14,11 +14,12 @@ const main=await readFile(join(directory,"dist","main.js"),"utf8");
 const preload=await readFile(join(directory,"dist","preload.cjs"),"utf8");
 
 if(packaged.version!==expected.version)throw new Error(`Packaged version ${packaged.version} does not match ${expected.version}`);
-for(const marker of [`v${expected.version}`,"build-version","proxy-mode","updateAccount"]){
+for(const marker of [`v${expected.version}`,"build-version","proxy-mode","updateAccount","central-settings-card","updateCentralUrl"]){
   if(!renderer.includes(marker))throw new Error(`Packaged renderer is missing ${marker}`);
 }
 if(renderer.includes("__AGENT_VERSION__"))throw new Error("Agent version placeholder was not replaced");
 if(!main.includes("@relaydesk")||!main.includes("windows-agent"))throw new Error("Stable user data path is missing");
-if(!preload.includes("agent:state")||!preload.includes("account:add"))throw new Error("Packaged preload bridge is incomplete");
+if(!main.includes("agent:update-central-url"))throw new Error("Packaged main process is missing central URL updates");
+if(!preload.includes("agent:state")||!preload.includes("account:add")||!preload.includes("updateCentralUrl"))throw new Error("Packaged preload bridge is incomplete");
 await rm(directory,{recursive:true,force:true});
 console.log(`Verified RelayDesk Agent v${expected.version} packaged renderer, preload and persistent data path.`);
