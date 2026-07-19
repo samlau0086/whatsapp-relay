@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canManageSharedRecord, formatOrderSummary, preferredCustomerStage } from "../src/crm.js";
+import { calculateOrderTotal, canManageSharedRecord, formatOrderSummary, preferredCustomerStage } from "../src/crm.js";
 
 test("shared notes remain owner-managed with supervisor override",()=>{
   assert.equal(canManageSharedRecord("agent","user-1","user-1"),true);
@@ -15,6 +15,13 @@ test("contact merges retain the furthest customer stage",()=>{
 });
 
 test("order summaries are stable and customer-readable",()=>{
-  assert.equal(formatOrderSummary(27,"香水",99.5,"USD","含运费"),"订单 #000027\n商品：香水\n金额：USD 99.50\n说明：含运费");
-  assert.match(formatOrderSummary(1,undefined,10,"CNY"),/手工订单/);
+  const items=[{name:"Perfume",quantity:2,unitAmount:49.75},{name:"Gift box",quantity:1,unitAmount:8}];
+  const fees=[{name:"Shipping",amount:6.5}];
+  assert.equal(calculateOrderTotal(items,fees),114);
+  const summary=formatOrderSummary(27,items,fees,"USD","Handle with care");
+  assert.match(summary,/Order #000027/);
+  assert.match(summary,/1\. Perfume x 2 - USD 49\.75 each - USD 99\.50/);
+  assert.match(summary,/Additional fees:\nShipping - USD 6\.50/);
+  assert.match(summary,/Total: USD 114\.00/);
+  assert.match(summary,/Notes: Handle with care/);
 });

@@ -62,11 +62,14 @@ test("CRM schemas enforce stages, tags, notes, and reminder dates",()=>{
   assert.equal(reminderSchema.safeParse({remindAt:new Date(Date.now()-60_000).toISOString()}).success,false);
 });
 
-test("orders validate idempotency key, money, currencies, and attachment limits",()=>{
-  const valid={clientOrderId:accountId,amount:19.95,currency:"USD",attachmentMediaIds:[accountId]};
+test("orders validate idempotency, products, fees, currency, and translation",()=>{
+  const valid={clientOrderId:accountId,currency:"USD",items:[{name:"Leather bag",quantity:2,unitAmount:19.95,imageMediaId:accountId}],fees:[{name:"Shipping",amount:5}]};
   assert.equal(orderSchema.safeParse(valid).success,true);
   assert.equal(orderSchema.safeParse({...valid,clientOrderId:"order-1"}).success,false);
-  assert.equal(orderSchema.safeParse({...valid,amount:19.999}).success,false);
+  assert.equal(orderSchema.safeParse({...valid,items:[{name:"Bag",quantity:1,unitAmount:19.999}]}).success,false);
   assert.equal(orderSchema.safeParse({...valid,currency:"BTC"}).success,false);
-  assert.equal(orderSchema.safeParse({...valid,attachmentMediaIds:Array.from({length:4},()=>accountId)}).success,false);
+  assert.equal(orderSchema.safeParse({...valid,items:[]}).success,false);
+  assert.equal(orderSchema.safeParse({...valid,items:[{name:"Free sample",quantity:1,unitAmount:0}],fees:[]}).success,false);
+  assert.equal(orderSchema.safeParse({...valid,translateOnSend:true}).success,false);
+  assert.equal(orderSchema.safeParse({...valid,translateOnSend:true,targetLanguage:"fr"}).success,true);
 });
