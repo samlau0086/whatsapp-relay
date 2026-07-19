@@ -33,7 +33,11 @@ test("order sending and deletion ship with an idempotent database upgrade",async
     readFile(new URL("../../../infra/postgres/migrations/011_order_send_formats.sql",import.meta.url),"utf8"),
   ]);
   assert.match(server,/orderSendSchema\.safeParse/);
+  assert.match(server,/orderUpdateSchema\.safeParse/);
   assert.match(server,/renderOrderImage/);
+  assert.match(server,/clientSendId/);
+  assert.match(server,/order\.update/);
+  assert.doesNotMatch(server,/if\(order\.status!=="draft"\)return reply\.code\(202\)/);
   assert.match(server,/app\.delete\("\/api\/v1\/conversations\/:conversationId\/orders\/:orderId"/);
   assert.match(server,/o\.deleted_at IS NULL/);
   assert.match(migration,/ADD COLUMN IF NOT EXISTS send_format/);

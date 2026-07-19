@@ -78,8 +78,7 @@ export const reminderSchema=z.object({remindAt:z.string().datetime({offset:true}
 const moneySchema=z.coerce.number().nonnegative().max(99_999_999.99).refine(value=>Number.isInteger(value*100),"amount supports at most two decimals");
 const orderItemSchema=z.object({name:z.string().trim().min(1).max(120),quantity:z.coerce.number().int().min(1).max(9999),unitAmount:moneySchema,imageMediaId:z.string().uuid().optional()});
 const orderFeeSchema=z.object({name:z.string().trim().min(1).max(80),amount:moneySchema.refine(value=>value>0,"fee must be positive")});
-export const orderSchema=z.object({
-  clientOrderId:z.string().uuid(),
+const orderContentSchema=z.object({
   currency:z.enum(["USD","CNY","EUR","GBP","JPY","HKD","SGD","AUD","CAD","AED"]),
   description:z.string().trim().max(2000).optional().transform(value=>value||undefined),
   translateOnSend:z.boolean().default(false),
@@ -87,6 +86,8 @@ export const orderSchema=z.object({
   items:z.array(orderItemSchema).min(1).max(50),
   fees:z.array(orderFeeSchema).max(20).default([]),
 }).superRefine((value,ctx)=>{const total=value.items.reduce((sum,item)=>sum+item.quantity*item.unitAmount,0)+value.fees.reduce((sum,fee)=>sum+fee.amount,0);if(total<=0)ctx.addIssue({code:"custom",path:["items"],message:"order total must be positive"});if(value.translateOnSend&&!value.targetLanguage)ctx.addIssue({code:"custom",path:["targetLanguage"],message:"target language is required"});});
-export const orderSendSchema=z.object({format:z.enum(["text","image"]).default("text")}).default({format:"text"});
+export const orderSchema=z.object({clientOrderId:z.string().uuid()}).and(orderContentSchema);
+export const orderUpdateSchema=orderContentSchema;
+export const orderSendSchema=z.object({format:z.enum(["text","image"]).default("text"),clientSendId:z.string().uuid().optional()}).default({format:"text"});
 
 export const enrollmentSchema = z.object({ code: z.string().min(16), name: z.string().min(2).max(80), version: z.string(), platform: z.string() });
