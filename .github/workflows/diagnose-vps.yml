@@ -43,6 +43,8 @@ jobs:
           cd "$root/current"
 
           echo "Current release: $(basename "$(readlink -f "$root/current")")"
+          ls -ld "$root/current"
+          readlink "$root/current" || true
           docker compose -p relaydesk ps
           docker inspect relaydesk-api-1 --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}'
           docker compose -p relaydesk exec -T postgres sh -lc \
