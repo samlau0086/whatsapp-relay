@@ -1,0 +1,88 @@
+name: Diagnose production CRM
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      VPS_PORT: ${{ vars.VPS_PORT || '22' }}
+      VPS_DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH || '/opt/relaydesk' }}
+    steps:
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$VPS_HOST"
+          test -n "$VPS_USER"
+          test -n "$VPS_SSH_KEY"
+          [[ "$VPS_PORT" =~ ^[0-9]+$ ]]
+          [[ "$VPS_DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]]
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "$VPS_PORT" -H "$VPS_HOST" > ~/.ssh/known_hosts
+
+      - name: Inspect CRM schema and endpoint
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$VPS_USER@$VPS_HOST" "bash -s -- '$VPS_DEPLOY_PATH'" <<'REMOTE'
+          set -Eeuo pipefail
+          root=$1
+          cd "$root/current"
+
+          echo "Current release: $(basename "$(readlink -f "$root/current")")"
+          docker compose -p relaydesk ps
+          docker compose -p relaydesk exec -T postgres sh -lc '
+            psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At <<"SQL"
+          SELECT current_database();
+          SELECT to_regclass('"'"'public.order_items'"'"'),to_regclass('"'"'public.order_fees'"'"');
+          SELECT string_agg(column_name,'"'"','"'"' ORDER BY column_name)
+          FROM information_schema.columns
+          WHERE table_schema='"'"'public'"'"' AND table_name='"'"'orders'"'"'
+            AND column_name IN ('"'"'status'"'"','"'"'translate_on_send'"'"','"'"'target_language'"'"','"'"'translated_text'"'"','"'"'sent_at'"'"');
+          SQL
+          '
+
+          if ! docker compose -p relaydesk exec -T api node --input-type=module <<'NODE'
+          const login = await fetch("http://gateway/api/v1/auth/login", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ email: process.env.ADMIN_EMAIL, password: process.env.ADMIN_PASSWORD }),
+          });
+          if (!login.ok) throw new Error(`login HTTP ${login.status}`);
+          const { accessToken } = await login.json();
+          const headers = { authorization: `Bearer ${accessToken}` };
+          const conversations = await fetch("http://gateway/api/v1/conversations?limit=1", { headers });
+          if (!conversations.ok) throw new Error(`conversations HTTP ${conversations.status}`);
+          const list = await conversations.json();
+          const id = list.data?.[0]?.id;
+          if (!id) {
+            console.log("No conversation is available for the CRM smoke test");
+            process.exit(0);
+          }
+          for (const path of [`/api/v1/conversations/${id}/details`, "/api/v1/tags"]) {
+            const response = await fetch(`http://gateway${path}`, { headers });
+            console.log(`${path}: HTTP ${response.status}`);
+            if (!response.ok) {
+              console.error((await response.text()).slice(0, 2000));
+              process.exitCode = 1;
+            }
+          }
+          NODE
+          then
+            docker compose -p relaydesk logs --tail=200 api
+            exit 1
+          fi
+          REMOTE
