@@ -30,8 +30,9 @@ test("provider settings require a URL and voice while allowing encrypted-key ret
 });
 
 test("translation preferences require BCP 47 language codes",()=>{
-  assert.equal(translationPreferenceSchema.safeParse({enabled:true,agentLanguage:"zh-CN",customerLanguage:"en-US"}).success,true);
-  assert.equal(translationPreferenceSchema.safeParse({enabled:true,agentLanguage:"中文",customerLanguage:"English"}).success,false);
+  assert.equal(translationPreferenceSchema.safeParse({conversationId:accountId,enabled:true,agentLanguage:"zh-CN",customerLanguage:"en-US"}).success,true);
+  assert.equal(translationPreferenceSchema.safeParse({conversationId:accountId,enabled:true,agentLanguage:"中文",customerLanguage:"English"}).success,false);
+  assert.equal(translationPreferenceSchema.safeParse({conversationId:"not-a-conversation",enabled:false,agentLanguage:"zh-CN",customerLanguage:"en"}).success,false);
 });
 
 test("translation inputs enforce text and batch limits",()=>{

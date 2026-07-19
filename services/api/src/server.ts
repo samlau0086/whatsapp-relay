@@ -7,7 +7,7 @@ import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } fro
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount } from "./auth.js";
-import { enrollmentSchema, loginSchema, messageSchema, messageTranslationsSchema, newConversationSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
+import { enrollmentSchema, loginSchema, messageSchema, messageTranslationsSchema, newConversationSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
 import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
 import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline } from "./agent-hub.js";
 import { generateSpeech, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
@@ -32,7 +32,7 @@ app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"Rel
   "/api/v1/agents/{id}":{patch:{summary:"重命名或撤销 Agent"},delete:{summary:"删除 Agent 登记"}},
   "/api/v1/media":{post:{summary:"上传媒体"}},
   "/api/v1/text-to-speech":{post:{summary:"使用当前 Provider 生成语音媒体"}},
-  "/api/v1/me/translation-preferences":{get:{summary:"读取当前坐席翻译偏好"},put:{summary:"保存当前坐席翻译偏好"}},
+  "/api/v1/me/translation-preferences":{get:{summary:"读取当前坐席在指定会话中的翻译偏好"},put:{summary:"保存当前坐席在指定会话中的翻译偏好"}},
   "/api/v1/translation/status":{get:{summary:"读取 AI 翻译可用状态"}},
   "/api/v1/translations/preview":{post:{summary:"生成待发送文本的翻译预览"}},
   "/api/v1/translations/messages":{post:{summary:"批量读取或生成接收消息译文"}},
@@ -252,19 +252,22 @@ app.post("/api/v1/messages", { preHandler:authenticate }, async (request, reply)
 
 app.get("/api/v1/me/translation-preferences", {preHandler:authenticate}, async(request,reply)=>{
   if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
-  const result=await pool.query("SELECT enabled,agent_language,customer_language,updated_at FROM user_translation_preferences WHERE user_id=$1",[request.principal.id]);
+  const parsed=translationPreferenceQuerySchema.safeParse(request.query);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  const conversation=await pool.query("SELECT account_id FROM conversations WHERE id=$1",[parsed.data.conversationId]);if(!conversation.rowCount||!canAccessAccount(request.principal,conversation.rows[0].account_id))return reply.code(404).send({error:"conversation_not_found"});
+  const result=await pool.query("SELECT enabled,agent_language,customer_language,updated_at FROM conversation_translation_preferences WHERE user_id=$1 AND conversation_id=$2",[request.principal.id,parsed.data.conversationId]);
   const row=result.rows[0];
-  return{enabled:Boolean(row?.enabled),agentLanguage:row?.agent_language??"zh-CN",customerLanguage:row?.customer_language??"en",updatedAt:row?.updated_at??null};
+  return{conversationId:parsed.data.conversationId,enabled:Boolean(row?.enabled),agentLanguage:row?.agent_language??"zh-CN",customerLanguage:row?.customer_language??"en",updatedAt:row?.updated_at??null};
 });
 
 app.put("/api/v1/me/translation-preferences", {preHandler:authenticate}, async(request,reply)=>{
   if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
   const parsed=translationPreferenceSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  const conversation=await pool.query("SELECT account_id FROM conversations WHERE id=$1",[parsed.data.conversationId]);if(!conversation.rowCount||!canAccessAccount(request.principal,conversation.rows[0].account_id))return reply.code(404).send({error:"conversation_not_found"});
   const provider=parsed.data.enabled?await pool.query("SELECT 1 FROM translation_provider_settings WHERE enabled=true AND api_key_encrypted IS NOT NULL LIMIT 1"):null;
   if(parsed.data.enabled&&!provider?.rowCount)return reply.code(409).send({error:"translation_not_configured",message:"管理员尚未启用 AI 翻译 Provider"});
-  const result=await pool.query("INSERT INTO user_translation_preferences(user_id,enabled,agent_language,customer_language) VALUES($1,$2,$3,$4) ON CONFLICT(user_id) DO UPDATE SET enabled=EXCLUDED.enabled,agent_language=EXCLUDED.agent_language,customer_language=EXCLUDED.customer_language,updated_at=now() RETURNING enabled,agent_language,customer_language,updated_at",[request.principal.id,parsed.data.enabled,parsed.data.agentLanguage,parsed.data.customerLanguage]);
+  const result=await pool.query("INSERT INTO conversation_translation_preferences(user_id,conversation_id,enabled,agent_language,customer_language) VALUES($1,$2,$3,$4,$5) ON CONFLICT(user_id,conversation_id) DO UPDATE SET enabled=EXCLUDED.enabled,agent_language=EXCLUDED.agent_language,customer_language=EXCLUDED.customer_language,updated_at=now() RETURNING enabled,agent_language,customer_language,updated_at",[request.principal.id,parsed.data.conversationId,parsed.data.enabled,parsed.data.agentLanguage,parsed.data.customerLanguage]);
   const row=result.rows[0];
-  return{enabled:row.enabled,agentLanguage:row.agent_language,customerLanguage:row.customer_language,updatedAt:row.updated_at};
+  return{conversationId:parsed.data.conversationId,enabled:row.enabled,agentLanguage:row.agent_language,customerLanguage:row.customer_language,updatedAt:row.updated_at};
 });
 
 app.get("/api/v1/translation/status", {preHandler:authenticate}, async()=>{
@@ -386,14 +389,25 @@ async function mapWithConcurrency<T,R>(items:T[],limit:number,work:(item:T)=>Pro
 }
 
 async function ensureTranslationTables():Promise<void>{
-  await pool.query(`CREATE TABLE IF NOT EXISTS user_translation_preferences (
-    user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  await pool.query(`CREATE TABLE IF NOT EXISTS conversation_translation_preferences (
+    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    conversation_id uuid NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     enabled boolean NOT NULL DEFAULT false,
     agent_language text NOT NULL DEFAULT 'zh-CN',
     customer_language text NOT NULL DEFAULT 'en',
     created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id,conversation_id)
   )`);
+  await pool.query(`DO $$ BEGIN
+    IF to_regclass('public.user_translation_preferences') IS NOT NULL THEN
+      INSERT INTO conversation_translation_preferences(user_id,conversation_id,enabled,agent_language,customer_language,created_at,updated_at)
+      SELECT preference.user_id,conversation.id,preference.enabled,preference.agent_language,preference.customer_language,preference.created_at,preference.updated_at
+      FROM user_translation_preferences preference CROSS JOIN conversations conversation
+      ON CONFLICT(user_id,conversation_id) DO NOTHING;
+    END IF;
+  END $$`);
+  await pool.query("DROP TABLE IF EXISTS user_translation_preferences");
   await pool.query(`CREATE TABLE IF NOT EXISTS translation_provider_settings (
     provider text PRIMARY KEY CHECK (provider IN ('openai','openai_compatible')),
     enabled boolean NOT NULL DEFAULT false,

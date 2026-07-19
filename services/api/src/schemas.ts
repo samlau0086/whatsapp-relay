@@ -32,10 +32,13 @@ export const ttsProviderSettingsSchema=z.object({
 const languageCodeSchema=z.string().trim().min(2).max(35).regex(/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/,"invalid BCP 47 language code");
 
 export const translationPreferenceSchema=z.object({
+  conversationId:z.string().uuid(),
   enabled:z.boolean(),
   agentLanguage:languageCodeSchema,
   customerLanguage:languageCodeSchema,
 });
+
+export const translationPreferenceQuerySchema=z.object({conversationId:z.string().uuid()});
 
 export const translationProviderSettingsSchema=z.object({
   enabled:z.boolean().default(false),

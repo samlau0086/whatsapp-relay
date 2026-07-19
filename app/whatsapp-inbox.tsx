@@ -35,6 +35,7 @@ type TranslationProviderId="openai"|"openai_compatible";
 type TranslationProviderConfig={provider:TranslationProviderId;enabled:boolean;keyConfigured:boolean;baseUrl:string;model:string;updatedAt:string|null};
 type TranslationPreference={enabled:boolean;agentLanguage:string;customerLanguage:string;updatedAt:string|null};
 type MessageTranslation={status:"loading"|"translated"|"failed";text?:string};
+const DEFAULT_TRANSLATION_PREFERENCE:TranslationPreference={enabled:false,agentLanguage:"zh-CN",customerLanguage:"en",updatedAt:null};
 
 export function WhatsAppInbox() {
   const [accounts,setAccounts]=useState<Account[]>([]);
@@ -60,9 +61,9 @@ export function WhatsAppInbox() {
   const [ttsOpen,setTtsOpen]=useState(false);
   const [emojiOpen,setEmojiOpen]=useState(false);
   const [emojiCategory,setEmojiCategory]=useState("常用");
-  const [translationPreference,setTranslationPreference]=useState<TranslationPreference>({enabled:false,agentLanguage:"zh-CN",customerLanguage:"en",updatedAt:null});
+  const [translationPreferences,setTranslationPreferences]=useState<Record<string,TranslationPreference>>({});
   const [translationConfigured,setTranslationConfigured]=useState(false);
-  const [translationReady,setTranslationReady]=useState(false);
+  const [translationReadyConversationId,setTranslationReadyConversationId]=useState("");
   const [translationMenuOpen,setTranslationMenuOpen]=useState(false);
   const [messageTranslations,setMessageTranslations]=useState<Record<string,MessageTranslation>>({});
   const [translationPreview,setTranslationPreview]=useState<{source:string;translated:string}|null>(null);
@@ -70,6 +71,7 @@ export function WhatsAppInbox() {
   const [translationError,setTranslationError]=useState("");
   const textareaRef=useRef<HTMLTextAreaElement>(null);
   const messagesRef=useRef<HTMLDivElement>(null);
+  const translationLoadSequence=useRef(0);
 
   const userId=user?.id??tokenSubject(apiToken);
   const counts=useMemo(()=>({
@@ -92,6 +94,8 @@ export function WhatsAppInbox() {
   }),[conversations,selectedAccount,query,filter,userId]);
   const effectiveActiveId=visible.some(item=>item.id===activeId)?activeId:(visible[0]?.id??"");
   const active=visible.find(item=>item.id===effectiveActiveId)??null;
+  const translationPreference=active?translationPreferences[active.id]??DEFAULT_TRANSLATION_PREFERENCE:DEFAULT_TRANSLATION_PREFERENCE;
+  const translationReady=Boolean(active&&translationReadyConversationId===active.id);
   const currentMessages=useMemo(()=>active?messages[active.id]??[]:[],[active,messages]);
   const latestMessageId=currentMessages.at(-1)?.id??"";
   const scrollMessagesToEnd=useCallback((behavior:ScrollBehavior="smooth")=>{
@@ -111,7 +115,7 @@ export function WhatsAppInbox() {
 
   const logout=useCallback(()=>{
     sessionStorage.removeItem("relayAccessToken");sessionStorage.removeItem("relayUser");
-    setApiToken("");setUser(null);setAccounts([]);setConversations([]);setMessages({});setMessageTranslations({});setTranslationReady(false);setActiveId("");setAuthOpen(false);setSessionReady(true);setLoading(false);
+    setApiToken("");setUser(null);setAccounts([]);setConversations([]);setMessages({});setMessageTranslations({});setTranslationPreferences({});setTranslationReadyConversationId("");setActiveId("");setAuthOpen(false);setSessionReady(true);setLoading(false);
   },[]);
 
   const loadWorkspace=useCallback(async(token:string,quiet=false)=>{
@@ -145,15 +149,16 @@ export function WhatsAppInbox() {
     }catch{setToast("消息加载失败，正在等待下次同步");}
   },[logout]);
 
-  const loadTranslationSettings=useCallback(async(token:string)=>{
+  const loadTranslationSettings=useCallback(async(token:string,conversationId:string)=>{
+    const sequence=++translationLoadSequence.current;
     try{
-      const [preferenceResult,statusResult]=await Promise.all([authorizedFetch("/api/v1/me/translation-preferences",token),authorizedFetch("/api/v1/translation/status",token)]);
+      const [preferenceResult,statusResult]=await Promise.all([authorizedFetch(`/api/v1/me/translation-preferences?conversationId=${encodeURIComponent(conversationId)}`,token),authorizedFetch("/api/v1/translation/status",token)]);
       const refreshedToken=preferenceResult.token!==token?preferenceResult.token:statusResult.token;if(refreshedToken!==token)setApiToken(refreshedToken);
       const preferenceBody=await preferenceResult.response.json() as Partial<TranslationPreference>;
       const statusBody=await statusResult.response.json() as {configured?:boolean};
-      if(preferenceResult.response.ok)setTranslationPreference({enabled:Boolean(preferenceBody.enabled),agentLanguage:preferenceBody.agentLanguage??"zh-CN",customerLanguage:preferenceBody.customerLanguage??"en",updatedAt:preferenceBody.updatedAt??null});
-      setTranslationConfigured(Boolean(statusBody.configured));setTranslationReady(true);
-    }catch{setTranslationConfigured(false);setTranslationReady(true);}
+      if(preferenceResult.response.ok)setTranslationPreferences(all=>({...all,[conversationId]:{enabled:Boolean(preferenceBody.enabled),agentLanguage:preferenceBody.agentLanguage??"zh-CN",customerLanguage:preferenceBody.customerLanguage??"en",updatedAt:preferenceBody.updatedAt??null}}));
+      if(sequence===translationLoadSequence.current){setTranslationConfigured(Boolean(statusBody.configured));setTranslationReadyConversationId(conversationId);}
+    }catch{if(sequence===translationLoadSequence.current){setTranslationConfigured(false);setTranslationReadyConversationId(conversationId);}}
   },[]);
 
   const loadIncomingTranslations=useCallback(async(token:string,messageIds:string[],targetLanguage:string,retry=false)=>{
@@ -181,7 +186,7 @@ export function WhatsAppInbox() {
 
   useEffect(()=>{if(!apiToken)return;const timer=window.setInterval(()=>void loadWorkspace(apiToken,true),5000);return()=>window.clearInterval(timer);},[apiToken,loadWorkspace]);
   useEffect(()=>{if(!apiToken||!effectiveActiveId)return;const initial=window.setTimeout(()=>void loadMessages(apiToken,effectiveActiveId,true),0);const timer=window.setInterval(()=>void loadMessages(apiToken,effectiveActiveId),3000);return()=>{window.clearTimeout(initial);window.clearInterval(timer);};},[apiToken,effectiveActiveId,loadMessages]);
-  useEffect(()=>{if(!apiToken)return;const timer=window.setTimeout(()=>void loadTranslationSettings(apiToken),0);return()=>window.clearTimeout(timer);},[apiToken,view,loadTranslationSettings]);
+  useEffect(()=>{if(!apiToken||!effectiveActiveId)return;const timer=window.setTimeout(()=>void loadTranslationSettings(apiToken,effectiveActiveId),0);return()=>window.clearTimeout(timer);},[apiToken,view,effectiveActiveId,loadTranslationSettings]);
   useEffect(()=>{const timer=window.setTimeout(()=>setMessageTranslations({}),0);return()=>window.clearTimeout(timer);},[translationPreference.agentLanguage]);
   useEffect(()=>{if(!apiToken||!translationPreference.enabled||!translationConfigured)return;const ids=currentMessages.filter(message=>message.direction==="in"&&message.kind==="text"&&message.text.trim()&&!messageTranslations[message.id]).map(message=>message.id);if(!ids.length)return;const timer=window.setTimeout(()=>void loadIncomingTranslations(apiToken,ids,translationPreference.agentLanguage),0);return()=>window.clearTimeout(timer);},[apiToken,currentMessages,translationPreference.enabled,translationPreference.agentLanguage,translationConfigured,messageTranslations,loadIncomingTranslations]);
   useEffect(()=>{if(!toast)return;const timer=window.setTimeout(()=>setToast(""),3200);return()=>window.clearTimeout(timer);},[toast]);
@@ -193,11 +198,11 @@ export function WhatsAppInbox() {
   }
 
   async function saveTranslationPreference(next:TranslationPreference){
-    if(!apiToken)return;if(next.enabled&&!translationConfigured){setToast("管理员尚未启用 AI 翻译 Provider");return;}
-    const previous=translationPreference;setTranslationPreference(next);
-    const result=await authorizedFetch("/api/v1/me/translation-preferences",apiToken,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({enabled:next.enabled,agentLanguage:next.agentLanguage,customerLanguage:next.customerLanguage})});if(result.token!==apiToken)setApiToken(result.token);
-    if(!result.response.ok){setTranslationPreference(previous);const body=await result.response.json().catch(()=>({})) as {message?:string};setToast(body.message??"翻译偏好保存失败");return;}
-    const body=await result.response.json() as TranslationPreference;setTranslationPreference(body);
+    if(!apiToken||!active)return;if(next.enabled&&!translationConfigured){setToast("管理员尚未启用 AI 翻译 Provider");return;}
+    const conversationId=active.id,previous=translationPreferences[conversationId]??DEFAULT_TRANSLATION_PREFERENCE;setTranslationPreferences(all=>({...all,[conversationId]:next}));
+    const result=await authorizedFetch("/api/v1/me/translation-preferences",apiToken,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({conversationId,enabled:next.enabled,agentLanguage:next.agentLanguage,customerLanguage:next.customerLanguage})});if(result.token!==apiToken)setApiToken(result.token);
+    if(!result.response.ok){setTranslationPreferences(all=>({...all,[conversationId]:previous}));const body=await result.response.json().catch(()=>({})) as {message?:string};setToast(body.message??"该会话的翻译偏好保存失败");return;}
+    const body=await result.response.json() as TranslationPreference;setTranslationPreferences(all=>({...all,[conversationId]:body}));
   }
 
   async function sendMessage(){
@@ -316,7 +321,7 @@ const LANGUAGES=[
 function languageName(code:string){return LANGUAGES.find(item=>item[0]===code)?.[1]??code;}
 
 function TranslationMenu({preference,configured,ready,onChange,onClose}:{preference:TranslationPreference;configured:boolean;ready:boolean;onChange:(value:TranslationPreference)=>void;onClose:()=>void}){
-  return <section className="translation-menu" role="dialog" aria-label="AI 翻译设置"><header><span><Languages size={16}/><b>AI 双向翻译</b></span><button onClick={onClose} aria-label="关闭翻译设置"><X size={15}/></button></header><label className="translation-toggle"><span><b>启用 AI 翻译</b><small>{!ready?"正在读取配置…":configured?"偏好会同步到其他浏览器":"管理员尚未配置翻译 Provider"}</small></span><input type="checkbox" checked={preference.enabled} disabled={!ready||(!configured&&!preference.enabled)} onChange={event=>onChange({...preference,enabled:event.target.checked})}/></label><div className="translation-language-grid"><label><span>收到消息译为</span><LanguagePicker value={preference.agentLanguage} onChange={agentLanguage=>onChange({...preference,agentLanguage})}/></label><label><span>发送消息译为</span><LanguagePicker value={preference.customerLanguage} onChange={customerLanguage=>onChange({...preference,customerLanguage})}/></label></div><p><Info size={13}/>发送前会显示可编辑预览；收到的消息保留原文。</p></section>;
+  return <section className="translation-menu" role="dialog" aria-label="AI 翻译设置"><header><span><Languages size={16}/><b>当前会话 · AI 双向翻译</b></span><button onClick={onClose} aria-label="关闭翻译设置"><X size={15}/></button></header><label className="translation-toggle"><span><b>为当前会话启用</b><small>{!ready?"正在读取会话配置…":configured?"此会话偏好会跨浏览器同步":"管理员尚未配置翻译 Provider"}</small></span><input type="checkbox" checked={preference.enabled} disabled={!ready||(!configured&&!preference.enabled)} onChange={event=>onChange({...preference,enabled:event.target.checked})}/></label><div className="translation-language-grid"><label><span>收到消息译为</span><LanguagePicker value={preference.agentLanguage} onChange={agentLanguage=>onChange({...preference,agentLanguage})}/></label><label><span>发送消息译为</span><LanguagePicker value={preference.customerLanguage} onChange={customerLanguage=>onChange({...preference,customerLanguage})}/></label></div><p><Info size={13}/>设置只影响当前会话；发送前会显示可编辑预览。</p></section>;
 }
 
 function LanguagePicker({value,onChange}:{value:string;onChange:(value:string)=>void}){
