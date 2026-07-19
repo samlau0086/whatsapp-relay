@@ -269,6 +269,22 @@ jobs:
               console.error(`Admin credential self-check failed with HTTP ${response.status}`);
               process.exit(1);
             }
+            const session = await response.json();
+            const headers = { authorization: `Bearer ${session.accessToken}` };
+            const conversations = await fetch("http://gateway/api/v1/conversations?limit=1", { headers });
+            if (!conversations.ok) {
+              console.error(`Conversation self-check failed with HTTP ${conversations.status}`);
+              process.exit(1);
+            }
+            const list = await conversations.json();
+            const conversationId = list.data?.[0]?.id;
+            for (const path of [conversationId ? `/api/v1/conversations/${conversationId}/details` : null, "/api/v1/tags"].filter(Boolean)) {
+              const crm = await fetch(`http://gateway${path}`, { headers });
+              if (!crm.ok) {
+                console.error(`CRM self-check failed for ${path} with HTTP ${crm.status}`);
+                process.exit(1);
+              }
+            }
             const cookie = response.headers.get("set-cookie")?.split(";", 1)[0];
             if (cookie) {
               await fetch("http://gateway/api/v1/auth/logout", { method: "POST", headers: { cookie } });
@@ -276,7 +292,7 @@ jobs:
             console.log("Admin credential self-check passed");
           '
 
-          ln -sfn "$release" "$root/current"
+          ln -sfnT "$release" "$root/current"
           rm -f "$archive" "$incoming_env" "$env_backup"
           trap - ERR
           WEB_PORT="$web_port" docker compose -p relaydesk ps

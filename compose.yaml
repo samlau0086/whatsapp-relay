@@ -40,6 +40,7 @@ services:
     command: ["node","dist/worker.js"]
     env_file: .env
     depends_on: { postgres: { condition: service_healthy }, minio-init: { condition: service_completed_successfully } }
+    healthcheck: { test: ["CMD-SHELL", "kill -0 1"], interval: 5s, timeout: 3s, retries: 6, start_period: 5s }
   web:
     build:
       context: .
