@@ -34,7 +34,7 @@ type TtsProviderConfig={provider:TtsProviderId;enabled:boolean;keyConfigured:boo
 type TranslationProviderId="openai"|"openai_compatible";
 type TranslationProviderConfig={provider:TranslationProviderId;enabled:boolean;keyConfigured:boolean;baseUrl:string;model:string;transcriptionModel:string;updatedAt:string|null};
 type TranslationPreference={enabled:boolean;agentLanguage:string;customerLanguage:string;updatedAt:string|null};
-type MessageTranslation={status:"loading"|"translated"|"failed";text?:string;sourceText?:string};
+type MessageTranslation={status:"loading"|"translated"|"failed";text?:string;sourceText?:string;message?:string};
 const DEFAULT_TRANSLATION_PREFERENCE:TranslationPreference={enabled:false,agentLanguage:"zh-CN",customerLanguage:"en",updatedAt:null};
 
 export function WhatsAppInbox() {
@@ -167,9 +167,9 @@ export function WhatsAppInbox() {
     let accessToken=token;
     for(let offset=0;offset<ids.length;offset+=50){const chunk=ids.slice(offset,offset+50);try{
       const result=await authorizedFetch("/api/v1/translations/messages",accessToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({messageIds:chunk,targetLanguage})});accessToken=result.token;if(result.token!==token)setApiToken(result.token);
-      const body=await result.response.json().catch(()=>({})) as {data?:Array<{messageId:string;status:string;translatedText?:string;sourceText?:string}>};
-      if(!result.response.ok||!body.data)throw new Error("translation_failed");
-      setMessageTranslations(all=>({...all,...Object.fromEntries(body.data!.map(item=>[item.messageId,item.status==="translated"?{status:"translated" as const,text:item.translatedText??"",sourceText:item.sourceText}:{status:"failed" as const}]))}));
+      const body=await result.response.json().catch(()=>({})) as {data?:Array<{messageId:string;status:string;translatedText?:string;sourceText?:string;message?:string}>;message?:string};
+      if(!result.response.ok||!body.data){setMessageTranslations(all=>({...all,...Object.fromEntries(chunk.map(id=>[id,{status:"failed" as const,message:body.message??"翻译服务暂时不可用"}]))}));continue;}
+      setMessageTranslations(all=>({...all,...Object.fromEntries(body.data!.map(item=>[item.messageId,item.status==="translated"?{status:"translated" as const,text:item.translatedText??"",sourceText:item.sourceText}:{status:"failed" as const,message:item.message}]))}));
     }catch{setMessageTranslations(all=>({...all,...Object.fromEntries(chunk.map(id=>[id,{status:"failed" as const}]))}));}}
   },[messageTranslations]);
 
@@ -332,14 +332,14 @@ function LanguagePicker({value,onChange}:{value:string;onChange:(value:string)=>
 
 function IncomingTranslation({value,language,onRetry}:{value?:MessageTranslation;language:string;onRetry:()=>void}){
   if(!value||value.status==="loading")return <div className="incoming-translation loading"><RefreshCw className="spin" size={12}/>正在翻译为 {languageName(language)}…</div>;
-  if(value.status==="failed")return <div className="incoming-translation failed"><span>译文加载失败</span><button onClick={onRetry}>重试</button></div>;
+  if(value.status==="failed")return <div className="incoming-translation failed"><span>{value.message??"译文加载失败"}</span><button onClick={onRetry}>重试</button></div>;
   return <div className="incoming-translation"><span><Languages size={12}/>{languageName(language)}</span><p>{value.text}</p></div>;
 }
 
 function VoiceTranslation({value,language,configured,onTranslate}:{value?:MessageTranslation;language:string;configured:boolean;onTranslate:()=>void}){
   if(!value)return <button className="voice-translate-action" disabled={!configured} onClick={onTranslate}><Languages size={12}/>{configured?`AI 翻译语音为 ${languageName(language)}`:"管理员尚未配置翻译 Provider"}</button>;
   if(value.status==="loading")return <div className="incoming-translation loading"><RefreshCw className="spin" size={12}/>正在转写并翻译语音…</div>;
-  if(value.status==="failed")return <div className="incoming-translation failed"><span>语音翻译失败</span><button onClick={onTranslate}>重试</button></div>;
+  if(value.status==="failed")return <div className="incoming-translation failed"><span>{value.message??"语音翻译失败"}</span><button onClick={onTranslate}>重试</button></div>;
   return <div className="incoming-translation voice-translation">{value.sourceText&&<><span><Mic size={12}/>语音原文</span><p>{value.sourceText}</p></>}<span><Languages size={12}/>{languageName(language)}译文</span><p>{value.text}</p></div>;
 }
 

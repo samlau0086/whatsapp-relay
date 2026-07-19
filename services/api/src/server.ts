@@ -12,6 +12,7 @@ import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, veri
 import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline } from "./agent-hub.js";
 import { generateSpeech, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
 import { TRANSLATION_PROVIDERS, transcribeAudio, translateText, translationProviderDefaults, type TranslationProvider, type TranslationProviderSetting } from "./translation-providers.js";
+import { normalizeTranscriptionAudio } from "./audio-normalizer.js";
 
 const app = Fastify({ logger: { level: config.NODE_ENV === "production" ? "info" : "debug", redact:["req.headers.authorization","password"] }, bodyLimit: 2_000_000 });
 const s3 = new S3Client({ region:config.S3_REGION, endpoint:config.S3_ENDPOINT, forcePathStyle:true, credentials:{ accessKeyId:config.S3_ACCESS_KEY, secretAccessKey:config.S3_SECRET_KEY } });
@@ -302,7 +303,8 @@ app.post("/api/v1/translations/messages", {preHandler:authenticate}, async(reque
             const object=await s3.send(new GetObjectCommand({Bucket:config.S3_BUCKET,Key:row.object_key}));
             if(!object.Body)throw new Error("audio_body_missing");
             const bytes=Buffer.from(await object.Body.transformToByteArray());
-            const transcript=await transcribeAudio(setting!,{bytes,fileName:row.file_name??`voice-${row.id}.ogg`,mimeType:row.mime_type??"audio/ogg"});
+            const audio=await normalizeTranscriptionAudio({bytes,fileName:row.file_name??`voice-${row.id}.ogg`,mimeType:row.mime_type??"audio/ogg"});
+            const transcript=await transcribeAudio(setting!,audio);
             await pool.query("INSERT INTO message_transcriptions(message_id,transcript_text,provider,model) VALUES($1,$2,$3,$4) ON CONFLICT(message_id) DO NOTHING",[row.id,transcript,setting!.provider,setting!.transcriptionModel]);
             return transcript;
           });
@@ -311,10 +313,10 @@ app.post("/api/v1/translations/messages", {preHandler:authenticate}, async(reque
       const translatedText=await translateText(setting!,{text:sourceText,targetLanguage:parsed.data.targetLanguage});
       await pool.query("INSERT INTO message_translations(message_id,target_language,translated_text,provider,model) VALUES($1,$2,$3,$4,$5) ON CONFLICT(message_id,target_language) DO NOTHING",[row.id,parsed.data.targetLanguage,translatedText,setting!.provider,setting!.model]);
       return{id:row.id,translatedText,sourceText};
-    }catch(error){request.log.error({messageId:row.id,provider:setting?.provider,error:String(error)},"Incoming message translation failed");return{id:row.id,error:"translation_failed"};}
+    }catch(error){const failure=translationFailure(error);request.log.error({messageId:row.id,provider:setting?.provider,error:String(error),failure:failure.error},"Incoming message translation failed");return{id:row.id,...failure};}
   }));
   const generatedById=new Map(generated.map(item=>[item.id,item]));
-  return{data:parsed.data.messageIds.map(messageId=>{const row=found.rows.find(item=>item.id===messageId);const isText=row?.kind==="text"&&String(row.text_content??"").trim();const isAudio=row?.kind==="audio"&&row.media_id&&row.object_key;if(!row||row.direction!=="in"||(!isText&&!isAudio))return{messageId,status:"skipped"};const item=generatedById.get(messageId);if(item?.error)return{messageId,status:"failed",error:item.error};return{messageId,status:"translated",translatedText:row.translated_text??item?.translatedText,...(isAudio?{sourceText:row.transcript_text??item?.sourceText}:{})};})};
+  return{data:parsed.data.messageIds.map(messageId=>{const row=found.rows.find(item=>item.id===messageId);const isText=row?.kind==="text"&&String(row.text_content??"").trim();const isAudio=row?.kind==="audio"&&row.media_id&&row.object_key;if(!row||row.direction!=="in"||(!isText&&!isAudio))return{messageId,status:"skipped"};const item=generatedById.get(messageId);if(item?.error)return{messageId,status:"failed",error:item.error,message:item.message};return{messageId,status:"translated",translatedText:row.translated_text??item?.translatedText,...(isAudio?{sourceText:row.transcript_text??item?.sourceText}:{})};})};
 });
 
 app.get("/api/v1/admin/translation-providers", {preHandler:authenticate}, async(request,reply)=>{
@@ -404,10 +406,21 @@ async function mapWithConcurrency<T,R>(items:T[],limit:number,work:(item:T)=>Pro
 }
 
 const transcriptionFlights=new Map<string,Promise<string>>();
-const messageTranslationFlights=new Map<string,Promise<{id:string;translatedText?:string;sourceText?:string;error?:string}>>();
+const messageTranslationFlights=new Map<string,Promise<{id:string;translatedText?:string;sourceText?:string;error?:string;message?:string}>>();
 async function singleFlight<T>(flights:Map<string,Promise<T>>,key:string,work:()=>Promise<T>):Promise<T>{
   const current=flights.get(key);if(current)return current;
   const pending=work().finally(()=>flights.delete(key));flights.set(key,pending);return pending;
+}
+
+function translationFailure(error:unknown):{error:string;message:string}{
+  const detail=String(error);
+  if(detail.includes("audio_conversion_"))return{error:"audio_conversion_failed",message:"语音格式转换失败，请稍后重试"};
+  if(/transcription_provider_http_(401|403)/.test(detail))return{error:"transcription_auth_failed",message:"语音转写 Provider 鉴权失败，请联系管理员"};
+  if(detail.includes("transcription_provider_http_404"))return{error:"transcription_endpoint_missing",message:"当前 Provider 不支持语音转写接口"};
+  if(detail.includes("transcription_provider_http_429"))return{error:"transcription_rate_limited",message:"语音转写请求过于频繁，请稍后重试"};
+  if(detail.includes("transcription_provider_http_400"))return{error:"transcription_rejected",message:"转写 Provider 拒绝了音频，请检查转写模型配置"};
+  if(detail.includes("transcription_provider_"))return{error:"transcription_failed",message:"语音转写失败，请检查 Provider 配置"};
+  return{error:"translation_failed",message:"译文生成失败，请稍后重试"};
 }
 
 async function ensureTranslationTables():Promise<void>{

@@ -20,6 +20,8 @@ test("translation routes enforce user preferences, provider secrecy, access chec
   assert.match(server,/ON CONFLICT\(message_id,target_language\) DO NOTHING/);
   assert.match(server,/ON CONFLICT\(message_id\) DO NOTHING/);
   assert.match(server,/transcribeAudio/);
+  assert.match(server,/normalizeTranscriptionAudio/);
+  assert.match(server,/transcription_endpoint_missing/);
   assert.match(initialMigration,/PRIMARY KEY \(message_id,target_language\)/);
   assert.match(initialMigration,/translation_provider_one_enabled_idx/);
   assert.match(conversationMigration,/PRIMARY KEY \(user_id,conversation_id\)/);
