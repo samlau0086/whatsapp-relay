@@ -35,8 +35,12 @@ export async function ensureCrmTables(db:Queryable):Promise<void>{
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS target_language text");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS translated_text text");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS sent_at timestamptz");
+  await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS send_format text");
+  await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS rendered_media_id uuid REFERENCES media(id) ON DELETE SET NULL");
+  await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS deleted_at timestamptz");
   await db.query("UPDATE orders SET status='queued',sent_at=COALESCE(sent_at,created_at) WHERE summary_message_id IS NOT NULL AND status='draft'");
   await db.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='orders_status_check') THEN ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK(status IN ('draft','queued')); END IF; END $$`);
+  await db.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='orders_send_format_check') THEN ALTER TABLE orders ADD CONSTRAINT orders_send_format_check CHECK(send_format IS NULL OR send_format IN ('text','image')); END IF; END $$`);
   await db.query(`CREATE TABLE IF NOT EXISTS order_items (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),order_id uuid NOT NULL REFERENCES orders(id) ON DELETE CASCADE,position smallint NOT NULL,product_name text NOT NULL,quantity integer NOT NULL CHECK(quantity BETWEEN 1 AND 9999),unit_amount numeric(12,2) NOT NULL CHECK(unit_amount>=0),image_media_id uuid REFERENCES media(id) ON DELETE RESTRICT,UNIQUE(order_id,position))`);
   await db.query(`CREATE TABLE IF NOT EXISTS order_fees (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),order_id uuid NOT NULL REFERENCES orders(id) ON DELETE CASCADE,position smallint NOT NULL,name text NOT NULL,amount numeric(12,2) NOT NULL CHECK(amount>0),UNIQUE(order_id,position))`);
   await db.query("INSERT INTO order_items(order_id,position,product_name,quantity,unit_amount) SELECT id,0,COALESCE(product_name,'Manual item'),1,amount FROM orders WHERE NOT EXISTS(SELECT 1 FROM order_items WHERE order_items.order_id=orders.id)");
@@ -44,4 +48,5 @@ export async function ensureCrmTables(db:Queryable):Promise<void>{
   await db.query("CREATE INDEX IF NOT EXISTS order_fees_order_idx ON order_fees(order_id,position)");
   await db.query("CREATE INDEX IF NOT EXISTS reminders_user_due_idx ON reminders(user_id,remind_at) WHERE dismissed_at IS NULL");
   await db.query("CREATE INDEX IF NOT EXISTS orders_conversation_created_idx ON orders(conversation_id,created_at DESC)");
+  await db.query("CREATE INDEX IF NOT EXISTS orders_conversation_active_idx ON orders(conversation_id,created_at DESC) WHERE deleted_at IS NULL");
 }

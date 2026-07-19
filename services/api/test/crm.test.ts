@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { calculateOrderTotal, canManageSharedRecord, formatOrderSummary, preferredCustomerStage } from "../src/crm.js";
 
@@ -24,4 +25,18 @@ test("order summaries are stable and customer-readable",()=>{
   assert.match(summary,/Additional fees:\nShipping - USD 6\.50/);
   assert.match(summary,/Total: USD 114\.00/);
   assert.match(summary,/Notes: Handle with care/);
+});
+
+test("order sending and deletion ship with an idempotent database upgrade",async()=>{
+  const [server,migration]=await Promise.all([
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../infra/postgres/migrations/011_order_send_formats.sql",import.meta.url),"utf8"),
+  ]);
+  assert.match(server,/orderSendSchema\.safeParse/);
+  assert.match(server,/renderOrderImage/);
+  assert.match(server,/app\.delete\("\/api\/v1\/conversations\/:conversationId\/orders\/:orderId"/);
+  assert.match(server,/o\.deleted_at IS NULL/);
+  assert.match(migration,/ADD COLUMN IF NOT EXISTS send_format/);
+  assert.match(migration,/ADD COLUMN IF NOT EXISTS rendered_media_id/);
+  assert.match(migration,/ADD COLUMN IF NOT EXISTS deleted_at/);
 });

@@ -87,5 +87,6 @@ export const orderSchema=z.object({
   items:z.array(orderItemSchema).min(1).max(50),
   fees:z.array(orderFeeSchema).max(20).default([]),
 }).superRefine((value,ctx)=>{const total=value.items.reduce((sum,item)=>sum+item.quantity*item.unitAmount,0)+value.fees.reduce((sum,fee)=>sum+fee.amount,0);if(total<=0)ctx.addIssue({code:"custom",path:["items"],message:"order total must be positive"});if(value.translateOnSend&&!value.targetLanguage)ctx.addIssue({code:"custom",path:["targetLanguage"],message:"target language is required"});});
+export const orderSendSchema=z.object({format:z.enum(["text","image"]).default("text")}).default({format:"text"});
 
 export const enrollmentSchema = z.object({ code: z.string().min(16), name: z.string().min(2).max(80), version: z.string(), platform: z.string() });

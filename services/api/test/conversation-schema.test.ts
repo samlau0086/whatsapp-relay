@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { conversationTagsSchema, customerStageSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
+import { conversationTagsSchema, customerStageSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
 
 const accountId="10000000-0000-4000-8000-000000000009";
 
@@ -72,4 +72,8 @@ test("orders validate idempotency, products, fees, currency, and translation",()
   assert.equal(orderSchema.safeParse({...valid,items:[{name:"Free sample",quantity:1,unitAmount:0}],fees:[]}).success,false);
   assert.equal(orderSchema.safeParse({...valid,translateOnSend:true}).success,false);
   assert.equal(orderSchema.safeParse({...valid,translateOnSend:true,targetLanguage:"fr"}).success,true);
+  assert.equal(orderSendSchema.safeParse({format:"text"}).success,true);
+  assert.equal(orderSendSchema.safeParse({format:"image"}).success,true);
+  assert.equal(orderSendSchema.safeParse({format:"pdf"}).success,false);
+  assert.equal(orderSendSchema.parse(undefined).format,"text");
 });
