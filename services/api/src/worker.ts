@@ -4,6 +4,7 @@ import { decryptAtRest, signWebhook } from "./security.js";
 import { config } from "./config.js";
 
 let stopping=false;
+let lastRetention=0;
 process.on("SIGTERM",()=>{stopping=true;});
 process.on("SIGINT",()=>{stopping=true;});
 
@@ -59,7 +60,6 @@ async function requeueCommands():Promise<void>{
   });
 }
 
-let lastRetention=0;
 async function enforceRetention():Promise<void>{
   if(Date.now()-lastRetention<60*60_000)return;lastRetention=Date.now();
   await pool.query("UPDATE media m SET delete_after=COALESCE(delete_after,m.created_at+(a.retention_days||' days')::interval) FROM whatsapp_accounts a WHERE m.account_id=a.id AND a.retention_days IS NOT NULL AND m.delete_after IS NULL");

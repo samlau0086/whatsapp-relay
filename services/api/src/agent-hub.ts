@@ -79,7 +79,7 @@ async function handleFrame(agentId: string, socket: WebSocket, raw: string): Pro
   if (frame.type === "heartbeat") {
     await pool.query("UPDATE agents SET last_seen_at=now(),status='online' WHERE id=$1", [agentId]);
     const accounts = Array.isArray(frame.accounts) ? frame.accounts as Array<{accountId:string;status:string}> : [];
-    for (const account of accounts) await pool.query("UPDATE whatsapp_accounts SET status=$2,status_reason=CASE WHEN $2='online' THEN NULL ELSE status_reason END,last_event_at=now(),last_connected_at=CASE WHEN $2='online' THEN now() ELSE last_connected_at END WHERE id=$1 AND agent_id=$3", [account.accountId, account.status, agentId]);
+    for (const account of accounts) await pool.query("UPDATE whatsapp_accounts SET status=$2::wa_account_status,status_reason=CASE WHEN $2::wa_account_status='online'::wa_account_status THEN NULL ELSE status_reason END,last_event_at=now(),last_connected_at=CASE WHEN $2::wa_account_status='online'::wa_account_status THEN now() ELSE last_connected_at END WHERE id=$1 AND agent_id=$3", [account.accountId, account.status, agentId]);
     socket.send(JSON.stringify({ type:"pong", at:new Date().toISOString() }));
     await dispatchPending(agentId, socket);
     return;

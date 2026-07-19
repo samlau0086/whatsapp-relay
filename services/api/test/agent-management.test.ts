@@ -5,6 +5,7 @@ import test from "node:test";
 test("agent management routes and legacy demo cleanup are shipped", async () => {
   const server=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
   const hub=await readFile(new URL("../src/agent-hub.ts",import.meta.url),"utf8");
+  const worker=await readFile(new URL("../src/worker.ts",import.meta.url),"utf8");
   const cleanup=await readFile(new URL("../../../infra/postgres/migrations/003_remove_legacy_demo.sql",import.meta.url),"utf8");
   assert.match(server,/app\.get\("\/api\/v1\/agents"/);
   assert.match(server,/app\.patch\("\/api\/v1\/agents\/:id"/);
@@ -16,6 +17,7 @@ test("agent management routes and legacy demo cleanup are shipped", async () => 
   assert.match(server,/account_id=\$2 OR account_id IS NULL/);
   assert.match(server,/removeLegacyDemoData/);
   assert.match(server,/markStaleAgentsOffline/);
+  assert.match(server,/COALESCE\(m\.status::text,o\.status\) message_status/);
   assert.match(hub,/HEARTBEAT_TIMEOUT_SECONDS = 45/);
   assert.match(hub,/agent_heartbeat_timeout/);
   assert.match(hub,/status IN \('offline','revoked'\)/);
@@ -31,8 +33,9 @@ test("agent management routes and legacy demo cleanup are shipped", async () => 
   assert.match(hub,/UPDATE messages SET sender_contact_id=\$1 WHERE sender_contact_id=\$2/);
   assert.match(hub,/status=\$2::wa_account_status/);
   assert.match(hub,/\$2::wa_account_status='online'::wa_account_status/);
-  assert.match(hub,/status_reason=CASE WHEN \$2='online' THEN NULL/);
-  assert.match(hub,/last_connected_at=CASE WHEN \$2='online' THEN now\(\)/);
+  assert.match(hub,/status_reason=CASE WHEN \$2::wa_account_status='online'::wa_account_status THEN NULL/);
+  assert.match(hub,/last_connected_at=CASE WHEN \$2::wa_account_status='online'::wa_account_status THEN now\(\)/);
+  assert.ok(worker.indexOf("let lastRetention=0")<worker.indexOf("while(!stopping)"));
   assert.match(cleanup,/10000000-0000-4000-8000-000000000001/);
   await assert.rejects(access(new URL("../../../infra/postgres/migrations/002_seed_demo.sql",import.meta.url)));
 });
