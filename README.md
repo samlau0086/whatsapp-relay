@@ -141,6 +141,12 @@ docker compose up --build -d
 
 首次启动会使用 `.env` 中的 `ADMIN_EMAIL` 和 `ADMIN_PASSWORD` 创建管理员。
 
+### AI 双向翻译
+
+管理员进入“系统设置 → AI 翻译”后，可配置 OpenAI 或实现 `/chat/completions` 的 OpenAI 兼容服务，并指定 Base URL、API Key 和模型 ID。翻译与语音 Provider 相互独立；翻译服务同一时间只允许启用一个 Provider，API Key 使用 `DATA_ENCRYPTION_KEY` 加密保存且不会回传明文。
+
+坐席可在会话输入区附件按钮右侧开启 AI 翻译，并分别选择“收到消息译为”和“发送消息译为”的语言。偏好保存在 PostgreSQL 中，会随同一坐席账号跨浏览器同步。收到的纯文本保留原文并在下方显示译文；发出文本先生成可编辑预览，只有确认后才会进入可靠消息队列。附件说明、语音、图片 OCR 和新建会话首条消息不会自动翻译。
+
 ### AI 文字转语音
 
 管理员登录 Web 工作台后，进入左下角“系统设置 → AI 语音 Provider”配置服务。当前支持 OpenAI、ElevenLabs、Azure Speech，以及实现 `/audio/speech` 的 OpenAI 兼容接口。API Key 使用 `DATA_ENCRYPTION_KEY` 加密保存到 PostgreSQL，读取配置时只返回是否已配置，不回传密钥明文；不需要在 `.env` 中保存 Provider API Key。

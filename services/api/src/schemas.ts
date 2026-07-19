@@ -29,6 +29,31 @@ export const ttsProviderSettingsSchema=z.object({
   voice:z.string().trim().min(1).max(200),
 });
 
+const languageCodeSchema=z.string().trim().min(2).max(35).regex(/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/,"invalid BCP 47 language code");
+
+export const translationPreferenceSchema=z.object({
+  enabled:z.boolean(),
+  agentLanguage:languageCodeSchema,
+  customerLanguage:languageCodeSchema,
+});
+
+export const translationProviderSettingsSchema=z.object({
+  enabled:z.boolean().default(false),
+  apiKey:z.string().trim().min(1).max(4096).optional(),
+  baseUrl:z.string().trim().url().max(2048),
+  model:z.string().trim().min(1).max(200),
+});
+
+export const translationPreviewSchema=z.object({
+  text:z.string().trim().min(1).max(65536),
+  targetLanguage:languageCodeSchema,
+});
+
+export const messageTranslationsSchema=z.object({
+  messageIds:z.array(z.string().uuid()).min(1).max(50),
+  targetLanguage:languageCodeSchema,
+});
+
 export const newConversationSchema = z.object({
   accountId: z.string().uuid(),
   phone: z.string().transform(value=>value.trim().replace(/[\s()+.-]/g,"")).refine(value=>/^[1-9]\d{6,14}$/.test(value),"请输入包含国家代码的有效号码"),

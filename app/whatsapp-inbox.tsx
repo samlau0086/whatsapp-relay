@@ -2,7 +2,7 @@
 
 import {
   Archive, Bookmark, Check, CheckCheck, ChevronDown, CircleHelp, Clock3, FileText,
-  Inbox, Info, Menu, MessageCircle, Mic, MonitorSmartphone, Paperclip, Phone, Plus,
+  Inbox, Info, Languages, Menu, MessageCircle, Mic, MonitorSmartphone, Paperclip, Phone, Plus,
   RefreshCw, Search, Send, Settings, ShieldCheck, Smile, Sparkles, Star, Trash2, UploadCloud, UserPlus,
   Users, Wifi, WifiOff, X,
 } from "lucide-react";
@@ -31,6 +31,10 @@ type ManagedAgent = {id:string;name:string;status:string;version?:string;protoco
 type MediaAsset = {id:string;fileName:string;mimeType:string;size:number;sha256:string;createdAt:string;usageCount:number};
 type TtsProviderId="openai"|"elevenlabs"|"azure"|"openai_compatible";
 type TtsProviderConfig={provider:TtsProviderId;enabled:boolean;keyConfigured:boolean;baseUrl:string;model:string;voice:string;updatedAt:string|null};
+type TranslationProviderId="openai"|"openai_compatible";
+type TranslationProviderConfig={provider:TranslationProviderId;enabled:boolean;keyConfigured:boolean;baseUrl:string;model:string;updatedAt:string|null};
+type TranslationPreference={enabled:boolean;agentLanguage:string;customerLanguage:string;updatedAt:string|null};
+type MessageTranslation={status:"loading"|"translated"|"failed";text?:string};
 
 export function WhatsAppInbox() {
   const [accounts,setAccounts]=useState<Account[]>([]);
@@ -56,6 +60,14 @@ export function WhatsAppInbox() {
   const [ttsOpen,setTtsOpen]=useState(false);
   const [emojiOpen,setEmojiOpen]=useState(false);
   const [emojiCategory,setEmojiCategory]=useState("常用");
+  const [translationPreference,setTranslationPreference]=useState<TranslationPreference>({enabled:false,agentLanguage:"zh-CN",customerLanguage:"en",updatedAt:null});
+  const [translationConfigured,setTranslationConfigured]=useState(false);
+  const [translationReady,setTranslationReady]=useState(false);
+  const [translationMenuOpen,setTranslationMenuOpen]=useState(false);
+  const [messageTranslations,setMessageTranslations]=useState<Record<string,MessageTranslation>>({});
+  const [translationPreview,setTranslationPreview]=useState<{source:string;translated:string}|null>(null);
+  const [translatingDraft,setTranslatingDraft]=useState(false);
+  const [translationError,setTranslationError]=useState("");
   const textareaRef=useRef<HTMLTextAreaElement>(null);
   const messagesRef=useRef<HTMLDivElement>(null);
 
@@ -80,7 +92,7 @@ export function WhatsAppInbox() {
   }),[conversations,selectedAccount,query,filter,userId]);
   const effectiveActiveId=visible.some(item=>item.id===activeId)?activeId:(visible[0]?.id??"");
   const active=visible.find(item=>item.id===effectiveActiveId)??null;
-  const currentMessages=active?messages[active.id]??[]:[];
+  const currentMessages=useMemo(()=>active?messages[active.id]??[]:[],[active,messages]);
   const latestMessageId=currentMessages.at(-1)?.id??"";
   const scrollMessagesToEnd=useCallback((behavior:ScrollBehavior="smooth")=>{
     window.requestAnimationFrame(()=>{
@@ -99,7 +111,7 @@ export function WhatsAppInbox() {
 
   const logout=useCallback(()=>{
     sessionStorage.removeItem("relayAccessToken");sessionStorage.removeItem("relayUser");
-    setApiToken("");setUser(null);setAccounts([]);setConversations([]);setMessages({});setActiveId("");setAuthOpen(false);setSessionReady(true);setLoading(false);
+    setApiToken("");setUser(null);setAccounts([]);setConversations([]);setMessages({});setMessageTranslations({});setTranslationReady(false);setActiveId("");setAuthOpen(false);setSessionReady(true);setLoading(false);
   },[]);
 
   const loadWorkspace=useCallback(async(token:string,quiet=false)=>{
@@ -133,6 +145,29 @@ export function WhatsAppInbox() {
     }catch{setToast("消息加载失败，正在等待下次同步");}
   },[logout]);
 
+  const loadTranslationSettings=useCallback(async(token:string)=>{
+    try{
+      const [preferenceResult,statusResult]=await Promise.all([authorizedFetch("/api/v1/me/translation-preferences",token),authorizedFetch("/api/v1/translation/status",token)]);
+      const refreshedToken=preferenceResult.token!==token?preferenceResult.token:statusResult.token;if(refreshedToken!==token)setApiToken(refreshedToken);
+      const preferenceBody=await preferenceResult.response.json() as Partial<TranslationPreference>;
+      const statusBody=await statusResult.response.json() as {configured?:boolean};
+      if(preferenceResult.response.ok)setTranslationPreference({enabled:Boolean(preferenceBody.enabled),agentLanguage:preferenceBody.agentLanguage??"zh-CN",customerLanguage:preferenceBody.customerLanguage??"en",updatedAt:preferenceBody.updatedAt??null});
+      setTranslationConfigured(Boolean(statusBody.configured));setTranslationReady(true);
+    }catch{setTranslationConfigured(false);setTranslationReady(true);}
+  },[]);
+
+  const loadIncomingTranslations=useCallback(async(token:string,messageIds:string[],targetLanguage:string,retry=false)=>{
+    const ids=messageIds.filter(id=>retry||!messageTranslations[id]);if(!ids.length)return;
+    setMessageTranslations(all=>({...all,...Object.fromEntries(ids.map(id=>[id,{status:"loading" as const}]))}));
+    let accessToken=token;
+    for(let offset=0;offset<ids.length;offset+=50){const chunk=ids.slice(offset,offset+50);try{
+      const result=await authorizedFetch("/api/v1/translations/messages",accessToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({messageIds:chunk,targetLanguage})});accessToken=result.token;if(result.token!==token)setApiToken(result.token);
+      const body=await result.response.json().catch(()=>({})) as {data?:Array<{messageId:string;status:string;translatedText?:string}>};
+      if(!result.response.ok||!body.data)throw new Error("translation_failed");
+      setMessageTranslations(all=>({...all,...Object.fromEntries(body.data!.map(item=>[item.messageId,item.status==="translated"?{status:"translated" as const,text:item.translatedText??""}:{status:"failed" as const}]))}));
+    }catch{setMessageTranslations(all=>({...all,...Object.fromEntries(chunk.map(id=>[id,{status:"failed" as const}]))}));}}
+  },[messageTranslations]);
+
   useEffect(()=>{
     const timer=window.setTimeout(()=>{
       const token=sessionStorage.getItem("relayAccessToken")??"";
@@ -146,6 +181,9 @@ export function WhatsAppInbox() {
 
   useEffect(()=>{if(!apiToken)return;const timer=window.setInterval(()=>void loadWorkspace(apiToken,true),5000);return()=>window.clearInterval(timer);},[apiToken,loadWorkspace]);
   useEffect(()=>{if(!apiToken||!effectiveActiveId)return;const initial=window.setTimeout(()=>void loadMessages(apiToken,effectiveActiveId,true),0);const timer=window.setInterval(()=>void loadMessages(apiToken,effectiveActiveId),3000);return()=>{window.clearTimeout(initial);window.clearInterval(timer);};},[apiToken,effectiveActiveId,loadMessages]);
+  useEffect(()=>{if(!apiToken)return;const timer=window.setTimeout(()=>void loadTranslationSettings(apiToken),0);return()=>window.clearTimeout(timer);},[apiToken,view,loadTranslationSettings]);
+  useEffect(()=>{const timer=window.setTimeout(()=>setMessageTranslations({}),0);return()=>window.clearTimeout(timer);},[translationPreference.agentLanguage]);
+  useEffect(()=>{if(!apiToken||!translationPreference.enabled||!translationConfigured)return;const ids=currentMessages.filter(message=>message.direction==="in"&&message.kind==="text"&&message.text.trim()&&!messageTranslations[message.id]).map(message=>message.id);if(!ids.length)return;const timer=window.setTimeout(()=>void loadIncomingTranslations(apiToken,ids,translationPreference.agentLanguage),0);return()=>window.clearTimeout(timer);},[apiToken,currentMessages,translationPreference.enabled,translationPreference.agentLanguage,translationConfigured,messageTranslations,loadIncomingTranslations]);
   useEffect(()=>{if(!toast)return;const timer=window.setTimeout(()=>setToast(""),3200);return()=>window.clearTimeout(timer);},[toast]);
 
   async function updateConversation(change:Record<string,unknown>){
@@ -154,9 +192,28 @@ export function WhatsAppInbox() {
     if(!response.ok){setToast(`操作失败（HTTP ${response.status}）`);return;}await loadWorkspace(apiToken,true);
   }
 
+  async function saveTranslationPreference(next:TranslationPreference){
+    if(!apiToken)return;if(next.enabled&&!translationConfigured){setToast("管理员尚未启用 AI 翻译 Provider");return;}
+    const previous=translationPreference;setTranslationPreference(next);
+    const result=await authorizedFetch("/api/v1/me/translation-preferences",apiToken,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({enabled:next.enabled,agentLanguage:next.agentLanguage,customerLanguage:next.customerLanguage})});if(result.token!==apiToken)setApiToken(result.token);
+    if(!result.response.ok){setTranslationPreference(previous);const body=await result.response.json().catch(()=>({})) as {message?:string};setToast(body.message??"翻译偏好保存失败");return;}
+    const body=await result.response.json() as TranslationPreference;setTranslationPreference(body);
+  }
+
   async function sendMessage(){
-    if(!active||!apiToken||!draft.trim())return;
-    const text=draft.trim();const clientMessageId=crypto.randomUUID();setDraft("");
+    if(!active||!apiToken||!draft.trim()||translatingDraft)return;
+    const source=draft.trim();
+    if(translationPreference.enabled){
+      if(!translationConfigured){setToast("AI 翻译暂不可用，请联系管理员配置 Provider");return;}
+      setTranslatingDraft(true);setTranslationError("");
+      try{const result=await authorizedFetch("/api/v1/translations/preview",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:source,targetLanguage:translationPreference.customerLanguage})});if(result.token!==apiToken)setApiToken(result.token);const body=await result.response.json().catch(()=>({})) as {translatedText?:string;message?:string};if(!result.response.ok||!body.translatedText)throw new Error(body.message??"翻译失败");setTranslationPreview({source,translated:body.translatedText});}catch(reason){setTranslationError(reason instanceof Error?reason.message:"翻译失败");setToast("AI 翻译失败，原文未发送");}finally{setTranslatingDraft(false);}return;
+    }
+    await queueTextMessage(source);
+  }
+
+  async function queueTextMessage(text:string){
+    if(!active||!apiToken||!text.trim())return;
+    const clientMessageId=crypto.randomUUID();setDraft("");setTranslationPreview(null);setTranslationError("");
     setMessages(all=>({...all,[active.id]:[...(all[active.id]??[]),{id:clientMessageId,direction:"out",kind:"text",text,time:formatTime(new Date()),status:"queued"}]}));
     const result=await authorizedFetch("/api/v1/messages",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId:active.accountId,conversationId:active.id,clientMessageId,type:"text",text})});const response=result.response;if(result.token!==apiToken)setApiToken(result.token);
     if(!response.ok){setToast(`消息入队失败（HTTP ${response.status}）`);setMessages(all=>({...all,[active.id]:(all[active.id]??[]).map(item=>item.id===clientMessageId?{...item,status:"failed"}:item)}));return;}
@@ -207,18 +264,20 @@ export function WhatsAppInbox() {
     <section className="chat-panel">{active?<>
       <header className="chat-head"><div className="chat-person"><span className="avatar" style={{background:active.color}}>{active.initials}</span><span><b>{active.name}</b><small><i className={`status-dot ${active.accountStatus==="online"?"online":""}`}/>{active.account} · {statusText(active.accountStatus)}</small></span></div><div className="chat-actions"><button onClick={()=>void updateConversation({assignedToMe:active.assignedUserId!==userId})} className="assign-button"><UserPlus size={15}/>{active.assignedUserId===userId?"取消认领":active.assignedUserId?"转为我负责":"认领"}</button><button onClick={()=>void updateConversation({favorite:!active.favorite})} className="icon-button" aria-label="收藏"><Bookmark size={17} fill={active.favorite?"currentColor":"none"}/></button><button onClick={()=>setDetailsOpen(!detailsOpen)} className="icon-button" aria-label="联系人详情"><Info size={17}/></button></div></header>
       {active.accountStatus!=="online"&&<div className="offline-banner"><WifiOff size={15}/><span>该账号当前离线；发送请求仍会进入持久队列。</span></div>}
-      <div ref={messagesRef} className="messages" aria-live="polite"><div className="day-separator"><span>真实消息记录</span></div>{currentMessages.length?currentMessages.map(message=><article key={message.id} className={`message-row ${message.direction}`}>{message.direction==="in"&&<span className="avatar message-avatar" style={{background:active.color}}>{active.initials}</span>}<div className={`message-bubble ${message.attachment?.name.startsWith("sticker-")?"sticker-bubble":""}`}>{message.text&&<p>{message.text}</p>}{message.attachment&&<MessageMedia attachment={message.attachment} token={apiToken} onToken={setApiToken} onReady={scrollMessagesToEnd}/>}<footer><time>{message.time}</time>{message.direction==="out"&&<MessageStatus status={message.status}/>}</footer></div></article>):<EmptyState title="暂无消息" text="收到或发送的消息将显示在这里"/>}</div>
+      <div ref={messagesRef} className="messages" aria-live="polite"><div className="day-separator"><span>真实消息记录</span></div>{currentMessages.length?currentMessages.map(message=><article key={message.id} className={`message-row ${message.direction}`}>{message.direction==="in"&&<span className="avatar message-avatar" style={{background:active.color}}>{active.initials}</span>}<div className={`message-bubble ${message.attachment?.name.startsWith("sticker-")?"sticker-bubble":""}`}>{message.text&&<p>{message.text}</p>}{translationPreference.enabled&&message.direction==="in"&&message.kind==="text"&&message.text&&<IncomingTranslation value={messageTranslations[message.id]} language={translationPreference.agentLanguage} onRetry={()=>void loadIncomingTranslations(apiToken,[message.id],translationPreference.agentLanguage,true)}/>} {message.attachment&&<MessageMedia attachment={message.attachment} token={apiToken} onToken={setApiToken} onReady={scrollMessagesToEnd}/>}<footer><time>{message.time}</time>{message.direction==="out"&&<MessageStatus status={message.status}/>}</footer></div></article>):<EmptyState title="暂无消息" text="收到或发送的消息将显示在这里"/>}</div>
       <div className="composer-wrap">
-        <div className="composer-tools"><button onClick={()=>setMediaOpen(true)} aria-label="打开媒体与附件" title="媒体与附件"><Paperclip size={17}/></button><span>回复给 {active.name}</span></div>
+        <div className="composer-tools"><div className="composer-tool-actions"><button onClick={()=>setMediaOpen(true)} aria-label="打开媒体与附件" title="媒体与附件"><Paperclip size={17}/></button><button className={`translation-trigger ${translationPreference.enabled?"active":""}`} onClick={()=>setTranslationMenuOpen(value=>!value)} aria-expanded={translationMenuOpen} aria-label="AI 翻译设置"><Languages size={15}/><span>{translationPreference.enabled?`${languageName(translationPreference.agentLanguage)} → ${languageName(translationPreference.customerLanguage)}`:"AI 翻译"}</span></button></div><span>回复给 {active.name}</span></div>
+        {translationMenuOpen&&<TranslationMenu preference={translationPreference} configured={translationConfigured} ready={translationReady} onChange={next=>void saveTranslationPreference(next)} onClose={()=>setTranslationMenuOpen(false)}/>}
         {emojiOpen&&<EmojiPicker category={emojiCategory} onCategory={setEmojiCategory} onSelect={insertEmoji} onClose={()=>setEmojiOpen(false)}/>}
-        <div className="composer"><textarea ref={textareaRef} value={draft} onChange={event=>setDraft(event.target.value)} onKeyDown={event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();void sendMessage();}if(event.key==="Escape")setEmojiOpen(false);}} placeholder="输入消息，Enter 发送，Shift + Enter 换行"/><div className="composer-icons"><button className={emojiOpen?"active":""} onClick={()=>setEmojiOpen(value=>!value)} aria-label="选择表情" title="选择表情"><Smile size={18}/></button><button onClick={()=>setTtsOpen(true)} aria-label="AI 文字转语音" title="AI 文字转语音"><Mic size={18}/></button><button onClick={()=>void sendMessage()} className="send-button" aria-label="发送"><Send size={18}/></button></div></div>
+        <div className="composer"><textarea ref={textareaRef} value={draft} onChange={event=>setDraft(event.target.value)} onKeyDown={event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();void sendMessage();}if(event.key==="Escape"){setEmojiOpen(false);setTranslationMenuOpen(false);}}} placeholder="输入消息，Enter 发送，Shift + Enter 换行"/><div className="composer-icons"><button className={emojiOpen?"active":""} onClick={()=>setEmojiOpen(value=>!value)} aria-label="选择表情" title="选择表情"><Smile size={18}/></button><button onClick={()=>setTtsOpen(true)} aria-label="AI 文字转语音" title="AI 文字转语音"><Mic size={18}/></button><button onClick={()=>void sendMessage()} className="send-button" aria-label={translationPreference.enabled?"翻译并预览":"发送"} disabled={translatingDraft}>{translatingDraft?<RefreshCw className="spin" size={18}/>:<Send size={18}/>}</button></div></div>
+        {translationError&&<p className="composer-error">{translationError}</p>}
         <p className="delivery-hint">{active.accountStatus==="online"?<><Wifi size={13}/>Agent 在线</>:<><Clock3 size={13}/>离线队列已启用</>}</p>
       </div>
     </>:<div className="chat-empty"><MessageCircle size={31}/><h2>选择一个真实会话</h2><p>这里不会再显示演示联系人或模拟消息。</p></div>}</section>
 
     {detailsOpen&&active&&<aside className="details-panel"><header><h3>联系人详情</h3><button onClick={()=>setDetailsOpen(false)} className="icon-button" aria-label="关闭详情"><X size={17}/></button></header><div className="contact-card"><span className="avatar large" style={{background:active.color}}>{active.initials}</span><h2>{active.name}</h2><p>{active.phone||"号码待同步"}</p><span className="contact-online"><i className={`status-dot ${active.accountStatus==="online"?"online":""}`}/>{statusText(active.accountStatus)}</span></div><div className="detail-section"><h4>会话信息</h4><dl><div><dt>负责坐席</dt><dd>{active.assignedUserId===userId?"我":active.assignedUserId?"其他坐席":"未分配"}</dd></div><div><dt>接入账号</dt><dd>{active.account}</dd></div><div><dt>未读消息</dt><dd>{active.unread}</dd></div><div><dt>会话状态</dt><dd className="green-text">{active.conversationStatus==="open"?"进行中":active.conversationStatus==="closed"?"已关闭":"已归档"}</dd></div></dl><button className="conversation-state-button" onClick={()=>void updateConversation({status:active.conversationStatus==="closed"?"open":"closed"})}>{active.conversationStatus==="closed"?"重新打开会话":"关闭会话"}</button></div><div className="security-note"><ShieldCheck size={16}/><span><b>中心真实数据</b><small>消息来自 PostgreSQL 与本地 Agent 同步</small></span></div></aside>}</>
       :view==="agents"?<AgentManagement token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>
-      :view==="settings"?<TtsSettingsPanel token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>
+      :view==="settings"?<SettingsPanel token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>
       :<HelpPanel onInbox={()=>openInbox()} onAgents={()=>setView("agents")}/>
     }
 
@@ -231,6 +290,7 @@ export function WhatsAppInbox() {
     {newConversationOpen&&<NewConversationDialog accounts={accounts} token={apiToken} onToken={setApiToken} onClose={()=>setNewConversationOpen(false)} onCreated={async(conversationId,accountId,accessToken)=>{setNewConversationOpen(false);setView("inbox");setFilter("全部会话");setSelectedAccount(accountId);await loadWorkspace(accessToken,true);setActiveId(conversationId);setToast("新会话已创建，首条消息已进入发送队列");}}/>}
     {mediaOpen&&active&&<MediaDialog accountId={active.accountId} token={apiToken} initialCaption={draft} onToken={setApiToken} onToast={setToast} onClose={()=>setMediaOpen(false)} onSend={sendMediaAsset}/>}
     {ttsOpen&&active&&<TextToSpeechDialog accountId={active.accountId} token={apiToken} initialText={draft} onToken={setApiToken} onClose={()=>setTtsOpen(false)} onSend={async asset=>{setTtsOpen(false);await sendMediaAsset(asset,"");}}/>}
+    {translationPreview&&<TranslationPreviewDialog source={translationPreview.source} translated={translationPreview.translated} targetLanguage={translationPreference.customerLanguage} onClose={()=>setTranslationPreview(null)} onConfirm={text=>void queueTextMessage(text)}/>}
   </main>;
 }
 
@@ -244,6 +304,37 @@ function AccessPortal({loading,onLogin}:{loading:boolean;onLogin:()=>void}){
     <section className="access-purpose" aria-label="服务说明"><div><MessageCircle size={20}/><span><b>服务用途</b><small>集中处理经授权接入的客户消息</small></span></div><div><Wifi size={20}/><span><b>连接方式</b><small>通过受管的 RelayDesk Agent 同步</small></span></div><div><ShieldCheck size={20}/><span><b>凭据用途</b><small>仅验证 RelayDesk 坐席身份</small></span></div></section>
     <footer className="access-footer"><p><b>商标说明：</b>WhatsApp 是 WhatsApp LLC 的商标；Meta 是 Meta Platforms, Inc. 的商标。提及这些名称仅为说明兼容的消息渠道。</p><p>© {new Date().getFullYear()} GeekMT · RelayDesk 私有系统</p></footer>
   </main>;
+}
+
+const LANGUAGES=[
+  ["zh-CN","简体中文"],["zh-TW","繁體中文"],["en","English"],["en-US","English (US)"],["en-GB","English (UK)"],
+  ["ms","Bahasa Melayu"],["id","Bahasa Indonesia"],["th","ไทย"],["vi","Tiếng Việt"],["ja","日本語"],["ko","한국어"],
+  ["es","Español"],["fr","Français"],["de","Deutsch"],["it","Italiano"],["pt-BR","Português (Brasil)"],["ru","Русский"],
+  ["ar","العربية"],["hi","हिन्दी"],["tr","Türkçe"],["nl","Nederlands"],["pl","Polski"],
+] as const;
+
+function languageName(code:string){return LANGUAGES.find(item=>item[0]===code)?.[1]??code;}
+
+function TranslationMenu({preference,configured,ready,onChange,onClose}:{preference:TranslationPreference;configured:boolean;ready:boolean;onChange:(value:TranslationPreference)=>void;onClose:()=>void}){
+  return <section className="translation-menu" role="dialog" aria-label="AI 翻译设置"><header><span><Languages size={16}/><b>AI 双向翻译</b></span><button onClick={onClose} aria-label="关闭翻译设置"><X size={15}/></button></header><label className="translation-toggle"><span><b>启用 AI 翻译</b><small>{!ready?"正在读取配置…":configured?"偏好会同步到其他浏览器":"管理员尚未配置翻译 Provider"}</small></span><input type="checkbox" checked={preference.enabled} disabled={!ready||(!configured&&!preference.enabled)} onChange={event=>onChange({...preference,enabled:event.target.checked})}/></label><div className="translation-language-grid"><label><span>收到消息译为</span><LanguagePicker value={preference.agentLanguage} onChange={agentLanguage=>onChange({...preference,agentLanguage})}/></label><label><span>发送消息译为</span><LanguagePicker value={preference.customerLanguage} onChange={customerLanguage=>onChange({...preference,customerLanguage})}/></label></div><p><Info size={13}/>发送前会显示可编辑预览；收到的消息保留原文。</p></section>;
+}
+
+function LanguagePicker({value,onChange}:{value:string;onChange:(value:string)=>void}){
+  const [open,setOpen]=useState(false),[query,setQuery]=useState("");
+  const visible=LANGUAGES.filter(([code,name])=>`${code} ${name}`.toLowerCase().includes(query.toLowerCase()));
+  return <div className="language-picker"><input type="search" value={open?query:languageName(value)} onFocus={()=>{setOpen(true);setQuery("");}} onChange={event=>{setOpen(true);setQuery(event.target.value);}} onBlur={()=>window.setTimeout(()=>setOpen(false),120)} aria-label="搜索并选择语言" autoComplete="off"/>{open&&<div className="language-options" role="listbox">{visible.length?visible.map(([code,name])=><button type="button" role="option" aria-selected={code===value} className={code===value?"selected":""} key={code} onMouseDown={event=>event.preventDefault()} onClick={()=>{onChange(code);setOpen(false);setQuery("");}}><span>{name}</span><small>{code}</small></button>):<span className="language-empty">没有匹配语言</span>}</div>}</div>;
+}
+
+function IncomingTranslation({value,language,onRetry}:{value?:MessageTranslation;language:string;onRetry:()=>void}){
+  if(!value||value.status==="loading")return <div className="incoming-translation loading"><RefreshCw className="spin" size={12}/>正在翻译为 {languageName(language)}…</div>;
+  if(value.status==="failed")return <div className="incoming-translation failed"><span>译文加载失败</span><button onClick={onRetry}>重试</button></div>;
+  return <div className="incoming-translation"><span><Languages size={12}/>{languageName(language)}</span><p>{value.text}</p></div>;
+}
+
+function TranslationPreviewDialog({source,translated,targetLanguage,onClose,onConfirm}:{source:string;translated:string;targetLanguage:string;onClose:()=>void;onConfirm:(text:string)=>void}){
+  const [text,setText]=useState(translated);
+  useEffect(()=>{const onKey=(event:KeyboardEvent)=>{if(event.key==="Escape")onClose();};window.addEventListener("keydown",onKey);return()=>window.removeEventListener("keydown",onKey);},[onClose]);
+  return <div className="modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onClose();}}><section className="login-dialog translation-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="translation-preview-title"><button className="login-close" onClick={onClose} aria-label="关闭"><X size={17}/></button><span className="login-logo"><Languages size={21}/></span><h2 id="translation-preview-title">确认翻译后发送</h2><p>目标语言：{languageName(targetLanguage)}。译文可以在发送前继续修改。</p><label>原文<textarea value={source} readOnly/></label><label>将发送的译文 <span className="tts-count">{text.length}/65536</span><textarea value={text} onChange={event=>setText(event.target.value)} maxLength={65536} autoFocus/></label><div className="translation-preview-actions"><button className="secondary-action" onClick={onClose}>取消</button><button className="primary-action" disabled={!text.trim()} onClick={()=>onConfirm(text.trim())}><Send size={14}/>确认并发送</button></div></section></div>;
 }
 
 const EMOJI_GROUPS:Record<string,string[]>={
@@ -320,6 +411,27 @@ function MessageMedia({attachment,token,onToken,onReady}:{attachment:{id:string;
   return <button className="attachment-card" onClick={()=>{const link=document.createElement("a");link.href=url;link.download=attachment.name;link.click();}}><span><FileText size={20}/></span><span><b>{attachment.name}</b><small>{attachment.mime} · {attachment.size}</small></span></button>;
 }
 
+function SettingsPanel({token,role,onToken,onToast}:{token:string;role:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){
+  const [tab,setTab]=useState<"translation"|"speech">("translation");
+  if(role!=="admin")return <section className="management-panel"><EmptyState title="需要管理员权限" text="只有管理员可以查看或修改 AI Provider 与密钥配置。"/></section>;
+  return <section className="management-panel settings-panel"><header className="management-head"><div><span className="eyebrow">系统设置</span><h1>AI Provider</h1><p>集中管理翻译和文字转语音模型。API Key 加密保存，前端不会再次读取明文。</p></div></header><nav className="settings-tabs" aria-label="AI 设置"><button className={tab==="translation"?"active":""} onClick={()=>setTab("translation")}><Languages size={15}/>AI 翻译</button><button className={tab==="speech"?"active":""} onClick={()=>setTab("speech")}><Mic size={15}/>AI 语音</button></nav>{tab==="translation"?<TranslationSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:<TtsSettingsPanel token={token} role={role} onToken={onToken} onToast={onToast}/>}</section>;
+}
+
+const TRANSLATION_PROVIDER_META:Record<TranslationProviderId,{name:string;description:string;keyLabel:string;endpointHint:string;modelHint:string}>={
+  openai:{name:"OpenAI",description:"OpenAI 官方 Chat Completions API",keyLabel:"OpenAI API Key",endpointHint:"https://api.openai.com/v1",modelHint:"gpt-5.6-luna"},
+  openai_compatible:{name:"Custom Provider",description:"自托管或第三方 OpenAI-compatible /chat/completions 接口",keyLabel:"API Key",endpointHint:"https://provider.example.com/v1",modelHint:"Provider 的模型 ID"},
+};
+
+function TranslationSettingsPanel({token,onToken,onToast}:{token:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){
+  const [providers,setProviders]=useState<TranslationProviderConfig[]>([]),[selected,setSelected]=useState<TranslationProviderId>("openai"),[secret,setSecret]=useState(""),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[error,setError]=useState("");
+  const load=useCallback(async()=>{setLoading(true);try{const result=await authorizedFetch("/api/v1/admin/translation-providers",token);if(result.token!==token)onToken(result.token);const body=await result.response.json() as {data?:TranslationProviderConfig[];error?:string};if(!result.response.ok||!body.data)throw new Error(body.error??`HTTP ${result.response.status}`);setProviders(body.data);setSelected(previous=>body.data?.some(item=>item.provider===previous)?previous:(body.data?.find(item=>item.enabled)?.provider??"openai"));setError("");}catch(reason){setError(reason instanceof Error?reason.message:"翻译 Provider 配置加载失败");}finally{setLoading(false);}},[token,onToken]);
+  useEffect(()=>{const initial=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(initial);},[load]);
+  const current=providers.find(item=>item.provider===selected);const meta=TRANSLATION_PROVIDER_META[selected];
+  function change(values:Partial<TranslationProviderConfig>){setProviders(items=>items.map(item=>item.provider===selected?{...item,...values}:item));}
+  async function save(){if(!current||saving)return;setSaving(true);setError("");try{const result=await authorizedFetch(`/api/v1/admin/translation-providers/${selected}`,token,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({enabled:current.enabled,apiKey:secret.trim()||undefined,baseUrl:current.baseUrl,model:current.model})});if(result.token!==token)onToken(result.token);const body=await result.response.json().catch(()=>({})) as Record<string,unknown>;if(!result.response.ok)throw new Error(String(body.message??body.error??`HTTP ${result.response.status}`));setSecret("");onToast(`${meta.name} 翻译配置已保存${current.enabled?"并启用":""}`);await load();}catch(reason){setError(reason instanceof Error?reason.message:"保存失败");}finally{setSaving(false);}}
+  return <div className="settings-provider-section"><div className="settings-section-head"><div><h2>AI 翻译 Provider</h2><p>用于发出消息预览和收到消息译文，全工作区使用一个当前 Provider。</p></div><button className="secondary-action" onClick={()=>void load()}><RefreshCw size={15}/>刷新</button></div>{loading?<EmptyState title="正在读取翻译 Provider" text="请稍候…"/>:<div className="provider-settings-layout"><nav className="provider-list" aria-label="翻译 Provider">{providers.map(item=><button key={item.provider} className={selected===item.provider?"active":""} onClick={()=>{setSelected(item.provider);setSecret("");}}><span><b>{TRANSLATION_PROVIDER_META[item.provider].name}</b><small>{TRANSLATION_PROVIDER_META[item.provider].description}</small></span><em className={item.enabled?"enabled":item.keyConfigured?"configured":""}>{item.enabled?"使用中":item.keyConfigured?"已配置":"未配置"}</em></button>)}</nav>{current&&<div className="provider-form"><header><div><h2>{meta.name}</h2><p>{meta.description}</p></div><label className="provider-toggle"><input type="checkbox" checked={current.enabled} onChange={event=>change({enabled:event.target.checked})}/><span>设为当前 Provider</span></label></header><label>{meta.keyLabel}<input type="password" value={secret} onChange={event=>setSecret(event.target.value)} autoComplete="new-password" placeholder={current.keyConfigured?"已加密保存；留空表示不修改":"请输入 API Key"}/><small>保存后仅显示配置状态，不会回传密钥。</small></label><label>API Endpoint<input type="url" value={current.baseUrl} onChange={event=>change({baseUrl:event.target.value})} placeholder={meta.endpointHint}/></label><label>模型 ID<input value={current.model} onChange={event=>change({model:event.target.value})} placeholder={meta.modelHint}/></label>{error&&<span className="login-error">{error}</span>}<button className="primary-action provider-save" disabled={saving||!current.baseUrl.trim()||!current.model.trim()||(!current.keyConfigured&&!secret.trim())} onClick={()=>void save()}>{saving?<><RefreshCw className="spin" size={14}/>正在保存</>:<><Check size={14}/>保存配置</>}</button></div>}</div>}</div>;
+}
+
 const TTS_PROVIDER_META:Record<TtsProviderId,{name:string;description:string;keyLabel:string;endpointHint:string;modelHint:string;voiceHint:string}>={
   openai:{name:"OpenAI",description:"OpenAI 官方 Audio Speech API",keyLabel:"OpenAI API Key",endpointHint:"https://api.openai.com/v1",modelHint:"gpt-4o-mini-tts",voiceHint:"coral"},
   elevenlabs:{name:"ElevenLabs",description:"多语言语音与自定义 Voice ID",keyLabel:"ElevenLabs API Key",endpointHint:"https://api.elevenlabs.io/v1",modelHint:"eleven_multilingual_v2",voiceHint:"Voice ID"},
@@ -335,8 +447,8 @@ function TtsSettingsPanel({token,role,onToken,onToast}:{token:string;role:string
   const current=providers.find(item=>item.provider===selected);const meta=TTS_PROVIDER_META[selected];
   function change(values:Partial<TtsProviderConfig>){setProviders(items=>items.map(item=>item.provider===selected?{...item,...values}:item));}
   async function save(){if(!current||saving)return;setSaving(true);setError("");try{const result=await authorizedFetch(`/api/v1/admin/tts-providers/${selected}`,token,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({enabled:current.enabled,apiKey:secret.trim()||undefined,baseUrl:current.baseUrl,model:current.model,voice:current.voice})});if(result.token!==token)onToken(result.token);const body=await result.response.json().catch(()=>({})) as Record<string,unknown>;if(!result.response.ok)throw new Error(String(body.message??body.error??`HTTP ${result.response.status}`));setSecret("");onToast(`${meta.name} 配置已保存${current.enabled?"并启用":""}`);await load();}catch(reason){setError(reason instanceof Error?reason.message:"保存失败");}finally{setSaving(false);}}
-  if(role!=="admin")return <section className="management-panel"><EmptyState title="需要管理员权限" text="只有管理员可以查看或修改语音 Provider 与密钥配置。"/></section>;
-  return <section className="management-panel settings-panel"><header className="management-head"><div><span className="eyebrow">系统设置</span><h1>AI 语音 Provider</h1><p>在后台集中管理文字转语音服务。API Key 加密保存，前端不会再次读取明文。</p></div><button className="secondary-action" onClick={()=>void load()}><RefreshCw size={15}/>刷新</button></header>{loading?<EmptyState title="正在读取 Provider 配置" text="请稍候…"/>:<div className="provider-settings-layout"><nav className="provider-list" aria-label="语音 Provider">{providers.map(item=><button key={item.provider} className={selected===item.provider?"active":""} onClick={()=>{setSelected(item.provider);setSecret("");}}><span><b>{TTS_PROVIDER_META[item.provider].name}</b><small>{TTS_PROVIDER_META[item.provider].description}</small></span><em className={item.enabled?"enabled":item.keyConfigured?"configured":""}>{item.enabled?"使用中":item.keyConfigured?"已配置":"未配置"}</em></button>)}</nav>{current&&<div className="provider-form"><header><div><h2>{meta.name}</h2><p>{meta.description}</p></div><label className="provider-toggle"><input type="checkbox" checked={current.enabled} onChange={event=>change({enabled:event.target.checked})}/><span>设为当前 Provider</span></label></header><label>{meta.keyLabel}<input type="password" value={secret} onChange={event=>setSecret(event.target.value)} autoComplete="new-password" placeholder={current.keyConfigured?"已加密保存；留空表示不修改":"请输入 API Key"}/><small>保存后仅显示配置状态，不会回传密钥。</small></label><label>API Endpoint<input type="url" value={current.baseUrl} onChange={event=>change({baseUrl:event.target.value})} placeholder={meta.endpointHint}/></label><div className="provider-form-grid"><label>模型 ID<input value={current.model} onChange={event=>change({model:event.target.value})} placeholder={meta.modelHint}/></label><label>默认音色 / Voice ID<input value={current.voice} onChange={event=>change({voice:event.target.value})} placeholder={meta.voiceHint}/></label></div>{error&&<span className="login-error">{error}</span>}<button className="primary-action provider-save" disabled={saving||!current.baseUrl.trim()||!current.voice.trim()||(selected!=="azure"&&!current.model.trim())||(!current.keyConfigured&&!secret.trim())} onClick={()=>void save()}>{saving?<><RefreshCw className="spin" size={14}/>正在保存</>:<><Check size={14}/>保存配置</>}</button></div>}</div>}</section>;
+  if(role!=="admin")return <EmptyState title="需要管理员权限" text="只有管理员可以查看或修改语音 Provider 与密钥配置。"/>;
+  return <div className="settings-provider-section"><div className="settings-section-head"><div><h2>AI 语音 Provider</h2><p>管理文字转语音服务、模型与默认音色。</p></div><button className="secondary-action" onClick={()=>void load()}><RefreshCw size={15}/>刷新</button></div>{loading?<EmptyState title="正在读取语音 Provider" text="请稍候…"/>:<div className="provider-settings-layout"><nav className="provider-list" aria-label="语音 Provider">{providers.map(item=><button key={item.provider} className={selected===item.provider?"active":""} onClick={()=>{setSelected(item.provider);setSecret("");}}><span><b>{TTS_PROVIDER_META[item.provider].name}</b><small>{TTS_PROVIDER_META[item.provider].description}</small></span><em className={item.enabled?"enabled":item.keyConfigured?"configured":""}>{item.enabled?"使用中":item.keyConfigured?"已配置":"未配置"}</em></button>)}</nav>{current&&<div className="provider-form"><header><div><h2>{meta.name}</h2><p>{meta.description}</p></div><label className="provider-toggle"><input type="checkbox" checked={current.enabled} onChange={event=>change({enabled:event.target.checked})}/><span>设为当前 Provider</span></label></header><label>{meta.keyLabel}<input type="password" value={secret} onChange={event=>setSecret(event.target.value)} autoComplete="new-password" placeholder={current.keyConfigured?"已加密保存；留空表示不修改":"请输入 API Key"}/><small>保存后仅显示配置状态，不会回传密钥。</small></label><label>API Endpoint<input type="url" value={current.baseUrl} onChange={event=>change({baseUrl:event.target.value})} placeholder={meta.endpointHint}/></label><div className="provider-form-grid"><label>模型 ID<input value={current.model} onChange={event=>change({model:event.target.value})} placeholder={meta.modelHint}/></label><label>默认音色 / Voice ID<input value={current.voice} onChange={event=>change({voice:event.target.value})} placeholder={meta.voiceHint}/></label></div>{error&&<span className="login-error">{error}</span>}<button className="primary-action provider-save" disabled={saving||!current.baseUrl.trim()||!current.voice.trim()||(selected!=="azure"&&!current.model.trim())||(!current.keyConfigured&&!secret.trim())} onClick={()=>void save()}>{saving?<><RefreshCw className="spin" size={14}/>正在保存</>:<><Check size={14}/>保存配置</>}</button></div>}</div>}</div>;
 }
 
 function AgentManagement({token,role,onToken,onToast}:{token:string;role:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){

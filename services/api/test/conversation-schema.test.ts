@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { newConversationSchema, textToSpeechSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
+import { messageTranslationsSchema, newConversationSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
 
 const accountId="10000000-0000-4000-8000-000000000009";
 
@@ -27,4 +27,16 @@ test("provider settings require a URL and voice while allowing encrypted-key ret
   assert.equal(ttsProviderSettingsSchema.safeParse({enabled:true,baseUrl:"https://api.example.com/v1",model:"tts-model",voice:"voice-1"}).success,true);
   assert.equal(ttsProviderSettingsSchema.safeParse({enabled:true,baseUrl:"not-a-url",model:"tts-model",voice:"voice-1"}).success,false);
   assert.equal(ttsProviderSettingsSchema.safeParse({enabled:true,baseUrl:"https://api.example.com",model:"tts-model",voice:""}).success,false);
+});
+
+test("translation preferences require BCP 47 language codes",()=>{
+  assert.equal(translationPreferenceSchema.safeParse({enabled:true,agentLanguage:"zh-CN",customerLanguage:"en-US"}).success,true);
+  assert.equal(translationPreferenceSchema.safeParse({enabled:true,agentLanguage:"中文",customerLanguage:"English"}).success,false);
+});
+
+test("translation inputs enforce text and batch limits",()=>{
+  assert.equal(translationPreviewSchema.safeParse({text:"  Hello  ",targetLanguage:"fr"}).data?.text,"Hello");
+  assert.equal(messageTranslationsSchema.safeParse({messageIds:Array.from({length:51},()=>accountId),targetLanguage:"zh-CN"}).success,false);
+  assert.equal(translationProviderSettingsSchema.safeParse({enabled:true,baseUrl:"https://api.example.com/v1",model:"translator-1"}).success,true);
+  assert.equal(translationProviderSettingsSchema.safeParse({enabled:true,baseUrl:"invalid",model:""}).success,false);
 });
