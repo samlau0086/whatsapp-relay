@@ -7,9 +7,10 @@ import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } fro
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount } from "./auth.js";
-import { enrollmentSchema, loginSchema, messageSchema, newConversationSchema, textToSpeechSchema } from "./schemas.js";
-import { encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
+import { enrollmentSchema, loginSchema, messageSchema, newConversationSchema, textToSpeechSchema, ttsProviderSettingsSchema } from "./schemas.js";
+import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
 import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline } from "./agent-hub.js";
+import { generateSpeech, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
 
 const app = Fastify({ logger: { level: config.NODE_ENV === "production" ? "info" : "debug", redact:["req.headers.authorization","password"] }, bodyLimit: 2_000_000 });
 const s3 = new S3Client({ region:config.S3_REGION, endpoint:config.S3_ENDPOINT, forcePathStyle:true, credentials:{ accessKeyId:config.S3_ACCESS_KEY, secretAccessKey:config.S3_SECRET_KEY } });
@@ -18,8 +19,10 @@ await app.register(cors, { origin:config.CORS_ORIGIN, credentials:true });
 await app.register(multipart, { limits:{ fileSize:64 * 1024 * 1024, files:1 } });
 await app.register(websocket, { options:{ maxPayload:2_000_000 } });
 
+await ensureTtsProviderSettingsTable();
+
 app.get("/health", async () => { await pool.query("SELECT 1"); return { status:"ok", version:"0.1.0", time:new Date().toISOString() }; });
-app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"RelayDesk API",version:"0.1.0"}, paths:{ "/api/v1/messages":{post:{summary:"发送单条消息",responses:{"202":{description:"已进入持久队列"}}}}, "/api/v1/conversations":{get:{summary:"分页查询会话"},post:{summary:"创建或复用单个联系人会话并发送首条文本消息"}}, "/api/v1/conversations/{id}":{patch:{summary:"认领、收藏、关闭或标记已读"}}, "/api/v1/agents":{get:{summary:"查询已注册 Agent"}}, "/api/v1/agents/{id}":{patch:{summary:"重命名或撤销 Agent"},delete:{summary:"删除 Agent 登记"}}, "/api/v1/media":{post:{summary:"上传媒体"}} } }));
+app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"RelayDesk API",version:"0.1.0"}, paths:{ "/api/v1/messages":{post:{summary:"发送单条消息",responses:{"202":{description:"已进入持久队列"}}}}, "/api/v1/conversations":{get:{summary:"分页查询会话"},post:{summary:"创建或复用单个联系人会话并发送首条文本消息"}}, "/api/v1/conversations/{id}":{patch:{summary:"认领、收藏、关闭或标记已读"}}, "/api/v1/agents":{get:{summary:"查询已注册 Agent"}}, "/api/v1/agents/{id}":{patch:{summary:"重命名或撤销 Agent"},delete:{summary:"删除 Agent 登记"}}, "/api/v1/media":{post:{summary:"上传媒体"}}, "/api/v1/text-to-speech":{post:{summary:"使用当前 Provider 生成语音媒体"}}, "/api/v1/admin/tts-providers":{get:{summary:"管理员读取语音 Provider 配置"}}, "/api/v1/admin/tts-providers/{provider}":{put:{summary:"管理员保存并启用语音 Provider"}} } }));
 
 app.post("/api/v1/auth/login", async (request, reply) => {
   const parsed = loginSchema.safeParse(request.body);
@@ -232,17 +235,32 @@ app.post("/api/v1/messages", { preHandler:authenticate }, async (request, reply)
 app.post("/api/v1/text-to-speech", {preHandler:authenticate}, async(request,reply)=>{
   const parsed=textToSpeechSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
   if(!canAccessAccount(request.principal,parsed.data.accountId))return reply.code(403).send({error:"account_forbidden"});
-  if(!config.OPENAI_API_KEY)return reply.code(503).send({error:"tts_not_configured",message:"服务器尚未配置 OPENAI_API_KEY"});
   const account=await pool.query("SELECT id FROM whatsapp_accounts WHERE id=$1",[parsed.data.accountId]);if(!account.rowCount)return reply.code(404).send({error:"account_not_found"});
-  const upstream=await fetch("https://api.openai.com/v1/audio/speech",{method:"POST",headers:{authorization:`Bearer ${config.OPENAI_API_KEY}`,"content-type":"application/json"},body:JSON.stringify({model:config.OPENAI_TTS_MODEL,input:parsed.data.text,voice:parsed.data.voice,speed:parsed.data.speed,response_format:"opus",...(parsed.data.instructions&&!config.OPENAI_TTS_MODEL.startsWith("tts-1")?{instructions:parsed.data.instructions}:{})}),signal:AbortSignal.timeout(90_000)});
-  if(!upstream.ok){const detail=(await upstream.text()).slice(0,500);request.log.error({status:upstream.status,detail},"OpenAI text-to-speech request failed");return reply.code(502).send({error:"tts_generation_failed",message:"AI 语音生成失败，请稍后重试"});}
-  const bytes=Buffer.from(await upstream.arrayBuffer());if(!bytes.length)return reply.code(502).send({error:"tts_empty_audio"});
+  const configured=await pool.query("SELECT provider,api_key_encrypted,base_url,model,voice FROM tts_provider_settings WHERE enabled=true LIMIT 1");if(!configured.rowCount||!configured.rows[0].api_key_encrypted)return reply.code(503).send({error:"tts_not_configured",message:"管理员尚未启用文字转语音 Provider"});
+  const setting=configured.rows[0];let generated:Awaited<ReturnType<typeof generateSpeech>>;
+  try{generated=await generateSpeech({provider:setting.provider as TtsProvider,apiKey:decryptAtRest(setting.api_key_encrypted,config.DATA_ENCRYPTION_KEY),baseUrl:setting.base_url,model:setting.model,voice:setting.voice},parsed.data);}catch(error){request.log.error({provider:setting.provider,error:String(error)},"Text-to-speech provider request failed");return reply.code(502).send({error:"tts_generation_failed",message:"AI 语音生成失败，请检查 Provider 配置或稍后重试"});}
+  const {bytes,mimeType,extension}=generated;
   const sha256=createHash("sha256").update(bytes).digest("hex");const existing=await pool.query("SELECT id,file_name,mime_type,byte_size FROM media WHERE account_id=$1 AND sha256=$2 AND status='ready' ORDER BY created_at DESC LIMIT 1",[parsed.data.accountId,sha256]);
   if(existing.rowCount)return reply.code(200).send({mediaId:existing.rows[0].id,fileName:existing.rows[0].file_name,mimeType:existing.rows[0].mime_type,size:Number(existing.rows[0].byte_size),sha256,deduplicated:true});
-  const id=randomBytes(16).toString("hex"),fileName=`ai-voice-${Date.now()}.ogg`,mimeType="audio/ogg; codecs=opus",objectKey=`generated/${parsed.data.accountId}/${new Date().toISOString().slice(0,10)}/${id}.ogg`;
-  await s3.send(new PutObjectCommand({Bucket:config.S3_BUCKET,Key:objectKey,Body:bytes,ContentType:mimeType,Metadata:{sha256,source:"openai-tts"}}));
-  const media=await transaction(async client=>{const created=await client.query("INSERT INTO media(account_id,object_key,file_name,mime_type,byte_size,sha256) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",[parsed.data.accountId,objectKey,fileName,mimeType,bytes.length,sha256]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'media.tts_generate','media',$3,$4)",[request.principal?.kind,request.principal?.id,created.rows[0].id,JSON.stringify({accountId:parsed.data.accountId,model:config.OPENAI_TTS_MODEL,voice:parsed.data.voice,characterCount:parsed.data.text.length})]);return created;});
+  const id=randomBytes(16).toString("hex"),fileName=`ai-voice-${Date.now()}.${extension}`,objectKey=`generated/${parsed.data.accountId}/${new Date().toISOString().slice(0,10)}/${id}.${extension}`;
+  await s3.send(new PutObjectCommand({Bucket:config.S3_BUCKET,Key:objectKey,Body:bytes,ContentType:mimeType,Metadata:{sha256,source:`${setting.provider}-tts`}}));
+  const media=await transaction(async client=>{const created=await client.query("INSERT INTO media(account_id,object_key,file_name,mime_type,byte_size,sha256) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",[parsed.data.accountId,objectKey,fileName,mimeType,bytes.length,sha256]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'media.tts_generate','media',$3,$4)",[request.principal?.kind,request.principal?.id,created.rows[0].id,JSON.stringify({accountId:parsed.data.accountId,provider:setting.provider,model:setting.model,voice:setting.voice,characterCount:parsed.data.text.length})]);return created;});
   return reply.code(201).send({mediaId:media.rows[0].id,fileName,mimeType,size:bytes.length,sha256,deduplicated:false});
+});
+
+app.get("/api/v1/tts/status", {preHandler:authenticate}, async()=>{const result=await pool.query("SELECT provider,voice FROM tts_provider_settings WHERE enabled=true AND api_key_encrypted IS NOT NULL LIMIT 1");return result.rowCount?{configured:true,provider:result.rows[0].provider,voice:result.rows[0].voice}:{configured:false};});
+
+app.get("/api/v1/admin/tts-providers", {preHandler:authenticate}, async(request,reply)=>{
+  if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
+  const result=await pool.query("SELECT provider,enabled,api_key_encrypted IS NOT NULL key_configured,base_url,model,voice,updated_at FROM tts_provider_settings");const rows=new Map(result.rows.map(row=>[row.provider,row]));
+  return{data:TTS_PROVIDERS.map(provider=>{const row=rows.get(provider),defaults=ttsProviderDefaults(provider);return{provider,enabled:Boolean(row?.enabled),keyConfigured:Boolean(row?.key_configured),baseUrl:row?.base_url??defaults.baseUrl,model:row?.model??defaults.model,voice:row?.voice??defaults.voice,updatedAt:row?.updated_at??null};})};
+});
+
+app.put("/api/v1/admin/tts-providers/:provider", {preHandler:authenticate}, async(request,reply)=>{
+  if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});const {provider}=request.params as {provider:string};if(!TTS_PROVIDERS.includes(provider as TtsProvider))return reply.code(404).send({error:"provider_not_found"});
+  const parsed=ttsProviderSettingsSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});if(provider!=="azure"&&!parsed.data.model)return reply.code(400).send({error:"model_required",message:"该 Provider 必须填写模型 ID"});const current=await pool.query("SELECT api_key_encrypted FROM tts_provider_settings WHERE provider=$1",[provider]);const encrypted=parsed.data.apiKey?encryptAtRest(parsed.data.apiKey,config.DATA_ENCRYPTION_KEY):current.rows[0]?.api_key_encrypted??null;if(parsed.data.enabled&&!encrypted)return reply.code(400).send({error:"api_key_required",message:"启用 Provider 前必须填写 API Key"});
+  await transaction(async client=>{if(parsed.data.enabled)await client.query("UPDATE tts_provider_settings SET enabled=false,updated_at=now() WHERE enabled=true AND provider<>$1",[provider]);await client.query("INSERT INTO tts_provider_settings(provider,enabled,api_key_encrypted,base_url,model,voice,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(provider) DO UPDATE SET enabled=EXCLUDED.enabled,api_key_encrypted=EXCLUDED.api_key_encrypted,base_url=EXCLUDED.base_url,model=EXCLUDED.model,voice=EXCLUDED.voice,updated_by=EXCLUDED.updated_by,updated_at=now()",[provider,parsed.data.enabled,encrypted,parsed.data.baseUrl,parsed.data.model,parsed.data.voice,request.principal?.id]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'tts_provider.update','tts_provider',$2,$3)",[request.principal?.id,provider,JSON.stringify({enabled:parsed.data.enabled,baseUrl:parsed.data.baseUrl,model:parsed.data.model,voice:parsed.data.voice,keyChanged:Boolean(parsed.data.apiKey)})]);});
+  return{provider,enabled:parsed.data.enabled,keyConfigured:Boolean(encrypted),baseUrl:parsed.data.baseUrl,model:parsed.data.model,voice:parsed.data.voice};
 });
 
 app.get("/api/v1/media", {preHandler:authenticate}, async(request,reply)=>{
@@ -272,6 +290,21 @@ app.post("/api/v1/media", { preHandler:authenticate }, async (request,reply) => 
 app.setErrorHandler((error,_request,reply)=>{app.log.error(error);void reply.code((error as {statusCode?:number}).statusCode??500).send({error:"internal_error",message:config.NODE_ENV==="production"?"服务暂时不可用":error.message});});
 
 await registerAgentHub(app);
+
+async function ensureTtsProviderSettingsTable():Promise<void>{
+  await pool.query(`CREATE TABLE IF NOT EXISTS tts_provider_settings (
+    provider text PRIMARY KEY CHECK (provider IN ('openai','elevenlabs','azure','openai_compatible')),
+    enabled boolean NOT NULL DEFAULT false,
+    api_key_encrypted text,
+    base_url text NOT NULL,
+    model text NOT NULL DEFAULT '',
+    voice text NOT NULL DEFAULT '',
+    updated_by uuid REFERENCES users(id) ON DELETE SET NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+  )`);
+  await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS tts_provider_one_enabled_idx ON tts_provider_settings ((enabled)) WHERE enabled");
+}
 
 async function ensureAdmin():Promise<void>{
   const existing=await pool.query("SELECT id FROM users WHERE lower(email)=lower($1)",[config.ADMIN_EMAIL]);

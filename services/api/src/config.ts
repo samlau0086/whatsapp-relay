@@ -14,8 +14,6 @@ const schema = z.object({
   S3_ACCESS_KEY: z.string().default("relay"),
   S3_SECRET_KEY: z.string().default("relay-secret-change-me"),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
-  OPENAI_API_KEY: z.string().min(1).optional(),
-  OPENAI_TTS_MODEL: z.string().min(1).default("gpt-4o-mini-tts"),
 });
 
 export const config = schema.parse(process.env);

@@ -143,14 +143,9 @@ docker compose up --build -d
 
 ### AI 文字转语音
 
-在 `.env` 中设置以下变量并重新构建 API 服务：
+管理员登录 Web 工作台后，进入左下角“系统设置 → AI 语音 Provider”配置服务。当前支持 OpenAI、ElevenLabs、Azure Speech，以及实现 `/audio/speech` 的 OpenAI 兼容接口。API Key 使用 `DATA_ENCRYPTION_KEY` 加密保存到 PostgreSQL，读取配置时只返回是否已配置，不回传密钥明文；不需要在 `.env` 中保存 Provider API Key。
 
-```dotenv
-OPENAI_API_KEY=sk-your-openai-api-key
-OPENAI_TTS_MODEL=gpt-4o-mini-tts
-```
-
-进入任意会话后，点击输入框右侧的麦克风按钮，可以输入最多 4096 个字符，选择音色、语速和语气。中心 API 会生成 OGG/Opus 音频、保存到媒体库，再通过现有的可靠消息队列交给 Windows Agent；Agent 会将它作为 WhatsApp 语音消息发送。界面会明确提示文字将交给 OpenAI 处理，并标明音频由 AI 生成。
+进入任意会话后，点击输入框右侧的麦克风按钮，可以输入最多 4096 个字符并设置语速和语气。中心 API 会通过当前启用的 Provider 生成 OGG/Opus 或 MP3 音频、保存到媒体库，再通过现有的可靠消息队列交给 Windows Agent；Agent 会将它作为 WhatsApp 语音消息发送。系统同一时间只允许启用一个 Provider。
 
 ### Windows Agent
 

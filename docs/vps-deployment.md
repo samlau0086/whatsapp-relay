@@ -46,8 +46,6 @@ sudo chown -R "$USER":"$USER" /opt/relaydesk
 | `POSTGRES_USER` | `relay` | PostgreSQL 用户名 |
 | `S3_REGION` | `us-east-1` | S3 区域 |
 | `S3_BUCKET` | `relay-media` | 媒体 Bucket 名称 |
-| `OPENAI_API_KEY` | 无 | 启用 AI 文字转语音所需的 OpenAI API Key |
-| `OPENAI_TTS_MODEL` | `gpt-4o-mini-tts` | OpenAI 文字转语音模型 |
 | `S3_ACCESS_KEY` | `relay` | MinIO/S3 Access Key |
 
 可用以下命令分别生成 `POSTGRES_PASSWORD`、`JWT_SECRET`、`DATA_ENCRYPTION_KEY` 和 `S3_SECRET_KEY`：

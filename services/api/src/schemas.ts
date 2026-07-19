@@ -17,9 +17,16 @@ export const messageSchema = z.object({
 export const textToSpeechSchema = z.object({
   accountId: z.string().uuid(),
   text: z.string().trim().min(1).max(4096),
-  voice: z.enum(["alloy","ash","ballad","coral","echo","fable","onyx","nova","sage","shimmer","verse","marin","cedar"]).default("coral"),
   speed: z.number().min(0.25).max(4).default(1),
   instructions: z.string().trim().max(500).optional(),
+});
+
+export const ttsProviderSettingsSchema=z.object({
+  enabled:z.boolean().default(false),
+  apiKey:z.string().trim().min(1).max(4096).optional(),
+  baseUrl:z.string().trim().url().max(2048),
+  model:z.string().trim().max(200).default(""),
+  voice:z.string().trim().min(1).max(200),
 });
 
 export const newConversationSchema = z.object({
