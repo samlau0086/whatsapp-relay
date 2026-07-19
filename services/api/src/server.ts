@@ -11,7 +11,7 @@ import { enrollmentSchema, loginSchema, messageSchema, messageTranslationsSchema
 import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
 import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline } from "./agent-hub.js";
 import { generateSpeech, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
-import { TRANSLATION_PROVIDERS, translateText, translationProviderDefaults, type TranslationProvider, type TranslationProviderSetting } from "./translation-providers.js";
+import { TRANSLATION_PROVIDERS, transcribeAudio, translateText, translationProviderDefaults, type TranslationProvider, type TranslationProviderSetting } from "./translation-providers.js";
 
 const app = Fastify({ logger: { level: config.NODE_ENV === "production" ? "info" : "debug", redact:["req.headers.authorization","password"] }, bodyLimit: 2_000_000 });
 const s3 = new S3Client({ region:config.S3_REGION, endpoint:config.S3_ENDPOINT, forcePathStyle:true, credentials:{ accessKeyId:config.S3_ACCESS_KEY, secretAccessKey:config.S3_SECRET_KEY } });
@@ -35,7 +35,7 @@ app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"Rel
   "/api/v1/me/translation-preferences":{get:{summary:"读取当前坐席在指定会话中的翻译偏好"},put:{summary:"保存当前坐席在指定会话中的翻译偏好"}},
   "/api/v1/translation/status":{get:{summary:"读取 AI 翻译可用状态"}},
   "/api/v1/translations/preview":{post:{summary:"生成待发送文本的翻译预览"}},
-  "/api/v1/translations/messages":{post:{summary:"批量读取或生成接收消息译文"}},
+  "/api/v1/translations/messages":{post:{summary:"批量读取或生成接收文字及语音消息译文"}},
   "/api/v1/admin/translation-providers":{get:{summary:"管理员读取翻译 Provider 配置"}},
   "/api/v1/admin/translation-providers/{provider}":{put:{summary:"管理员保存并启用翻译 Provider"}},
   "/api/v1/admin/tts-providers":{get:{summary:"管理员读取语音 Provider 配置"}},
@@ -286,26 +286,41 @@ app.post("/api/v1/translations/preview", {preHandler:authenticate}, async(reques
 
 app.post("/api/v1/translations/messages", {preHandler:authenticate}, async(request,reply)=>{
   const parsed=messageTranslationsSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
-  const found=await pool.query("SELECT m.id,m.account_id,m.direction,m.kind,m.text_content,mt.translated_text FROM messages m LEFT JOIN message_translations mt ON mt.message_id=m.id AND mt.target_language=$2 WHERE m.id=ANY($1::uuid[])",[parsed.data.messageIds,parsed.data.targetLanguage]);
+  const found=await pool.query("SELECT m.id,m.account_id,m.direction,m.kind,m.text_content,m.media_id,media.object_key,media.file_name,media.mime_type,media.byte_size,mt.translated_text,transcription.transcript_text FROM messages m LEFT JOIN media ON media.id=m.media_id LEFT JOIN message_translations mt ON mt.message_id=m.id AND mt.target_language=$2 LEFT JOIN message_transcriptions transcription ON transcription.message_id=m.id WHERE m.id=ANY($1::uuid[])",[parsed.data.messageIds,parsed.data.targetLanguage]);
   if(found.rowCount!==new Set(parsed.data.messageIds).size||found.rows.some(row=>!canAccessAccount(request.principal,row.account_id)))return reply.code(404).send({error:"message_not_found"});
-  const eligible=found.rows.filter(row=>row.direction==="in"&&row.kind==="text"&&String(row.text_content??"").trim());
+  const eligible=found.rows.filter(row=>row.direction==="in"&&((row.kind==="text"&&String(row.text_content??"").trim())||(row.kind==="audio"&&row.media_id&&row.object_key)));
   const setting=eligible.some(row=>!row.translated_text)?await activeTranslationSetting():null;
   if(eligible.some(row=>!row.translated_text)&&!setting)return reply.code(503).send({error:"translation_not_configured",message:"管理员尚未启用 AI 翻译 Provider"});
-  const generated=await mapWithConcurrency(eligible.filter(row=>!row.translated_text),3,async row=>{
+  const generated=await mapWithConcurrency(eligible.filter(row=>!row.translated_text),3,row=>singleFlight(messageTranslationFlights,`${row.id}:${parsed.data.targetLanguage}`,async()=>{
     try{
-      const translatedText=await translateText(setting!,{text:String(row.text_content),targetLanguage:parsed.data.targetLanguage});
+      let sourceText=String(row.text_content??"").trim();
+      if(row.kind==="audio"){
+        sourceText=String(row.transcript_text??"").trim();
+        if(!sourceText){
+          sourceText=await singleFlight(transcriptionFlights,row.id,async()=>{
+            if(Number(row.byte_size)>25*1024*1024)throw new Error("audio_too_large");
+            const object=await s3.send(new GetObjectCommand({Bucket:config.S3_BUCKET,Key:row.object_key}));
+            if(!object.Body)throw new Error("audio_body_missing");
+            const bytes=Buffer.from(await object.Body.transformToByteArray());
+            const transcript=await transcribeAudio(setting!,{bytes,fileName:row.file_name??`voice-${row.id}.ogg`,mimeType:row.mime_type??"audio/ogg"});
+            await pool.query("INSERT INTO message_transcriptions(message_id,transcript_text,provider,model) VALUES($1,$2,$3,$4) ON CONFLICT(message_id) DO NOTHING",[row.id,transcript,setting!.provider,setting!.transcriptionModel]);
+            return transcript;
+          });
+        }
+      }
+      const translatedText=await translateText(setting!,{text:sourceText,targetLanguage:parsed.data.targetLanguage});
       await pool.query("INSERT INTO message_translations(message_id,target_language,translated_text,provider,model) VALUES($1,$2,$3,$4,$5) ON CONFLICT(message_id,target_language) DO NOTHING",[row.id,parsed.data.targetLanguage,translatedText,setting!.provider,setting!.model]);
-      return{id:row.id,translatedText};
+      return{id:row.id,translatedText,sourceText};
     }catch(error){request.log.error({messageId:row.id,provider:setting?.provider,error:String(error)},"Incoming message translation failed");return{id:row.id,error:"translation_failed"};}
-  });
+  }));
   const generatedById=new Map(generated.map(item=>[item.id,item]));
-  return{data:parsed.data.messageIds.map(messageId=>{const row=found.rows.find(item=>item.id===messageId);if(!row||row.direction!=="in"||row.kind!=="text"||!String(row.text_content??"").trim())return{messageId,status:"skipped"};const item=generatedById.get(messageId);if(item?.error)return{messageId,status:"failed",error:item.error};return{messageId,status:"translated",translatedText:row.translated_text??item?.translatedText};})};
+  return{data:parsed.data.messageIds.map(messageId=>{const row=found.rows.find(item=>item.id===messageId);const isText=row?.kind==="text"&&String(row.text_content??"").trim();const isAudio=row?.kind==="audio"&&row.media_id&&row.object_key;if(!row||row.direction!=="in"||(!isText&&!isAudio))return{messageId,status:"skipped"};const item=generatedById.get(messageId);if(item?.error)return{messageId,status:"failed",error:item.error};return{messageId,status:"translated",translatedText:row.translated_text??item?.translatedText,...(isAudio?{sourceText:row.transcript_text??item?.sourceText}:{})};})};
 });
 
 app.get("/api/v1/admin/translation-providers", {preHandler:authenticate}, async(request,reply)=>{
   if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
-  const result=await pool.query("SELECT provider,enabled,api_key_encrypted IS NOT NULL key_configured,base_url,model,updated_at FROM translation_provider_settings");const rows=new Map(result.rows.map(row=>[row.provider,row]));
-  return{data:TRANSLATION_PROVIDERS.map(provider=>{const row=rows.get(provider),defaults=translationProviderDefaults(provider);return{provider,enabled:Boolean(row?.enabled),keyConfigured:Boolean(row?.key_configured),baseUrl:row?.base_url??defaults.baseUrl,model:row?.model??defaults.model,updatedAt:row?.updated_at??null};})};
+  const result=await pool.query("SELECT provider,enabled,api_key_encrypted IS NOT NULL key_configured,base_url,model,transcription_model,updated_at FROM translation_provider_settings");const rows=new Map(result.rows.map(row=>[row.provider,row]));
+  return{data:TRANSLATION_PROVIDERS.map(provider=>{const row=rows.get(provider),defaults=translationProviderDefaults(provider);return{provider,enabled:Boolean(row?.enabled),keyConfigured:Boolean(row?.key_configured),baseUrl:row?.base_url??defaults.baseUrl,model:row?.model??defaults.model,transcriptionModel:row?.transcription_model??defaults.transcriptionModel,updatedAt:row?.updated_at??null};})};
 });
 
 app.put("/api/v1/admin/translation-providers/:provider", {preHandler:authenticate}, async(request,reply)=>{
@@ -313,8 +328,8 @@ app.put("/api/v1/admin/translation-providers/:provider", {preHandler:authenticat
   const actorId=request.principal.id;
   const parsed=translationProviderSettingsSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
   const current=await pool.query("SELECT api_key_encrypted FROM translation_provider_settings WHERE provider=$1",[provider]);const encrypted=parsed.data.apiKey?encryptAtRest(parsed.data.apiKey,config.DATA_ENCRYPTION_KEY):current.rows[0]?.api_key_encrypted??null;if(parsed.data.enabled&&!encrypted)return reply.code(400).send({error:"api_key_required",message:"启用 Provider 前必须填写 API Key"});
-  await transaction(async client=>{if(parsed.data.enabled)await client.query("UPDATE translation_provider_settings SET enabled=false,updated_at=now() WHERE enabled=true AND provider<>$1",[provider]);await client.query("INSERT INTO translation_provider_settings(provider,enabled,api_key_encrypted,base_url,model,updated_by) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(provider) DO UPDATE SET enabled=EXCLUDED.enabled,api_key_encrypted=EXCLUDED.api_key_encrypted,base_url=EXCLUDED.base_url,model=EXCLUDED.model,updated_by=EXCLUDED.updated_by,updated_at=now()",[provider,parsed.data.enabled,encrypted,parsed.data.baseUrl,parsed.data.model,actorId]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'translation_provider.update','translation_provider',$2,$3)",[actorId,provider,JSON.stringify({enabled:parsed.data.enabled,baseUrl:parsed.data.baseUrl,model:parsed.data.model,keyChanged:Boolean(parsed.data.apiKey)})]);});
-  return{provider,enabled:parsed.data.enabled,keyConfigured:Boolean(encrypted),baseUrl:parsed.data.baseUrl,model:parsed.data.model};
+  await transaction(async client=>{if(parsed.data.enabled)await client.query("UPDATE translation_provider_settings SET enabled=false,updated_at=now() WHERE enabled=true AND provider<>$1",[provider]);await client.query("INSERT INTO translation_provider_settings(provider,enabled,api_key_encrypted,base_url,model,transcription_model,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(provider) DO UPDATE SET enabled=EXCLUDED.enabled,api_key_encrypted=EXCLUDED.api_key_encrypted,base_url=EXCLUDED.base_url,model=EXCLUDED.model,transcription_model=EXCLUDED.transcription_model,updated_by=EXCLUDED.updated_by,updated_at=now()",[provider,parsed.data.enabled,encrypted,parsed.data.baseUrl,parsed.data.model,parsed.data.transcriptionModel,actorId]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'translation_provider.update','translation_provider',$2,$3)",[actorId,provider,JSON.stringify({enabled:parsed.data.enabled,baseUrl:parsed.data.baseUrl,model:parsed.data.model,transcriptionModel:parsed.data.transcriptionModel,keyChanged:Boolean(parsed.data.apiKey)})]);});
+  return{provider,enabled:parsed.data.enabled,keyConfigured:Boolean(encrypted),baseUrl:parsed.data.baseUrl,model:parsed.data.model,transcriptionModel:parsed.data.transcriptionModel};
 });
 
 app.post("/api/v1/text-to-speech", {preHandler:authenticate}, async(request,reply)=>{
@@ -377,15 +392,22 @@ app.setErrorHandler((error,_request,reply)=>{app.log.error(error);void reply.cod
 await registerAgentHub(app);
 
 async function activeTranslationSetting():Promise<TranslationProviderSetting|null>{
-  const result=await pool.query("SELECT provider,api_key_encrypted,base_url,model FROM translation_provider_settings WHERE enabled=true AND api_key_encrypted IS NOT NULL LIMIT 1");
+  const result=await pool.query("SELECT provider,api_key_encrypted,base_url,model,transcription_model FROM translation_provider_settings WHERE enabled=true AND api_key_encrypted IS NOT NULL LIMIT 1");
   if(!result.rowCount)return null;const row=result.rows[0];
-  return{provider:row.provider as TranslationProvider,apiKey:decryptAtRest(row.api_key_encrypted,config.DATA_ENCRYPTION_KEY),baseUrl:row.base_url,model:row.model};
+  return{provider:row.provider as TranslationProvider,apiKey:decryptAtRest(row.api_key_encrypted,config.DATA_ENCRYPTION_KEY),baseUrl:row.base_url,model:row.model,transcriptionModel:row.transcription_model};
 }
 
 async function mapWithConcurrency<T,R>(items:T[],limit:number,work:(item:T)=>Promise<R>):Promise<R[]>{
   const results=new Array<R>(items.length);let cursor=0;
   await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{while(cursor<items.length){const index=cursor++;results[index]=await work(items[index]);}}));
   return results;
+}
+
+const transcriptionFlights=new Map<string,Promise<string>>();
+const messageTranslationFlights=new Map<string,Promise<{id:string;translatedText?:string;sourceText?:string;error?:string}>>();
+async function singleFlight<T>(flights:Map<string,Promise<T>>,key:string,work:()=>Promise<T>):Promise<T>{
+  const current=flights.get(key);if(current)return current;
+  const pending=work().finally(()=>flights.delete(key));flights.set(key,pending);return pending;
 }
 
 async function ensureTranslationTables():Promise<void>{
@@ -418,6 +440,7 @@ async function ensureTranslationTables():Promise<void>{
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
   )`);
+  await pool.query("ALTER TABLE translation_provider_settings ADD COLUMN IF NOT EXISTS transcription_model text NOT NULL DEFAULT 'gpt-4o-mini-transcribe'");
   await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS translation_provider_one_enabled_idx ON translation_provider_settings ((enabled)) WHERE enabled");
   await pool.query(`CREATE TABLE IF NOT EXISTS message_translations (
     message_id uuid NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -427,6 +450,13 @@ async function ensureTranslationTables():Promise<void>{
     model text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (message_id,target_language)
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS message_transcriptions (
+    message_id uuid PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    transcript_text text NOT NULL,
+    provider text NOT NULL,
+    model text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
   )`);
 }
 

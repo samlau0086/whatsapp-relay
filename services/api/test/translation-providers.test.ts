@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { translateText, translationProviderDefaults } from "../src/translation-providers.js";
+import { transcribeAudio, translateText, translationProviderDefaults } from "../src/translation-providers.js";
 
 test("OpenAI translation provider sends a constrained chat-completions request",async()=>{
   const original=globalThis.fetch;let request:Request|undefined;
@@ -17,7 +17,17 @@ test("OpenAI translation provider sends a constrained chat-completions request",
 test("custom provider uses its configured endpoint and model",async()=>{
   const original=globalThis.fetch;let request:Request|undefined;
   globalThis.fetch=async(input,init)=>{request=new Request(input,init);return Response.json({choices:[{message:{content:"Bonjour"}}]});};
-  try{await translateText({provider:"openai_compatible",apiKey:"custom",baseUrl:"https://llm.example/v1/",model:"translator-1"},{text:"Hello",targetLanguage:"fr"});const body=JSON.parse(await request!.text());assert.equal(request?.url,"https://llm.example/v1/chat/completions");assert.equal(body.model,"translator-1");}finally{globalThis.fetch=original;}
+  try{await translateText({provider:"openai_compatible",apiKey:"custom",baseUrl:"https://llm.example/v1/",model:"translator-1",transcriptionModel:"speech-1"},{text:"Hello",targetLanguage:"fr"});const body=JSON.parse(await request!.text());assert.equal(request?.url,"https://llm.example/v1/chat/completions");assert.equal(body.model,"translator-1");}finally{globalThis.fetch=original;}
+});
+
+test("audio transcription uses the configured OpenAI-compatible endpoint and model",async()=>{
+  const original=globalThis.fetch;let request:Request|undefined;
+  globalThis.fetch=async(input,init)=>{request=new Request(input,init);return Response.json({text:"Hello from the voice note"});};
+  try{
+    const transcript=await transcribeAudio({provider:"openai",apiKey:"secret",...translationProviderDefaults("openai")},{bytes:Buffer.from("voice"),fileName:"voice.ogg",mimeType:"audio/ogg"});
+    assert.equal(transcript,"Hello from the voice note");assert.equal(request?.url,"https://api.openai.com/v1/audio/transcriptions");assert.equal(request?.headers.get("authorization"),"Bearer secret");
+    const form=await request!.formData();assert.equal(form.get("model"),"gpt-4o-mini-transcribe");assert.equal(form.get("response_format"),"json");assert.equal((form.get("file") as File).name,"voice.ogg");
+  }finally{globalThis.fetch=original;}
 });
 
 test("provider failures and empty responses are rejected",async()=>{
@@ -25,5 +35,6 @@ test("provider failures and empty responses are rejected",async()=>{
   try{
     globalThis.fetch=async()=>new Response("bad gateway",{status:502});await assert.rejects(()=>translateText({provider:"openai",apiKey:"x",...translationProviderDefaults("openai")},{text:"Hello",targetLanguage:"zh-CN"}),/translation_provider_http_502/);
     globalThis.fetch=async()=>Response.json({choices:[{message:{content:"  "}}]});await assert.rejects(()=>translateText({provider:"openai",apiKey:"x",...translationProviderDefaults("openai")},{text:"Hello",targetLanguage:"zh-CN"}),/empty_response/);
+    globalThis.fetch=async()=>Response.json({text:"  "});await assert.rejects(()=>transcribeAudio({provider:"openai",apiKey:"x",...translationProviderDefaults("openai")},{bytes:Buffer.from("voice"),fileName:"voice.ogg",mimeType:"audio/ogg"}),/empty_response/);
   }finally{globalThis.fetch=original;}
 });
