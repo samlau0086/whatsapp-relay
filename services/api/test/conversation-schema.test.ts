@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { messageTranslationsSchema, newConversationSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
+import { messageSchema, messageTranslationsSchema, newConversationSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
 
 const accountId="10000000-0000-4000-8000-000000000009";
 
@@ -38,7 +38,15 @@ test("translation preferences require BCP 47 language codes",()=>{
 test("translation inputs enforce text and batch limits",()=>{
   assert.equal(translationPreviewSchema.safeParse({text:"  Hello  ",targetLanguage:"fr"}).data?.text,"Hello");
   assert.equal(messageTranslationsSchema.safeParse({messageIds:Array.from({length:51},()=>accountId),targetLanguage:"zh-CN"}).success,false);
+  assert.equal(messageTranslationsSchema.parse({messageIds:[accountId],targetLanguage:"zh-CN"}).generateAudio,false);
+  assert.equal(messageTranslationsSchema.parse({messageIds:[accountId],targetLanguage:"zh-CN",generateAudio:true}).generateAudio,true);
   assert.equal(translationProviderSettingsSchema.safeParse({enabled:true,baseUrl:"https://api.example.com/v1",model:"translator-1",transcriptionModel:"speech-1"}).success,true);
   assert.equal(translationProviderSettingsSchema.safeParse({enabled:true,baseUrl:"https://api.example.com/v1",model:"translator-1",transcriptionModel:""}).success,false);
   assert.equal(translationProviderSettingsSchema.safeParse({enabled:true,baseUrl:"invalid",model:""}).success,false);
+});
+
+test("translated outgoing text can retain an agent-only source",()=>{
+  const translated=messageSchema.parse({accountId,conversationId:accountId,clientMessageId:"translated-message-001",type:"text",text:"Hello",translationSourceText:"你好"});
+  assert.equal(translated.translationSourceText,"你好");
+  assert.equal(messageSchema.safeParse({accountId,conversationId:accountId,clientMessageId:"translated-audio-001",type:"audio",mediaId:accountId,translationSourceText:"你好"}).success,false);
 });

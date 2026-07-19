@@ -7,10 +7,12 @@ export const messageSchema = z.object({
   clientMessageId: z.string().min(8).max(128),
   type: z.enum(["text","image","video","audio","document","location","contact"]),
   text: z.string().max(65536).optional(),
+  translationSourceText: z.string().trim().min(1).max(65536).optional(),
   mediaId: z.string().uuid().optional(),
   quotedMessageId: z.string().uuid().optional(),
 }).superRefine((value, ctx) => {
   if (value.type === "text" && !value.text?.trim()) ctx.addIssue({ code:"custom", path:["text"], message:"文本消息不能为空" });
+  if (value.type !== "text" && value.translationSourceText) ctx.addIssue({ code:"custom", path:["translationSourceText"], message:"只有文本消息可以保存翻译原文" });
   if (["image","video","audio","document"].includes(value.type) && !value.mediaId) ctx.addIssue({ code:"custom", path:["mediaId"], message:"媒体消息必须提供 mediaId" });
 });
 
@@ -56,6 +58,7 @@ export const translationPreviewSchema=z.object({
 export const messageTranslationsSchema=z.object({
   messageIds:z.array(z.string().uuid()).min(1).max(50),
   targetLanguage:languageCodeSchema,
+  generateAudio:z.boolean().default(false),
 });
 
 export const newConversationSchema = z.object({
