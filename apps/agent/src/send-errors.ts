@@ -6,5 +6,12 @@ export function isTransientSendConnectionError(error:unknown):boolean {
   if(values.some(item=>TRANSIENT_CODES.has(Number(item))))return true;
   const message=[value?.message,value?.cause?.message,error].map(item=>String(item??"")).join(" ").toLowerCase();
   if([...TRANSIENT_CODES].some(code=>new RegExp(`(^|\\D)${code}(\\D|$)`).test(message)))return true;
-  return /connection (?:closed|terminated|lost)|socket (?:closed|hang up)|econnreset|econnrefused|etimedout|epipe|network timeout/.test(message);
+  return /fetch failed|connection (?:closed|terminated|lost)|socket (?:closed|hang up)|econnreset|econnrefused|etimedout|epipe|network timeout|connect timeout|headers timeout|body timeout/.test(message);
+}
+
+export function describeSendError(error:unknown):string {
+  const value=error as {message?:unknown;code?:unknown;cause?:{message?:unknown;code?:unknown}}|undefined;
+  const parts=[value?.message,value?.code,value?.cause?.message,value?.cause?.code]
+    .map(item=>String(item??"").trim()).filter(Boolean);
+  return [...new Set(parts)].join("; ")||String(error);
 }

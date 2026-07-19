@@ -5,7 +5,7 @@ import makeWASocket, { Browsers, BufferJSON, DisconnectReason, downloadMediaMess
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { pino } from "pino";
 import { ProxyAgent as UndiciProxyAgent } from "undici";
-import { isTransientSendConnectionError } from "./send-errors.js";
+import { describeSendError, isTransientSendConnectionError } from "./send-errors.js";
 
 type Init = {type:"init";accountId:string;dataDir:string;masterKey:string;baseUrl:string;credential:string;proxyUrl?:string};
 type Command = {type:"command";sequence:number;commandId:string;payload:Record<string,unknown>};
@@ -107,9 +107,24 @@ async function uploadInboundMedia(options:Init,bytes:Buffer,mime:string,fileName
 
 async function execute(command:Command):Promise<void>{
   if(!socket||!init||!connectionOpen){emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"deferred",errorCode:"account_offline",errorMessage:"WhatsApp account is offline; command remains queued",completedAt:new Date().toISOString()});return;}const toJid=String(command.payload.toJid??"");if(!toJid)throw new Error("Missing destination JID");
-  const type=String(command.payload.type??"text");let content:AnyMessageContent;
-  if(type==="text")content={text:String(command.payload.text??"")};else{const mediaId=String(command.payload.mediaId??"");const response=await fetch(new URL(`/agent/media/${mediaId}`,init.baseUrl),{headers:{authorization:`Bearer ${init.credential}`}});if(!response.ok)throw new Error(`Media download failed: ${response.status}`);const bytes=Buffer.from(await response.arrayBuffer());const mime=response.headers.get("content-type")??"application/octet-stream";const name=response.headers.get("x-file-name")??"attachment";const caption=command.payload.text?String(command.payload.text):undefined;if(type==="image")content={image:bytes,mimetype:mime,caption};else if(type==="video")content={video:bytes,mimetype:mime,caption};else if(type==="audio")content={audio:bytes,mimetype:mime,ptt:true};else content={document:bytes,mimetype:mime,fileName:name,caption};}
-  try{const sent=await socket.sendMessage(toJid,content);if(sent?.key.id&&sent.message)await messageCache?.saveMessage(sent.key.id,sent.message);emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",whatsappMessageId:sent?.key.id,completedAt:new Date().toISOString()});}catch(error){const errorMessage=error instanceof Error?error.message:String(error);if(isTransientSendConnectionError(error)){emit({type:"diagnostic",level:"warn",accountId:init.accountId,message:"send_deferred_after_disconnect",detail:errorMessage});emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"deferred",errorCode:"connection_interrupted",errorMessage:`WhatsApp connection interrupted (${errorMessage}); command remains queued`,completedAt:new Date().toISOString()});return;}emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"failed",errorCode:"whatsapp_rejected",errorMessage,completedAt:new Date().toISOString()});}
+  try{
+    const type=String(command.payload.type??"text");let content:AnyMessageContent;
+    if(type==="text")content={text:String(command.payload.text??"")};else{const media=await downloadOutboundMedia(init,String(command.payload.mediaId??""));const caption=command.payload.text?String(command.payload.text):undefined;if(type==="image")content={image:media.bytes,mimetype:media.mime,caption};else if(type==="video")content={video:media.bytes,mimetype:media.mime,caption};else if(type==="audio")content={audio:media.bytes,mimetype:media.mime,ptt:true};else content={document:media.bytes,mimetype:media.mime,fileName:media.name,caption};}
+    const sent=await socket.sendMessage(toJid,content);if(sent?.key.id&&sent.message)await messageCache?.saveMessage(sent.key.id,sent.message);emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",whatsappMessageId:sent?.key.id,completedAt:new Date().toISOString()});
+  }catch(error){const errorMessage=describeSendError(error);if(isTransientSendConnectionError(error)){emit({type:"diagnostic",level:"warn",accountId:init.accountId,message:"send_deferred_after_transient_error",detail:errorMessage});emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"deferred",errorCode:"transient_send_error",errorMessage:`Temporary send failure (${errorMessage}); command remains queued`,completedAt:new Date().toISOString()});return;}emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"failed",errorCode:"whatsapp_rejected",errorMessage,completedAt:new Date().toISOString()});}
+}
+
+async function downloadOutboundMedia(options:Init,mediaId:string):Promise<{bytes:Buffer;mime:string;name:string}>{
+  if(!mediaId)throw new Error("Missing media ID");let lastError:unknown;
+  for(let attempt=0;attempt<5;attempt++){
+    try{
+      const requestOptions=mediaProxyAgent?({dispatcher:mediaProxyAgent} as unknown as RequestInit):undefined;
+      const response=await fetch(new URL(`/agent/media/${encodeURIComponent(mediaId)}`,options.baseUrl),{...requestOptions,headers:{authorization:`Bearer ${options.credential}`},signal:AbortSignal.timeout(12_000)});
+      if(!response.ok){const error=Object.assign(new Error(`Media download failed: HTTP ${response.status}`),{statusCode:response.status});if(![408,425,429,502,503,504].includes(response.status))throw error;lastError=error;}else return{bytes:Buffer.from(await response.arrayBuffer()),mime:response.headers.get("content-type")??"application/octet-stream",name:decodeURIComponent(response.headers.get("x-file-name")??"attachment")};
+    }catch(error){lastError=error;if(!isTransientSendConnectionError(error))throw error;}
+    if(attempt<4)await new Promise(resolve=>setTimeout(resolve,Math.min(15_000,1_000*(2**attempt))+Math.floor(Math.random()*500)));
+  }
+  throw lastError;
 }
 
 function messageTime(value:unknown):string{
