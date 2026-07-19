@@ -43,9 +43,16 @@ export async function ensureCrmTables(db:Queryable):Promise<void>{
   await db.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='orders_send_format_check') THEN ALTER TABLE orders ADD CONSTRAINT orders_send_format_check CHECK(send_format IS NULL OR send_format IN ('text','image')); END IF; END $$`);
   await db.query(`CREATE TABLE IF NOT EXISTS order_items (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),order_id uuid NOT NULL REFERENCES orders(id) ON DELETE CASCADE,position smallint NOT NULL,product_name text NOT NULL,quantity integer NOT NULL CHECK(quantity BETWEEN 1 AND 9999),unit_amount numeric(12,2) NOT NULL CHECK(unit_amount>=0),image_media_id uuid REFERENCES media(id) ON DELETE RESTRICT,UNIQUE(order_id,position))`);
   await db.query(`CREATE TABLE IF NOT EXISTS order_fees (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),order_id uuid NOT NULL REFERENCES orders(id) ON DELETE CASCADE,position smallint NOT NULL,name text NOT NULL,amount numeric(12,2) NOT NULL CHECK(amount>0),UNIQUE(order_id,position))`);
+  await db.query(`CREATE TABLE IF NOT EXISTS products (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),client_product_id uuid UNIQUE NOT NULL,name text NOT NULL,default_unit_amount numeric(12,2) NOT NULL CHECK(default_unit_amount>=0),currency text NOT NULL CHECK(currency IN ('USD','CNY','EUR','GBP','JPY','HKD','SGD','AUD','CAD','AED')),image_media_id uuid REFERENCES media(id) ON DELETE RESTRICT,created_by uuid REFERENCES users(id) ON DELETE SET NULL,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now(),deleted_at timestamptz)`);
+  await db.query(`CREATE TABLE IF NOT EXISTS product_labels (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),product_id uuid NOT NULL REFERENCES products(id) ON DELETE CASCADE,name text NOT NULL,color text NOT NULL DEFAULT '#E8EEF7')`);
+  await db.query("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS product_id uuid REFERENCES products(id) ON DELETE SET NULL");
   await db.query("INSERT INTO order_items(order_id,position,product_name,quantity,unit_amount) SELECT id,0,COALESCE(product_name,'Manual item'),1,amount FROM orders WHERE NOT EXISTS(SELECT 1 FROM order_items WHERE order_items.order_id=orders.id)");
   await db.query("CREATE INDEX IF NOT EXISTS order_items_order_idx ON order_items(order_id,position)");
   await db.query("CREATE INDEX IF NOT EXISTS order_fees_order_idx ON order_fees(order_id,position)");
+  await db.query("CREATE UNIQUE INDEX IF NOT EXISTS product_labels_product_name_unique ON product_labels(product_id,lower(name))");
+  await db.query("CREATE INDEX IF NOT EXISTS products_active_updated_idx ON products(updated_at DESC,id) WHERE deleted_at IS NULL");
+  await db.query("CREATE INDEX IF NOT EXISTS product_labels_name_idx ON product_labels(lower(name))");
+  await db.query("CREATE INDEX IF NOT EXISTS order_items_product_idx ON order_items(product_id) WHERE product_id IS NOT NULL");
   await db.query("CREATE INDEX IF NOT EXISTS reminders_user_due_idx ON reminders(user_id,remind_at) WHERE dismissed_at IS NULL");
   await db.query("CREATE INDEX IF NOT EXISTS orders_conversation_created_idx ON orders(conversation_id,created_at DESC)");
   await db.query("CREATE INDEX IF NOT EXISTS orders_conversation_active_idx ON orders(conversation_id,created_at DESC) WHERE deleted_at IS NULL");

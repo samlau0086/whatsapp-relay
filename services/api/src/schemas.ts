@@ -76,10 +76,15 @@ export const conversationTagsSchema=z.object({tagIds:z.array(z.string().uuid()).
 export const noteSchema=z.object({body:z.string().trim().min(1).max(5000)});
 export const reminderSchema=z.object({remindAt:z.string().datetime({offset:true}).transform(value=>new Date(value)).refine(value=>value.getTime()>Date.now(),"reminder must be in the future")});
 const moneySchema=z.coerce.number().nonnegative().max(99_999_999.99).refine(value=>Number.isInteger(value*100),"amount supports at most two decimals");
-const orderItemSchema=z.object({name:z.string().trim().min(1).max(120),quantity:z.coerce.number().int().min(1).max(9999),unitAmount:moneySchema,imageMediaId:z.string().uuid().optional()});
+export const currencySchema=z.enum(["USD","CNY","EUR","GBP","JPY","HKD","SGD","AUD","CAD","AED"]);
+export const productLabelSchema=z.object({name:z.string().trim().min(1).max(40),color:z.string().regex(/^#[0-9A-Fa-f]{6}$/)});
+const productContentSchema=z.object({name:z.string().trim().min(1).max(120),defaultUnitAmount:moneySchema,currency:currencySchema,imageMediaId:z.string().uuid().nullable().optional(),tags:z.array(productLabelSchema).max(30).default([])});
+export const productCreateSchema=z.object({clientProductId:z.string().uuid()}).and(productContentSchema);
+export const productUpdateSchema=productContentSchema.partial().refine(value=>Object.keys(value).length>0,"at least one field is required");
+const orderItemSchema=z.object({name:z.string().trim().min(1).max(120),quantity:z.coerce.number().int().min(1).max(9999),unitAmount:moneySchema,imageMediaId:z.string().uuid().optional(),productId:z.string().uuid().optional(),clientProductId:z.string().uuid().optional()}).superRefine((value,ctx)=>{if(value.productId&&value.clientProductId)ctx.addIssue({code:"custom",path:["productId"],message:"productId and clientProductId are mutually exclusive"});});
 const orderFeeSchema=z.object({name:z.string().trim().min(1).max(80),amount:moneySchema.refine(value=>value>0,"fee must be positive")});
 const orderContentSchema=z.object({
-  currency:z.enum(["USD","CNY","EUR","GBP","JPY","HKD","SGD","AUD","CAD","AED"]),
+  currency:currencySchema,
   description:z.string().trim().max(2000).optional().transform(value=>value||undefined),
   translateOnSend:z.boolean().default(false),
   targetLanguage:languageCodeSchema.optional(),
