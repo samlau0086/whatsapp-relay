@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { messageSchema, messageTranslationsSchema, newConversationSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
+import { conversationTagsSchema, customerStageSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
 
 const accountId="10000000-0000-4000-8000-000000000009";
 
@@ -49,4 +49,24 @@ test("translated outgoing text can retain an agent-only source",()=>{
   const translated=messageSchema.parse({accountId,conversationId:accountId,clientMessageId:"translated-message-001",type:"text",text:"Hello",translationSourceText:"你好"});
   assert.equal(translated.translationSourceText,"你好");
   assert.equal(messageSchema.safeParse({accountId,conversationId:accountId,clientMessageId:"translated-audio-001",type:"audio",mediaId:accountId,translationSourceText:"你好"}).success,false);
+});
+
+test("CRM schemas enforce stages, tags, notes, and reminder dates",()=>{
+  assert.equal(customerStageSchema.safeParse("qualified").success,true);
+  assert.equal(customerStageSchema.safeParse("maybe").success,false);
+  assert.equal(tagCreateSchema.safeParse({name:"  VIP  ",color:"#DFF5E8"}).data?.name,"VIP");
+  assert.equal(tagCreateSchema.safeParse({name:"VIP",color:"green"}).success,false);
+  assert.equal(conversationTagsSchema.safeParse({tagIds:Array.from({length:21},()=>accountId)}).success,false);
+  assert.equal(noteSchema.safeParse({body:"x".repeat(5001)}).success,false);
+  assert.equal(reminderSchema.safeParse({remindAt:new Date(Date.now()+60_000).toISOString()}).success,true);
+  assert.equal(reminderSchema.safeParse({remindAt:new Date(Date.now()-60_000).toISOString()}).success,false);
+});
+
+test("orders validate idempotency key, money, currencies, and attachment limits",()=>{
+  const valid={clientOrderId:accountId,amount:19.95,currency:"USD",attachmentMediaIds:[accountId]};
+  assert.equal(orderSchema.safeParse(valid).success,true);
+  assert.equal(orderSchema.safeParse({...valid,clientOrderId:"order-1"}).success,false);
+  assert.equal(orderSchema.safeParse({...valid,amount:19.999}).success,false);
+  assert.equal(orderSchema.safeParse({...valid,currency:"BTC"}).success,false);
+  assert.equal(orderSchema.safeParse({...valid,attachmentMediaIds:Array.from({length:4},()=>accountId)}).success,false);
 });

@@ -69,4 +69,19 @@ export const newConversationSchema = z.object({
   clientMessageId: z.string().min(8).max(128),
 });
 
+export const customerStageSchema=z.enum(["new","considering","qualified","won","lost"]);
+export const tagCreateSchema=z.object({name:z.string().trim().min(1).max(40),color:z.string().regex(/^#[0-9A-Fa-f]{6}$/)});
+export const tagUpdateSchema=tagCreateSchema.partial().refine(value=>Object.keys(value).length>0,"at least one field is required");
+export const conversationTagsSchema=z.object({tagIds:z.array(z.string().uuid()).max(20)});
+export const noteSchema=z.object({body:z.string().trim().min(1).max(5000)});
+export const reminderSchema=z.object({remindAt:z.string().datetime({offset:true}).transform(value=>new Date(value)).refine(value=>value.getTime()>Date.now(),"reminder must be in the future")});
+export const orderSchema=z.object({
+  clientOrderId:z.string().uuid(),
+  productName:z.string().trim().max(120).optional().transform(value=>value||undefined),
+  amount:z.coerce.number().positive().max(99_999_999.99).refine(value=>Number.isInteger(value*100),"amount supports at most two decimals"),
+  currency:z.enum(["USD","CNY","EUR","GBP","JPY","HKD","SGD","AUD","CAD","AED"]),
+  description:z.string().trim().max(2000).optional().transform(value=>value||undefined),
+  attachmentMediaIds:z.array(z.string().uuid()).max(3).default([]),
+});
+
 export const enrollmentSchema = z.object({ code: z.string().min(16), name: z.string().min(2).max(80), version: z.string(), platform: z.string() });

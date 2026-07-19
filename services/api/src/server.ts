@@ -7,12 +7,13 @@ import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } fro
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount } from "./auth.js";
-import { enrollmentSchema, loginSchema, messageSchema, messageTranslationsSchema, newConversationSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
+import { conversationTagsSchema, customerStageSchema, enrollmentSchema, loginSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
 import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
 import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline } from "./agent-hub.js";
 import { generateSpeech, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
 import { TRANSLATION_PROVIDERS, transcribeAudio, translateText, translationProviderDefaults, type TranslationProvider, type TranslationProviderSetting } from "./translation-providers.js";
 import { normalizeTranscriptionAudio } from "./audio-normalizer.js";
+import { canManageSharedRecord, ensureCrmTables, formatOrderSummary } from "./crm.js";
 
 const app = Fastify({ logger: { level: config.NODE_ENV === "production" ? "info" : "debug", redact:["req.headers.authorization","password"] }, bodyLimit: 2_000_000 });
 const s3 = new S3Client({ region:config.S3_REGION, endpoint:config.S3_ENDPOINT, forcePathStyle:true, credentials:{ accessKeyId:config.S3_ACCESS_KEY, secretAccessKey:config.S3_SECRET_KEY } });
@@ -23,12 +24,19 @@ await app.register(websocket, { options:{ maxPayload:2_000_000 } });
 
 await ensureTtsProviderSettingsTable();
 await ensureTranslationTables();
+await ensureCrmTables(pool);
 
 app.get("/health", async () => { await pool.query("SELECT 1"); return { status:"ok", version:"0.1.0", time:new Date().toISOString() }; });
 app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"RelayDesk API",version:"0.1.0"}, paths:{
   "/api/v1/messages":{post:{summary:"发送单条消息",responses:{"202":{description:"已进入持久队列"}}}},
   "/api/v1/conversations":{get:{summary:"分页查询会话"},post:{summary:"创建或复用单个联系人会话并发送首条文本消息"}},
-  "/api/v1/conversations/{id}":{patch:{summary:"认领、收藏、关闭或标记已读"}},
+  "/api/v1/conversations/{id}":{patch:{summary:"认领、收藏、更新客户阶段、关闭或标记已读"}},
+  "/api/v1/conversations/{id}/details":{get:{summary:"读取会话标签、备注、个人提醒与订单"}},
+  "/api/v1/conversations/{id}/tags":{put:{summary:"替换会话标签"}},
+  "/api/v1/conversations/{id}/notes":{post:{summary:"添加团队共享备注"}},
+  "/api/v1/conversations/{id}/reminder":{put:{summary:"设置当前坐席提醒"},delete:{summary:"取消当前坐席提醒"}},
+  "/api/v1/conversations/{id}/orders":{post:{summary:"创建订单并排队发送 WhatsApp 摘要"}},
+  "/api/v1/tags":{get:{summary:"读取标签目录"},post:{summary:"创建标签"}},
   "/api/v1/agents":{get:{summary:"查询已注册 Agent"}},
   "/api/v1/agents/{id}":{patch:{summary:"重命名或撤销 Agent"},delete:{summary:"删除 Agent 登记"}},
   "/api/v1/media":{post:{summary:"上传媒体"}},
@@ -187,21 +195,103 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request) =>
   const query = request.query as { accountId?:string; status?:string; q?:string; limit?:string; before?:string };
   const limit = Math.min(100,Math.max(1,Number(query.limit ?? 30)));
   if (query.accountId && !canAccessAccount(request.principal,query.accountId)) return { data:[], nextCursor:null };
-  const result = await pool.query(`SELECT c.id,c.status,c.favorite,c.unread_count,c.last_message_at,c.assigned_user_id,co.display_name,co.phone_e164,co.avatar_url,a.id account_id,a.display_name account_name,a.status account_status,m.text_content last_message,m.kind last_message_kind FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN whatsapp_accounts a ON a.id=c.account_id LEFT JOIN LATERAL (SELECT text_content,kind FROM messages WHERE conversation_id=c.id ORDER BY occurred_at DESC LIMIT 1)m ON true WHERE a.agent_id IS NOT NULL AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::text IS NULL OR c.status::text=$2) AND ($3::text IS NULL OR co.display_name ILIKE '%'||$3||'%' OR co.phone_e164 ILIKE '%'||$3||'%') AND ($4::timestamptz IS NULL OR c.last_message_at<$4) ORDER BY c.last_message_at DESC NULLS LAST LIMIT $5`, [query.accountId ?? null,query.status ?? null,query.q ?? null,query.before ?? null,limit+1]);
+  const principalUserId=request.principal?.kind==="user"?request.principal.id:null;
+  const result = await pool.query(`SELECT c.id,c.status,c.favorite,c.unread_count,c.last_message_at,c.assigned_user_id,c.customer_stage,co.display_name,co.phone_e164,co.avatar_url,a.id account_id,a.display_name account_name,a.status account_status,m.text_content last_message,m.kind last_message_kind,COALESCE(tag_list.tags,'[]'::json) tags,r.remind_at FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN whatsapp_accounts a ON a.id=c.account_id LEFT JOIN LATERAL (SELECT text_content,kind FROM messages WHERE conversation_id=c.id ORDER BY occurred_at DESC LIMIT 1)m ON true LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true LEFT JOIN reminders r ON r.conversation_id=c.id AND r.user_id=$5::uuid AND r.dismissed_at IS NULL WHERE a.agent_id IS NOT NULL AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::text IS NULL OR c.status::text=$2) AND ($3::text IS NULL OR co.display_name ILIKE '%'||$3||'%' OR co.phone_e164 ILIKE '%'||$3||'%') AND ($4::timestamptz IS NULL OR c.last_message_at<$4) ORDER BY c.last_message_at DESC NULLS LAST LIMIT $6`, [query.accountId ?? null,query.status ?? null,query.q ?? null,query.before ?? null,principalUserId,limit+1]);
   const hasMore = result.rows.length > limit; const data = result.rows.slice(0,limit);
   return { data, nextCursor:hasMore ? data[data.length-1]?.last_message_at : null };
 });
 
 app.patch("/api/v1/conversations/:id", { preHandler:authenticate }, async (request,reply) => {
   if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
-  const {id}=request.params as {id:string};const body=(request.body??{}) as {assignedToMe?:boolean;favorite?:boolean;status?:string;read?:boolean};
+  const {id}=request.params as {id:string};const body=(request.body??{}) as {assignedToMe?:boolean;favorite?:boolean;status?:string;read?:boolean;customerStage?:string};
   if(body.assignedToMe!==undefined&&typeof body.assignedToMe!=="boolean"||body.favorite!==undefined&&typeof body.favorite!=="boolean"||body.read!==undefined&&typeof body.read!=="boolean")return reply.code(400).send({error:"invalid_request"});
   if(body.status!==undefined&&!['open','closed','archived'].includes(body.status))return reply.code(400).send({error:"invalid_status"});
+  if(body.customerStage!==undefined&&!customerStageSchema.safeParse(body.customerStage).success)return reply.code(400).send({error:"invalid_customer_stage"});
   const current=await pool.query("SELECT account_id FROM conversations WHERE id=$1",[id]);
   if(!current.rowCount||!canAccessAccount(request.principal,current.rows[0].account_id))return reply.code(404).send({error:"not_found"});
-  const updated=await pool.query("UPDATE conversations SET assigned_user_id=CASE WHEN $2::boolean IS NULL THEN assigned_user_id WHEN $2 THEN $6::uuid ELSE NULL END,favorite=COALESCE($3,favorite),status=COALESCE($4::conversation_status,status),closed_at=CASE WHEN $4='closed' THEN now() WHEN $4='open' THEN NULL ELSE closed_at END,unread_count=CASE WHEN $5 THEN 0 ELSE unread_count END WHERE id=$1 RETURNING id,account_id,status,favorite,assigned_user_id,unread_count,closed_at",[id,body.assignedToMe??null,body.favorite??null,body.status??null,body.read??false,request.principal.id]);
+  const updated=await pool.query("UPDATE conversations SET assigned_user_id=CASE WHEN $2::boolean IS NULL THEN assigned_user_id WHEN $2 THEN $6::uuid ELSE NULL END,favorite=COALESCE($3,favorite),status=COALESCE($4::conversation_status,status),closed_at=CASE WHEN $4='closed' THEN now() WHEN $4='open' THEN NULL ELSE closed_at END,unread_count=CASE WHEN $5 THEN 0 ELSE unread_count END,customer_stage=COALESCE($7,customer_stage) WHERE id=$1 RETURNING id,account_id,status,favorite,assigned_user_id,unread_count,closed_at,customer_stage",[id,body.assignedToMe??null,body.favorite??null,body.status??null,body.read??false,request.principal.id,body.customerStage??null]);
   await pool.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'conversation.update','conversation',$2,$3)",[request.principal.id,id,JSON.stringify(body)]);
   return updated.rows[0];
+});
+
+app.get("/api/v1/tags",{preHandler:authenticate},async()=>{
+  const result=await pool.query("SELECT id,name,color FROM tags ORDER BY lower(name)");
+  return{data:result.rows};
+});
+
+app.post("/api/v1/tags",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user"||!["admin","supervisor"].includes(request.principal.role??""))return reply.code(403).send({error:"supervisor_required"});
+  const parsed=tagCreateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  try{const created=await pool.query("INSERT INTO tags(name,color) VALUES($1,$2) RETURNING id,name,color",[parsed.data.name,parsed.data.color]);await auditCrm(request.principal.id,"tag.create","tag",created.rows[0].id,parsed.data);return reply.code(201).send(created.rows[0]);}
+  catch(error){if((error as {code?:string}).code==="23505")return reply.code(409).send({error:"tag_name_exists"});throw error;}
+});
+
+app.patch("/api/v1/tags/:id",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user"||!["admin","supervisor"].includes(request.principal.role??""))return reply.code(403).send({error:"supervisor_required"});
+  const parsed=tagUpdateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});const {id}=request.params as {id:string};
+  try{const updated=await pool.query("UPDATE tags SET name=COALESCE($2,name),color=COALESCE($3,color) WHERE id=$1 RETURNING id,name,color",[id,parsed.data.name??null,parsed.data.color??null]);if(!updated.rowCount)return reply.code(404).send({error:"not_found"});await auditCrm(request.principal.id,"tag.update","tag",id,parsed.data);return updated.rows[0];}
+  catch(error){if((error as {code?:string}).code==="23505")return reply.code(409).send({error:"tag_name_exists"});throw error;}
+});
+
+app.delete("/api/v1/tags/:id",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user"||!["admin","supervisor"].includes(request.principal.role??""))return reply.code(403).send({error:"supervisor_required"});const {id}=request.params as {id:string};
+  const removed=await pool.query("DELETE FROM tags WHERE id=$1 RETURNING id,name",[id]);if(!removed.rowCount)return reply.code(404).send({error:"not_found"});await auditCrm(request.principal.id,"tag.delete","tag",id,removed.rows[0]);return reply.code(204).send();
+});
+
+app.get("/api/v1/conversations/:id/details",{preHandler:authenticate},async(request,reply)=>{
+  const {id}=request.params as {id:string};const conversation=await pool.query("SELECT account_id,customer_stage FROM conversations WHERE id=$1",[id]);
+  if(!conversation.rowCount||!canAccessAccount(request.principal,conversation.rows[0].account_id))return reply.code(404).send({error:"not_found"});
+  const userId=request.principal?.kind==="user"?request.principal.id:null;
+  const [tags,notes,reminder,orders]=await Promise.all([
+    pool.query("SELECT t.id,t.name,t.color FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=$1 ORDER BY lower(t.name)",[id]),
+    pool.query("SELECT n.id,n.body,n.user_id,n.created_at,n.updated_at,u.display_name author_name FROM notes n LEFT JOIN users u ON u.id=n.user_id WHERE n.conversation_id=$1 ORDER BY n.created_at DESC LIMIT 50",[id]),
+    userId?pool.query("SELECT id,remind_at,created_at,updated_at FROM reminders WHERE conversation_id=$1 AND user_id=$2 AND dismissed_at IS NULL",[id,userId]):Promise.resolve({rows:[]}),
+    pool.query("SELECT o.id,o.order_number,o.product_name,o.amount,o.currency,o.description,o.created_at,u.display_name created_by_name,m.status message_status,COALESCE(a.attachments,'[]'::json) attachments FROM orders o LEFT JOIN users u ON u.id=o.created_by LEFT JOIN messages m ON m.id=o.summary_message_id LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',media.id,'name',media.file_name,'mimeType',media.mime_type) ORDER BY oa.ordinal) attachments FROM order_attachments oa JOIN media ON media.id=oa.media_id WHERE oa.order_id=o.id)a ON true WHERE o.conversation_id=$1 ORDER BY o.created_at DESC LIMIT 20",[id]),
+  ]);
+  return{customerStage:conversation.rows[0].customer_stage,tags:tags.rows,notes:notes.rows,reminder:reminder.rows[0]??null,orders:orders.rows};
+});
+
+app.put("/api/v1/conversations/:id/tags",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const parsed=conversationTagsSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});const {id}=request.params as {id:string};
+  const current=await pool.query("SELECT account_id FROM conversations WHERE id=$1",[id]);if(!current.rowCount||!canAccessAccount(request.principal,current.rows[0].account_id))return reply.code(404).send({error:"not_found"});
+  const unique=[...new Set(parsed.data.tagIds)];const result=await transaction(async client=>{if(unique.length){const found=await client.query("SELECT id FROM tags WHERE id=ANY($1::uuid[])",[unique]);if(found.rowCount!==unique.length)return null;}await client.query("DELETE FROM conversation_tags WHERE conversation_id=$1",[id]);if(unique.length)await client.query("INSERT INTO conversation_tags(conversation_id,tag_id) SELECT $1,unnest($2::uuid[])",[id,unique]);const selected=await client.query("SELECT t.id,t.name,t.color FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=$1 ORDER BY lower(t.name)",[id]);return selected.rows;});
+  if(!result)return reply.code(400).send({error:"unknown_tag"});await auditCrm(request.principal.id,"conversation.tags","conversation",id,{tagIds:unique});return{data:result};
+});
+
+app.post("/api/v1/conversations/:id/notes",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const parsed=noteSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});const {id}=request.params as {id:string};
+  const current=await pool.query("SELECT account_id FROM conversations WHERE id=$1",[id]);if(!current.rowCount||!canAccessAccount(request.principal,current.rows[0].account_id))return reply.code(404).send({error:"not_found"});const created=await pool.query("INSERT INTO notes(conversation_id,user_id,body) VALUES($1,$2,$3) RETURNING id,body,user_id,created_at,updated_at",[id,request.principal.id,parsed.data.body]);await auditCrm(request.principal.id,"note.create","note",created.rows[0].id,{conversationId:id});return reply.code(201).send({...created.rows[0],author_name:null});
+});
+
+app.patch("/api/v1/conversations/:conversationId/notes/:noteId",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const parsed=noteSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});const {conversationId,noteId}=request.params as {conversationId:string;noteId:string};const note=await pool.query("SELECT n.user_id,c.account_id FROM notes n JOIN conversations c ON c.id=n.conversation_id WHERE n.id=$1 AND n.conversation_id=$2",[noteId,conversationId]);if(!note.rowCount||!canAccessAccount(request.principal,note.rows[0].account_id))return reply.code(404).send({error:"not_found"});if(!canManageSharedRecord(request.principal.role,note.rows[0].user_id,request.principal.id))return reply.code(403).send({error:"note_owner_required"});const updated=await pool.query("UPDATE notes SET body=$2,updated_at=now() WHERE id=$1 RETURNING id,body,user_id,created_at,updated_at",[noteId,parsed.data.body]);await auditCrm(request.principal.id,"note.update","note",noteId,{conversationId});return updated.rows[0];
+});
+
+app.delete("/api/v1/conversations/:conversationId/notes/:noteId",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const {conversationId,noteId}=request.params as {conversationId:string;noteId:string};const note=await pool.query("SELECT n.user_id,c.account_id FROM notes n JOIN conversations c ON c.id=n.conversation_id WHERE n.id=$1 AND n.conversation_id=$2",[noteId,conversationId]);if(!note.rowCount||!canAccessAccount(request.principal,note.rows[0].account_id))return reply.code(404).send({error:"not_found"});if(!canManageSharedRecord(request.principal.role,note.rows[0].user_id,request.principal.id))return reply.code(403).send({error:"note_owner_required"});await pool.query("DELETE FROM notes WHERE id=$1",[noteId]);await auditCrm(request.principal.id,"note.delete","note",noteId,{conversationId});return reply.code(204).send();
+});
+
+app.put("/api/v1/conversations/:id/reminder",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const parsed=reminderSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});const {id}=request.params as {id:string};const current=await pool.query("SELECT account_id FROM conversations WHERE id=$1",[id]);if(!current.rowCount||!canAccessAccount(request.principal,current.rows[0].account_id))return reply.code(404).send({error:"not_found"});const saved=await pool.query("INSERT INTO reminders(conversation_id,user_id,remind_at) VALUES($1,$2,$3) ON CONFLICT(conversation_id,user_id) DO UPDATE SET remind_at=EXCLUDED.remind_at,dismissed_at=NULL,updated_at=now() RETURNING id,remind_at,created_at,updated_at",[id,request.principal.id,parsed.data.remindAt]);await auditCrm(request.principal.id,"reminder.set","conversation",id,{remindAt:parsed.data.remindAt.toISOString()});return saved.rows[0];
+});
+
+app.delete("/api/v1/conversations/:id/reminder",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const {id}=request.params as {id:string};const current=await pool.query("SELECT account_id FROM conversations WHERE id=$1",[id]);if(!current.rowCount||!canAccessAccount(request.principal,current.rows[0].account_id))return reply.code(404).send({error:"not_found"});await pool.query("UPDATE reminders SET dismissed_at=now(),updated_at=now() WHERE conversation_id=$1 AND user_id=$2 AND dismissed_at IS NULL",[id,request.principal.id]);await auditCrm(request.principal.id,"reminder.dismiss","conversation",id,{});return reply.code(204).send();
+});
+
+app.post("/api/v1/conversations/:id/orders",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const principal=request.principal;const parsed=orderSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});const {id}=request.params as {id:string};
+  const result=await transaction(async client=>{
+    const conversation=await client.query("SELECT c.account_id,a.agent_id,co.wa_jid FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id JOIN contacts co ON co.id=c.contact_id WHERE c.id=$1 AND a.agent_id IS NOT NULL",[id]);if(!conversation.rowCount||!canAccessAccount(principal,conversation.rows[0].account_id))return null;
+    const duplicate=await client.query("SELECT o.id,o.order_number,o.conversation_id,o.summary_message_id,m.status FROM orders o LEFT JOIN messages m ON m.id=o.summary_message_id WHERE o.client_order_id=$1",[parsed.data.clientOrderId]);if(duplicate.rowCount){if(duplicate.rows[0].conversation_id!==id)throw Object.assign(new Error("client_order_id_conflict"),{statusCode:409});return{...duplicate.rows[0],deduplicated:true,agentId:conversation.rows[0].agent_id};}
+    const mediaIds=[...new Set(parsed.data.attachmentMediaIds)];if(mediaIds.length!==parsed.data.attachmentMediaIds.length)throw Object.assign(new Error("duplicate_order_attachment"),{statusCode:400});
+    if(mediaIds.length){const media=await client.query("SELECT id FROM media WHERE id=ANY($1::uuid[]) AND (account_id=$2 OR account_id IS NULL) AND status='ready' AND mime_type IN ('image/png','image/jpeg')",[mediaIds,conversation.rows[0].account_id]);if(media.rowCount!==mediaIds.length)throw Object.assign(new Error("invalid_order_attachment"),{statusCode:400});}
+    const order=await client.query("INSERT INTO orders(client_order_id,conversation_id,created_by,product_name,amount,currency,description) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,order_number",[parsed.data.clientOrderId,id,principal.id,parsed.data.productName??null,parsed.data.amount,parsed.data.currency,parsed.data.description??null]);const orderRow=order.rows[0];const summary=formatOrderSummary(Number(orderRow.order_number),parsed.data.productName,parsed.data.amount,parsed.data.currency,parsed.data.description);const summaryClientId=`${parsed.data.clientOrderId}:summary`;
+    const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,status,occurred_at) VALUES($1,$2,$3,$4,'out','text',$5,'queued',now()) RETURNING id,status",[id,conversation.rows[0].account_id,principal.id,summaryClientId,summary]);await client.query("UPDATE orders SET summary_message_id=$2 WHERE id=$1",[orderRow.id,message.rows[0].id]);await queueOrderCommand(client,conversation.rows[0],id,message.rows[0].id,summaryClientId,"text",summary);
+    for(const [index,mediaId] of mediaIds.entries()){const clientMessageId=`${parsed.data.clientOrderId}:attachment:${index+1}`;const caption=`订单 #${String(orderRow.order_number).padStart(6,"0")} 附件 ${index+1}/${mediaIds.length}`;const attachment=await client.query("INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,media_id,status,occurred_at) VALUES($1,$2,$3,$4,'out','image',$5,$6,'queued',now()) RETURNING id",[id,conversation.rows[0].account_id,principal.id,clientMessageId,caption,mediaId]);await client.query("INSERT INTO order_attachments(order_id,media_id,message_id,ordinal) VALUES($1,$2,$3,$4)",[orderRow.id,mediaId,attachment.rows[0].id,index]);await queueOrderCommand(client,conversation.rows[0],id,attachment.rows[0].id,clientMessageId,"image",caption,mediaId);}
+    await client.query("UPDATE conversations SET status='open',closed_at=NULL,last_message_at=now() WHERE id=$1",[id]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'order.create','order',$2,$3)",[principal.id,orderRow.id,JSON.stringify({conversationId:id,attachmentCount:mediaIds.length})]);return{id:orderRow.id,order_number:orderRow.order_number,summary_message_id:message.rows[0].id,status:message.rows[0].status,deduplicated:false,agentId:conversation.rows[0].agent_id};
+  });
+  if(!result)return reply.code(404).send({error:"not_found"});if(result.agentId)void dispatchPending(result.agentId);return reply.code(202).send({orderId:result.id,orderNumber:Number(result.order_number),messageId:result.summary_message_id,status:result.status,deduplicated:result.deduplicated});
 });
 
 app.post("/api/v1/conversations", {preHandler:authenticate}, async(request,reply)=>{
@@ -404,6 +494,14 @@ async function mapWithConcurrency<T,R>(items:T[],limit:number,work:(item:T)=>Pro
   const results=new Array<R>(items.length);let cursor=0;
   await Promise.all(Array.from({length:Math.min(limit,items.length)},async()=>{while(cursor<items.length){const index=cursor++;results[index]=await work(items[index]);}}));
   return results;
+}
+
+async function auditCrm(actorId:string,action:string,targetType:string,targetId:string,metadata:unknown):Promise<void>{
+  await pool.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,$2,$3,$4,$5)",[actorId,action,targetType,targetId,JSON.stringify(metadata)]);
+}
+
+async function queueOrderCommand(client:import("pg").PoolClient,conversation:{account_id:string;agent_id:string;wa_jid:string},conversationId:string,messageId:string,clientMessageId:string,type:"text"|"image",text:string,mediaId?:string):Promise<void>{
+  await client.query("INSERT INTO outbound_commands(agent_id,account_id,message_id,command,payload) VALUES($1,$2,$3,'send_message',$4)",[conversation.agent_id,conversation.account_id,messageId,JSON.stringify({accountId:conversation.account_id,conversationId,clientMessageId,type,text,...(mediaId?{mediaId}:{}),messageId,toJid:conversation.wa_jid})]);
 }
 
 const transcriptionFlights=new Map<string,Promise<string>>();
