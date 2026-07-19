@@ -79,6 +79,7 @@ jobs:
           if ! docker compose -p relaydesk exec -T api node --input-type=module -e "$diagnostic" </dev/null
           then
             docker compose -p relaydesk logs --tail=200 api
+            docker compose -p relaydesk logs --tail=120 worker
             exit 1
           fi
           docker compose -p relaydesk logs --tail=120 worker
