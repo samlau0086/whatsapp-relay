@@ -14,6 +14,14 @@ export const messageSchema = z.object({
   if (["image","video","audio","document"].includes(value.type) && !value.mediaId) ctx.addIssue({ code:"custom", path:["mediaId"], message:"媒体消息必须提供 mediaId" });
 });
 
+export const textToSpeechSchema = z.object({
+  accountId: z.string().uuid(),
+  text: z.string().trim().min(1).max(4096),
+  voice: z.enum(["alloy","ash","ballad","coral","echo","fable","onyx","nova","sage","shimmer","verse","marin","cedar"]).default("coral"),
+  speed: z.number().min(0.25).max(4).default(1),
+  instructions: z.string().trim().max(500).optional(),
+});
+
 export const newConversationSchema = z.object({
   accountId: z.string().uuid(),
   phone: z.string().transform(value=>value.trim().replace(/[\s()+.-]/g,"")).refine(value=>/^[1-9]\d{6,14}$/.test(value),"请输入包含国家代码的有效号码"),

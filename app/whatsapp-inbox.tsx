@@ -51,6 +51,7 @@ export function WhatsAppInbox() {
   const [view,setView]=useState<WorkspaceView>("inbox");
   const [newConversationOpen,setNewConversationOpen]=useState(false);
   const [mediaOpen,setMediaOpen]=useState(false);
+  const [ttsOpen,setTtsOpen]=useState(false);
   const [emojiOpen,setEmojiOpen]=useState(false);
   const [emojiCategory,setEmojiCategory]=useState("常用");
   const textareaRef=useRef<HTMLTextAreaElement>(null);
@@ -208,7 +209,7 @@ export function WhatsAppInbox() {
       <div className="composer-wrap">
         <div className="composer-tools"><button onClick={()=>setMediaOpen(true)} aria-label="打开媒体与附件" title="媒体与附件"><Paperclip size={17}/></button><span>回复给 {active.name}</span></div>
         {emojiOpen&&<EmojiPicker category={emojiCategory} onCategory={setEmojiCategory} onSelect={insertEmoji} onClose={()=>setEmojiOpen(false)}/>}
-        <div className="composer"><textarea ref={textareaRef} value={draft} onChange={event=>setDraft(event.target.value)} onKeyDown={event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();void sendMessage();}if(event.key==="Escape")setEmojiOpen(false);}} placeholder="输入消息，Enter 发送，Shift + Enter 换行"/><div className="composer-icons"><button className={emojiOpen?"active":""} onClick={()=>setEmojiOpen(value=>!value)} aria-label="选择表情" title="选择表情"><Smile size={18}/></button><button onClick={()=>setToast("语音录制尚未启用，可先上传 OGG 或 MP3 语音文件")} aria-label="录音说明" title="录音说明"><Mic size={18}/></button><button onClick={()=>void sendMessage()} className="send-button" aria-label="发送"><Send size={18}/></button></div></div>
+        <div className="composer"><textarea ref={textareaRef} value={draft} onChange={event=>setDraft(event.target.value)} onKeyDown={event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();void sendMessage();}if(event.key==="Escape")setEmojiOpen(false);}} placeholder="输入消息，Enter 发送，Shift + Enter 换行"/><div className="composer-icons"><button className={emojiOpen?"active":""} onClick={()=>setEmojiOpen(value=>!value)} aria-label="选择表情" title="选择表情"><Smile size={18}/></button><button onClick={()=>setTtsOpen(true)} aria-label="AI 文字转语音" title="AI 文字转语音"><Mic size={18}/></button><button onClick={()=>void sendMessage()} className="send-button" aria-label="发送"><Send size={18}/></button></div></div>
         <p className="delivery-hint">{active.accountStatus==="online"?<><Wifi size={13}/>Agent 在线</>:<><Clock3 size={13}/>离线队列已启用</>}</p>
       </div>
     </>:<div className="chat-empty"><MessageCircle size={31}/><h2>选择一个真实会话</h2><p>这里不会再显示演示联系人或模拟消息。</p></div>}</section>
@@ -226,6 +227,7 @@ export function WhatsAppInbox() {
     />}
     {newConversationOpen&&<NewConversationDialog accounts={accounts} token={apiToken} onToken={setApiToken} onClose={()=>setNewConversationOpen(false)} onCreated={async(conversationId,accountId,accessToken)=>{setNewConversationOpen(false);setView("inbox");setFilter("全部会话");setSelectedAccount(accountId);await loadWorkspace(accessToken,true);setActiveId(conversationId);setToast("新会话已创建，首条消息已进入发送队列");}}/>}
     {mediaOpen&&active&&<MediaDialog accountId={active.accountId} token={apiToken} initialCaption={draft} onToken={setApiToken} onToast={setToast} onClose={()=>setMediaOpen(false)} onSend={sendMediaAsset}/>}
+    {ttsOpen&&active&&<TextToSpeechDialog accountId={active.accountId} token={apiToken} initialText={draft} onToken={setApiToken} onClose={()=>setTtsOpen(false)} onSend={async asset=>{setTtsOpen(false);await sendMediaAsset(asset,"");}}/>}
   </main>;
 }
 
@@ -254,6 +256,25 @@ const EMOJI_GROUPS:Record<string,string[]>={
 const EMOJI_TABS:Record<string,string>={"常用":"🕘","表情":"😀","手势":"👋","动物":"🐻","食物":"🍔","活动":"⚽","旅行":"🚗","符号":"❤️"};
 
 function EmojiPicker({category,onCategory,onSelect,onClose}:{category:string;onCategory:(value:string)=>void;onSelect:(emoji:string)=>void;onClose:()=>void}){return <section className="emoji-picker" role="dialog" aria-label="选择表情"><header><b>表情</b><button onClick={onClose} aria-label="关闭表情面板"><X size={15}/></button></header><nav>{Object.entries(EMOJI_TABS).map(([name,icon])=><button key={name} className={category===name?"active":""} onClick={()=>onCategory(name)} title={name} aria-label={name}>{icon}</button>)}</nav><div className="emoji-grid">{(EMOJI_GROUPS[category]??EMOJI_GROUPS["常用"]).map((emoji,index)=><button key={`${emoji}-${index}`} onClick={()=>onSelect(emoji)} aria-label={`插入 ${emoji}`}>{emoji}</button>)}</div></section>}
+
+const TTS_VOICES=[
+  {id:"coral",name:"Coral · 温暖自然"},{id:"marin",name:"Marin · 清晰亲切"},{id:"cedar",name:"Cedar · 沉稳自然"},
+  {id:"nova",name:"Nova · 明快"},{id:"alloy",name:"Alloy · 中性"},{id:"onyx",name:"Onyx · 深沉"},
+];
+
+function TextToSpeechDialog({accountId,token,initialText,onToken,onClose,onSend}:{accountId:string;token:string;initialText:string;onToken:(token:string)=>void;onClose:()=>void;onSend:(asset:MediaAsset)=>Promise<void>}){
+  const [text,setText]=useState(initialText),[voice,setVoice]=useState("coral"),[speed,setSpeed]=useState(1),[instructions,setInstructions]=useState("用自然、友好、适合客户沟通的语气朗读"),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  async function generate(){
+    if(!text.trim()||busy)return;setBusy(true);setError("");
+    try{
+      const result=await authorizedFetch("/api/v1/text-to-speech",token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId,text:text.trim(),voice,speed,instructions:instructions.trim()||undefined})});if(result.token!==token)onToken(result.token);
+      const body=await result.response.json().catch(()=>({})) as Record<string,unknown>;
+      if(!result.response.ok)throw new Error(String(body.message??(body.error==="tts_not_configured"?"服务器尚未配置 OpenAI API Key":`生成失败（HTTP ${result.response.status}）`)));
+      await onSend({id:String(body.mediaId),fileName:String(body.fileName),mimeType:String(body.mimeType),size:Number(body.size),sha256:String(body.sha256),createdAt:new Date().toISOString(),usageCount:0});
+    }catch(reason){setError(reason instanceof Error?reason.message:"AI 语音生成失败，请稍后重试");setBusy(false);}
+  }
+  return <div className="modal-backdrop media-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget&&!busy)onClose();}}><section className="login-dialog tts-dialog" role="dialog" aria-modal="true" aria-labelledby="tts-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><div className="login-logo"><Sparkles size={20}/></div><h2 id="tts-title">AI 文字转语音</h2><p>输入要发送的内容，生成后会作为 WhatsApp 语音消息直接排队发送。</p><label>朗读文字 <span className="tts-count">{text.length}/4096</span><textarea value={text} onChange={event=>setText(event.target.value)} maxLength={4096} autoFocus placeholder="输入需要朗读并发送的文字"/></label><div className="tts-grid"><label>音色<select value={voice} onChange={event=>setVoice(event.target.value)}>{TTS_VOICES.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>语速 <span className="tts-speed">{speed.toFixed(2)}×</span><input type="range" min="0.75" max="1.5" step="0.05" value={speed} onChange={event=>setSpeed(Number(event.target.value))}/></label></div><label>语气要求（可选）<input value={instructions} onChange={event=>setInstructions(event.target.value)} maxLength={500} placeholder="例如：专业、亲切，稍微放慢语速"/></label><div className="tts-disclosure"><Info size={14}/><span>此功能会把文字发送给 OpenAI 生成语音；发送给对方的是 AI 生成音频。</span></div>{error&&<span className="login-error">{error}</span>}<button className="login-submit" onClick={()=>void generate()} disabled={busy||!text.trim()}>{busy?<><RefreshCw className="spin" size={15}/>正在生成并发送…</>:<><Mic size={15}/>生成并发送语音</>}</button></section></div>;
+}
 
 function MediaDialog({accountId,token,initialCaption,onToken,onToast,onClose,onSend}:{accountId:string;token:string;initialCaption:string;onToken:(token:string)=>void;onToast:(text:string)=>void;onClose:()=>void;onSend:(asset:MediaAsset,caption:string)=>Promise<void>}){
   const [assets,setAssets]=useState<MediaAsset[]>([]),[selectedId,setSelectedId]=useState(""),[query,setQuery]=useState(""),[filter,setFilter]=useState("all"),[caption,setCaption]=useState(initialCaption),[busy,setBusy]=useState(false),[dragging,setDragging]=useState(false),[error,setError]=useState("");const inputRef=useRef<HTMLInputElement>(null);

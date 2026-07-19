@@ -7,7 +7,7 @@ import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } fro
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount } from "./auth.js";
-import { enrollmentSchema, loginSchema, messageSchema, newConversationSchema } from "./schemas.js";
+import { enrollmentSchema, loginSchema, messageSchema, newConversationSchema, textToSpeechSchema } from "./schemas.js";
 import { encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
 import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline } from "./agent-hub.js";
 
@@ -227,6 +227,22 @@ app.post("/api/v1/messages", { preHandler:authenticate }, async (request, reply)
   });
   if(!result)return reply.code(404).send({error:"conversation_not_found"});
   if(result.agentId)void dispatchPending(result.agentId); return reply.code(202).send(result);
+});
+
+app.post("/api/v1/text-to-speech", {preHandler:authenticate}, async(request,reply)=>{
+  const parsed=textToSpeechSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  if(!canAccessAccount(request.principal,parsed.data.accountId))return reply.code(403).send({error:"account_forbidden"});
+  if(!config.OPENAI_API_KEY)return reply.code(503).send({error:"tts_not_configured",message:"服务器尚未配置 OPENAI_API_KEY"});
+  const account=await pool.query("SELECT id FROM whatsapp_accounts WHERE id=$1",[parsed.data.accountId]);if(!account.rowCount)return reply.code(404).send({error:"account_not_found"});
+  const upstream=await fetch("https://api.openai.com/v1/audio/speech",{method:"POST",headers:{authorization:`Bearer ${config.OPENAI_API_KEY}`,"content-type":"application/json"},body:JSON.stringify({model:config.OPENAI_TTS_MODEL,input:parsed.data.text,voice:parsed.data.voice,speed:parsed.data.speed,response_format:"opus",...(parsed.data.instructions&&!config.OPENAI_TTS_MODEL.startsWith("tts-1")?{instructions:parsed.data.instructions}:{})}),signal:AbortSignal.timeout(90_000)});
+  if(!upstream.ok){const detail=(await upstream.text()).slice(0,500);request.log.error({status:upstream.status,detail},"OpenAI text-to-speech request failed");return reply.code(502).send({error:"tts_generation_failed",message:"AI 语音生成失败，请稍后重试"});}
+  const bytes=Buffer.from(await upstream.arrayBuffer());if(!bytes.length)return reply.code(502).send({error:"tts_empty_audio"});
+  const sha256=createHash("sha256").update(bytes).digest("hex");const existing=await pool.query("SELECT id,file_name,mime_type,byte_size FROM media WHERE account_id=$1 AND sha256=$2 AND status='ready' ORDER BY created_at DESC LIMIT 1",[parsed.data.accountId,sha256]);
+  if(existing.rowCount)return reply.code(200).send({mediaId:existing.rows[0].id,fileName:existing.rows[0].file_name,mimeType:existing.rows[0].mime_type,size:Number(existing.rows[0].byte_size),sha256,deduplicated:true});
+  const id=randomBytes(16).toString("hex"),fileName=`ai-voice-${Date.now()}.ogg`,mimeType="audio/ogg; codecs=opus",objectKey=`generated/${parsed.data.accountId}/${new Date().toISOString().slice(0,10)}/${id}.ogg`;
+  await s3.send(new PutObjectCommand({Bucket:config.S3_BUCKET,Key:objectKey,Body:bytes,ContentType:mimeType,Metadata:{sha256,source:"openai-tts"}}));
+  const media=await transaction(async client=>{const created=await client.query("INSERT INTO media(account_id,object_key,file_name,mime_type,byte_size,sha256) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",[parsed.data.accountId,objectKey,fileName,mimeType,bytes.length,sha256]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'media.tts_generate','media',$3,$4)",[request.principal?.kind,request.principal?.id,created.rows[0].id,JSON.stringify({accountId:parsed.data.accountId,model:config.OPENAI_TTS_MODEL,voice:parsed.data.voice,characterCount:parsed.data.text.length})]);return created;});
+  return reply.code(201).send({mediaId:media.rows[0].id,fileName,mimeType,size:bytes.length,sha256,deduplicated:false});
 });
 
 app.get("/api/v1/media", {preHandler:authenticate}, async(request,reply)=>{

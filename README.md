@@ -141,6 +141,17 @@ docker compose up --build -d
 
 首次启动会使用 `.env` 中的 `ADMIN_EMAIL` 和 `ADMIN_PASSWORD` 创建管理员。
 
+### AI 文字转语音
+
+在 `.env` 中设置以下变量并重新构建 API 服务：
+
+```dotenv
+OPENAI_API_KEY=sk-your-openai-api-key
+OPENAI_TTS_MODEL=gpt-4o-mini-tts
+```
+
+进入任意会话后，点击输入框右侧的麦克风按钮，可以输入最多 4096 个字符，选择音色、语速和语气。中心 API 会生成 OGG/Opus 音频、保存到媒体库，再通过现有的可靠消息队列交给 Windows Agent；Agent 会将它作为 WhatsApp 语音消息发送。界面会明确提示文字将交给 OpenAI 处理，并标明音频由 AI 生成。
+
 ### Windows Agent
 
 Agent 安装包以 `apps/agent/package.json` 的版本为准。版本文件合入 `main` 后，GitHub Actions 会构建并校验安装包内的版本徽标、renderer、preload 桥接和固定用户数据目录，然后自动创建对应的 `agent-v*` GitHub Release。不要从旧 Release 下载 `v0.1.0/v0.1.1`；已注册设备的 SQLite、凭据和账号数据固定保存在 `%APPDATA%\@relaydesk\windows-agent`，覆盖升级不会清除。
