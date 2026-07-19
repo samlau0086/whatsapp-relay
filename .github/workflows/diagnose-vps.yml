@@ -44,18 +44,12 @@ jobs:
 
           echo "Current release: $(basename "$(readlink -f "$root/current")")"
           docker compose -p relaydesk ps
-          docker compose -p relaydesk exec -T postgres sh -lc '
-            psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At <<"SQL"
-          SELECT current_database();
-          SELECT to_regclass('"'"'public.order_items'"'"'),to_regclass('"'"'public.order_fees'"'"');
-          SELECT string_agg(column_name,'"'"','"'"' ORDER BY column_name)
-          FROM information_schema.columns
-          WHERE table_schema='"'"'public'"'"' AND table_name='"'"'orders'"'"'
-            AND column_name IN ('"'"'status'"'"','"'"'translate_on_send'"'"','"'"'target_language'"'"','"'"'translated_text'"'"','"'"'sent_at'"'"');
-          SQL
-          '
+          docker inspect relaydesk-api-1 --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}'
+          docker compose -p relaydesk exec -T postgres sh -lc \
+            'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT current_database(); SELECT to_regclass('"'"'public.order_items'"'"'),to_regclass('"'"'public.order_fees'"'"'); SELECT string_agg(column_name,'"'"','"'"' ORDER BY column_name) FROM information_schema.columns WHERE table_schema='"'"'public'"'"' AND table_name='"'"'orders'"'"' AND column_name IN ('"'"'status'"'"','"'"'translate_on_send'"'"','"'"'target_language'"'"','"'"'translated_text'"'"','"'"'sent_at'"'"');"' \
+            </dev/null
 
-          if ! docker compose -p relaydesk exec -T api node --input-type=module <<'NODE'
+          diagnostic=$(cat <<'NODE'
           const login = await fetch("http://gateway/api/v1/auth/login", {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -81,8 +75,11 @@ jobs:
             }
           }
           NODE
+          )
+          if ! docker compose -p relaydesk exec -T api node --input-type=module -e "$diagnostic" </dev/null
           then
             docker compose -p relaydesk logs --tail=200 api
             exit 1
           fi
+          docker compose -p relaydesk logs --tail=120 worker
           REMOTE
