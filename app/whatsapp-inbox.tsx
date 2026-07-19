@@ -4,7 +4,7 @@ import {
   Archive, Bell, Bookmark, Check, CheckCheck, ChevronDown, CircleHelp, Clock3, FileText,
   Inbox, Info, Languages, Menu, MessageCircle, Mic, MonitorSmartphone, Paperclip, Phone, Plus,
   Pencil, RefreshCw, Search, Send, Settings, ShieldCheck, ShoppingBag, Smile, Sparkles, Star, Trash2, UploadCloud, UserPlus,
-  Users, Wifi, WifiOff, X,
+  Users, Wifi, WifiOff, X, ClipboardList, ExternalLink,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
@@ -25,7 +25,7 @@ type ProductItem={id:string;name:string;defaultUnitAmount:number;currency:string
 type NoteItem={id:string;body:string;userId:string|null;authorName:string;createdAt:string;updatedAt:string};
 type OrderProductItem={id:string;name:string;quantity:number;unitAmount:number;imageMediaId:string|null;imageName:string;productId:string|null};
 type OrderFeeItem={id:string;name:string;amount:number};
-type OrderItem={id:string;orderNumber:number;amount:number;currency:string;description:string;status:string;sendFormat:string;translateOnSend:boolean;targetLanguage:string;createdAt:string;createdByName:string;messageStatus:string;items:OrderProductItem[];fees:OrderFeeItem[]};
+type OrderItem={id:string;orderNumber:string;conversationId:string;accountId:string;accountName:string;customerName:string;customerPhone:string;amount:number;currency:string;description:string;status:string;sendFormat:string;translateOnSend:boolean;targetLanguage:string;createdAt:string;createdByName:string;messageStatus:string;items:OrderProductItem[];fees:OrderFeeItem[]};
 type ConversationDetails={customerStage:string;tags:TagItem[];notes:NoteItem[];reminder:{id:string;remindAt:string;createdAt:string;updatedAt:string}|null;orders:OrderItem[]};
 type ChatMessage = {
   id:string; direction:"in"|"out"; kind:string; text:string; time:string;
@@ -34,7 +34,7 @@ type ChatMessage = {
   attachment?:{id:string;name:string;size:string;mime:string};
 };
 type User = {id:string;email:string;displayName:string;role:string};
-type WorkspaceView = "inbox"|"products"|"agents"|"settings"|"help";
+type WorkspaceView = "inbox"|"orders"|"products"|"agents"|"settings"|"help";
 type ManagedAgent = {id:string;name:string;status:string;version?:string;protocol_version?:number;platform?:string;last_seen_at?:string;last_acked_cursor:number;created_at:string;accounts:Array<{id:string;display_name:string;phone_e164?:string;status:string;status_reason?:string;last_event_at?:string}>};
 type MediaAsset = {id:string;fileName:string;mimeType:string;size:number;sha256:string;createdAt:string;usageCount:number};
 type TtsProviderId="openai"|"elevenlabs"|"azure"|"openai_compatible";
@@ -44,6 +44,10 @@ type TranslationProviderConfig={provider:TranslationProviderId;enabled:boolean;k
 type TranslationPreference={enabled:boolean;agentLanguage:string;customerLanguage:string;updatedAt:string|null};
 type MessageTranslation={status:"idle"|"loading"|"translated"|"failed";text?:string;sourceText?:string;message?:string};
 const DEFAULT_TRANSLATION_PREFERENCE:TranslationPreference={enabled:false,agentLanguage:"zh-CN",customerLanguage:"en",updatedAt:null};
+
+function mapOrder(item:Record<string,unknown>,defaults:Partial<OrderItem>={}):OrderItem{return{
+  id:String(item.id),orderNumber:String(item.display_order_number??item.order_number??""),conversationId:String(item.conversation_id??defaults.conversationId??""),accountId:String(item.account_id??defaults.accountId??""),accountName:String(item.account_name??defaults.accountName??""),customerName:String(item.customer_name??defaults.customerName??""),customerPhone:String(item.customer_phone??defaults.customerPhone??""),amount:Number(item.amount),currency:String(item.currency),description:String(item.description??""),status:String(item.status??"draft"),sendFormat:String(item.send_format??""),translateOnSend:Boolean(item.translate_on_send),targetLanguage:String(item.target_language??""),createdAt:String(item.created_at),createdByName:String(item.created_by_name??"已离职坐席"),messageStatus:String(item.message_status??item.status??"draft"),items:Array.isArray(item.items)?(item.items as Array<Record<string,unknown>>).map(product=>({id:String(product.id),name:String(product.name),quantity:Number(product.quantity),unitAmount:Number(product.unitAmount),imageMediaId:product.imageMediaId?String(product.imageMediaId):null,imageName:String(product.imageName??""),productId:product.productId?String(product.productId):null})):[],fees:Array.isArray(item.fees)?(item.fees as Array<Record<string,unknown>>).map(fee=>({id:String(fee.id),name:String(fee.name),amount:Number(fee.amount)})):[],
+};}
 
 export function WhatsAppInbox() {
   const [accounts,setAccounts]=useState<Account[]>([]);
@@ -264,6 +268,7 @@ export function WhatsAppInbox() {
     {toast&&<div className="toast"><Check size={15}/>{toast}</div>}
     <nav className="rail" aria-label="全局导航"><button className="brand-mark" onClick={()=>openInbox()} aria-label="RelayDesk 消息中心"><Sparkles size={19}/></button><div className="rail-nav">
       <button className={view==="inbox"&&filter==="全部会话"?"rail-button active":"rail-button"} onClick={()=>openInbox()} aria-label="消息中心" title="消息中心"><MessageCircle size={18}/></button>
+      <button className={view==="orders"?"rail-button active":"rail-button"} onClick={()=>setView("orders")} aria-label="订单管理" title="订单管理"><ClipboardList size={18}/></button>
       <button className={view==="products"?"rail-button active":"rail-button"} onClick={()=>setView("products")} aria-label="产品库" title="产品库"><ShoppingBag size={18}/></button>
       <button className={view==="agents"?"rail-button active":"rail-button"} onClick={()=>setView("agents")} aria-label="Agent 管理" title="Agent 管理"><MonitorSmartphone size={18}/></button>
       <button className="rail-button" onClick={()=>{openInbox();window.setTimeout(()=>{const composer=document.querySelector<HTMLTextAreaElement>(".composer textarea");if(composer)composer.focus();else setToast("请先选择一个真实会话");},0);}} aria-label="发送消息" title="发送消息"><Send size={18}/></button>
@@ -297,6 +302,7 @@ export function WhatsAppInbox() {
     </>:<div className="chat-empty"><MessageCircle size={31}/><h2>选择一个真实会话</h2><p>这里不会再显示演示联系人或模拟消息。</p></div>}</section>
 
     {detailsOpen&&active&&<CrmDetailsPanel active={active} token={apiToken} user={user} role={userRole} translationPreference={translationPreference} translationConfigured={translationConfigured} onToken={setApiToken} onClose={()=>setDetailsOpen(false)} onToast={setToast} onConversationChange={async change=>{await updateConversation(change);}} onChanged={async()=>{await Promise.all([loadWorkspace(apiToken,true),loadMessages(apiToken,active.id)]);}}/>}</>
+      :view==="orders"?<OrderManagement token={apiToken} accounts={accounts} onToken={setApiToken} onToast={setToast} onConversation={conversationId=>{const found=conversations.find(item=>item.id===conversationId);if(!found){setToast("该会话不在当前列表，请在消息中心搜索客户");openInbox();return;}setActiveId(conversationId);setDetailsOpen(true);openInbox();}}/>
       :view==="products"?<ProductManagement token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>
       :view==="agents"?<AgentManagement token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>
       :view==="settings"?<SettingsPanel token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>
@@ -407,46 +413,7 @@ function CrmDetailsPanel({
             }
           : null,
         orders: Array.isArray(body.orders)
-          ? (body.orders as Array<Record<string, unknown>>).map((item) => ({
-              id: String(item.id),
-              orderNumber: Number(item.order_number),
-              amount: Number(item.amount),
-              currency: String(item.currency),
-              description: String(item.description ?? ""),
-              status: String(item.status ?? "draft"),
-              sendFormat: String(item.send_format ?? ""),
-              translateOnSend: Boolean(item.translate_on_send),
-              targetLanguage: String(item.target_language ?? ""),
-              createdAt: String(item.created_at),
-              createdByName: String(item.created_by_name ?? "已离职坐席"),
-              messageStatus: String(
-                item.message_status ?? item.status ?? "draft",
-              ),
-              items: Array.isArray(item.items)
-                ? (item.items as Array<Record<string, unknown>>).map(
-                    (product) => ({
-                      id: String(product.id),
-                      name: String(product.name),
-                      quantity: Number(product.quantity),
-                      unitAmount: Number(product.unitAmount),
-                      imageMediaId: product.imageMediaId
-                        ? String(product.imageMediaId)
-                        : null,
-                      imageName: String(product.imageName ?? ""),
-                      productId: product.productId
-                        ? String(product.productId)
-                        : null,
-                    }),
-                  )
-                : [],
-              fees: Array.isArray(item.fees)
-                ? (item.fees as Array<Record<string, unknown>>).map((fee) => ({
-                    id: String(fee.id),
-                    name: String(fee.name),
-                    amount: Number(fee.amount),
-                  }))
-                : [],
-            }))
+          ? (body.orders as Array<Record<string, unknown>>).map(item=>mapOrder(item,{conversationId:active.id,accountId:active.accountId,accountName:active.account,customerName:active.name,customerPhone:active.phone}))
           : [],
       });
       setCatalog(tagBody.data.map(mapTag));
@@ -458,7 +425,7 @@ function CrmDetailsPanel({
     } finally {
       setLoading(false);
     }
-  }, [active.id, active.customerStage, token, onToken]);
+  }, [active.id, active.customerStage, active.accountId, active.account, active.name, active.phone, token, onToken]);
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
@@ -604,7 +571,7 @@ function CrmDetailsPanel({
         );
       setSendOrderTarget(null);
       onToast(
-        `订单 #${String(order.orderNumber).padStart(6, "0")} 已${order.status === "draft" ? "按" : "重新按"}${format === "image" ? "完整图片版" : "文字版"}进入发送队列`,
+        `订单 #${order.orderNumber} 已${order.status === "draft" ? "按" : "重新按"}${format === "image" ? "完整图片版" : "文字版"}进入发送队列`,
       );
       await load();
       await onChanged();
@@ -619,8 +586,8 @@ function CrmDetailsPanel({
     if (
       !window.confirm(
         sent
-          ? `删除订单 #${String(order.orderNumber).padStart(6, "0")}？这只会从联系人资料中移除，不会撤回已发送的 WhatsApp 消息。`
-          : `删除草稿订单 #${String(order.orderNumber).padStart(6, "0")}？`,
+          ? `删除订单 #${order.orderNumber}？这只会从联系人资料中移除，不会撤回已发送的 WhatsApp 消息。`
+          : `删除草稿订单 #${order.orderNumber}？`,
       )
     )
       return;
@@ -630,7 +597,7 @@ function CrmDetailsPanel({
     );
     if (ok)
       onToast(
-        `订单 #${String(order.orderNumber).padStart(6, "0")} 已删除${sent ? "（已发送消息未撤回）" : ""}`,
+        `订单 #${order.orderNumber} 已删除${sent ? "（已发送消息未撤回）" : ""}`,
       );
   }
   const visibleTags = catalog.filter((item) =>
@@ -688,7 +655,7 @@ function CrmDetailsPanel({
                     <article key={order.id} className="order-summary-card">
                       <span>
                         <b>
-                          #{String(order.orderNumber).padStart(6, "0")} ·{" "}
+                          #{order.orderNumber} ·{" "}
                           {order.items.length} 件商品
                         </b>
                         <small>
@@ -721,7 +688,7 @@ function CrmDetailsPanel({
                           className="order-edit"
                           disabled={busy}
                           onClick={() => setEditOrderTarget(order)}
-                          aria-label={`编辑订单 #${String(order.orderNumber).padStart(6, "0")}`}
+                          aria-label={`编辑订单 #${order.orderNumber}`}
                         >
                           <Pencil size={12} />
                         </button>
@@ -741,7 +708,7 @@ function CrmDetailsPanel({
                           className="order-delete"
                           disabled={busy}
                           onClick={() => void deleteOrder(order)}
-                          aria-label={`删除订单 #${String(order.orderNumber).padStart(6, "0")}`}
+                          aria-label={`删除订单 #${order.orderNumber}`}
                         >
                           <Trash2 size={12} />
                         </button>
@@ -991,7 +958,7 @@ function CrmDetailsPanel({
           onCreated={async (orderNumber) => {
             setOrderOpen(false);
             onToast(
-              `订单 #${String(orderNumber).padStart(6, "0")} 已保存为草稿`,
+              `订单 #${orderNumber} 已保存为草稿`,
             );
             await load();
             await onChanged();
@@ -1009,7 +976,7 @@ function CrmDetailsPanel({
           onClose={() => setEditOrderTarget(null)}
           onCreated={async (orderNumber) => {
             setEditOrderTarget(null);
-            onToast(`订单 #${String(orderNumber).padStart(6, "0")} 已更新`);
+            onToast(`订单 #${orderNumber} 已更新`);
             await load();
             await onChanged();
           }}
@@ -1029,7 +996,7 @@ function CrmDetailsPanel({
 
 function OrderSendDialog({order,busy,onClose,onSend}:{order:OrderItem;busy:boolean;onClose:()=>void;onSend:(format:"text"|"image")=>void}){
   const [format,setFormat]=useState<"text"|"image">("text");
-  return <div className="modal-backdrop order-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget&&!busy)onClose();}}><section className="login-dialog order-send-dialog" role="dialog" aria-modal="true" aria-labelledby="order-send-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><Send size={19}/></span><h2 id="order-send-title">发送订单 #{String(order.orderNumber).padStart(6,"0")}</h2><p>选择客户在 WhatsApp 中收到的订单格式。</p><div className="order-send-options">
+  return <div className="modal-backdrop order-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget&&!busy)onClose();}}><section className="login-dialog order-send-dialog" role="dialog" aria-modal="true" aria-labelledby="order-send-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><Send size={19}/></span><h2 id="order-send-title">发送订单 #{order.orderNumber}</h2><p>选择客户在 WhatsApp 中收到的订单格式。</p><div className="order-send-options">
     <label className={format==="text"?"selected":""}><input type="radio" name="order-format" checked={format==="text"} onChange={()=>setFormat("text")}/><span><b><FileText size={16}/>文字版详情</b><small>发送完整订单文字，不包含产品图片</small></span></label>
     <label className={format==="image"?"selected":""}><input type="radio" name="order-format" checked={format==="image"} onChange={()=>setFormat("image")}/><span><b><ShoppingBag size={16}/>图片版完整详情</b><small>生成一张包含全部订单内容和所有产品图片的长图</small></span></label>
   </div>{order.translateOnSend&&<p className="order-send-translation"><Languages size={13}/>点击发送后才会将订单详情翻译为 {languageName(order.targetLanguage)}</p>}<button className="login-submit" disabled={busy} onClick={()=>onSend(format)}>{busy?format==="image"?"正在生成订单图片…":"正在加入队列…":format==="image"?"生成完整图片并发送":"发送文字版详情"}</button></section></div>;
@@ -1056,7 +1023,7 @@ function OrderDialog({
   translationConfigured: boolean;
   onToken: (token: string) => void;
   onClose: () => void;
-  onCreated: (orderNumber: number) => Promise<void>;
+  onCreated: (orderNumber: string) => Promise<void>;
 }) {
   const [products, setProducts] = useState<DraftProduct[]>(() =>
       order
@@ -1285,7 +1252,7 @@ function OrderDialog({
       );
       if (saved.token !== token) onToken(saved.token);
       const body = (await saved.response.json().catch(() => ({}))) as {
-        orderNumber?: number;
+        orderNumber?: string;
         message?: string;
         error?: string;
       };
@@ -1761,9 +1728,22 @@ function MessageMedia({attachment,token,onToken,onReady}:{attachment:{id:string;
 }
 
 function SettingsPanel({token,role,onToken,onToast}:{token:string;role:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){
-  const [tab,setTab]=useState<"translation"|"speech">("translation");
+  const [tab,setTab]=useState<"translation"|"speech"|"orders">("translation");
   if(role!=="admin")return <section className="management-panel"><EmptyState title="需要管理员权限" text="只有管理员可以查看或修改 AI Provider 与密钥配置。"/></section>;
-  return <section className="management-panel settings-panel"><header className="management-head"><div><span className="eyebrow">系统设置</span><h1>AI Provider</h1><p>集中管理翻译和文字转语音模型。API Key 加密保存，前端不会再次读取明文。</p></div></header><nav className="settings-tabs" aria-label="AI 设置"><button className={tab==="translation"?"active":""} onClick={()=>setTab("translation")}><Languages size={15}/>AI 翻译</button><button className={tab==="speech"?"active":""} onClick={()=>setTab("speech")}><Mic size={15}/>AI 语音</button></nav>{tab==="translation"?<TranslationSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:<TtsSettingsPanel token={token} role={role} onToken={onToken} onToast={onToast}/>}</section>;
+  return <section className="management-panel settings-panel"><header className="management-head"><div><span className="eyebrow">系统设置</span><h1>工作区配置</h1><p>集中管理 AI Provider、订单编号规则和业务时区。</p></div></header><nav className="settings-tabs" aria-label="系统设置"><button className={tab==="translation"?"active":""} onClick={()=>setTab("translation")}><Languages size={15}/>AI 翻译</button><button className={tab==="speech"?"active":""} onClick={()=>setTab("speech")}><Mic size={15}/>AI 语音</button><button className={tab==="orders"?"active":""} onClick={()=>setTab("orders")}><ClipboardList size={15}/>订单设置</button></nav>{tab==="translation"?<TranslationSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="speech"?<TtsSettingsPanel token={token} role={role} onToken={onToken} onToast={onToast}/>:<OrderSettingsPanel token={token} onToken={onToken} onToast={onToast}/>}</section>;
+}
+
+function previewOrderNumber(template:string,timezone:string):string{
+  try{const parts=new Intl.DateTimeFormat("en-CA",{timeZone:timezone,year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date()),value=(type:string)=>parts.find(part=>part.type===type)?.value??"";const year=value("year");return template.replace(/\{(?:YYYY|YY|MM|DD|SEQ:\d+)\}/g,token=>token==="{YYYY}"?year:token==="{YY}"?year.slice(-2):token==="{MM}"?value("month"):token==="{DD}"?value("day"):"1".padStart(Number(token.slice(5,-1)),"0"));}catch{return "时区或模板无效";}
+}
+
+function OrderSettingsPanel({token,onToken,onToast}:{token:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){
+  const [template,setTemplate]=useState("{YYYY}{MM}{DD}-{SEQ:3}"),[timezone,setTimezone]=useState("Asia/Shanghai"),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[error,setError]=useState("");
+  const load=useCallback(async()=>{setLoading(true);try{const result=await authorizedFetch("/api/v1/admin/order-settings",token);if(result.token!==token)onToken(result.token);const body=await result.response.json() as {numberTemplate?:string;timezone?:string;message?:string};if(!result.response.ok)throw new Error(body.message??`HTTP ${result.response.status}`);setTemplate(body.numberTemplate??"{YYYY}{MM}{DD}-{SEQ:3}");setTimezone(body.timezone??"Asia/Shanghai");setError("");}catch(reason){setError(reason instanceof Error?reason.message:"订单设置加载失败");}finally{setLoading(false);}},[token,onToken]);
+  useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer);},[load]);
+  async function save(){setSaving(true);setError("");try{const result=await authorizedFetch("/api/v1/admin/order-settings",token,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({numberTemplate:template,timezone})});if(result.token!==token)onToken(result.token);const body=await result.response.json().catch(()=>({})) as {message?:string;error?:string};if(!result.response.ok)throw new Error(body.message??body.error??`HTTP ${result.response.status}`);onToast("订单编号规则已保存，仅影响此后创建的订单");await load();}catch(reason){setError(reason instanceof Error?reason.message:"订单设置保存失败");}finally{setSaving(false);}}
+  if(loading)return <EmptyState title="正在读取订单设置" text="请稍候…"/>;
+  return <div className="settings-provider-section order-settings"><div className="settings-section-head"><div><h2>订单编号规则</h2><p>订单号在创建时固化；修改规则不会改变任何历史订单。</p></div><button className="secondary-action" onClick={()=>void load()}><RefreshCw size={15}/>刷新</button></div><div className="order-settings-form"><label>编号模板<input value={template} onChange={event=>setTemplate(event.target.value)} maxLength={80}/><small>必须包含年份、月份、日期和当日序号各一次。</small></label><div className="order-variable-buttons">{["{YYYY}","{YY}","{MM}","{DD}","{SEQ:3}"].map(variable=><button key={variable} onClick={()=>setTemplate(value=>value+variable)}>{variable}</button>)}</div><label>业务时区<input value={timezone} onChange={event=>setTimezone(event.target.value)} list="order-timezones" placeholder="Asia/Shanghai"/><datalist id="order-timezones"><option value="Asia/Shanghai"/><option value="Asia/Hong_Kong"/><option value="Asia/Singapore"/><option value="Europe/London"/><option value="America/New_York"/><option value="America/Los_Angeles"/></datalist><small>使用 IANA 时区计算日期和每日序号重置边界。</small></label><div className="order-number-preview"><span>下一个订单号示例</span><b>#{previewOrderNumber(template,timezone)}</b></div>{error&&<span className="login-error">{error}</span>}<button className="primary-action provider-save" disabled={saving||!template.trim()||!timezone.trim()} onClick={()=>void save()}>{saving?<><RefreshCw className="spin" size={14}/>正在保存</>:<><Check size={14}/>保存订单设置</>}</button></div></div>;
 }
 
 const TRANSLATION_PROVIDER_META:Record<TranslationProviderId,{name:string;description:string;keyLabel:string;endpointHint:string;modelHint:string;transcriptionModelHint:string}>={
@@ -1798,6 +1778,26 @@ function TtsSettingsPanel({token,role,onToken,onToast}:{token:string;role:string
   async function save(){if(!current||saving)return;setSaving(true);setError("");try{const result=await authorizedFetch(`/api/v1/admin/tts-providers/${selected}`,token,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({enabled:current.enabled,apiKey:secret.trim()||undefined,baseUrl:current.baseUrl,model:current.model,voice:current.voice})});if(result.token!==token)onToken(result.token);const body=await result.response.json().catch(()=>({})) as Record<string,unknown>;if(!result.response.ok)throw new Error(String(body.message??body.error??`HTTP ${result.response.status}`));setSecret("");onToast(`${meta.name} 配置已保存${current.enabled?"并启用":""}`);await load();}catch(reason){setError(reason instanceof Error?reason.message:"保存失败");}finally{setSaving(false);}}
   if(role!=="admin")return <EmptyState title="需要管理员权限" text="只有管理员可以查看或修改语音 Provider 与密钥配置。"/>;
   return <div className="settings-provider-section"><div className="settings-section-head"><div><h2>AI 语音 Provider</h2><p>管理文字转语音服务、模型与默认音色。</p></div><button className="secondary-action" onClick={()=>void load()}><RefreshCw size={15}/>刷新</button></div>{loading?<EmptyState title="正在读取语音 Provider" text="请稍候…"/>:<div className="provider-settings-layout"><nav className="provider-list" aria-label="语音 Provider">{providers.map(item=><button key={item.provider} className={selected===item.provider?"active":""} onClick={()=>{setSelected(item.provider);setSecret("");}}><span><b>{TTS_PROVIDER_META[item.provider].name}</b><small>{TTS_PROVIDER_META[item.provider].description}</small></span><em className={item.enabled?"enabled":item.keyConfigured?"configured":""}>{item.enabled?"使用中":item.keyConfigured?"已配置":"未配置"}</em></button>)}</nav>{current&&<div className="provider-form"><header><div><h2>{meta.name}</h2><p>{meta.description}</p></div><label className="provider-toggle"><input type="checkbox" checked={current.enabled} onChange={event=>change({enabled:event.target.checked})}/><span>设为当前 Provider</span></label></header><label>{meta.keyLabel}<input type="password" value={secret} onChange={event=>setSecret(event.target.value)} autoComplete="new-password" placeholder={current.keyConfigured?"已加密保存；留空表示不修改":"请输入 API Key"}/><small>保存后仅显示配置状态，不会回传密钥。</small></label><label>API Endpoint<input type="url" value={current.baseUrl} onChange={event=>change({baseUrl:event.target.value})} placeholder={meta.endpointHint}/></label><div className="provider-form-grid"><label>模型 ID<input value={current.model} onChange={event=>change({model:event.target.value})} placeholder={meta.modelHint}/></label><label>默认音色 / Voice ID<input value={current.voice} onChange={event=>change({voice:event.target.value})} placeholder={meta.voiceHint}/></label></div>{error&&<span className="login-error">{error}</span>}<button className="primary-action provider-save" disabled={saving||!current.baseUrl.trim()||!current.voice.trim()||(selected!=="azure"&&!current.model.trim())||(!current.keyConfigured&&!secret.trim())} onClick={()=>void save()}>{saving?<><RefreshCw className="spin" size={14}/>正在保存</>:<><Check size={14}/>保存配置</>}</button></div>}</div>}</div>;
+}
+
+function OrderManagement({token,accounts,onToken,onToast,onConversation}:{token:string;accounts:Account[];onToken:(token:string)=>void;onToast:(text:string)=>void;onConversation:(conversationId:string)=>void}){
+  const [orders,setOrders]=useState<OrderItem[]>([]),[loading,setLoading]=useState(true),[error,setError]=useState(""),[query,setQuery]=useState(""),[accountId,setAccountId]=useState(""),[status,setStatus]=useState(""),[dateFrom,setDateFrom]=useState(""),[dateTo,setDateTo]=useState(""),[total,setTotal]=useState(0),[nextCursor,setNextCursor]=useState<string|null>(null),[viewing,setViewing]=useState<OrderItem|null>(null),[editing,setEditing]=useState<OrderItem|null>(null);
+  const cursorRef=useRef<string|null>(null);
+  const load=useCallback(async(reset=true)=>{if(reset)setLoading(true);try{const params=new URLSearchParams({limit:"30"});if(query.trim())params.set("q",query.trim());if(accountId)params.set("accountId",accountId);if(status)params.set("status",status);if(dateFrom)params.set("dateFrom",dateFrom);if(dateTo)params.set("dateTo",dateTo);if(!reset&&cursorRef.current)params.set("cursor",cursorRef.current);const result=await authorizedFetch(`/api/v1/orders?${params}`,token);if(result.token!==token)onToken(result.token);if(!result.response.ok)throw new Error(`订单加载失败（HTTP ${result.response.status}）`);const body=await result.response.json() as {data:Array<Record<string,unknown>>;nextCursor:string|null;total:number};const mapped=body.data.map(item=>mapOrder(item));setOrders(all=>reset?mapped:[...all,...mapped]);cursorRef.current=body.nextCursor;setNextCursor(body.nextCursor);if(reset)setTotal(Number(body.total??mapped.length));setError("");}catch(reason){setError(reason instanceof Error?reason.message:"订单加载失败");}finally{setLoading(false);}},[token,onToken,query,accountId,status,dateFrom,dateTo]);
+  useEffect(()=>{cursorRef.current=null;const timer=window.setTimeout(()=>void load(true),query?250:0);return()=>window.clearTimeout(timer);},[load,query]);
+  async function remove(order:OrderItem){const sent=order.status!=="draft";if(!window.confirm(sent?`删除订单 #${order.orderNumber}？这不会撤回已经发送的 WhatsApp 消息。`:`删除草稿订单 #${order.orderNumber}？`))return;const result=await authorizedFetch(`/api/v1/conversations/${order.conversationId}/orders/${order.id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);if(!result.response.ok){onToast(`订单删除失败（HTTP ${result.response.status}）`);return;}onToast(`订单 #${order.orderNumber} 已删除${sent?"，历史消息保持不变":""}`);cursorRef.current=null;await load(true);}
+  const draftCount=orders.filter(order=>order.status==="draft").length,queuedCount=orders.filter(order=>order.status!=="draft").length;
+  return <section className="management-panel order-management"><header className="management-head"><div><span className="eyebrow">会话订单中心</span><h1>订单管理</h1><p>集中查看、编辑和删除从客户会话中创建的订单。</p></div><button className="secondary-action" onClick={()=>void load(true)}><RefreshCw size={15}/>刷新</button></header>
+    <div className="management-summary"><SummaryCard label="匹配订单" value={total}/><SummaryCard label="当前页草稿" value={draftCount}/><SummaryCard label="当前页已发送" value={queuedCount}/></div>
+    <div className="order-management-filters"><label><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索订单号、客户名称或手机号"/></label><select value={accountId} onChange={event=>setAccountId(event.target.value)} aria-label="按账号筛选"><option value="">全部账号</option>{accounts.map(account=><option key={account.id} value={account.id}>{account.name}</option>)}</select><select value={status} onChange={event=>setStatus(event.target.value)} aria-label="按状态筛选"><option value="">全部状态</option><option value="draft">草稿</option><option value="queued">已发送</option></select><input type="date" value={dateFrom} onChange={event=>setDateFrom(event.target.value)} aria-label="开始日期"/><input type="date" value={dateTo} min={dateFrom||undefined} onChange={event=>setDateTo(event.target.value)} aria-label="结束日期"/></div>
+    {loading?<EmptyState title="正在读取订单" text="请稍候…"/>:error?<EmptyState title="订单加载失败" text={error}/>:orders.length?<><div className="order-table-wrap"><table className="order-table"><thead><tr><th>订单号</th><th>客户 / 账号</th><th>商品</th><th>金额</th><th>状态</th><th>创建时间</th><th aria-label="操作"/></tr></thead><tbody>{orders.map(order=><tr key={order.id} onClick={()=>setViewing(order)}><td><b>#{order.orderNumber}</b><small>{order.createdByName}</small></td><td><b>{order.customerName||order.customerPhone||"未知客户"}</b><small>{order.accountName}{order.customerPhone?` · ${order.customerPhone}`:""}</small></td><td>{order.items.length} 件<small>{order.items.slice(0,2).map(item=>item.name).join("、")}{order.items.length>2?"…":""}</small></td><td><b>{order.currency} {order.amount.toFixed(2)}</b></td><td><em className={`delivery-state ${order.messageStatus}`}>{order.status==="draft"?"草稿":deliveryText(order.messageStatus)}</em></td><td>{formatDateTime(order.createdAt)}</td><td><span className="order-row-actions"><button onClick={event=>{event.stopPropagation();setEditing(order);}} aria-label={`编辑订单 ${order.orderNumber}`}><Pencil size={13}/></button><button className="danger" onClick={event=>{event.stopPropagation();void remove(order);}} aria-label={`删除订单 ${order.orderNumber}`}><Trash2 size={13}/></button></span></td></tr>)}</tbody></table></div>{nextCursor&&<button className="order-load-more" onClick={()=>void load(false)}>加载更多订单</button>}</>:<EmptyState title="暂无匹配订单" text="订单需先在客户会话中创建，或调整当前筛选条件"/>}
+    {viewing&&<OrderDetailsDialog order={viewing} onClose={()=>setViewing(null)} onEdit={()=>{setViewing(null);setEditing(viewing);}} onConversation={()=>onConversation(viewing.conversationId)}/>}
+    {editing&&<OrderDialog order={editing} active={{id:editing.conversationId,name:editing.customerName,initials:"",color:"#477a62",account:editing.accountName,accountId:editing.accountId,phone:editing.customerPhone,preview:"",time:"",unread:0,accountStatus:"online",assignedUserId:null,favorite:false,conversationStatus:"open",customerStage:"new",tags:[],remindAt:null}} token={token} translationPreference={{enabled:editing.translateOnSend,agentLanguage:"zh-CN",customerLanguage:editing.targetLanguage||"en",updatedAt:null}} translationConfigured onToken={onToken} onClose={()=>setEditing(null)} onCreated={async orderNumber=>{setEditing(null);onToast(`订单 #${orderNumber} 已更新`);cursorRef.current=null;await load(true);}}/>}
+  </section>;
+}
+
+function OrderDetailsDialog({order,onClose,onEdit,onConversation}:{order:OrderItem;onClose:()=>void;onEdit:()=>void;onConversation:()=>void}){
+  return <div className="modal-backdrop order-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onClose();}}><section className="login-dialog order-details-dialog" role="dialog" aria-modal="true" aria-labelledby="order-details-title"><button className="login-close" onClick={onClose} aria-label="关闭"><X size={17}/></button><span className="login-logo"><ClipboardList size={20}/></span><h2 id="order-details-title">订单 #{order.orderNumber}</h2><p>{order.customerName||order.customerPhone||"未知客户"} · {order.accountName}</p><dl className="order-details-meta"><div><dt>状态</dt><dd>{order.status==="draft"?"草稿":deliveryText(order.messageStatus)}</dd></div><div><dt>创建人</dt><dd>{order.createdByName}</dd></div><div><dt>创建时间</dt><dd>{formatDateTime(order.createdAt)}</dd></div><div><dt>订单金额</dt><dd>{order.currency} {order.amount.toFixed(2)}</dd></div></dl><div className="order-details-items"><h3>商品</h3>{order.items.map(item=><div key={item.id}><span><b>{item.name}</b><small>{item.quantity} × {order.currency} {item.unitAmount.toFixed(2)}</small></span><strong>{order.currency} {(item.quantity*item.unitAmount).toFixed(2)}</strong></div>)}{order.fees.map(item=><div key={item.id}><span><b>{item.name}</b><small>附加费用</small></span><strong>{order.currency} {item.amount.toFixed(2)}</strong></div>)}</div>{order.description&&<div className="order-details-notes"><b>订单备注</b><p>{order.description}</p></div>}<footer className="order-details-actions"><button className="secondary-action" onClick={onConversation}><ExternalLink size={14}/>打开所属会话</button><button className="primary-action" onClick={onEdit}><Pencil size={14}/>编辑订单</button></footer></section></div>;
 }
 
 function ProductManagement({token,role,onToken,onToast}:{token:string;role:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){

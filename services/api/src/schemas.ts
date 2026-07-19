@@ -94,5 +94,6 @@ const orderContentSchema=z.object({
 export const orderSchema=z.object({clientOrderId:z.string().uuid()}).and(orderContentSchema);
 export const orderUpdateSchema=orderContentSchema;
 export const orderSendSchema=z.object({format:z.enum(["text","image"]).default("text"),clientSendId:z.string().uuid().optional()}).default({format:"text"});
+export const orderSettingsSchema=z.object({numberTemplate:z.string().min(1).max(80),timezone:z.string().min(1).max(100)});
 
 export const enrollmentSchema = z.object({ code: z.string().min(16), name: z.string().min(2).max(80), version: z.string(), platform: z.string() });

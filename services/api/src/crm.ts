@@ -13,8 +13,9 @@ export type OrderSummaryFee={name:string;amount:number};
 
 export function calculateOrderTotal(items:OrderSummaryItem[],fees:OrderSummaryFee[]):number{return items.reduce((sum,item)=>sum+item.quantity*item.unitAmount,0)+fees.reduce((sum,fee)=>sum+fee.amount,0);}
 
-export function formatOrderSummary(orderNumber:number,items:OrderSummaryItem[],fees:OrderSummaryFee[],currency:string,description?:string):string{
-  const lines=[`Order #${String(orderNumber).padStart(6,"0")}`,"","Items:",...items.map((item,index)=>`${index+1}. ${item.name} x ${item.quantity} - ${currency} ${item.unitAmount.toFixed(2)} each - ${currency} ${(item.quantity*item.unitAmount).toFixed(2)}`)];
+export function formatOrderSummary(orderNumber:string|number,items:OrderSummaryItem[],fees:OrderSummaryFee[],currency:string,description?:string):string{
+  const displayNumber=typeof orderNumber==="number"?String(orderNumber).padStart(6,"0"):orderNumber;
+  const lines=[`Order #${displayNumber}`,"","Items:",...items.map((item,index)=>`${index+1}. ${item.name} x ${item.quantity} - ${currency} ${item.unitAmount.toFixed(2)} each - ${currency} ${(item.quantity*item.unitAmount).toFixed(2)}`)];
   if(fees.length)lines.push("","Additional fees:",...fees.map(fee=>`${fee.name} - ${currency} ${fee.amount.toFixed(2)}`));
   lines.push("",`Total: ${currency} ${calculateOrderTotal(items,fees).toFixed(2)}`);
   if(description)lines.push("",`Notes: ${description}`);
@@ -38,6 +39,14 @@ export async function ensureCrmTables(db:Queryable):Promise<void>{
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS send_format text");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS rendered_media_id uuid REFERENCES media(id) ON DELETE SET NULL");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS deleted_at timestamptz");
+  await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS display_order_number text");
+  await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS sequence_date date");
+  await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS daily_sequence integer");
+  await db.query("UPDATE orders SET display_order_number=lpad(order_number::text,6,'0') WHERE display_order_number IS NULL");
+  await db.query("ALTER TABLE orders ALTER COLUMN display_order_number SET NOT NULL");
+  await db.query(`CREATE TABLE IF NOT EXISTS order_settings (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),number_template text NOT NULL DEFAULT '{YYYY}{MM}{DD}-{SEQ:3}',timezone text NOT NULL DEFAULT 'Asia/Shanghai',updated_by uuid REFERENCES users(id) ON DELETE SET NULL,updated_at timestamptz NOT NULL DEFAULT now())`);
+  await db.query("INSERT INTO order_settings(singleton) VALUES(true) ON CONFLICT(singleton) DO NOTHING");
+  await db.query("CREATE TABLE IF NOT EXISTS order_daily_sequences (sequence_date date PRIMARY KEY,last_value integer NOT NULL CHECK(last_value>0),updated_at timestamptz NOT NULL DEFAULT now())");
   await db.query("UPDATE orders SET status='queued',sent_at=COALESCE(sent_at,created_at) WHERE summary_message_id IS NOT NULL AND status='draft'");
   await db.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='orders_status_check') THEN ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK(status IN ('draft','queued')); END IF; END $$`);
   await db.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='orders_send_format_check') THEN ALTER TABLE orders ADD CONSTRAINT orders_send_format_check CHECK(send_format IS NULL OR send_format IN ('text','image')); END IF; END $$`);
@@ -56,4 +65,6 @@ export async function ensureCrmTables(db:Queryable):Promise<void>{
   await db.query("CREATE INDEX IF NOT EXISTS reminders_user_due_idx ON reminders(user_id,remind_at) WHERE dismissed_at IS NULL");
   await db.query("CREATE INDEX IF NOT EXISTS orders_conversation_created_idx ON orders(conversation_id,created_at DESC)");
   await db.query("CREATE INDEX IF NOT EXISTS orders_conversation_active_idx ON orders(conversation_id,created_at DESC) WHERE deleted_at IS NULL");
+  await db.query("CREATE UNIQUE INDEX IF NOT EXISTS orders_display_number_unique ON orders(display_order_number)");
+  await db.query("CREATE INDEX IF NOT EXISTS orders_management_created_idx ON orders(created_at DESC,id DESC) WHERE deleted_at IS NULL");
 }
