@@ -292,7 +292,11 @@ jobs:
             console.log("Admin credential self-check passed");
           '
 
-          ln -sfnT "$release" "$root/current"
+          next_link="$root/.current-$sha"
+          rm -f "$next_link"
+          ln -s "$release" "$next_link"
+          mv -Tf "$next_link" "$root/current"
+          test "$(readlink -f "$root/current")" = "$release"
           rm -f "$archive" "$incoming_env" "$env_backup"
           trap - ERR
           WEB_PORT="$web_port" docker compose -p relaydesk ps
