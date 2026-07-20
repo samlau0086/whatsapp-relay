@@ -116,6 +116,7 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /order-send-mode/);
   assert.doesNotMatch(component, /order-send-english/);
   assert.match(component, /目标翻译语言/);
+  assert.match(component, /LanguagePicker value=\{targetLanguage\}/);
   assert.match(component, /setTranslate\(false\)/);
   assert.match(component, /clientSendId\s*:\s*crypto\.randomUUID/);
   assert.match(component, /method\s*:\s*order\s*\?\s*"PATCH"\s*:\s*"POST"/);
