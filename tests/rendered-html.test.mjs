@@ -160,6 +160,10 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /AI Agent/);
   assert.match(component, /知识库/);
   assert.match(component, /聊天记忆/);
-  assert.match(component, /恢复 Agent/);
+  assert.match(component, /AI 接管/);
+  assert.match(component, /人工接管/);
+  assert.match(component, /会话接管方式/);
+  assert.match(component, /conversations\/\$\{conversationId\}\/agent/);
+  assert.match(css, /\.takeover-switch/);
   assert.match(component, /确认发送/);
 });
