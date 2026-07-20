@@ -60,3 +60,18 @@ test("customer addresses are reusable while orders retain an address snapshot",a
   assert.match(migration,/ADD COLUMN IF NOT EXISTS address_id/);
   assert.match(migration,/ADD COLUMN IF NOT EXISTS shipping_address_snapshot jsonb/);
 });
+
+test("contact aliases stay independent from synchronized WhatsApp names",async()=>{
+  const [server,hub,migration,migrator]=await Promise.all([
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/agent-hub.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../infra/postgres/migrations/019_contact_aliases.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(migration,/ADD COLUMN IF NOT EXISTS alias text/);
+  assert.match(migrator,/019_contact_aliases\.sql/);
+  assert.match(server,/contact\.alias\.update/);
+  assert.match(server,/COALESCE\(NULLIF\(co\.alias,''\),co\.display_name,co\.phone_e164\)/);
+  assert.match(hub,/const bestAlias=/);
+  assert.doesNotMatch(hub,/UPDATE contacts SET[^\n]*alias=COALESCE\(NULLIF\(EXCLUDED\.display_name/);
+});

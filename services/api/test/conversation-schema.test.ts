@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { conversationTagsSchema, customerStageSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, orderUpdateSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
+import { contactAliasSchema, conversationTagsSchema, customerStageSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, orderUpdateSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
 
 const accountId="10000000-0000-4000-8000-000000000009";
 
@@ -52,6 +52,9 @@ test("translated outgoing text can retain an agent-only source",()=>{
 });
 
 test("CRM schemas enforce stages, tags, notes, and reminder dates",()=>{
+  assert.equal(contactAliasSchema.parse({alias:"  Alice Shanghai  "}).alias,"Alice Shanghai");
+  assert.equal(contactAliasSchema.parse({alias:"   "}).alias,"");
+  assert.equal(contactAliasSchema.safeParse({alias:"x".repeat(81)}).success,false);
   assert.equal(customerStageSchema.safeParse("qualified").success,true);
   assert.equal(customerStageSchema.safeParse("maybe").success,false);
   assert.equal(tagCreateSchema.safeParse({name:"  VIP  ",color:"#DFF5E8"}).data?.name,"VIP");

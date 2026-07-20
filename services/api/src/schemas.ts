@@ -70,6 +70,7 @@ export const newConversationSchema = z.object({
 });
 
 export const customerStageSchema=z.enum(["new","considering","qualified","won","lost"]);
+export const contactAliasSchema=z.object({alias:z.string().trim().max(80)});
 export const tagCreateSchema=z.object({name:z.string().trim().min(1).max(40),color:z.string().regex(/^#[0-9A-Fa-f]{6}$/)});
 export const tagUpdateSchema=tagCreateSchema.partial().refine(value=>Object.keys(value).length>0,"at least one field is required");
 export const conversationTagsSchema=z.object({tagIds:z.array(z.string().uuid()).max(20)});

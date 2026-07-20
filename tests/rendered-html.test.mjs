@@ -167,4 +167,7 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /conversations\/\$\{conversationId\}\/agent/);
   assert.match(css, /\.takeover-switch/);
   assert.match(component, /确认发送/);
+  assert.match(component, /中文参考/);
+  assert.match(component, /reply_zh/);
+  assert.match(css, /\.agent-draft-copy/);
 });

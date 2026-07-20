@@ -37,3 +37,8 @@ test("full takeover sends useful replies without the cautious evidence gate",()=
   assert.equal(shouldAutoReply(uncertain,"full",.8,new Set()),true);
   assert.equal(shouldAutoReply({...uncertain,decision:"ignore"},"full",.8,new Set()),false);
 });
+
+test("agent decisions can carry a Chinese review translation",()=>{
+  const decision:AgentDecision={decision:"draft",reply:"How can I help?",replyZh:"请问有什么可以帮助您？",confidence:.5,citations:[],reason:"review"};
+  assert.equal(decision.replyZh,"请问有什么可以帮助您？");
+});

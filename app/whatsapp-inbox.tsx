@@ -17,6 +17,7 @@ let refreshPromise:Promise<string>|null=null;
 type Account = { id:string; name:string; phone:string; status:string; reason:string; lastEvent?:string };
 type Conversation = {
   id:string; name:string; initials:string; color:string; account:string; accountId:string; phone:string;
+  alias:string; contactName:string;
   preview:string; time:string; unread:number; accountStatus:string; assignedUserId:string|null;
   favorite:boolean; conversationStatus:string; customerStage:string; tags:TagItem[]; remindAt:string|null;
 };
@@ -46,7 +47,7 @@ type TranslationProviderConfig={provider:TranslationProviderId;enabled:boolean;k
 type TranslationPreference={enabled:boolean;agentLanguage:string;customerLanguage:string;updatedAt:string|null};
 type MessageTranslation={status:"idle"|"loading"|"translated"|"failed";text?:string;sourceText?:string;message?:string};
 type KnowledgeBaseItem={id:string;name:string;description:string;document_count?:number;faq_count?:number};
-type AgentDraft={id:string;text_content:string;reason:string;citations:string[];created_at:string};
+type AgentDraft={id:string;text_content:string;reply_zh:string|null;reason:string;citations:string[];created_at:string};
 const DEFAULT_TRANSLATION_PREFERENCE:TranslationPreference={enabled:false,agentLanguage:"zh-CN",customerLanguage:"en",updatedAt:null};
 
 function mapOrder(item:Record<string,unknown>,defaults:Partial<OrderItem>={}):OrderItem{return{
@@ -373,6 +374,9 @@ function CrmDetailsPanel({
     [orderOpen, setOrderOpen] = useState(false),
     [editOrderTarget, setEditOrderTarget] = useState<OrderItem | null>(null),
     [sendOrderTarget, setSendOrderTarget] = useState<OrderSendTarget | null>(null),
+    [aliasEditing, setAliasEditing] = useState(false),
+    [aliasDraft, setAliasDraft] = useState(active.alias),
+    [aliasBusy, setAliasBusy] = useState(false),
     [currentTime] = useState(() => Date.now());
   const canManageTags = ["admin", "supervisor"].includes(role);
   const load = useCallback(async () => {
@@ -438,6 +442,10 @@ function CrmDetailsPanel({
     return () => window.clearTimeout(timer);
   }, [load]);
   useEffect(() => {
+    setAliasDraft(active.alias);
+    setAliasEditing(false);
+  }, [active.id, active.alias]);
+  useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (sendOrderTarget) setSendOrderTarget(null);
@@ -471,6 +479,21 @@ function CrmDetailsPanel({
     } finally {
       setBusy(false);
     }
+  }
+  async function saveAlias(event: React.FormEvent) {
+    event.preventDefault();
+    setAliasBusy(true);
+    setError("");
+    try {
+      const result=await authorizedFetch(`/api/v1/conversations/${active.id}/contact`,token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({alias:aliasDraft})});
+      if(result.token!==token)onToken(result.token);
+      const body=await result.response.json().catch(()=>({})) as {error?:string};
+      if(!result.response.ok)throw new Error(body.error??`别名保存失败（HTTP ${result.response.status}）`);
+      await onChanged();
+      setAliasEditing(false);
+      onToast(aliasDraft.trim()?"联系人别名已保存":"联系人别名已清除");
+    }catch(reason){setError(reason instanceof Error?reason.message:"别名保存失败");}
+    finally{setAliasBusy(false);}
   }
   async function setStage(customerStage: string) {
     await onConversationChange({ customerStage });
@@ -632,7 +655,11 @@ function CrmDetailsPanel({
           <span className="avatar large" style={{ background: active.color }}>
             {active.initials}
           </span>
-          <h2>{active.name}</h2>
+          {aliasEditing?<form className="contact-alias-form" onSubmit={saveAlias}>
+            <input autoFocus value={aliasDraft} maxLength={80} placeholder={active.contactName||active.phone||"输入联系人别名"} onChange={event=>setAliasDraft(event.target.value)} onKeyDown={event=>{if(event.key==="Escape"){setAliasDraft(active.alias);setAliasEditing(false);}}} aria-label="联系人别名"/>
+            <button type="submit" disabled={aliasBusy} aria-label="保存别名"><Check size={14}/></button>
+            <button type="button" disabled={aliasBusy} onClick={()=>{setAliasDraft(active.alias);setAliasEditing(false);}} aria-label="取消编辑"><X size={14}/></button>
+          </form>:<div className="contact-name"><h2>{active.name}</h2><button className="contact-alias-edit" onClick={()=>setAliasEditing(true)} aria-label="编辑联系人别名" title="编辑别名"><Pencil size={13}/></button></div>}
           <p>{active.phone || "号码待同步"}</p>
           <span className="contact-online">
             <i
@@ -1870,7 +1897,7 @@ function ProductImageMediaDialog({accountId,token,onToken,onClose,onSelect}:{acc
 function mapMediaAsset(item:Record<string,unknown>):MediaAsset{return{id:String(item.id),fileName:String(item.file_name??"未命名文件"),mimeType:String(item.mime_type??"application/octet-stream"),size:Number(item.byte_size??0),sha256:String(item.sha256??""),createdAt:String(item.created_at??""),usageCount:Number(item.usage_count??0)};}
 function mediaKind(mime:string){return mime.startsWith("image/")?"image":mime.startsWith("video/")?"video":mime.startsWith("audio/")?"audio":"document";}
 
-function mapConversation(item:Record<string,unknown>,index:number):Conversation {const name=String(item.display_name??item.phone_e164??"未知联系人");return{id:String(item.id),name,initials:name.slice(0,2).toUpperCase(),color:COLORS[index%COLORS.length],account:String(item.account_name??"未知账号"),accountId:String(item.account_id),phone:String(item.phone_e164??""),preview:String(item.last_message??kindText(String(item.last_message_kind??""))),time:item.last_message_at?formatTime(new Date(String(item.last_message_at))):"",unread:Number(item.unread_count??0),accountStatus:String(item.account_status??"offline"),assignedUserId:item.assigned_user_id?String(item.assigned_user_id):null,favorite:Boolean(item.favorite),conversationStatus:String(item.status??"open"),customerStage:String(item.customer_stage??"new"),tags:Array.isArray(item.tags)?item.tags.map(mapTag):[],remindAt:item.remind_at?String(item.remind_at):null};}
+function mapConversation(item:Record<string,unknown>,index:number):Conversation {const name=String(item.display_name??item.phone_e164??"未知联系人");return{id:String(item.id),name,initials:name.slice(0,2).toUpperCase(),color:COLORS[index%COLORS.length],account:String(item.account_name??"未知账号"),accountId:String(item.account_id),phone:String(item.phone_e164??""),alias:String(item.alias??""),contactName:String(item.contact_name??item.phone_e164??""),preview:String(item.last_message??kindText(String(item.last_message_kind??""))),time:item.last_message_at?formatTime(new Date(String(item.last_message_at))):"",unread:Number(item.unread_count??0),accountStatus:String(item.account_status??"offline"),assignedUserId:item.assigned_user_id?String(item.assigned_user_id):null,favorite:Boolean(item.favorite),conversationStatus:String(item.status??"open"),customerStage:String(item.customer_stage??"new"),tags:Array.isArray(item.tags)?item.tags.map(mapTag):[],remindAt:item.remind_at?String(item.remind_at):null};}
 function mapTag(item:Record<string,unknown>):TagItem{return{id:String(item.id),name:String(item.name??"标签"),color:String(item.color??"#DFF5E8")};}
 function mapMessage(item:Record<string,unknown>):ChatMessage {const kind=String(item.kind??"text"),mediaId=String(item.media_id??"");return{id:String(item.id),direction:item.direction as "in"|"out",kind,text:String(item.text_content??(mediaId?"":kindText(kind))),translationSourceText:item.translation_source_text?String(item.translation_source_text):undefined,time:formatTime(new Date(String(item.occurred_at))),status:item.status as ChatMessage["status"],attachment:item.file_name&&mediaId?{id:mediaId,name:String(item.file_name),mime:String(item.mime_type??"文件"),size:formatBytes(Number(item.byte_size??0))}:undefined};}
 function kindText(kind:string){return({audio:"[语音消息]",image:"[图片]",video:"[视频]",document:"[文档]",location:"[位置]",contact:"[联系人名片]"} as Record<string,string>)[kind]??"暂无消息";}
@@ -1910,7 +1937,7 @@ function AgentConversationBar({conversationId,token,refreshKey,onToken,onToast,o
   async function setMode(mode:"cautious"|"full"|"human_paused"){setBusy(true);const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/agent`,token,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({mode})});if(result.token!==token)onToken(result.token);setBusy(false);if(result.response.ok){onToast(mode==="cautious"?"已启用谨慎接管，证据不足时将等待人工确认":mode==="full"?"已启用完全接管，Agent 回复无需人工确认":"已切换人工接管，待跟进任务已取消");await load();}}
   async function resolveDraft(action:"send"|"dismiss"){if(!state?.draft)return;setBusy(true);const result=await authorizedFetch(`/api/v1/ai-drafts/${state.draft.id}/${action}`,token,{method:"POST",headers:{"content-type":"application/json"},body:action==="send"?JSON.stringify({text:state.draft.text_content}):undefined});if(result.token!==token)onToken(result.token);setBusy(false);if(result.response.ok){onToast(action==="send"?"AI 草稿已进入发送队列，Agent 已转为人工接管":"AI 草稿已忽略");await load();onSent();}}
   if(!state)return null;const paused=state.mode==="human_paused",full=state.mode==="full",enabled=state.account_enabled;
-  return <div className={`agent-conversation-bar ${paused?"paused":full?"full":""} ${enabled?"":"disabled"}`}><span><Bot size={15}/><b>{enabled?(paused?"人工接管":full?"完全接管":"谨慎接管"):"AI 自动回复未配置"}</b><small>{enabled?(paused?"当前会话不会自动回复或跟进":full?"当前会话完全由 Agent 回复，无需人工确认":"可靠回复自动发送，证据不足时等待人工确认"):"请先在系统设置中启用该账号的 AI 能力"}</small></span><div className="takeover-switch" role="group" aria-label="会话接管方式"><button className={!paused&&!full&&enabled?"active cautious":""} disabled={busy||!enabled} onClick={()=>void setMode("cautious")} aria-pressed={!paused&&!full&&enabled}><ShieldCheck size={13}/>谨慎接管</button><button className={full&&enabled?"active full":""} disabled={busy||!enabled} onClick={()=>void setMode("full")} aria-pressed={full&&enabled}><Bot size={13}/>完全接管</button><button className={paused&&enabled?"active human":""} disabled={busy||!enabled} onClick={()=>void setMode("human_paused")} aria-pressed={paused&&enabled}><Users size={13}/>人工接管</button></div>{state.draft&&<div className="agent-draft"><span><Sparkles size={14}/><b>AI 建议回复</b><small>{state.draft.reason}</small></span><p>{state.draft.text_content}</p><div><button onClick={()=>onUseDraft(state.draft!.text_content)}>放入输入框</button><button onClick={()=>void resolveDraft("dismiss")}>忽略</button><button className="primary" onClick={()=>void resolveDraft("send")}>确认发送</button></div></div>}</div>;
+  return <div className={`agent-conversation-bar ${paused?"paused":full?"full":""} ${enabled?"":"disabled"}`}><span><Bot size={15}/><b>{enabled?(paused?"人工接管":full?"完全接管":"谨慎接管"):"AI 自动回复未配置"}</b><small>{enabled?(paused?"当前会话不会自动回复或跟进":full?"当前会话完全由 Agent 回复，无需人工确认":"可靠回复自动发送，证据不足时等待人工确认"):"请先在系统设置中启用该账号的 AI 能力"}</small></span><div className="takeover-switch" role="group" aria-label="会话接管方式"><button className={!paused&&!full&&enabled?"active cautious":""} disabled={busy||!enabled} onClick={()=>void setMode("cautious")} aria-pressed={!paused&&!full&&enabled}><ShieldCheck size={13}/>谨慎接管</button><button className={full&&enabled?"active full":""} disabled={busy||!enabled} onClick={()=>void setMode("full")} aria-pressed={full&&enabled}><Bot size={13}/>完全接管</button><button className={paused&&enabled?"active human":""} disabled={busy||!enabled} onClick={()=>void setMode("human_paused")} aria-pressed={paused&&enabled}><Users size={13}/>人工接管</button></div>{state.draft&&<div className="agent-draft"><span><Sparkles size={14}/><b>AI 建议回复</b><small>{state.draft.reason}</small></span><div className="agent-draft-copy"><section><b>发送内容</b><p>{state.draft.text_content}</p></section><section className="zh"><b>中文参考</b><p>{state.draft.reply_zh||"历史建议未生成中文参考"}</p></section></div><div><button onClick={()=>onUseDraft(state.draft!.text_content)}>放入输入框</button><button onClick={()=>void resolveDraft("dismiss")}>忽略</button><button className="primary" onClick={()=>void resolveDraft("send")}>确认发送</button></div></div>}</div>;
 }
 
 function AgentMemoryPanel({conversationId,token,onToken,onToast}:{conversationId:string;token:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){

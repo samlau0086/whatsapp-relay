@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS ai_drafts (
   conversation_id uuid NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   run_id uuid NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
   text_content text NOT NULL,
+  reply_zh text,
   reason text NOT NULL,
   citations jsonb NOT NULL DEFAULT '[]',
   status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sent','dismissed')),
