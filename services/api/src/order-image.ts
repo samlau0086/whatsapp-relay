@@ -38,11 +38,23 @@ export async function renderOrderImage(summary:string,products:OrderImageProduct
   return sharp(Buffer.from(svg)).png({compressionLevel:9}).toBuffer();
 }
 
-function wrapLine(value:string,max:number):string[]{
+export function wrapLine(value:string,max:number):string[]{
   if(!value)return[""];
-  const chars=Array.from(value),lines:string[]=[];let current="";
-  for(const char of chars){if(Array.from(current).length>=max){lines.push(current.trimEnd());current="";}current+=char;}
-  if(current||!lines.length)lines.push(current.trimEnd());return lines;
+  const normalized=value.replace(/\b([A-Z]{3})\s+(\d+(?:\.\d+)?)\b/g,"$1\u00a0$2");
+  const words=normalized.split(/ +/),lines:string[]=[];let current="";
+  const pushLongWord=(word:string)=>{
+    const chars=Array.from(word);
+    while(chars.length>max)lines.push(chars.splice(0,max).join(""));
+    current=chars.join("");
+  };
+  for(const word of words){
+    const candidate=current?`${current} ${word}`:word;
+    if(Array.from(candidate).length<=max){current=candidate;continue;}
+    if(current){lines.push(current);current="";}
+    if(Array.from(word).length>max)pushLongWord(word);else current=word;
+  }
+  if(current||!lines.length)lines.push(current);
+  return lines;
 }
 
 function escapeXml(value:string):string{return value.replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&apos;"}[char]!));}

@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import sharp from "sharp";
-import { parseOrderImageSummary, renderOrderImage } from "../src/order-image.js";
+import { parseOrderImageSummary, renderOrderImage, wrapLine } from "../src/order-image.js";
+
+test("order image wrapping keeps currency amounts together",()=>{
+  const lines=wrapLine("1. Perfume x 1 - USD 12.00 each - USD 12.00",39);
+  assert.ok(lines.length>1);
+  assert.ok(lines.every(line=>!line.endsWith("USD")));
+  assert.ok(lines.some(line=>line.includes("USD\u00a012.00")));
+  assert.ok(lines.every(line=>line!=="2.00"));
+});
 
 test("full order images contain the complete summary and every supplied product image",async()=>{
   const red=await sharp({create:{width:12,height:12,channels:3,background:"#d22"}}).jpeg().toBuffer();
