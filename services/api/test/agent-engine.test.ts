@@ -88,3 +88,11 @@ test("a requested image language bypasses an older rendered version",()=>{
   const caption=captionOrderDetailsImage({decision:"auto_reply",reply:"image",confidence:.9,citations:[],reason:"model"},{...request,mediaId:"new-english-media"});
   assert.match(caption.reply,/English version/);
 });
+
+test("short image follow-ups inherit the recent requested language",()=>{
+  const inherited={code:"en",label:"English"};
+  const imageVersion=resolveOrderDetailsImage("Image version",[{id:"order-1",order_number:"001",rendered_media_id:"old-arabic-media"}],true,inherited);
+  assert.equal(imageVersion.requested,true);assert.equal(imageVersion.targetLanguage,"en");assert.equal(imageVersion.mediaId,null);
+  const again=resolveOrderDetailsImage("Again",[{id:"order-1",order_number:"001",rendered_media_id:"old-arabic-media"}],true,inherited);
+  assert.equal(again.requested,true);assert.equal(again.targetLanguage,"en");assert.equal(again.mediaId,null);
+});
