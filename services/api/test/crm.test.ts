@@ -36,6 +36,9 @@ test("order sending and deletion ship with an idempotent database upgrade",async
   assert.match(server,/orderUpdateSchema\.safeParse/);
   assert.match(server,/renderOrderImage/);
   assert.match(server,/clientSendId/);
+  assert.match(server,/shouldTranslate=parsed\.data\.translate/);
+  assert.match(server,/targetLanguage=parsed\.data\.targetLanguage/);
+  assert.match(server,/translated:shouldTranslate/);
   assert.match(server,/order\.update/);
   assert.doesNotMatch(server,/if\(order\.status!=="draft"\)return reply\.code\(202\)/);
   assert.match(server,/app\.delete\("\/api\/v1\/conversations\/:conversationId\/orders\/:orderId"/);

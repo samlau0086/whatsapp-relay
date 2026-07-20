@@ -26,6 +26,7 @@ type NoteItem={id:string;body:string;userId:string|null;authorName:string;create
 type OrderProductItem={id:string;name:string;quantity:number;unitAmount:number;imageMediaId:string|null;imageName:string;productId:string|null};
 type OrderFeeItem={id:string;name:string;amount:number};
 type OrderItem={id:string;orderNumber:string;conversationId:string;accountId:string;accountName:string;customerName:string;customerPhone:string;amount:number;currency:string;description:string;status:string;sendFormat:string;translateOnSend:boolean;targetLanguage:string;createdAt:string;createdByName:string;messageStatus:string;items:OrderProductItem[];fees:OrderFeeItem[]};
+type OrderSendTarget={order:OrderItem;translate:boolean};
 type ConversationDetails={customerStage:string;tags:TagItem[];notes:NoteItem[];reminder:{id:string;remindAt:string;createdAt:string;updatedAt:string}|null;orders:OrderItem[]};
 type ChatMessage = {
   id:string; direction:"in"|"out"; kind:string; text:string; time:string;
@@ -365,7 +366,7 @@ function CrmDetailsPanel({
     [reminderValue, setReminderValue] = useState(""),
     [orderOpen, setOrderOpen] = useState(false),
     [editOrderTarget, setEditOrderTarget] = useState<OrderItem | null>(null),
-    [sendOrderTarget, setSendOrderTarget] = useState<OrderItem | null>(null),
+    [sendOrderTarget, setSendOrderTarget] = useState<OrderSendTarget | null>(null),
     [currentTime] = useState(() => Date.now());
   const canManageTags = ["admin", "supervisor"].includes(role);
   const load = useCallback(async () => {
@@ -545,7 +546,7 @@ function CrmDetailsPanel({
       onToast("提醒已取消");
     }
   }
-  async function sendOrder(order: OrderItem, format: "text" | "image") {
+  async function sendOrder(order: OrderItem, format: "text" | "image", translate: boolean, targetLanguage?: string) {
     setBusy(true);
     setError("");
     try {
@@ -555,7 +556,7 @@ function CrmDetailsPanel({
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ format, clientSendId: crypto.randomUUID() }),
+          body: JSON.stringify({ format, clientSendId: crypto.randomUUID(), translate, ...(translate&&targetLanguage?{targetLanguage}:{}) }),
         },
       );
       if (result.token !== token) onToken(result.token);
@@ -571,7 +572,7 @@ function CrmDetailsPanel({
         );
       setSendOrderTarget(null);
       onToast(
-        `订单 #${order.orderNumber} 已${order.status === "draft" ? "按" : "重新按"}${format === "image" ? "完整图片版" : "文字版"}进入发送队列`,
+        `订单 #${order.orderNumber} 已${order.status === "draft" ? "按" : "重新按"}${translate?languageName(targetLanguage??order.targetLanguage):"英文"}${format === "image" ? "完整图片版" : "文字版"}进入发送队列`,
       );
       await load();
       await onChanged();
@@ -692,17 +693,29 @@ function CrmDetailsPanel({
                         >
                           <Pencil size={12} />
                         </button>
+                        {order.translateOnSend && (
+                          <button
+                            className="order-send order-send-english"
+                            disabled={busy}
+                            onClick={() => setSendOrderTarget({order,translate:false})}
+                          >
+                            <Send size={12} />
+                            {order.status === "draft" ? "发送英文版" : "重发英文版"}
+                          </button>
+                        )}
                         <button
                           className="order-send"
                           disabled={busy}
-                          onClick={() => setSendOrderTarget(order)}
+                          onClick={() => setSendOrderTarget({order,translate:order.translateOnSend})}
                         >
-                          <Send size={12} />
+                          {order.translateOnSend ? <Languages size={12} /> : <Send size={12} />}
                           {order.status === "draft"
                             ? order.translateOnSend
                               ? "翻译并发送"
                               : "发送"
-                            : "重新发送"}
+                            : order.translateOnSend
+                              ? "翻译并重发"
+                              : "重新发送"}
                         </button>
                         <button
                           className="order-delete"
@@ -984,22 +997,24 @@ function CrmDetailsPanel({
       )}
       {sendOrderTarget && (
         <OrderSendDialog
-          order={sendOrderTarget}
+          order={sendOrderTarget.order}
+          translate={sendOrderTarget.translate}
+          defaultTargetLanguage={sendOrderTarget.order.targetLanguage||translationPreference.customerLanguage}
           busy={busy}
           onClose={() => setSendOrderTarget(null)}
-          onSend={(format) => void sendOrder(sendOrderTarget, format)}
+          onSend={(format,targetLanguage) => void sendOrder(sendOrderTarget.order,format,sendOrderTarget.translate,targetLanguage)}
         />
       )}
     </>
   );
 }
 
-function OrderSendDialog({order,busy,onClose,onSend}:{order:OrderItem;busy:boolean;onClose:()=>void;onSend:(format:"text"|"image")=>void}){
-  const [format,setFormat]=useState<"text"|"image">("text");
-  return <div className="modal-backdrop order-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget&&!busy)onClose();}}><section className="login-dialog order-send-dialog" role="dialog" aria-modal="true" aria-labelledby="order-send-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><Send size={19}/></span><h2 id="order-send-title">发送订单 #{order.orderNumber}</h2><p>选择客户在 WhatsApp 中收到的订单格式。</p><div className="order-send-options">
+function OrderSendDialog({order,translate,defaultTargetLanguage,busy,onClose,onSend}:{order:OrderItem;translate:boolean;defaultTargetLanguage:string;busy:boolean;onClose:()=>void;onSend:(format:"text"|"image",targetLanguage?:string)=>void}){
+  const [format,setFormat]=useState<"text"|"image">("text"),[targetLanguage,setTargetLanguage]=useState(defaultTargetLanguage||"en");
+  return <div className="modal-backdrop order-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget&&!busy)onClose();}}><section className="login-dialog order-send-dialog" role="dialog" aria-modal="true" aria-labelledby="order-send-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo">{translate?<Languages size={19}/>:<Send size={19}/>}</span><h2 id="order-send-title">{translate?"翻译并发送":"发送英文版"}订单 #{order.orderNumber}</h2><p>选择客户在 WhatsApp 中收到的订单格式。</p>{translate&&<label className="order-send-language"><span>目标翻译语言</span><select value={targetLanguage} disabled={busy} onChange={event=>setTargetLanguage(event.target.value)}>{LANGUAGES.map(([code,name])=><option key={code} value={code}>{name} · {code}</option>)}</select></label>}<div className="order-send-options">
     <label className={format==="text"?"selected":""}><input type="radio" name="order-format" checked={format==="text"} onChange={()=>setFormat("text")}/><span><b><FileText size={16}/>文字版详情</b><small>发送完整订单文字，不包含产品图片</small></span></label>
     <label className={format==="image"?"selected":""}><input type="radio" name="order-format" checked={format==="image"} onChange={()=>setFormat("image")}/><span><b><ShoppingBag size={16}/>图片版完整详情</b><small>生成一张包含全部订单内容和所有产品图片的长图</small></span></label>
-  </div>{order.translateOnSend&&<p className="order-send-translation"><Languages size={13}/>点击发送后才会将订单详情翻译为 {languageName(order.targetLanguage)}</p>}<button className="login-submit" disabled={busy} onClick={()=>onSend(format)}>{busy?format==="image"?"正在生成订单图片…":"正在加入队列…":format==="image"?"生成完整图片并发送":"发送文字版详情"}</button></section></div>;
+  </div>{translate?<p className="order-send-translation"><Languages size={13}/>点击发送后才会将订单详情翻译为 {languageName(targetLanguage)}</p>:<p className="order-send-translation english"><FileText size={13}/>订单将以英文原文发送，不调用 AI 翻译</p>}<button className="login-submit" disabled={busy} onClick={()=>onSend(format,translate?targetLanguage:undefined)}>{busy?format==="image"?"正在生成订单图片…":"正在加入队列…":translate?(format==="image"?"翻译、生成图片并发送":"翻译并发送文字版"):(format==="image"?"生成英文图片并发送":"发送英文文字版")}</button></section></div>;
 }
 
 type DraftProduct={id:string;mode:"library"|"new"|"legacy";productId:string|null;clientProductId:string|null;name:string;quantity:string;unitAmount:string;image:File|null;imageMediaId:string|null;imageName:string};
