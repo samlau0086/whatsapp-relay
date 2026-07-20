@@ -88,6 +88,20 @@ test("stale WhatsApp sockets and stale renderer refreshes cannot overwrite curre
   assert.match(renderer,/sequence\s*!==\s*refreshSequence/);
 });
 
+test("offline accounts can reconnect without clearing their saved session", () => {
+  const main=readFileSync(new URL("../dist/main.js",import.meta.url),"utf8");
+  const worker=readFileSync(new URL("../dist/account-worker.js",import.meta.url),"utf8");
+  const preload=readFileSync(new URL("../dist/preload.cjs",import.meta.url),"utf8");
+  const renderer=readFileSync(new URL("../dist/renderer/index.html",import.meta.url),"utf8");
+  assert.match(main,/account:reconnect/);
+  assert.match(main,/worker\.send\(\{ type: "reconnect" \}\)/);
+  assert.match(worker,/message\.type === "reconnect"/);
+  assert.match(worker,/if \(reconnectTimer\)\s*return/);
+  assert.match(preload,/reconnectAccount/);
+  assert.match(renderer,/data-action="reconnect"/);
+  assert.match(renderer,/重新连接/);
+});
+
 test("an enrolled agent can change its central URL without replacing credentials", () => {
   const main=readFileSync(new URL("../dist/main.js",import.meta.url),"utf8");
   const preload=readFileSync(new URL("../dist/preload.cjs",import.meta.url),"utf8");

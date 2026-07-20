@@ -168,6 +168,16 @@ ipcMain.handle("account:update", async (_event, input: {id:string;name:string}) 
   return {ok:true};
 });
 
+ipcMain.handle("account:reconnect", async (_event, input: {id:string}) => {
+  const account=store.accounts().find(item=>item.id===input.id);if(!account)throw new Error("账号不存在");
+  store.setAccountStatus(input.id,"offline","正在重新连接");
+  const worker=workers.get(input.id);
+  if(worker?.connected)worker.send({type:"reconnect"});
+  else if(worker){intentionalRestarts.add(input.id);worker.kill();}
+  else await startAccount(input.id,account.name,app.getPath("userData"));
+  return {ok:true};
+});
+
 ipcMain.handle("account:repair", async (_event, input: {id:string}) => {
   const account=store.accounts().find(item=>item.id===input.id);if(!account)throw new Error("账号不存在");
   await accountRequest(input.id,"PATCH",{status:"pairing"});

@@ -9,7 +9,7 @@ import { describeSendError, isTransientSendConnectionError } from "./send-errors
 
 type Init = {type:"init";accountId:string;dataDir:string;masterKey:string;baseUrl:string;credential:string;proxyUrl?:string};
 type Command = {type:"command";sequence:number;commandId:string;payload:Record<string,unknown>};
-type Control = {type:"shutdown";logout?:boolean};
+type Control = {type:"shutdown";logout?:boolean}|{type:"reconnect"};
 let socket:ReturnType<typeof makeWASocket>|undefined;let init:Init|undefined;let sendChain=Promise.resolve();let reconnectAttempt=0;let reconnectTimer:NodeJS.Timeout|undefined;let connectionOpen=false;let connectionGeneration=0;let mediaProxyAgent:UndiciProxyAgent|undefined;let messageCache:Awaited<ReturnType<typeof encryptedAuthState>>|undefined;
 const emit=(message:unknown):void=>{process.send?.(message);};
 const emitIdentity=(accountId:string,lid:string,pn:string,displayName?:string):void=>{const lidJid=jidNormalizedUser(lid),phoneJid=jidNormalizedUser(pn);if(!lidJid.endsWith("@lid")||!phoneJid.endsWith("@s.whatsapp.net"))return;emit({type:"event",kind:"contact_identity",payload:{eventId:`identity:${accountId}:${lidJid}:${phoneJid}`,accountId,lidJid,phoneJid,displayName,at:new Date().toISOString()}});};
@@ -17,6 +17,7 @@ const emitIdentity=(accountId:string,lid:string,pn:string,displayName?:string):v
 process.on("message",(message:Init|Command|Control)=>{
   if(message.type==="init"){init=message;void connect(message);}
   if(message.type==="command")sendChain=sendChain.then(()=>execute(message)).catch((error)=>emit({type:"command_result",sequence:message.sequence,commandId:message.commandId,outcome:"failed",errorCode:"send_failed",errorMessage:String(error),completedAt:new Date().toISOString()}));
+  if(message.type==="reconnect"&&init){reconnectAttempt=0;void connect(init);}
   if(message.type==="shutdown")void shutdown(message.logout===true);
 });
 
@@ -83,8 +84,11 @@ async function connect(options:Init):Promise<void>{
 
 function scheduleReconnect(options:Init,generation:number):void{
   if(generation!==connectionGeneration)return;
-  if(reconnectTimer)clearTimeout(reconnectTimer);
+  // A socket can report the same close more than once. Keep the first retry
+  // scheduled so repeated close notifications cannot postpone it forever.
+  if(reconnectTimer)return;
   const delay=Math.min(60_000,3_000*(2**Math.min(reconnectAttempt++,5)))+Math.floor(Math.random()*1_000);
+  emit({type:"reconnect_scheduled",accountId:options.accountId,delayMs:delay,attempt:reconnectAttempt});
   reconnectTimer=setTimeout(()=>{reconnectTimer=undefined;if(generation===connectionGeneration)void connect(options);},delay);
 }
 

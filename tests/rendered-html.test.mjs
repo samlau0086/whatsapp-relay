@@ -126,7 +126,9 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /新标签名称/);
   assert.match(component, /添加商品/);
   assert.match(component, /Additional fees/);
-  assert.match(component, /AI translation on send/);
+  assert.doesNotMatch(component, /AI translation on send/);
+  assert.match(component, /defaultTargetLanguage=\{translationPreference\.customerLanguage\}/);
+  assert.match(component, /useState\(!isEnglishLanguage\(initialTargetLanguage\)\)/);
   assert.match(component, /Save order draft/);
   assert.match(component, /orders\/\$\{order\.id\}\/send/);
   assert.match(component, /method:"DELETE"/);

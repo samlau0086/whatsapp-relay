@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("relayAgent", {
   updateCentralUrl: (input) => ipcRenderer.invoke("agent:update-central-url", input),
   addAccount: (input) => ipcRenderer.invoke("account:add", input),
   updateAccount: (input) => ipcRenderer.invoke("account:update", input),
+  reconnectAccount: (input) => ipcRenderer.invoke("account:reconnect", input),
   repairAccount: (input) => ipcRenderer.invoke("account:repair", input),
   removeAccount: (input) => ipcRenderer.invoke("account:remove", input),
   saveProxy: (input) => ipcRenderer.invoke("proxy:save", input),

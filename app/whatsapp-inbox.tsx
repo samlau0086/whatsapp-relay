@@ -28,7 +28,7 @@ type OrderProductItem={id:string;name:string;quantity:number;unitAmount:number;i
 type OrderFeeItem={id:string;name:string;amount:number};
 type CustomerAddress={id:string;label:string;recipientName:string;phone:string;address:string};
 type OrderItem={id:string;orderNumber:string;conversationId:string;accountId:string;accountName:string;customerName:string;customerPhone:string;amount:number;currency:string;description:string;status:string;sendFormat:string;translateOnSend:boolean;targetLanguage:string;createdAt:string;createdByName:string;messageStatus:string;items:OrderProductItem[];fees:OrderFeeItem[];addressId:string|null;address:CustomerAddress|null};
-type OrderSendTarget={order:OrderItem;translate:boolean};
+type OrderSendTarget={order:OrderItem};
 type ConversationDetails={customerStage:string;tags:TagItem[];notes:NoteItem[];reminder:{id:string;remindAt:string;createdAt:string;updatedAt:string}|null;orders:OrderItem[]};
 type ChatMessage = {
   id:string; direction:"in"|"out"; kind:string; text:string; time:string;
@@ -309,7 +309,7 @@ export function WhatsAppInbox() {
       </div>
     </>:<div className="chat-empty"><MessageCircle size={31}/><h2>选择一个真实会话</h2><p>这里不会再显示演示联系人或模拟消息。</p></div>}</section>
 
-    {detailsOpen&&active&&<CrmDetailsPanel key={active.id} active={active} token={apiToken} user={user} role={userRole} translationPreference={translationPreference} translationConfigured={translationConfigured} onToken={setApiToken} onClose={()=>setDetailsOpen(false)} onToast={setToast} onConversationChange={async change=>{await updateConversation(change);}} onChanged={async()=>{await Promise.all([loadWorkspace(apiToken,true),loadMessages(apiToken,active.id)]);}}/>}</>
+    {detailsOpen&&active&&<CrmDetailsPanel key={active.id} active={active} token={apiToken} user={user} role={userRole} translationPreference={translationPreference} onToken={setApiToken} onClose={()=>setDetailsOpen(false)} onToast={setToast} onConversationChange={async change=>{await updateConversation(change);}} onChanged={async()=>{await Promise.all([loadWorkspace(apiToken,true),loadMessages(apiToken,active.id)]);}}/>}</>
       :view==="orders"?<OrderManagement token={apiToken} accounts={accounts} onToken={setApiToken} onToast={setToast} onConversation={conversationId=>{const found=conversations.find(item=>item.id===conversationId);if(!found){setToast("该会话不在当前列表，请在消息中心搜索客户");openInbox();return;}setActiveId(conversationId);setDetailsOpen(true);openInbox();}}/>
       :view==="products"?<ProductManagement token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>
       :view==="agents"?<AgentManagement token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>
@@ -342,7 +342,6 @@ function CrmDetailsPanel({
   user,
   role,
   translationPreference,
-  translationConfigured,
   onToken,
   onClose,
   onToast,
@@ -354,7 +353,6 @@ function CrmDetailsPanel({
   user: User | null;
   role: string;
   translationPreference: TranslationPreference;
-  translationConfigured: boolean;
   onToken: (token: string) => void;
   onClose: () => void;
   onToast: (text: string) => void;
@@ -693,12 +691,6 @@ function CrmDetailsPanel({
                           {order.currency} {order.amount.toFixed(2)} ·{" "}
                           {formatDateTime(order.createdAt)}
                         </small>
-                        {order.translateOnSend && (
-                          <small>
-                            <Languages size={10} />
-                            发送时译为 {languageName(order.targetLanguage)}
-                          </small>
-                        )}
                         {order.sendFormat && (
                           <small>
                             {order.sendFormat === "image"
@@ -726,7 +718,7 @@ function CrmDetailsPanel({
                         <button
                           className="order-send"
                           disabled={busy}
-                          onClick={() => setSendOrderTarget({order,translate:order.translateOnSend})}
+                          onClick={() => setSendOrderTarget({order})}
                         >
                           <Send size={12} />
                           {order.status === "draft" ? "发送" : "重新发送"}
@@ -978,8 +970,6 @@ function CrmDetailsPanel({
         <OrderDialog
           active={active}
           token={token}
-          translationPreference={translationPreference}
-          translationConfigured={translationConfigured}
           onToken={onToken}
           onClose={() => setOrderOpen(false)}
           onCreated={async (orderNumber) => {
@@ -997,8 +987,6 @@ function CrmDetailsPanel({
           order={editOrderTarget}
           active={active}
           token={token}
-          translationPreference={translationPreference}
-          translationConfigured={translationConfigured}
           onToken={onToken}
           onClose={() => setEditOrderTarget(null)}
           onCreated={async (orderNumber) => {
@@ -1012,8 +1000,7 @@ function CrmDetailsPanel({
       {sendOrderTarget && (
         <OrderSendDialog
           order={sendOrderTarget.order}
-          defaultTranslate={sendOrderTarget.translate}
-          defaultTargetLanguage={sendOrderTarget.order.targetLanguage||translationPreference.customerLanguage}
+          defaultTargetLanguage={translationPreference.customerLanguage}
           busy={busy}
           onClose={() => setSendOrderTarget(null)}
           onSend={(format,translate,targetLanguage) => void sendOrder(sendOrderTarget.order,format,translate,targetLanguage)}
@@ -1023,8 +1010,9 @@ function CrmDetailsPanel({
   );
 }
 
-function OrderSendDialog({order,defaultTranslate,defaultTargetLanguage,busy,onClose,onSend}:{order:OrderItem;defaultTranslate:boolean;defaultTargetLanguage:string;busy:boolean;onClose:()=>void;onSend:(format:"text"|"image",translate:boolean,targetLanguage?:string)=>void}){
-  const [format,setFormat]=useState<"text"|"image">("text"),[translate,setTranslate]=useState(defaultTranslate),[targetLanguage,setTargetLanguage]=useState(defaultTargetLanguage||"en");
+function OrderSendDialog({order,defaultTargetLanguage,busy,onClose,onSend}:{order:OrderItem;defaultTargetLanguage:string;busy:boolean;onClose:()=>void;onSend:(format:"text"|"image",translate:boolean,targetLanguage?:string)=>void}){
+  const initialTargetLanguage=defaultTargetLanguage||"en";
+  const [format,setFormat]=useState<"text"|"image">("text"),[translate,setTranslate]=useState(!isEnglishLanguage(initialTargetLanguage)),[targetLanguage,setTargetLanguage]=useState(initialTargetLanguage);
   return <div className="modal-backdrop order-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget&&!busy)onClose();}}><section className="login-dialog order-send-dialog" role="dialog" aria-modal="true" aria-labelledby="order-send-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><Send size={19}/></span><h2 id="order-send-title">发送订单 #{order.orderNumber}</h2><p>选择发送语言和客户在 WhatsApp 中收到的订单格式。</p><div className="order-send-mode"><label className={!translate?"selected":""}><input type="radio" name="order-language-mode" checked={!translate} onChange={()=>setTranslate(false)}/><span><FileText size={14}/><b>英文原文</b></span></label><label className={translate?"selected":""}><input type="radio" name="order-language-mode" checked={translate} onChange={()=>setTranslate(true)}/><span><Languages size={14}/><b>AI 翻译</b></span></label></div>{translate&&<label className="order-send-language"><span>目标翻译语言</span><LanguagePicker value={targetLanguage} onChange={setTargetLanguage}/></label>}<div className="order-send-options">
     <label className={format==="text"?"selected":""}><input type="radio" name="order-format" checked={format==="text"} onChange={()=>setFormat("text")}/><span><b><FileText size={16}/>文字版详情</b><small>发送完整订单文字，不包含产品图片</small></span></label>
     <label className={format==="image"?"selected":""}><input type="radio" name="order-format" checked={format==="image"} onChange={()=>setFormat("image")}/><span><b><ShoppingBag size={16}/>图片版完整详情</b><small>生成一张包含全部订单内容和所有产品图片的长图</small></span></label>
@@ -1178,8 +1166,6 @@ function OrderDialog({
   order,
   active,
   token,
-  translationPreference,
-  translationConfigured,
   onToken,
   onClose,
   onCreated,
@@ -1187,8 +1173,6 @@ function OrderDialog({
   order?: OrderItem;
   active: Conversation;
   token: string;
-  translationPreference: TranslationPreference;
-  translationConfigured: boolean;
   onToken: (token: string) => void;
   onClose: () => void;
   onCreated: (orderNumber: string) => Promise<void>;
@@ -1224,11 +1208,6 @@ function OrderDialog({
     [addressId, setAddressId] = useState(order?.addressId ?? ""),
     [addingAddress, setAddingAddress] = useState(Boolean(order?.address&&!order.addressId)),
     [addressDraft, setAddressDraft] = useState({label:order?.address?.label??"收货地址",recipientName:order?.address?.recipientName??active.name,phone:order?.address?.phone??active.phone,address:order?.address?.address??""}),
-    [translateOnSend, setTranslateOnSend] = useState(() =>
-      order
-        ? order.translateOnSend
-        : translationPreference.enabled && translationConfigured,
-    ),
     [imagePickerProductId, setImagePickerProductId] = useState<string|null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
@@ -1374,10 +1353,7 @@ function OrderDialog({
       const payload = {
         currency,
         description: description.trim() || undefined,
-        translateOnSend,
-        targetLanguage: translateOnSend
-          ? translationPreference.customerLanguage
-          : undefined,
+        translateOnSend: false,
         items,
         fees: fees.map((fee) => ({
           name: fee.name.trim(),
@@ -1702,22 +1678,6 @@ function OrderDialog({
             placeholder="Order notes in English"
           />
         </label>
-        <label className="translation-toggle order-translation">
-          <span>
-            <b>AI translation on send</b>
-            <small>
-              {translationConfigured
-                ? `Translate the English order to ${languageName(translationPreference.customerLanguage)} only when Send is clicked`
-                : `Translation provider is not configured`}
-            </small>
-          </span>
-          <input
-            type="checkbox"
-            checked={translateOnSend}
-            disabled={!translationConfigured}
-            onChange={(event) => setTranslateOnSend(event.target.checked)}
-          />
-        </label>
         <div className="order-total">
           <span>Total</span>
           <b>
@@ -1783,6 +1743,7 @@ const LANGUAGES=[
 ] as const;
 
 function languageName(code:string){return LANGUAGES.find(item=>item[0]===code)?.[1]??code;}
+function isEnglishLanguage(code:string){return /^en(?:-|$)/i.test(code);}
 
 function TranslationMenu({preference,configured,ready,onChange,onClose}:{preference:TranslationPreference;configured:boolean;ready:boolean;onChange:(value:TranslationPreference)=>void;onClose:()=>void}){
   return <section className="translation-menu" role="dialog" aria-label="AI 翻译设置"><header><span><Languages size={16}/><b>当前会话 · AI 双向翻译</b></span><button onClick={onClose} aria-label="关闭翻译设置"><X size={15}/></button></header><label className="translation-toggle"><span><b>为当前会话启用</b><small>{!ready?"正在读取会话配置…":configured?"此会话偏好会跨浏览器同步":"管理员尚未配置翻译 Provider"}</small></span><input type="checkbox" checked={preference.enabled} disabled={!ready||(!configured&&!preference.enabled)} onChange={event=>onChange({...preference,enabled:event.target.checked})}/></label><div className="translation-language-grid"><label><span>收到消息译为</span><LanguagePicker value={preference.agentLanguage} onChange={agentLanguage=>onChange({...preference,agentLanguage})}/></label><label><span>发送消息译为</span><LanguagePicker value={preference.customerLanguage} onChange={customerLanguage=>onChange({...preference,customerLanguage})}/></label></div><p><Info size={13}/>设置只影响当前会话；发送前会显示可编辑预览。</p></section>;
@@ -2045,7 +2006,7 @@ function OrderManagement({token,accounts,onToken,onToast,onConversation}:{token:
     <div className="order-management-filters"><label><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索订单号、客户名称或手机号"/></label><select value={accountId} onChange={event=>setAccountId(event.target.value)} aria-label="按账号筛选"><option value="">全部账号</option>{accounts.map(account=><option key={account.id} value={account.id}>{account.name}</option>)}</select><select value={status} onChange={event=>setStatus(event.target.value)} aria-label="按状态筛选"><option value="">全部状态</option><option value="draft">草稿</option><option value="queued">已发送</option></select><input type="date" value={dateFrom} onChange={event=>setDateFrom(event.target.value)} aria-label="开始日期"/><input type="date" value={dateTo} min={dateFrom||undefined} onChange={event=>setDateTo(event.target.value)} aria-label="结束日期"/></div>
     {loading?<EmptyState title="正在读取订单" text="请稍候…"/>:error?<EmptyState title="订单加载失败" text={error}/>:orders.length?<><div className="order-table-wrap"><table className="order-table"><thead><tr><th>订单号</th><th>客户 / 账号</th><th>商品</th><th>金额</th><th>状态</th><th>创建时间</th><th aria-label="操作"/></tr></thead><tbody>{orders.map(order=><tr key={order.id} onClick={()=>setViewing(order)}><td><b>#{order.orderNumber}</b><small>{order.createdByName}</small></td><td><b>{order.customerName||order.customerPhone||"未知客户"}</b><small>{order.accountName}{order.customerPhone?` · ${order.customerPhone}`:""}</small></td><td>{order.items.length} 件<small>{order.items.slice(0,2).map(item=>item.name).join("、")}{order.items.length>2?"…":""}</small></td><td><b>{order.currency} {order.amount.toFixed(2)}</b></td><td><em className={`delivery-state ${order.messageStatus}`}>{order.status==="draft"?"草稿":deliveryText(order.messageStatus)}</em></td><td>{formatDateTime(order.createdAt)}</td><td><span className="order-row-actions"><button onClick={event=>{event.stopPropagation();setEditing(order);}} aria-label={`编辑订单 ${order.orderNumber}`}><Pencil size={13}/></button><button className="danger" onClick={event=>{event.stopPropagation();void remove(order);}} aria-label={`删除订单 ${order.orderNumber}`}><Trash2 size={13}/></button></span></td></tr>)}</tbody></table></div>{nextCursor&&<button className="order-load-more" onClick={()=>void load(false)}>加载更多订单</button>}</>:<EmptyState title="暂无匹配订单" text="订单需先在客户会话中创建，或调整当前筛选条件"/>}
     {viewing&&<OrderDetailsDialog order={viewing} onClose={()=>setViewing(null)} onEdit={()=>{setViewing(null);setEditing(viewing);}} onConversation={()=>onConversation(viewing.conversationId)}/>}
-    {editing&&<OrderDialog order={editing} active={{id:editing.conversationId,name:editing.customerName,initials:"",color:"#477a62",account:editing.accountName,accountId:editing.accountId,phone:editing.customerPhone,preview:"",time:"",unread:0,accountStatus:"online",assignedUserId:null,favorite:false,conversationStatus:"open",customerStage:"new",tags:[],remindAt:null}} token={token} translationPreference={{enabled:editing.translateOnSend,agentLanguage:"zh-CN",customerLanguage:editing.targetLanguage||"en",updatedAt:null}} translationConfigured onToken={onToken} onClose={()=>setEditing(null)} onCreated={async orderNumber=>{setEditing(null);onToast(`订单 #${orderNumber} 已更新`);cursorRef.current=null;await load(true);}}/>}
+    {editing&&<OrderDialog order={editing} active={{id:editing.conversationId,name:editing.customerName,initials:"",color:"#477a62",account:editing.accountName,accountId:editing.accountId,phone:editing.customerPhone,preview:"",time:"",unread:0,accountStatus:"online",assignedUserId:null,favorite:false,conversationStatus:"open",customerStage:"new",tags:[],remindAt:null}} token={token} onToken={onToken} onClose={()=>setEditing(null)} onCreated={async orderNumber=>{setEditing(null);onToast(`订单 #${orderNumber} 已更新`);cursorRef.current=null;await load(true);}}/>}
   </section>;
 }
 
