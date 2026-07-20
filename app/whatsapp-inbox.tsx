@@ -1878,7 +1878,7 @@ function ProductImageMediaDialog({accountId,token,onToken,onClose,onSelect}:{acc
     }catch(reason){setError(reason instanceof Error?reason.message:"上传失败");}
     finally{setBusy(false);}
   }
-  return <div className="modal-backdrop media-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget&&!busy)onClose();}}>
+  return <div className="modal-backdrop media-backdrop product-image-media-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget&&!busy)onClose();}}>
     <section className="media-dialog product-image-media-dialog" role="dialog" aria-modal="true" aria-labelledby="product-image-media-title">
       <header><div><span className="login-logo"><Paperclip size={21}/></span><span><h2 id="product-image-media-title">从媒体与附件选择</h2><p>仅显示当前 WhatsApp 账号中可用的 PNG 和 JPG 图片。</p></span></div><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button></header>
       <div className="media-dropzone" onClick={()=>inputRef.current?.click()} role="button" tabIndex={0} onKeyDown={event=>{if(event.key==="Enter"||event.key===" ")inputRef.current?.click();}}><UploadCloud size={30}/><b>{busy?"正在上传…":"上传新图片到媒体与附件"}</b><span>PNG 或 JPG；单文件最大 64 MB</span><input ref={inputRef} type="file" multiple accept="image/png,image/jpeg" onChange={event=>{if(event.target.files)void upload(event.target.files);event.currentTarget.value="";}}/></div>
