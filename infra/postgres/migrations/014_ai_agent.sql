@@ -84,7 +84,7 @@ CREATE INDEX IF NOT EXISTS knowledge_chunks_embedding_idx ON knowledge_chunks US
 
 CREATE TABLE IF NOT EXISTS conversation_agent_state (
   conversation_id uuid PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
-  mode text NOT NULL DEFAULT 'active' CHECK(mode IN ('active','human_paused')),
+  mode text NOT NULL DEFAULT 'human_paused' CHECK(mode IN ('active','human_paused')),
   pause_reason text,
   followup_count integer NOT NULL DEFAULT 0,
   last_customer_message_id uuid REFERENCES messages(id) ON DELETE SET NULL,
@@ -159,4 +159,3 @@ CREATE TABLE IF NOT EXISTS agent_jobs (
 );
 CREATE INDEX IF NOT EXISTS agent_jobs_ready_idx ON agent_jobs(state,available_at,created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS agent_jobs_reply_source_idx ON agent_jobs(kind,source_message_id) WHERE kind='reply' AND source_message_id IS NOT NULL;
-
