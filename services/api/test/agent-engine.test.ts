@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chunkText, isConversationAgentActive, isWithinBusinessHours, passesAutoReplyGate, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
+import { chunkText, groundOrderNumberReply, isConversationAgentActive, isReplySourceCurrent, isWithinBusinessHours, passesAutoReplyGate, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
 
 test("chunkText creates bounded overlapping chunks",()=>{
   const input=("A paragraph with useful knowledge. ").repeat(120);
@@ -41,4 +41,18 @@ test("full takeover sends useful replies without the cautious evidence gate",()=
 test("agent decisions can carry a Chinese review translation",()=>{
   const decision:AgentDecision={decision:"draft",reply:"How can I help?",replyZh:"请问有什么可以帮助您？",confidence:.5,citations:[],reason:"review"};
   assert.equal(decision.replyZh,"请问有什么可以帮助您？");
+});
+
+test("late reply jobs cannot answer a newer customer message",()=>{
+  assert.equal(isReplySourceCurrent("reply","message-old","message-new"),false);
+  assert.equal(isReplySourceCurrent("reply","message-new","message-new"),true);
+  assert.equal(isReplySourceCurrent("followup","message-old","message-new"),true);
+});
+
+test("order-number questions are grounded in the latest conversation order",()=>{
+  const wrong:AgentDecision={decision:"auto_reply",reply:"Our company name is unavailable.",replyZh:"无法确认公司名称。",confidence:.9,citations:[],reason:"wrong topic"};
+  const grounded=groundOrderNumberReply(wrong,"send me the order number",[{order_number:"20260720003"}]);
+  assert.equal(grounded.reply,"Order #20260720003");
+  assert.equal(grounded.replyZh,"订单号：20260720003");
+  assert.equal(groundOrderNumberReply(wrong,"what is your company name?",[{order_number:"20260720003"}]),wrong);
 });
