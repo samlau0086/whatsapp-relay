@@ -2,6 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { pool, transaction } from "./db.js";
 import { decryptAtRest, signWebhook } from "./security.js";
 import { config } from "./config.js";
+import { processOneAgentJob } from "./agent-engine.js";
 
 let stopping=false;
 let lastRetention=0;
@@ -9,8 +10,9 @@ process.on("SIGTERM",()=>{stopping=true;});
 process.on("SIGINT",()=>{stopping=true;});
 
 while(!stopping){
+  const agentWork=await processOneAgentJob();
   const delivery=await claimWebhook();
-  if(delivery)await deliverWebhook(delivery);else await sleep(750);
+  if(delivery)await deliverWebhook(delivery);else if(!agentWork)await sleep(750);
   await requeueCommands();
   await enforceRetention();
 }

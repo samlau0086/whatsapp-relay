@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { WebSocket } from "ws";
 import { pool, transaction } from "./db.js";
 import { hashSecret } from "./security.js";
+import { enqueueInboundAgentWork } from "./agent-engine.js";
 
 const PROTOCOL_VERSION = 1;
 const HEARTBEAT_TIMEOUT_SECONDS = 45;
@@ -176,7 +177,10 @@ async function ingestMessage(client: import("pg").PoolClient, agentId:string, pa
   const conversation = await client.query("INSERT INTO conversations(account_id,contact_id,last_message_at,unread_count) VALUES($1,$2,$3,CASE WHEN $4='in' THEN 1 ELSE 0 END) ON CONFLICT(account_id,contact_id) DO UPDATE SET last_message_at=EXCLUDED.last_message_at,unread_count=conversations.unread_count+CASE WHEN $4='in' THEN 1 ELSE 0 END,status='open' RETURNING id", [accountId,contact.rows[0].id,payload.occurredAt,payload.direction]);
   const media=payload.media as {uploadId?:string}|undefined;
   const message = await client.query("INSERT INTO messages(conversation_id,account_id,sender_contact_id,whatsapp_message_id,direction,kind,text_content,media_id,status,occurred_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(account_id,whatsapp_message_id) DO NOTHING RETURNING id", [conversation.rows[0].id,accountId,payload.direction === "in" ? contact.rows[0].id : null,payload.whatsappMessageId,payload.direction,payload.kind,payload.text ?? null,media?.uploadId??null,payload.direction === "in" ? "received" : "sent",payload.occurredAt]);
-  if (message.rowCount) await createWebhookEvent(client,"message.received",message.rows[0].id,{ ...payload, platformMessageId:message.rows[0].id, conversationId:conversation.rows[0].id });
+  if (message.rowCount){
+    await createWebhookEvent(client,"message.received",message.rows[0].id,{ ...payload, platformMessageId:message.rows[0].id, conversationId:conversation.rows[0].id });
+    if(payload.direction==="in"&&(payload.kind==="text"||payload.kind==="audio"))await enqueueInboundAgentWork(client,conversation.rows[0].id,message.rows[0].id);
+  }
 }
 
 async function updateMessageStatus(client: import("pg").PoolClient, payload: Record<string,unknown>): Promise<void> {

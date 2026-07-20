@@ -1,31 +1,40 @@
 import sharp from "sharp";
 
 export type OrderImageProduct={name:string;image?:Buffer};
+export type OrderImageSections={title:string;itemsHeading:string;items:string[];feesHeading:string;fees:string[];notes:string;total:string};
 
 const WIDTH=1080;
 const PADDING=72;
+const CONTENT_WIDTH=WIDTH-PADDING*2;
 
-export async function renderOrderImage(summary:string,products:OrderImageProduct[]):Promise<Buffer>{
-  const paragraphs=summary.split("\n").flatMap(line=>wrapLine(line,58));
-  const textLineHeight=42;
-  const textHeight=Math.max(100,paragraphs.length*textLineHeight);
-  const pictured=products.filter(product=>product.image);
-  const columns=3,photoSize=264,photoGap=24;
-  const photoRows=Math.ceil(pictured.length/columns);
-  const photoTop=PADDING+126+textHeight+(photoRows?42:0);
-  const height=Math.max(720,photoRows?photoTop+photoRows*(photoSize+92+photoGap)+PADDING:PADDING+150+textHeight+PADDING);
-  const prepared=await Promise.all(pictured.map(async product=>({
+export function parseOrderImageSummary(summary:string,itemCount:number,feeCount:number):OrderImageSections{
+  const lines=summary.split("\n").map(line=>line.trim()).filter(Boolean),title=lines.shift()??"Order",itemsHeading=lines.shift()??"Items:";
+  const items=lines.splice(0,itemCount),feesHeading=feeCount?(lines.shift()??"Additional fees:"):"",fees=lines.splice(0,feeCount),total=lines.shift()??"Total",notes=lines.join(" ");
+  return{title,itemsHeading,items,feesHeading,fees,notes,total};
+}
+
+export async function renderOrderImage(summary:string,products:OrderImageProduct[],feeCount=0):Promise<Buffer>{
+  const sections=parseOrderImageSummary(summary,products.length,feeCount),photoSize=190;
+  const prepared=await Promise.all(products.map(async product=>({
     name:product.name,
-    data:(await sharp(product.image!).rotate().resize(photoSize,photoSize,{fit:"cover"}).png().toBuffer()).toString("base64"),
+    data:product.image?(await sharp(product.image).rotate().resize(photoSize,photoSize,{fit:"cover"}).png().toBuffer()).toString("base64"):null,
   })));
-  const title=paragraphs.shift()??"Order";
-  const body=paragraphs.map((line,index)=>`<text x="${PADDING}" y="${PADDING+144+index*textLineHeight}" class="body">${escapeXml(line||" ")}</text>`).join("");
-  const photos=prepared.map((product,index)=>{
-    const column=index%columns,row=Math.floor(index/columns),x=PADDING+column*(photoSize+photoGap),y=photoTop+row*(photoSize+92+photoGap);
-    const label=truncate(product.name,30);
-    return `<rect x="${x}" y="${y}" width="${photoSize}" height="${photoSize+58}" rx="18" fill="#f6f9f7"/><image x="${x}" y="${y}" width="${photoSize}" height="${photoSize}" preserveAspectRatio="xMidYMid slice" href="data:image/png;base64,${product.data}"/><text x="${x+16}" y="${y+photoSize+38}" class="label">${escapeXml(label)}</text>`;
-  }).join("");
-  const svg=`<svg width="${WIDTH}" height="${height}" viewBox="0 0 ${WIDTH} ${height}" xmlns="http://www.w3.org/2000/svg"><style>.title{font:700 42px 'Noto Sans','Noto Sans CJK SC',sans-serif;fill:#fff}.body{font:400 28px 'Noto Sans','Noto Sans CJK SC',sans-serif;fill:#20372d}.label{font:600 22px 'Noto Sans','Noto Sans CJK SC',sans-serif;fill:#20372d}</style><rect width="${WIDTH}" height="${height}" fill="#fff"/><rect width="${WIDTH}" height="150" fill="#153f2f"/><circle cx="${WIDTH-92}" cy="75" r="35" fill="#36ba7c"/><path d="M${WIDTH-108} 75l11 11 23-26" fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/><text x="${PADDING}" y="94" class="title">${escapeXml(title)}</text>${body}${photos}<rect x="${PADDING}" y="${height-30}" width="${WIDTH-PADDING*2}" height="3" fill="#dce9e2"/></svg>`;
+  const itemLayouts=products.map((product,index)=>{const hasImage=Boolean(prepared[index]?.data),lines=wrapLine(sections.items[index]??product.name,hasImage?39:66);return{hasImage,lines,height:Math.max(hasImage?226:92,lines.length*38+42)};});
+  const feeLayouts=sections.fees.map(text=>{const lines=wrapLine(text,68);return{lines,height:lines.length*36+30};});
+  const noteLines=sections.notes?wrapLine(sections.notes,68):[];
+  const totalLines=wrapLine(sections.total,55);
+  let y=204;
+  const itemHeading=`<text x="${PADDING}" y="${y}" class="section">${escapeXml(sections.itemsHeading)}</text>`;y+=28;
+  const itemCards=itemLayouts.map((layout,index)=>{const cardY=y,product=prepared[index],textX=PADDING+24,textY=cardY+48;y+=layout.height+18;const text=layout.lines.map((line,lineIndex)=>`<text x="${textX}" y="${textY+lineIndex*38}" class="body">${escapeXml(line)}</text>`).join("");const image=layout.hasImage&&product?.data?`<image x="${WIDTH-PADDING-photoSize-18}" y="${cardY+18}" width="${photoSize}" height="${photoSize}" rx="12" preserveAspectRatio="xMidYMid slice" href="data:image/png;base64,${product.data}"/>`:"";return`<rect x="${PADDING}" y="${cardY}" width="${CONTENT_WIDTH}" height="${layout.height}" rx="16" fill="#f6f9f7" stroke="#e0eae5"/>${text}${image}`;}).join("");
+
+  let feeSection="";
+  if(feeLayouts.length){y+=20;feeSection+=`<text x="${PADDING}" y="${y}" class="section">${escapeXml(sections.feesHeading)}</text>`;y+=26;feeSection+=feeLayouts.map(layout=>{const rowY=y,textY=rowY+35;y+=layout.height+10;const text=layout.lines.map((line,index)=>`<text x="${PADDING+22}" y="${textY+index*36}" class="body small">${escapeXml(line)}</text>`).join("");return`<rect x="${PADDING}" y="${rowY}" width="${CONTENT_WIDTH}" height="${layout.height}" rx="12" fill="#fafcfb" stroke="#e4ece8"/>${text}`;}).join("");}
+
+  let notes="";
+  if(noteLines.length){y+=20;const noteY=y,noteHeight=noteLines.length*36+22;notes+=`<rect x="${PADDING}" y="${noteY}" width="${CONTENT_WIDTH}" height="${noteHeight}" rx="12" fill="#fffaf0"/><text x="${PADDING+22}" y="${noteY+36}" class="body small">${escapeXml(noteLines[0])}</text>${noteLines.slice(1).map((line,index)=>`<text x="${PADDING+22}" y="${noteY+72+index*36}" class="body small">${escapeXml(line)}</text>`).join("")}`;y+=noteHeight;}
+
+  y+=28;const totalY=y,totalHeight=totalLines.length*42+34,height=Math.max(720,totalY+totalHeight+PADDING);const total=`<rect x="${PADDING}" y="${totalY}" width="${CONTENT_WIDTH}" height="${totalHeight}" rx="15" fill="#153f2f"/>${totalLines.map((line,index)=>`<text x="${PADDING+24}" y="${totalY+48+index*42}" class="total">${escapeXml(line)}</text>`).join("")}`;
+  const svg=`<svg width="${WIDTH}" height="${height}" viewBox="0 0 ${WIDTH} ${height}" xmlns="http://www.w3.org/2000/svg"><style>.title{font:700 42px 'Noto Sans','Noto Sans CJK SC',sans-serif;fill:#fff}.section{font:700 27px 'Noto Sans','Noto Sans CJK SC',sans-serif;fill:#20372d}.body{font:500 25px 'Noto Sans','Noto Sans CJK SC',sans-serif;fill:#20372d}.body.small{font-size:23px}.total{font:700 29px 'Noto Sans','Noto Sans CJK SC',sans-serif;fill:#fff}</style><rect width="${WIDTH}" height="${height}" fill="#fff"/><rect width="${WIDTH}" height="150" fill="#153f2f"/><circle cx="${WIDTH-92}" cy="75" r="35" fill="#36ba7c"/><path d="M${WIDTH-108} 75l11 11 23-26" fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/><text x="${PADDING}" y="94" class="title">${escapeXml(sections.title)}</text>${itemHeading}${itemCards}${feeSection}${notes}${total}<rect x="${PADDING}" y="${height-24}" width="${CONTENT_WIDTH}" height="3" fill="#dce9e2"/></svg>`;
   return sharp(Buffer.from(svg)).png({compressionLevel:9}).toBuffer();
 }
 
@@ -36,5 +45,4 @@ function wrapLine(value:string,max:number):string[]{
   if(current||!lines.length)lines.push(current.trimEnd());return lines;
 }
 
-function truncate(value:string,max:number):string{const chars=Array.from(value);return chars.length>max?`${chars.slice(0,max-1).join("")}…`:value;}
 function escapeXml(value:string):string{return value.replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&apos;"}[char]!));}

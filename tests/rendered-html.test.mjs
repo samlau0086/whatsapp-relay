@@ -153,4 +153,13 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(css, /\.product-grid/);
   assert.match(css, /\.product-dialog/);
   assert.match(css, /\.order-product-mode/);
+  assert.match(component, /ProductSearchDropdown/);
+  assert.match(component, /role="combobox"/);
+  assert.match(component, /搜索产品名称、价格或标签/);
+  assert.match(css, /\.product-search-dropdown/);
+  assert.match(component, /AI Agent/);
+  assert.match(component, /知识库/);
+  assert.match(component, /聊天记忆/);
+  assert.match(component, /恢复 Agent/);
+  assert.match(component, /确认发送/);
 });

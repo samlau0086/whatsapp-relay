@@ -47,3 +47,16 @@ test("order sending and deletion ship with an idempotent database upgrade",async
   assert.match(migration,/ADD COLUMN IF NOT EXISTS rendered_media_id/);
   assert.match(migration,/ADD COLUMN IF NOT EXISTS deleted_at/);
 });
+
+test("customer addresses are reusable while orders retain an address snapshot",async()=>{
+  const [server,migration]=await Promise.all([
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../infra/postgres/migrations/015_customer_addresses.sql",import.meta.url),"utf8"),
+  ]);
+  assert.match(server,/contact_addresses WHERE contact_id/);
+  assert.match(server,/resolveOrderAddress/);
+  assert.match(server,/shipping_address_snapshot/);
+  assert.match(migration,/CREATE TABLE IF NOT EXISTS contact_addresses/);
+  assert.match(migration,/ADD COLUMN IF NOT EXISTS address_id/);
+  assert.match(migration,/ADD COLUMN IF NOT EXISTS shipping_address_snapshot jsonb/);
+});

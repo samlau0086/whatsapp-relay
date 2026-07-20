@@ -4,7 +4,7 @@ import {
   Archive, Bell, Bookmark, Check, CheckCheck, ChevronDown, CircleHelp, Clock3, FileText,
   Inbox, Info, Languages, Menu, MessageCircle, Mic, MonitorSmartphone, Paperclip, Phone, Plus,
   Pencil, RefreshCw, Search, Send, Settings, ShieldCheck, ShoppingBag, Smile, Sparkles, Star, Trash2, UploadCloud, UserPlus,
-  Users, Wifi, WifiOff, X, ClipboardList, ExternalLink,
+  Users, Wifi, WifiOff, X, ClipboardList, ExternalLink, Bot, Brain, BookOpen, PauseCircle, PlayCircle, MapPin,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
@@ -25,7 +25,8 @@ type ProductItem={id:string;name:string;defaultUnitAmount:number;currency:string
 type NoteItem={id:string;body:string;userId:string|null;authorName:string;createdAt:string;updatedAt:string};
 type OrderProductItem={id:string;name:string;quantity:number;unitAmount:number;imageMediaId:string|null;imageName:string;productId:string|null};
 type OrderFeeItem={id:string;name:string;amount:number};
-type OrderItem={id:string;orderNumber:string;conversationId:string;accountId:string;accountName:string;customerName:string;customerPhone:string;amount:number;currency:string;description:string;status:string;sendFormat:string;translateOnSend:boolean;targetLanguage:string;createdAt:string;createdByName:string;messageStatus:string;items:OrderProductItem[];fees:OrderFeeItem[]};
+type CustomerAddress={id:string;label:string;recipientName:string;phone:string;address:string};
+type OrderItem={id:string;orderNumber:string;conversationId:string;accountId:string;accountName:string;customerName:string;customerPhone:string;amount:number;currency:string;description:string;status:string;sendFormat:string;translateOnSend:boolean;targetLanguage:string;createdAt:string;createdByName:string;messageStatus:string;items:OrderProductItem[];fees:OrderFeeItem[];addressId:string|null;address:CustomerAddress|null};
 type OrderSendTarget={order:OrderItem;translate:boolean};
 type ConversationDetails={customerStage:string;tags:TagItem[];notes:NoteItem[];reminder:{id:string;remindAt:string;createdAt:string;updatedAt:string}|null;orders:OrderItem[]};
 type ChatMessage = {
@@ -44,11 +45,15 @@ type TranslationProviderId="openai"|"openai_compatible";
 type TranslationProviderConfig={provider:TranslationProviderId;enabled:boolean;keyConfigured:boolean;baseUrl:string;model:string;transcriptionModel:string;updatedAt:string|null};
 type TranslationPreference={enabled:boolean;agentLanguage:string;customerLanguage:string;updatedAt:string|null};
 type MessageTranslation={status:"idle"|"loading"|"translated"|"failed";text?:string;sourceText?:string;message?:string};
+type KnowledgeBaseItem={id:string;name:string;description:string;document_count?:number;faq_count?:number};
+type AgentDraft={id:string;text_content:string;reason:string;citations:string[];created_at:string};
 const DEFAULT_TRANSLATION_PREFERENCE:TranslationPreference={enabled:false,agentLanguage:"zh-CN",customerLanguage:"en",updatedAt:null};
 
 function mapOrder(item:Record<string,unknown>,defaults:Partial<OrderItem>={}):OrderItem{return{
-  id:String(item.id),orderNumber:String(item.display_order_number??item.order_number??""),conversationId:String(item.conversation_id??defaults.conversationId??""),accountId:String(item.account_id??defaults.accountId??""),accountName:String(item.account_name??defaults.accountName??""),customerName:String(item.customer_name??defaults.customerName??""),customerPhone:String(item.customer_phone??defaults.customerPhone??""),amount:Number(item.amount),currency:String(item.currency),description:String(item.description??""),status:String(item.status??"draft"),sendFormat:String(item.send_format??""),translateOnSend:Boolean(item.translate_on_send),targetLanguage:String(item.target_language??""),createdAt:String(item.created_at),createdByName:String(item.created_by_name??"已离职坐席"),messageStatus:String(item.message_status??item.status??"draft"),items:Array.isArray(item.items)?(item.items as Array<Record<string,unknown>>).map(product=>({id:String(product.id),name:String(product.name),quantity:Number(product.quantity),unitAmount:Number(product.unitAmount),imageMediaId:product.imageMediaId?String(product.imageMediaId):null,imageName:String(product.imageName??""),productId:product.productId?String(product.productId):null})):[],fees:Array.isArray(item.fees)?(item.fees as Array<Record<string,unknown>>).map(fee=>({id:String(fee.id),name:String(fee.name),amount:Number(fee.amount)})):[],
+  id:String(item.id),orderNumber:String(item.display_order_number??item.order_number??""),conversationId:String(item.conversation_id??defaults.conversationId??""),accountId:String(item.account_id??defaults.accountId??""),accountName:String(item.account_name??defaults.accountName??""),customerName:String(item.customer_name??defaults.customerName??""),customerPhone:String(item.customer_phone??defaults.customerPhone??""),amount:Number(item.amount),currency:String(item.currency),description:String(item.description??""),status:String(item.status??"draft"),sendFormat:String(item.send_format??""),translateOnSend:Boolean(item.translate_on_send),targetLanguage:String(item.target_language??""),createdAt:String(item.created_at),createdByName:String(item.created_by_name??"已离职坐席"),messageStatus:String(item.message_status??item.status??"draft"),items:Array.isArray(item.items)?(item.items as Array<Record<string,unknown>>).map(product=>({id:String(product.id),name:String(product.name),quantity:Number(product.quantity),unitAmount:Number(product.unitAmount),imageMediaId:product.imageMediaId?String(product.imageMediaId):null,imageName:String(product.imageName??""),productId:product.productId?String(product.productId):null})):[],fees:Array.isArray(item.fees)?(item.fees as Array<Record<string,unknown>>).map(fee=>({id:String(fee.id),name:String(fee.name),amount:Number(fee.amount)})):[],addressId:item.address_id?String(item.address_id):null,address:item.shipping_address_snapshot?mapCustomerAddress(item.shipping_address_snapshot as Record<string,unknown>,item.address_id?String(item.address_id):""):null,
 };}
+
+function mapCustomerAddress(item:Record<string,unknown>,id=String(item.id??"")):CustomerAddress{return{id,label:String(item.label??"地址"),recipientName:String(item.recipientName??item.recipient_name??""),phone:String(item.phone??""),address:String(item.address??"")};}
 
 export function WhatsAppInbox() {
   const [accounts,setAccounts]=useState<Account[]>([]);
@@ -290,6 +295,7 @@ export function WhatsAppInbox() {
 
     <section className="chat-panel">{active?<>
       <header className="chat-head"><div className="chat-person"><span className="avatar" style={{background:active.color}}>{active.initials}</span><span><b>{active.name}</b><small><i className={`status-dot ${active.accountStatus==="online"?"online":""}`}/>{active.account} · {statusText(active.accountStatus)}</small></span></div><div className="chat-actions"><button onClick={()=>void updateConversation({assignedToMe:active.assignedUserId!==userId})} className="assign-button"><UserPlus size={15}/>{active.assignedUserId===userId?"取消认领":active.assignedUserId?"转为我负责":"认领"}</button><button onClick={()=>void updateConversation({favorite:!active.favorite})} className="icon-button" aria-label="收藏"><Bookmark size={17} fill={active.favorite?"currentColor":"none"}/></button><button onClick={()=>setDetailsOpen(!detailsOpen)} className="icon-button" aria-label="联系人详情"><Info size={17}/></button></div></header>
+      <AgentConversationBar conversationId={active.id} token={apiToken} refreshKey={latestMessageId} onToken={setApiToken} onToast={setToast} onUseDraft={setDraft} onSent={()=>void loadMessages(apiToken,active.id)}/>
       {active.accountStatus!=="online"&&<div className="offline-banner"><WifiOff size={15}/><span>该账号当前离线；发送请求仍会进入持久队列。</span></div>}
       <div ref={messagesRef} className="messages" aria-live="polite"><div className="day-separator"><span>真实消息记录</span></div>{currentMessages.length?currentMessages.map(message=><article key={message.id} className={`message-row ${message.direction}`}>{message.direction==="in"&&<span className="avatar message-avatar" style={{background:active.color}}>{active.initials}</span>}<div className={`message-bubble ${message.attachment?.name.startsWith("sticker-")?"sticker-bubble":""}`}>{message.text&&<p>{message.text}</p>}{message.direction==="out"&&message.translationSourceText&&<div className="outgoing-translation-source"><span><Languages size={12}/>原文（仅坐席可见）</span><p>{message.translationSourceText}</p></div>}{translationPreference.enabled&&message.direction==="in"&&message.kind==="text"&&message.text&&<IncomingTranslation value={messageTranslations[message.id]} language={translationPreference.agentLanguage} onRetry={()=>void loadIncomingTranslations(apiToken,[message.id],translationPreference.agentLanguage,true)}/>} {message.attachment&&<MessageMedia attachment={message.attachment} token={apiToken} onToken={setApiToken} onReady={scrollMessagesToEnd}/>} {translationPreference.enabled&&message.direction==="in"&&message.kind==="audio"&&<VoiceTranslation value={messageTranslations[message.id]} language={translationPreference.agentLanguage} configured={translationConfigured} onTranslate={()=>void loadIncomingTranslations(apiToken,[message.id],translationPreference.agentLanguage,true,true)}/>}<footer><time>{message.time}</time>{message.direction==="out"&&<MessageStatus status={message.status}/>}</footer></div></article>):<EmptyState title="暂无消息" text="收到或发送的消息将显示在这里"/>}</div>
       <div className="composer-wrap">
@@ -306,7 +312,7 @@ export function WhatsAppInbox() {
       :view==="orders"?<OrderManagement token={apiToken} accounts={accounts} onToken={setApiToken} onToast={setToast} onConversation={conversationId=>{const found=conversations.find(item=>item.id===conversationId);if(!found){setToast("该会话不在当前列表，请在消息中心搜索客户");openInbox();return;}setActiveId(conversationId);setDetailsOpen(true);openInbox();}}/>
       :view==="products"?<ProductManagement token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>
       :view==="agents"?<AgentManagement token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>
-      :view==="settings"?<SettingsPanel token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>
+      :view==="settings"?<SettingsPanel token={apiToken} role={userRole} accounts={accounts} onToken={setApiToken} onToast={setToast}/>
       :<HelpPanel onInbox={()=>openInbox()} onAgents={()=>setView("agents")}/>
     }
 
@@ -635,6 +641,7 @@ function CrmDetailsPanel({
             {statusText(active.accountStatus)}
           </span>
         </div>
+        <AgentMemoryPanel conversationId={active.id} token={token} onToken={onToken} onToast={onToast}/>
         {loading ? (
           <div className="crm-loading">
             <RefreshCw className="spin" size={18} />
@@ -1001,9 +1008,148 @@ function OrderSendDialog({order,defaultTranslate,defaultTargetLanguage,busy,onCl
   </div>{translate?<p className="order-send-translation"><Languages size={13}/>点击发送后才会将订单详情翻译为 {languageName(targetLanguage)}</p>:<p className="order-send-translation english"><FileText size={13}/>订单将以英文原文发送，不调用 AI 翻译</p>}<button className="login-submit" disabled={busy} onClick={()=>onSend(format,translate,translate?targetLanguage:undefined)}>{busy?format==="image"?"正在生成订单图片…":"正在加入队列…":translate?(format==="image"?"翻译、生成图片并发送":"翻译并发送文字版"):(format==="image"?"生成英文图片并发送":"发送英文文字版")}</button></section></div>;
 }
 
-type DraftProduct={id:string;mode:"library"|"new"|"legacy";productId:string|null;clientProductId:string|null;name:string;quantity:string;unitAmount:string;image:File|null;imageMediaId:string|null;imageName:string};
+type DraftProduct={id:string;mode:"library"|"new"|"legacy";productId:string|null;clientProductId:string|null;name:string;quantity:string;unitAmount:string;imageMediaId:string|null;imageName:string};
 type DraftFee={id:string;name:string;amount:string};
-const newDraftProduct=():DraftProduct=>({id:crypto.randomUUID(),mode:"new",productId:null,clientProductId:crypto.randomUUID(),name:"",quantity:"1",unitAmount:"",image:null,imageMediaId:null,imageName:""});
+const newDraftProduct=():DraftProduct=>({id:crypto.randomUUID(),mode:"new",productId:null,clientProductId:crypto.randomUUID(),name:"",quantity:"1",unitAmount:"",imageMediaId:null,imageName:""});
+
+function ProductSearchDropdown({
+  id,
+  products,
+  value,
+  fallbackName,
+  onChange,
+}: {
+  id: string;
+  products: ProductItem[];
+  value: string | null;
+  fallbackName: string;
+  onChange: (productId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const selected = products.find((item) => item.id === value);
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    if (!needle) return products;
+    return products.filter((item) =>
+      [item.name, item.currency, item.defaultUnitAmount.toFixed(2), ...item.tags.map((tag) => tag.name)]
+        .some((part) => part.toLocaleLowerCase().includes(needle)),
+    );
+  }, [products, query]);
+  const listboxId = `${id}-product-options`;
+
+  useEffect(() => {
+    if (!open) return;
+    searchRef.current?.focus();
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, [open]);
+  function openDropdown() {
+    setQuery("");
+    setActiveIndex(Math.max(0, products.findIndex((item) => item.id === value)));
+    setOpen(true);
+  }
+  function selectProduct(product: ProductItem) {
+    onChange(product.id);
+    setOpen(false);
+    setQuery("");
+    window.setTimeout(() => triggerRef.current?.focus(), 0);
+  }
+  function handleSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((index) => Math.max(0, Math.min(index + 1, filtered.length - 1)));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((index) => Math.max(index - 1, 0));
+    } else if (event.key === "Enter" && filtered[activeIndex]) {
+      event.preventDefault();
+      selectProduct(filtered[activeIndex]);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+      triggerRef.current?.focus();
+    }
+  }
+
+  return (
+    <div className="product-search-dropdown" ref={rootRef}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="product-search-trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={open ? listboxId : undefined}
+        onClick={() => (open ? setOpen(false) : openDropdown())}
+        onKeyDown={(event) => {
+          if (!open && ["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key)) {
+            event.preventDefault();
+            openDropdown();
+          }
+        }}
+      >
+        <span>
+          <b>{selected?.name ?? fallbackName}</b>
+          <small>{selected ? `${selected.currency} ${selected.defaultUnitAmount.toFixed(2)}` : "已从产品库移除"}</small>
+        </span>
+        <ChevronDown size={15} aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="product-search-menu">
+          <label className="product-search-input">
+            <Search size={14} aria-hidden="true" />
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setActiveIndex(0);
+              }}
+              onKeyDown={handleSearchKeyDown}
+              placeholder="搜索产品名称、价格或标签"
+              aria-label="搜索产品"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded="true"
+              aria-controls={listboxId}
+              aria-activedescendant={filtered[activeIndex] ? `${id}-product-${filtered[activeIndex].id}` : undefined}
+            />
+          </label>
+          <div id={listboxId} className="product-search-options" role="listbox">
+            {filtered.length ? filtered.map((item, index) => (
+              <button
+                id={`${id}-product-${item.id}`}
+                type="button"
+                role="option"
+                aria-selected={item.id === value}
+                className={index === activeIndex ? "active" : ""}
+                key={item.id}
+                onMouseEnter={() => setActiveIndex(index)}
+                onClick={() => selectProduct(item)}
+              >
+                <span>
+                  <b>{item.name}</b>
+                  {item.tags.length > 0 && <small>{item.tags.map((tag) => tag.name).join(" · ")}</small>}
+                </span>
+                <strong>{item.currency} {item.defaultUnitAmount.toFixed(2)}</strong>
+                {item.id === value && <Check size={14} aria-hidden="true" />}
+              </button>
+            )) : <p className="product-search-empty">没有匹配的产品</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function OrderDialog({
   order,
@@ -1034,7 +1180,6 @@ function OrderDialog({
             name: item.name,
             quantity: String(item.quantity),
             unitAmount: item.unitAmount.toFixed(2),
-            image: null,
             imageMediaId: item.imageMediaId,
             imageName: item.imageName,
           }))
@@ -1052,11 +1197,16 @@ function OrderDialog({
     ),
     [currency, setCurrency] = useState(order?.currency ?? "USD"),
     [description, setDescription] = useState(order?.description ?? ""),
+    [addresses, setAddresses] = useState<CustomerAddress[]>([]),
+    [addressId, setAddressId] = useState(order?.addressId ?? ""),
+    [addingAddress, setAddingAddress] = useState(Boolean(order?.address&&!order.addressId)),
+    [addressDraft, setAddressDraft] = useState({label:order?.address?.label??"收货地址",recipientName:order?.address?.recipientName??active.name,phone:order?.address?.phone??active.phone,address:order?.address?.address??""}),
     [translateOnSend, setTranslateOnSend] = useState(() =>
       order
         ? order.translateOnSend
         : translationPreference.enabled && translationConfigured,
     ),
+    [imagePickerProductId, setImagePickerProductId] = useState<string|null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const total = useMemo(
@@ -1097,6 +1247,7 @@ function OrderDialog({
     );
     return () => window.clearTimeout(timer);
   }, [token, onToken]);
+  useEffect(()=>{let cancelled=false;void (async()=>{const result=await authorizedFetch(`/api/v1/conversations/${active.id}/addresses`,token);if(result.token!==token)onToken(result.token);if(result.response.ok){const body=await result.response.json() as {data:Array<Record<string,unknown>>};if(!cancelled)setAddresses(body.data.map(item=>mapCustomerAddress(item)));}})();return()=>{cancelled=true;};},[active.id,token,onToken]);
   function updateProduct(id: string, change: Partial<DraftProduct>) {
     setProducts((all) =>
       all.map((item) => (item.id === id ? { ...item, ...change } : item)),
@@ -1107,21 +1258,19 @@ function OrderDialog({
       all.map((item) => (item.id === id ? { ...item, ...change } : item)),
     );
   }
-  function chooseImage(id: string, file: File | undefined) {
-    if (!file) return;
-    if (!["image/png", "image/jpeg"].includes(file.type)) {
-      setError("产品图片仅支持 PNG 或 JPG");
+  function clearProductImage(id: string) {
+    updateProduct(id, { imageMediaId: null, imageName: "" });
+  }
+  function chooseMediaImage(asset: MediaAsset) {
+    if (!imagePickerProductId) return;
+    if (products.some(item => item.id !== imagePickerProductId && item.imageMediaId === asset.id)) {
+      setError("每个商品需要选择不同的产品图片");
+      setImagePickerProductId(null);
       return;
     }
+    updateProduct(imagePickerProductId, { imageMediaId: asset.id, imageName: asset.fileName });
     setError("");
-    updateProduct(id, {
-      image: file,
-      imageMediaId: null,
-      imageName: file.name,
-    });
-  }
-  function clearProductImage(id: string) {
-    updateProduct(id, { image: null, imageMediaId: null, imageName: "" });
+    setImagePickerProductId(null);
   }
   function chooseCatalogProduct(rowId: string, productId: string) {
     const selected = catalog.find((item) => item.id === productId);
@@ -1141,7 +1290,6 @@ function OrderDialog({
       clientProductId: null,
       name: selected.name,
       unitAmount: selected.defaultUnitAmount.toFixed(2),
-      image: null,
       imageMediaId: selected.imageMediaId,
       imageName: selected.imageName,
     });
@@ -1153,7 +1301,6 @@ function OrderDialog({
       clientProductId: crypto.randomUUID(),
       name: "",
       unitAmount: "",
-      image: null,
       imageMediaId: null,
       imageName: "",
     });
@@ -1187,40 +1334,20 @@ function OrderDialog({
       setError("订单总额必须大于 0");
       return;
     }
+    if(addingAddress&&(!addressDraft.label.trim()||!addressDraft.address.trim())){setError("请填写地址名称和详细地址");return;}
     setBusy(true);
     setError("");
     try {
-      let accessToken = token;
-      const items = [];
-      for (const product of products) {
-        let imageMediaId: string | undefined =
-          product.imageMediaId ?? undefined;
-        if (product.image) {
-          const form = new FormData();
-          form.append("file", product.image);
-          const uploaded = await authorizedFetch(
-            "/api/v1/products/media",
-            accessToken,
-            { method: "POST", body: form },
-          );
-          accessToken = uploaded.token;
-          if (uploaded.token !== token) onToken(uploaded.token);
-          if (!uploaded.response.ok)
-            throw new Error(`${product.image.name} 上传失败`);
-          const body = (await uploaded.response.json()) as { mediaId: string };
-          imageMediaId = body.mediaId;
-        }
-        items.push({
+      const items = products.map((product) => ({
           name: product.name.trim(),
           quantity: Number(product.quantity),
           unitAmount: Number(product.unitAmount),
-          ...(imageMediaId ? { imageMediaId } : {}),
+          ...(product.imageMediaId ? { imageMediaId: product.imageMediaId } : {}),
           ...(product.productId ? { productId: product.productId } : {}),
           ...(product.clientProductId
             ? { clientProductId: product.clientProductId }
             : {}),
-        });
-      }
+        }));
       const payload = {
         currency,
         description: description.trim() || undefined,
@@ -1233,12 +1360,13 @@ function OrderDialog({
           name: fee.name.trim(),
           amount: Number(fee.amount),
         })),
+        ...(addingAddress?{newAddress:{label:addressDraft.label.trim(),recipientName:addressDraft.recipientName.trim()||undefined,phone:addressDraft.phone.trim()||undefined,address:addressDraft.address.trim()}}:{addressId:addressId||null}),
       };
       const saved = await authorizedFetch(
         order
           ? `/api/v1/conversations/${active.id}/orders/${order.id}`
           : `/api/v1/conversations/${active.id}/orders`,
-        accessToken,
+        token,
         {
           method: order ? "PATCH" : "POST",
           headers: { "content-type": "application/json" },
@@ -1261,6 +1389,7 @@ function OrderDialog({
             body.error ??
             `${order ? "更新" : "创建"}失败（HTTP ${saved.response.status}）`,
         );
+      if(order){const addressSaved=await authorizedFetch(`/api/v1/conversations/${active.id}/orders/${order.id}/address`,saved.token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify(addingAddress?{newAddress:{label:addressDraft.label.trim(),recipientName:addressDraft.recipientName.trim()||undefined,phone:addressDraft.phone.trim()||undefined,address:addressDraft.address.trim()}}:{addressId:addressId||null})});if(addressSaved.token!==token)onToken(addressSaved.token);if(!addressSaved.response.ok)throw new Error("订单已更新，但地址保存失败，请重试");}
       await onCreated(body.orderNumber);
     } catch (reason) {
       setError(
@@ -1272,6 +1401,7 @@ function OrderDialog({
     }
   }
   return (
+    <>
     <div
       className="modal-backdrop order-backdrop"
       role="presentation"
@@ -1382,30 +1512,19 @@ function OrderDialog({
                 )}
               </div>
               {product.mode === "library" ? (
-                <label>
-                  选择产品
-                  <select
-                    value={product.productId ?? ""}
-                    onChange={(event) =>
-                      chooseCatalogProduct(product.id, event.target.value)
-                    }
-                  >
-                    {product.productId &&
-                      !available.some((item) => item.id === product.productId) && (
-                        <option value={product.productId}>
-                          {product.name} · 已从产品库移除
-                        </option>
-                      )}
-                    {available.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name} · {item.currency} {item.defaultUnitAmount.toFixed(2)}
-                      </option>
-                    ))}
-                  </select>
+                <div className="order-product-selector">
+                  <span className="order-product-selector-label">选择产品</span>
+                  <ProductSearchDropdown
+                    id={`order-${product.id}`}
+                    products={available}
+                    value={product.productId}
+                    fallbackName={product.name}
+                    onChange={(productId) => chooseCatalogProduct(product.id, productId)}
+                  />
                   <small className="selected-product-note">
                     名称与图片取自产品快照，订单内可调整成交单价。
                   </small>
-                </label>
+                </div>
               ) : (
                 <>
                   <label>
@@ -1456,21 +1575,12 @@ function OrderDialog({
               </div>
               {product.mode !== "library" && <><label className="product-image-input">
                 产品图片 · 可选
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg"
-                  onChange={(event) =>
-                    chooseImage(product.id, event.target.files?.[0])
-                  }
-                />
-                <span>
-                  <UploadCloud size={14} />
-                  {product.image
-                    ? product.image.name
-                    : product.imageName || "添加 PNG/JPG 图片"}
-                </span>
+                <button type="button" onClick={() => setImagePickerProductId(product.id)}>
+                  <Paperclip size={14} />
+                  {product.imageName || "从媒体与附件中选择"}
+                </button>
               </label>
-              {(product.image || product.imageMediaId) && (
+              {product.imageMediaId && (
                 <button
                   className="product-image-remove"
                   onClick={() => clearProductImage(product.id)}
@@ -1540,6 +1650,14 @@ function OrderDialog({
         ) : (
           <p className="order-empty-fees">No additional fees</p>
         )}
+        <section className="order-address-section">
+          <div className="order-fees-head"><span><b>收货地址 · 可选</b><small>地址会保存到当前客户，下次创建订单可直接选择</small></span><button onClick={()=>{setAddingAddress(true);setAddressId("");}}><Plus size={13}/>新增地址</button></div>
+          <div className="order-address-cards">
+            <button className={!addingAddress&&!addressId?"selected":""} onClick={()=>{setAddingAddress(false);setAddressId("");}}><MapPin size={15}/><span><b>不添加地址</b><small>此订单无需收货地址</small></span></button>
+            {addresses.map(item=><button key={item.id} className={!addingAddress&&addressId===item.id?"selected":""} onClick={()=>{setAddingAddress(false);setAddressId(item.id);}}><MapPin size={15}/><span><b>{item.label}</b><small>{[item.recipientName,item.phone].filter(Boolean).join(" · ")}</small><em>{item.address}</em></span></button>)}
+          </div>
+          {addingAddress&&<div className="order-address-editor"><label>地址名称<input value={addressDraft.label} maxLength={40} placeholder="例如：公司、家" onChange={event=>setAddressDraft(value=>({...value,label:event.target.value}))}/></label><div><label>收件人<input value={addressDraft.recipientName} maxLength={80} onChange={event=>setAddressDraft(value=>({...value,recipientName:event.target.value}))}/></label><label>联系电话<input value={addressDraft.phone} maxLength={40} onChange={event=>setAddressDraft(value=>({...value,phone:event.target.value}))}/></label></div><label>详细地址<textarea value={addressDraft.address} maxLength={1000} placeholder="请输入完整收货地址" onChange={event=>setAddressDraft(value=>({...value,address:event.target.value}))}/></label><small>保存订单后，这张地址卡会自动绑定到 {active.name}</small></div>}
+        </section>
         <label>
           Order notes · Optional
           <textarea
@@ -1593,6 +1711,16 @@ function OrderDialog({
         <small className="dialog-hint">Ctrl / Cmd + Enter</small>
       </section>
     </div>
+    {imagePickerProductId && (
+      <ProductImageMediaDialog
+        accountId={active.accountId}
+        token={token}
+        onToken={onToken}
+        onClose={() => setImagePickerProductId(null)}
+        onSelect={chooseMediaImage}
+      />
+    )}
+    </>
   );
 }
 
@@ -1690,6 +1818,55 @@ function MediaDialog({accountId,token,initialCaption,onToken,onToast,onClose,onS
   return <div className="modal-backdrop media-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget&&!busy)onClose();}}><section className="media-dialog" role="dialog" aria-modal="true" aria-labelledby="media-dialog-title"><header><div><span className="login-logo"><Paperclip size={21}/></span><span><h2 id="media-dialog-title">媒体与附件</h2><p>上传一次，之后可在该 WhatsApp 账号的会话中复用。</p></span></div><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button></header><div className={`media-dropzone ${dragging?"dragging":""}`} onDragEnter={event=>{event.preventDefault();setDragging(true)}} onDragOver={event=>event.preventDefault()} onDragLeave={event=>{if(event.currentTarget===event.target)setDragging(false)}} onDrop={event=>{event.preventDefault();void upload(event.dataTransfer.files)}} onClick={()=>inputRef.current?.click()} role="button" tabIndex={0} onKeyDown={event=>{if(event.key==="Enter"||event.key===" ")inputRef.current?.click();}}><UploadCloud size={30}/><b>{busy?"正在上传…":"拖拽文件到这里，或点击选择"}</b><span>图片、MP4、OGG、MP3、PDF、ZIP；单文件最大 64 MB</span><input ref={inputRef} type="file" multiple accept="image/jpeg,image/png,image/webp,video/mp4,audio/ogg,audio/mpeg,application/pdf,application/zip" onChange={event=>{if(event.target.files)void upload(event.target.files);event.currentTarget.value="";}}/></div><div className="media-library-head"><div><b>媒体库</b><span>{assets.length} 个文件</span></div><label><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索文件名"/></label></div><div className="media-filters">{[["all","全部"],["image","图片"],["video","视频"],["audio","音频"],["document","文档"]].map(([value,label])=><button key={value} className={filter===value?"active":""} onClick={()=>setFilter(value)}>{label}</button>)}</div><div className="media-grid">{visible.length?visible.map(asset=><button key={asset.id} className={`media-item ${selectedId===asset.id?"selected":""}`} onClick={()=>setSelectedId(asset.id)}><span className={`media-kind ${mediaKind(asset.mimeType)}`}><FileText size={22}/></span><span><b title={asset.fileName}>{asset.fileName}</b><small>{formatBytes(asset.size)} · {asset.usageCount?`已使用 ${asset.usageCount} 次`:"未使用"}</small></span><i role="button" tabIndex={0} aria-label={`删除 ${asset.fileName}`} onClick={event=>{event.stopPropagation();void remove(asset)}} onKeyDown={event=>{if(event.key==="Enter"){event.stopPropagation();void remove(asset);}}}><Trash2 size={14}/></i></button>):<div className="media-empty"><FileText size={28}/><b>媒体库中暂无匹配文件</b><span>可从上方拖拽上传</span></div>}</div>{error&&<span className="login-error media-error">{error}</span>}<footer><label>附件说明（可选）<input value={caption} onChange={event=>setCaption(event.target.value)} maxLength={65536} placeholder="随附件一起发送的文字"/></label><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" disabled={!selected||busy} onClick={()=>selected&&void onSend(selected,caption.trim())}>发送所选附件</button></footer></section></div>;
 }
 
+function ProductImageMediaDialog({accountId,token,onToken,onClose,onSelect}:{accountId:string;token:string;onToken:(token:string)=>void;onClose:()=>void;onSelect:(asset:MediaAsset)=>void}) {
+  const [assets,setAssets]=useState<MediaAsset[]>([]);
+  const [selectedId,setSelectedId]=useState("");
+  const [query,setQuery]=useState("");
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState("");
+  const inputRef=useRef<HTMLInputElement>(null);
+  const load=useCallback(async()=>{
+    const result=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(accountId)}&limit=100`,token);
+    if(result.token!==token)onToken(result.token);
+    if(!result.response.ok){setError(`媒体库加载失败（HTTP ${result.response.status}）`);return;}
+    const body=await result.response.json() as {data:Array<Record<string,unknown>>};
+    setAssets(body.data.map(mapMediaAsset).filter(item=>["image/png","image/jpeg"].includes(item.mimeType)));
+  },[accountId,token,onToken]);
+  useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer);},[load]);
+  useEffect(()=>{const key=(event:KeyboardEvent)=>{if(event.key==="Escape"&&!busy)onClose();};window.addEventListener("keydown",key);return()=>window.removeEventListener("keydown",key);},[busy,onClose]);
+  const visible=assets.filter(item=>!query||item.fileName.toLowerCase().includes(query.toLowerCase()));
+  const selected=assets.find(item=>item.id===selectedId)??null;
+  async function upload(files:FileList){
+    const list=Array.from(files);
+    if(!list.length)return;
+    setBusy(true);setError("");
+    try{
+      let lastId="";
+      for(const file of list){
+        if(!["image/png","image/jpeg"].includes(file.type))throw new Error(`${file.name} 不是 PNG 或 JPG 图片`);
+        if(file.size>64*1024*1024)throw new Error(`${file.name} 超过 64 MB`);
+        const form=new FormData();form.append("file",file);
+        const result=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(accountId)}`,token,{method:"POST",body:form});
+        if(result.token!==token)onToken(result.token);
+        if(!result.response.ok)throw new Error(`${file.name} 上传失败（HTTP ${result.response.status}）`);
+        const body=await result.response.json() as {mediaId:string};lastId=body.mediaId;
+      }
+      await load();setSelectedId(lastId);
+    }catch(reason){setError(reason instanceof Error?reason.message:"上传失败");}
+    finally{setBusy(false);}
+  }
+  return <div className="modal-backdrop media-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget&&!busy)onClose();}}>
+    <section className="media-dialog product-image-media-dialog" role="dialog" aria-modal="true" aria-labelledby="product-image-media-title">
+      <header><div><span className="login-logo"><Paperclip size={21}/></span><span><h2 id="product-image-media-title">从媒体与附件选择</h2><p>仅显示当前 WhatsApp 账号中可用的 PNG 和 JPG 图片。</p></span></div><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button></header>
+      <div className="media-dropzone" onClick={()=>inputRef.current?.click()} role="button" tabIndex={0} onKeyDown={event=>{if(event.key==="Enter"||event.key===" ")inputRef.current?.click();}}><UploadCloud size={30}/><b>{busy?"正在上传…":"上传新图片到媒体与附件"}</b><span>PNG 或 JPG；单文件最大 64 MB</span><input ref={inputRef} type="file" multiple accept="image/png,image/jpeg" onChange={event=>{if(event.target.files)void upload(event.target.files);event.currentTarget.value="";}}/></div>
+      <div className="media-library-head"><div><b>图片</b><span>{assets.length} 个文件</span></div><label><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索文件名"/></label></div>
+      <div className="media-grid">{visible.length?visible.map(asset=><button key={asset.id} className={`media-item ${selectedId===asset.id?"selected":""}`} onClick={()=>setSelectedId(asset.id)}><span className="media-kind image"><FileText size={22}/></span><span><b title={asset.fileName}>{asset.fileName}</b><small>{formatBytes(asset.size)} · {asset.usageCount?`已使用 ${asset.usageCount} 次`:"未使用"}</small></span></button>):<div className="media-empty"><FileText size={28}/><b>媒体与附件中暂无匹配图片</b><span>可从上方上传 PNG 或 JPG</span></div>}</div>
+      {error&&<span className="login-error media-error">{error}</span>}
+      <footer className="product-image-media-footer"><span>{selected?.fileName||"尚未选择图片"}</span><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" disabled={!selected||busy} onClick={()=>selected&&onSelect(selected)}>使用所选图片</button></footer>
+    </section>
+  </div>;
+}
+
 function mapMediaAsset(item:Record<string,unknown>):MediaAsset{return{id:String(item.id),fileName:String(item.file_name??"未命名文件"),mimeType:String(item.mime_type??"application/octet-stream"),size:Number(item.byte_size??0),sha256:String(item.sha256??""),createdAt:String(item.created_at??""),usageCount:Number(item.usage_count??0)};}
 function mediaKind(mime:string){return mime.startsWith("image/")?"image":mime.startsWith("video/")?"video":mime.startsWith("audio/")?"audio":"document";}
 
@@ -1726,10 +1903,52 @@ function MessageMedia({attachment,token,onToken,onReady}:{attachment:{id:string;
   return <button className="attachment-card" onClick={()=>{const link=document.createElement("a");link.href=url;link.download=attachment.name;link.click();}}><span><FileText size={20}/></span><span><b>{attachment.name}</b><small>{attachment.mime} · {attachment.size}</small></span></button>;
 }
 
-function SettingsPanel({token,role,onToken,onToast}:{token:string;role:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){
-  const [tab,setTab]=useState<"translation"|"speech"|"orders">("translation");
+function AgentConversationBar({conversationId,token,refreshKey,onToken,onToast,onUseDraft,onSent}:{conversationId:string;token:string;refreshKey:string;onToken:(token:string)=>void;onToast:(text:string)=>void;onUseDraft:(text:string)=>void;onSent:()=>void}){
+  const [state,setState]=useState<{mode:string;account_enabled:boolean;draft:AgentDraft|null}|null>(null),[busy,setBusy]=useState(false);
+  const load=useCallback(async()=>{try{const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/agent`,token);if(result.token!==token)onToken(result.token);if(result.response.ok)setState(await result.response.json());}catch{}},[conversationId,token,onToken]);
+  useEffect(()=>{const first=window.setTimeout(()=>void load(),0),poll=window.setInterval(()=>void load(),8000);return()=>{window.clearTimeout(first);window.clearInterval(poll);};},[load,refreshKey]);
+  async function setMode(mode:"active"|"human_paused"){setBusy(true);const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/agent`,token,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({mode})});if(result.token!==token)onToken(result.token);setBusy(false);if(result.response.ok){onToast(mode==="active"?"Agent 已恢复，将处理下一条客户消息":"Agent 已暂停，待跟进任务已取消");await load();}}
+  async function resolveDraft(action:"send"|"dismiss"){if(!state?.draft)return;setBusy(true);const result=await authorizedFetch(`/api/v1/ai-drafts/${state.draft.id}/${action}`,token,{method:"POST",headers:{"content-type":"application/json"},body:action==="send"?JSON.stringify({text:state.draft.text_content}):undefined});if(result.token!==token)onToken(result.token);setBusy(false);if(result.response.ok){onToast(action==="send"?"AI 草稿已进入发送队列，Agent 已转为人工接管":"AI 草稿已忽略");await load();onSent();}}
+  if(!state?.account_enabled)return null;const paused=state.mode==="human_paused";
+  return <div className={`agent-conversation-bar ${paused?"paused":""}`}><span><Bot size={15}/><b>{paused?"人工接管":"Agent 运行中"}</b><small>{paused?"不会自动回复或跟进":"仅有可靠知识依据时自动发送"}</small></span><button disabled={busy} onClick={()=>void setMode(paused?"active":"human_paused")}>{paused?<><PlayCircle size={14}/>恢复 Agent</>:<><PauseCircle size={14}/>暂停</>}</button>{state.draft&&<div className="agent-draft"><span><Sparkles size={14}/><b>AI 建议回复</b><small>{state.draft.reason}</small></span><p>{state.draft.text_content}</p><div><button onClick={()=>onUseDraft(state.draft!.text_content)}>放入输入框</button><button onClick={()=>void resolveDraft("dismiss")}>忽略</button><button className="primary" onClick={()=>void resolveDraft("send")}>确认发送</button></div></div>}</div>;
+}
+
+function AgentMemoryPanel({conversationId,token,onToken,onToast}:{conversationId:string;token:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){
+  const [memory,setMemory]=useState<{summary:string;updatedAt:string|null;facts:Array<{id:string;fact_key:string;fact_value:string;confidence:number;source_text?:string}>}|null>(null),[busy,setBusy]=useState(false);
+  const load=useCallback(async()=>{const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory`,token);if(result.token!==token)onToken(result.token);if(result.response.ok)setMemory(await result.response.json());},[conversationId,token,onToken]);useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer);},[load]);
+  async function remove(id:string){const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory/facts/${id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);if(result.response.ok)await load();}
+  async function edit(fact:{id:string;fact_key:string;fact_value:string}){const key=window.prompt("记忆字段",fact.fact_key),value=window.prompt("记忆内容",fact.fact_value);if(!key?.trim()||!value?.trim())return;const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory/facts/${fact.id}`,token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({key,value})});if(result.token!==token)onToken(result.token);if(result.response.ok)await load();}
+  async function rebuild(){setBusy(true);const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory/rebuild`,token,{method:"POST"});if(result.token!==token)onToken(result.token);setBusy(false);onToast(result.response.ok?"记忆更新任务已创建":"记忆更新失败");}
+  return <div className="detail-section agent-memory"><div className="detail-title"><h4><Brain size={13}/>聊天记忆</h4><button disabled={busy} onClick={()=>void rebuild()}><RefreshCw size={11}/>重新整理</button></div><p className="memory-summary">{memory?.summary||"Agent 尚未生成会话摘要。"}</p><div className="memory-facts">{memory?.facts.map(fact=><span key={fact.id} title={fact.source_text||"来源消息已删除"}><b>{fact.fact_key}</b><em>{fact.fact_value}</em><i><button onClick={()=>void edit(fact)} aria-label={`编辑记忆 ${fact.fact_key}`}><Pencil size={10}/></button><button onClick={()=>void remove(fact.id)} aria-label={`删除记忆 ${fact.fact_key}`}><X size={10}/></button></i></span>)}</div></div>;
+}
+
+function SettingsPanel({token,role,accounts,onToken,onToast}:{token:string;role:string;accounts:Account[];onToken:(token:string)=>void;onToast:(text:string)=>void}){
+  const [tab,setTab]=useState<"agent"|"knowledge"|"translation"|"speech"|"orders">("agent");
   if(role!=="admin")return <section className="management-panel"><EmptyState title="需要管理员权限" text="只有管理员可以查看或修改 AI Provider 与密钥配置。"/></section>;
-  return <section className="management-panel settings-panel"><header className="management-head"><div><span className="eyebrow">系统设置</span><h1>工作区配置</h1><p>集中管理 AI Provider、订单编号规则和业务时区。</p></div></header><nav className="settings-tabs" aria-label="系统设置"><button className={tab==="translation"?"active":""} onClick={()=>setTab("translation")}><Languages size={15}/>AI 翻译</button><button className={tab==="speech"?"active":""} onClick={()=>setTab("speech")}><Mic size={15}/>AI 语音</button><button className={tab==="orders"?"active":""} onClick={()=>setTab("orders")}><ClipboardList size={15}/>订单设置</button></nav>{tab==="translation"?<TranslationSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="speech"?<TtsSettingsPanel token={token} role={role} onToken={onToken} onToast={onToast}/>:<OrderSettingsPanel token={token} onToken={onToken} onToast={onToast}/>}</section>;
+  return <section className="management-panel settings-panel"><header className="management-head"><div><span className="eyebrow">系统设置</span><h1>工作区配置</h1><p>集中管理自动回复、知识库、AI Provider 和业务规则。</p></div></header><nav className="settings-tabs" aria-label="系统设置"><button className={tab==="agent"?"active":""} onClick={()=>setTab("agent")}><Bot size={15}/>AI Agent</button><button className={tab==="knowledge"?"active":""} onClick={()=>setTab("knowledge")}><BookOpen size={15}/>知识库</button><button className={tab==="translation"?"active":""} onClick={()=>setTab("translation")}><Languages size={15}/>AI 翻译</button><button className={tab==="speech"?"active":""} onClick={()=>setTab("speech")}><Mic size={15}/>AI 语音</button><button className={tab==="orders"?"active":""} onClick={()=>setTab("orders")}><ClipboardList size={15}/>订单设置</button></nav>{tab==="agent"?<AiAgentSettingsPanel token={token} accounts={accounts} onToken={onToken} onToast={onToast}/>:tab==="knowledge"?<KnowledgeBaseSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="translation"?<TranslationSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="speech"?<TtsSettingsPanel token={token} role={role} onToken={onToken} onToast={onToast}/>:<OrderSettingsPanel token={token} onToken={onToken} onToast={onToast}/>}</section>;
+}
+
+function AiAgentSettingsPanel({token,accounts,onToken,onToast}:{token:string;accounts:Account[];onToken:(token:string)=>void;onToast:(text:string)=>void}){
+  const [providers,setProviders]=useState<Array<{provider:string;enabled:boolean;key_configured:boolean;base_url:string;model:string;embedding_model:string}>>([]),[providerId,setProviderId]=useState("openai"),[secret,setSecret]=useState(""),[accountId,setAccountId]=useState(accounts[0]?.id??""),[kbs,setKbs]=useState<KnowledgeBaseItem[]>([]),[settings,setSettings]=useState({enabled:false,persona:"You are a helpful, concise customer service agent.",replyLanguage:"auto",timezone:"Asia/Shanghai",businessStart:"09:00",businessEnd:"18:00",confidenceThreshold:.8,followupEnabled:true,followupDelaysHours:[24,72],knowledgeBaseIds:[] as string[]}),[saving,setSaving]=useState(false);
+  const loadProvider=useCallback(async()=>{const result=await authorizedFetch("/api/v1/admin/agent-provider",token);if(result.token!==token)onToken(result.token);if(result.response.ok){const body=await result.response.json() as {data:typeof providers};setProviders(body.data);setProviderId(value=>body.data.some(item=>item.provider===value)?value:(body.data.find(item=>item.enabled)?.provider??"openai"));}},[token,onToken]);
+  const loadAccount=useCallback(async()=>{if(!accountId)return;const [result,kbResult]=await Promise.all([authorizedFetch(`/api/v1/accounts/${accountId}/agent-settings`,token),authorizedFetch("/api/v1/knowledge-bases",token)]);if(result.token!==token)onToken(result.token);if(kbResult.token!==token)onToken(kbResult.token);if(kbResult.response.ok)setKbs((await kbResult.response.json()).data);if(result.response.ok){const body=await result.response.json() as Record<string,unknown>;setSettings({enabled:Boolean(body.enabled),persona:String(body.persona??""),replyLanguage:String(body.reply_language??"auto"),timezone:String(body.timezone??"UTC"),businessStart:String(body.business_start??"09:00").slice(0,5),businessEnd:String(body.business_end??"18:00").slice(0,5),confidenceThreshold:Number(body.confidence_threshold??.8),followupEnabled:body.followup_enabled!==false,followupDelaysHours:(body.followup_delays_hours as number[])??[24,72],knowledgeBaseIds:(body.knowledgeBaseIds as string[])??[]});}},[accountId,token,onToken]);
+  useEffect(()=>{const timer=window.setTimeout(()=>void loadProvider(),0);return()=>window.clearTimeout(timer);},[loadProvider]);useEffect(()=>{if(!accountId&&accounts[0]){const timer=window.setTimeout(()=>setAccountId(accounts[0].id),0);return()=>window.clearTimeout(timer);}},[accountId,accounts]);useEffect(()=>{const timer=window.setTimeout(()=>void loadAccount(),0);return()=>window.clearTimeout(timer);},[loadAccount]);const provider=providers.find(item=>item.provider===providerId);
+  async function saveProvider(){if(!provider)return;setSaving(true);const result=await authorizedFetch(`/api/v1/admin/agent-provider/${providerId}`,token,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({enabled:provider.enabled,apiKey:secret||undefined,baseUrl:provider.base_url,model:provider.model,embeddingModel:provider.embedding_model})});if(result.token!==token)onToken(result.token);setSaving(false);onToast(result.response.ok?"Agent Provider 已保存":"Provider 保存失败");if(result.response.ok){setSecret("");await loadProvider();}}
+  async function saveAccount(){if(!accountId)return;setSaving(true);const result=await authorizedFetch(`/api/v1/accounts/${accountId}/agent-settings`,token,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({...settings,businessDays:[1,2,3,4,5]})});if(result.token!==token)onToken(result.token);setSaving(false);onToast(result.response.ok?"账号 Agent 规则已保存":"账号 Agent 规则保存失败");}
+  const patchProvider=(change:Record<string,unknown>)=>setProviders(items=>items.map(item=>item.provider===providerId?{...item,...change}:item));
+  return <div className="agent-settings-grid"><section className="provider-form agent-card"><header><div><h2>Agent Provider</h2><p>用于回复决策、记忆整理和知识检索。</p></div></header><label>Provider<select value={providerId} onChange={event=>{setProviderId(event.target.value);setSecret("");}}><option value="openai">OpenAI</option><option value="openai_compatible">OpenAI Compatible</option></select></label>{provider&&<><label className="provider-toggle"><input type="checkbox" checked={provider.enabled} onChange={event=>patchProvider({enabled:event.target.checked})}/><span>启用此 Provider</span></label><label>API Key<input type="password" value={secret} onChange={event=>setSecret(event.target.value)} placeholder={provider.key_configured?"已加密保存；留空不修改":"请输入 API Key"}/></label><label>Endpoint<input value={provider.base_url} onChange={event=>patchProvider({base_url:event.target.value})}/></label><label>生成模型<input value={provider.model} onChange={event=>patchProvider({model:event.target.value})}/></label><label>嵌入模型<input value={provider.embedding_model} onChange={event=>patchProvider({embedding_model:event.target.value})}/><small>必须返回 1536 维向量。</small></label><button className="primary-action" disabled={saving} onClick={()=>void saveProvider()}><Check size={14}/>保存 Provider</button></>}</section><section className="provider-form agent-card"><header><div><h2>账号自动化</h2><p>规则按 WhatsApp 账号独立生效。</p></div></header><label>WhatsApp 账号<select value={accountId} onChange={event=>setAccountId(event.target.value)}>{accounts.map(account=><option value={account.id} key={account.id}>{account.name}</option>)}</select></label><label className="provider-toggle"><input type="checkbox" checked={settings.enabled} onChange={event=>setSettings(value=>({...value,enabled:event.target.checked}))}/><span>启用自动回复与主动跟进</span></label><label>Agent 人设<textarea value={settings.persona} onChange={event=>setSettings(value=>({...value,persona:event.target.value}))}/></label><div className="provider-form-grid"><label>时区<input value={settings.timezone} onChange={event=>setSettings(value=>({...value,timezone:event.target.value}))}/></label><label>回复语言<input value={settings.replyLanguage} onChange={event=>setSettings(value=>({...value,replyLanguage:event.target.value}))}/></label><label>营业开始<input type="time" value={settings.businessStart} onChange={event=>setSettings(value=>({...value,businessStart:event.target.value}))}/></label><label>营业结束<input type="time" value={settings.businessEnd} onChange={event=>setSettings(value=>({...value,businessEnd:event.target.value}))}/></label></div><label>自动发送置信度：{settings.confidenceThreshold.toFixed(2)}<input type="range" min="0.6" max="0.95" step="0.01" value={settings.confidenceThreshold} onChange={event=>setSettings(value=>({...value,confidenceThreshold:Number(event.target.value)}))}/></label><label className="provider-toggle"><input type="checkbox" checked={settings.followupEnabled} onChange={event=>setSettings(value=>({...value,followupEnabled:event.target.checked}))}/><span>24 小时与 72 小时主动跟进</span></label><fieldset className="kb-assignment"><legend>分配知识库</legend>{kbs.map(kb=><label key={kb.id}><input type="checkbox" checked={settings.knowledgeBaseIds.includes(kb.id)} onChange={event=>setSettings(value=>({...value,knowledgeBaseIds:event.target.checked?[...value.knowledgeBaseIds,kb.id]:value.knowledgeBaseIds.filter(id=>id!==kb.id)}))}/>{kb.name}</label>)}</fieldset><button className="primary-action" disabled={saving||!accountId} onClick={()=>void saveAccount()}><Check size={14}/>保存账号规则</button></section></div>;
+}
+
+function KnowledgeBaseSettingsPanel({token,onToken,onToast}:{token:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){
+  const [items,setItems]=useState<KnowledgeBaseItem[]>([]),[selected,setSelected]=useState(""),[detail,setDetail]=useState<{documents:Array<{id:string;file_name:string;status:string;error?:string}>;faqs:Array<{id:string;question:string;answer:string}>}|null>(null),[name,setName]=useState(""),[question,setQuestion]=useState(""),[answer,setAnswer]=useState(""),[busy,setBusy]=useState(false);
+  const load=useCallback(async()=>{const result=await authorizedFetch("/api/v1/knowledge-bases",token);if(result.token!==token)onToken(result.token);if(result.response.ok){const body=await result.response.json() as {data:KnowledgeBaseItem[]};setItems(body.data);setSelected(value=>value||body.data[0]?.id||"");}},[token,onToken]);const loadDetail=useCallback(async()=>{if(!selected){setDetail(null);return;}const result=await authorizedFetch(`/api/v1/knowledge-bases/${selected}`,token);if(result.token!==token)onToken(result.token);if(result.response.ok)setDetail(await result.response.json());},[selected,token,onToken]);useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer);},[load]);useEffect(()=>{const first=window.setTimeout(()=>void loadDetail(),0),poll=window.setInterval(()=>void loadDetail(),5000);return()=>{window.clearTimeout(first);window.clearInterval(poll);};},[loadDetail]);
+  async function create(){if(!name.trim())return;setBusy(true);const result=await authorizedFetch("/api/v1/knowledge-bases",token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name})});if(result.token!==token)onToken(result.token);setBusy(false);if(result.response.ok){const created=await result.response.json() as {id:string};setName("");await load();setSelected(created.id);}}
+  async function upload(file:File){setBusy(true);const form=new FormData();form.append("file",file);const result=await authorizedFetch(`/api/v1/knowledge-bases/${selected}/documents`,token,{method:"POST",body:form});if(result.token!==token)onToken(result.token);setBusy(false);onToast(result.response.ok?"文档已上传，正在建立索引":"文档上传失败");await loadDetail();}
+  async function addFaq(){if(!question.trim()||!answer.trim())return;setBusy(true);const result=await authorizedFetch(`/api/v1/knowledge-bases/${selected}/faqs`,token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({question,answer})});if(result.token!==token)onToken(result.token);setBusy(false);if(result.response.ok){setQuestion("");setAnswer("");await loadDetail();}}
+  async function removeDocument(id:string){if(!window.confirm("删除该文档及其全部检索内容？"))return;const result=await authorizedFetch(`/api/v1/knowledge-documents/${id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);if(result.response.ok)await loadDetail();}
+  async function editFaq(faq:{id:string;question:string;answer:string}){const nextQuestion=window.prompt("问题",faq.question),nextAnswer=window.prompt("答案",faq.answer);if(!nextQuestion?.trim()||!nextAnswer?.trim())return;const result=await authorizedFetch(`/api/v1/knowledge-bases/${selected}/faqs/${faq.id}`,token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({question:nextQuestion,answer:nextAnswer})});if(result.token!==token)onToken(result.token);if(result.response.ok)await loadDetail();}
+  async function removeFaq(id:string){const result=await authorizedFetch(`/api/v1/knowledge-bases/${selected}/faqs/${id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);if(result.response.ok)await loadDetail();}
+  return <div className="knowledge-layout"><aside className="knowledge-list"><div className="knowledge-create"><input value={name} onChange={event=>setName(event.target.value)} placeholder="新知识库名称"/><button disabled={busy} onClick={()=>void create()}><Plus size={14}/></button></div>{items.map(item=><button className={selected===item.id?"active":""} key={item.id} onClick={()=>setSelected(item.id)}><span><b>{item.name}</b><small>{item.document_count??0} 文档 · {item.faq_count??0} 问答</small></span></button>)}</aside><section className="knowledge-detail">{selected?<><header><div><h2>{items.find(item=>item.id===selected)?.name}</h2><p>上传 PDF、DOCX、TXT 或 Markdown，索引完成后才会用于自动回复。</p></div><label className="secondary-action upload-action"><UploadCloud size={14}/>上传文档<input type="file" accept=".pdf,.docx,.txt,.md,text/plain,application/pdf" disabled={busy} onChange={event=>{const file=event.target.files?.[0];if(file)void upload(file);event.target.value="";}}/></label></header><div className="knowledge-documents">{detail?.documents.map(doc=><article key={doc.id}><FileText size={17}/><span><b>{doc.file_name}</b><small>{doc.error||({pending:"等待索引",indexing:"正在索引",ready:"可用于回答",failed:"索引失败"}[doc.status]??doc.status)}</small></span><em className={doc.status}>{doc.status}</em><button onClick={()=>void removeDocument(doc.id)} aria-label={`删除文档 ${doc.file_name}`}><Trash2 size={13}/></button></article>)}</div><div className="faq-editor"><h3>常见问答</h3><input value={question} onChange={event=>setQuestion(event.target.value)} placeholder="客户可能会问什么？"/><textarea value={answer} onChange={event=>setAnswer(event.target.value)} placeholder="可靠、可直接发送的标准答案"/><button className="primary-action" disabled={busy||!question.trim()||!answer.trim()} onClick={()=>void addFaq()}><Plus size={14}/>添加问答</button></div><div className="faq-list">{detail?.faqs.map(faq=><article key={faq.id}><b>{faq.question}</b><p>{faq.answer}</p><div><button onClick={()=>void editFaq(faq)}><Pencil size={11}/>编辑</button><button onClick={()=>void removeFaq(faq.id)}><Trash2 size={11}/>删除</button></div></article>)}</div></>:<EmptyState title="先创建知识库" text="知识库可分配给一个或多个 WhatsApp 账号。"/>}</section></div>;
 }
 
 function previewOrderNumber(template:string,timezone:string):string{
@@ -1796,7 +2015,7 @@ function OrderManagement({token,accounts,onToken,onToast,onConversation}:{token:
 }
 
 function OrderDetailsDialog({order,onClose,onEdit,onConversation}:{order:OrderItem;onClose:()=>void;onEdit:()=>void;onConversation:()=>void}){
-  return <div className="modal-backdrop order-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onClose();}}><section className="login-dialog order-details-dialog" role="dialog" aria-modal="true" aria-labelledby="order-details-title"><button className="login-close" onClick={onClose} aria-label="关闭"><X size={17}/></button><span className="login-logo"><ClipboardList size={20}/></span><h2 id="order-details-title">订单 #{order.orderNumber}</h2><p>{order.customerName||order.customerPhone||"未知客户"} · {order.accountName}</p><dl className="order-details-meta"><div><dt>状态</dt><dd>{order.status==="draft"?"草稿":deliveryText(order.messageStatus)}</dd></div><div><dt>创建人</dt><dd>{order.createdByName}</dd></div><div><dt>创建时间</dt><dd>{formatDateTime(order.createdAt)}</dd></div><div><dt>订单金额</dt><dd>{order.currency} {order.amount.toFixed(2)}</dd></div></dl><div className="order-details-items"><h3>商品</h3>{order.items.map(item=><div key={item.id}><span><b>{item.name}</b><small>{item.quantity} × {order.currency} {item.unitAmount.toFixed(2)}</small></span><strong>{order.currency} {(item.quantity*item.unitAmount).toFixed(2)}</strong></div>)}{order.fees.map(item=><div key={item.id}><span><b>{item.name}</b><small>附加费用</small></span><strong>{order.currency} {item.amount.toFixed(2)}</strong></div>)}</div>{order.description&&<div className="order-details-notes"><b>订单备注</b><p>{order.description}</p></div>}<footer className="order-details-actions"><button className="secondary-action" onClick={onConversation}><ExternalLink size={14}/>打开所属会话</button><button className="primary-action" onClick={onEdit}><Pencil size={14}/>编辑订单</button></footer></section></div>;
+  return <div className="modal-backdrop order-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onClose();}}><section className="login-dialog order-details-dialog" role="dialog" aria-modal="true" aria-labelledby="order-details-title"><button className="login-close" onClick={onClose} aria-label="关闭"><X size={17}/></button><span className="login-logo"><ClipboardList size={20}/></span><h2 id="order-details-title">订单 #{order.orderNumber}</h2><p>{order.customerName||order.customerPhone||"未知客户"} · {order.accountName}</p><dl className="order-details-meta"><div><dt>状态</dt><dd>{order.status==="draft"?"草稿":deliveryText(order.messageStatus)}</dd></div><div><dt>创建人</dt><dd>{order.createdByName}</dd></div><div><dt>创建时间</dt><dd>{formatDateTime(order.createdAt)}</dd></div><div><dt>订单金额</dt><dd>{order.currency} {order.amount.toFixed(2)}</dd></div></dl><div className="order-details-items"><h3>商品</h3>{order.items.map(item=><div key={item.id}><span><b>{item.name}</b><small>{item.quantity} × {order.currency} {item.unitAmount.toFixed(2)}</small></span><strong>{order.currency} {(item.quantity*item.unitAmount).toFixed(2)}</strong></div>)}{order.fees.map(item=><div key={item.id}><span><b>{item.name}</b><small>附加费用</small></span><strong>{order.currency} {item.amount.toFixed(2)}</strong></div>)}</div>{order.address&&<div className="order-details-address"><MapPin size={16}/><span><b>{order.address.label}</b>{(order.address.recipientName||order.address.phone)&&<small>{[order.address.recipientName,order.address.phone].filter(Boolean).join(" · ")}</small>}<p>{order.address.address}</p></span></div>}{order.description&&<div className="order-details-notes"><b>订单备注</b><p>{order.description}</p></div>}<footer className="order-details-actions"><button className="secondary-action" onClick={onConversation}><ExternalLink size={14}/>打开所属会话</button><button className="primary-action" onClick={onEdit}><Pencil size={14}/>编辑订单</button></footer></section></div>;
 }
 
 function ProductManagement({token,role,onToken,onToast}:{token:string;role:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){

@@ -74,6 +74,10 @@ test("orders validate idempotency, products, fees, currency, and translation",()
   assert.equal(orderSchema.safeParse({...valid,items:[{name:"Free sample",quantity:1,unitAmount:0}],fees:[]}).success,false);
   assert.equal(orderSchema.safeParse({...valid,translateOnSend:true}).success,false);
   assert.equal(orderSchema.safeParse({...valid,translateOnSend:true,targetLanguage:"fr"}).success,true);
+  assert.equal(orderSchema.safeParse({...valid,addressId:accountId}).success,true);
+  assert.equal(orderSchema.safeParse({...valid,newAddress:{label:"公司",recipientName:"Alice",phone:"+86 13800000000",address:"上海市浦东新区测试路 1 号"}}).success,true);
+  assert.equal(orderSchema.safeParse({...valid,addressId:accountId,newAddress:{label:"公司",address:"测试地址"}}).success,false);
+  assert.equal(orderSchema.safeParse({...valid,newAddress:{label:"",address:""}}).success,false);
   const update={currency:valid.currency,items:valid.items,fees:valid.fees};
   assert.equal(orderUpdateSchema.safeParse(update).success,true);
   assert.equal(orderSendSchema.safeParse({format:"text"}).success,true);

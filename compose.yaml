@@ -1,7 +1,7 @@
 name: relaydesk
 services:
   postgres:
-    image: postgres:17.5-alpine
+    image: pgvector/pgvector:pg17
     restart: unless-stopped
     env_file: .env
     volumes:
@@ -28,18 +28,22 @@ services:
     entrypoint: ["/bin/sh","-c"]
     command: ["mc alias set relay http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD && mc mb --ignore-existing relay/relay-media"]
   api:
-    build: ./services/api
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
     restart: unless-stopped
     env_file: .env
     depends_on: { postgres: { condition: service_healthy }, minio-init: { condition: service_completed_successfully }, redis: { condition: service_healthy } }
     ports: ["${BIND_ADDRESS:-127.0.0.1}:8080:8080"]
     healthcheck: { test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r=>{if(!r.ok)process.exit(1)})"], interval: 15s, timeout: 5s, retries: 10 }
   worker:
-    build: ./services/api
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
     restart: unless-stopped
     command: ["node","dist/worker.js"]
     env_file: .env
-    depends_on: { postgres: { condition: service_healthy }, minio-init: { condition: service_completed_successfully } }
+    depends_on: { api: { condition: service_healthy }, minio-init: { condition: service_completed_successfully } }
     healthcheck: { test: ["CMD-SHELL", "kill -0 1"], interval: 5s, timeout: 3s, retries: 6, start_period: 5s }
   web:
     build:

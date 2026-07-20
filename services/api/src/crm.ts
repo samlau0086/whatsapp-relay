@@ -39,6 +39,9 @@ export async function ensureCrmTables(db:Queryable):Promise<void>{
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS send_format text");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS rendered_media_id uuid REFERENCES media(id) ON DELETE SET NULL");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS deleted_at timestamptz");
+  await db.query(`CREATE TABLE IF NOT EXISTS contact_addresses (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),contact_id uuid NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,label text NOT NULL,recipient_name text,phone text,address text NOT NULL,created_by uuid REFERENCES users(id) ON DELETE SET NULL,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now())`);
+  await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS address_id uuid REFERENCES contact_addresses(id) ON DELETE SET NULL");
+  await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_address_snapshot jsonb");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS display_order_number text");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS sequence_date date");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS daily_sequence integer");
@@ -67,4 +70,5 @@ export async function ensureCrmTables(db:Queryable):Promise<void>{
   await db.query("CREATE INDEX IF NOT EXISTS orders_conversation_active_idx ON orders(conversation_id,created_at DESC) WHERE deleted_at IS NULL");
   await db.query("CREATE UNIQUE INDEX IF NOT EXISTS orders_display_number_unique ON orders(display_order_number)");
   await db.query("CREATE INDEX IF NOT EXISTS orders_management_created_idx ON orders(created_at DESC,id DESC) WHERE deleted_at IS NULL");
+  await db.query("CREATE INDEX IF NOT EXISTS contact_addresses_contact_idx ON contact_addresses(contact_id,created_at DESC)");
 }
