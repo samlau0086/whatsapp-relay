@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chunkText, isConversationAgentActive, isWithinBusinessHours, passesAutoReplyGate, type AgentDecision } from "../src/agent-engine.js";
+import { chunkText, isConversationAgentActive, isWithinBusinessHours, passesAutoReplyGate, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
 
 test("chunkText creates bounded overlapping chunks",()=>{
   const input=("A paragraph with useful knowledge. ").repeat(120);
@@ -24,8 +24,16 @@ test("business hours use the configured timezone and weekdays",()=>{
 });
 
 test("automatic replies require per-conversation AI takeover",()=>{
-  assert.equal(isConversationAgentActive(true,"active"),true);
+  assert.equal(isConversationAgentActive(true,"cautious"),true);
+  assert.equal(isConversationAgentActive(true,"full"),true);
   assert.equal(isConversationAgentActive(true,"human_paused"),false);
   assert.equal(isConversationAgentActive(true,null),false);
-  assert.equal(isConversationAgentActive(false,"active"),false);
+  assert.equal(isConversationAgentActive(false,"full"),false);
+});
+
+test("full takeover sends useful replies without the cautious evidence gate",()=>{
+  const uncertain:AgentDecision={decision:"draft",reply:"I can help you check that.",confidence:.2,citations:[],reason:"limited evidence"};
+  assert.equal(shouldAutoReply(uncertain,"cautious",.8,new Set()),false);
+  assert.equal(shouldAutoReply(uncertain,"full",.8,new Set()),true);
+  assert.equal(shouldAutoReply({...uncertain,decision:"ignore"},"full",.8,new Set()),false);
 });
