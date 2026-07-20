@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { pool } from "./db.js";
 
 export async function migrateAgentSchema():Promise<void>{
-  for(const migration of ["014_ai_agent.sql","016_conversation_ai_takeover.sql","017_conversation_agent_modes.sql","018_ai_draft_chinese_translation.sql","019_contact_aliases.sql"]){
+  for(const migration of ["014_ai_agent.sql","016_conversation_ai_takeover.sql","017_conversation_agent_modes.sql","018_ai_draft_chinese_translation.sql","019_contact_aliases.sql","020_order_templates.sql"]){
     const candidates=[join(process.cwd(),"migrations",migration),join(process.cwd(),"..","..","infra","postgres","migrations",migration),join(process.cwd(),"infra","postgres","migrations",migration)];
     let sql="";
     for(const file of candidates){try{sql=await readFile(file,"utf8");break;}catch{}}

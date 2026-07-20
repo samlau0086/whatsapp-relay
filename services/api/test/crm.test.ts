@@ -34,7 +34,7 @@ test("order sending and deletion ship with an idempotent database upgrade",async
   ]);
   assert.match(server,/orderSendSchema\.safeParse/);
   assert.match(server,/orderUpdateSchema\.safeParse/);
-  assert.match(server,/renderOrderImage/);
+  assert.match(server,/renderTemplateOrderImage/);
   assert.match(server,/clientSendId/);
   assert.match(server,/shouldTranslate=parsed\.data\.translate/);
   assert.match(server,/targetLanguage=parsed\.data\.targetLanguage/);

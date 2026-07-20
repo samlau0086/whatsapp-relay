@@ -48,6 +48,8 @@ export async function ensureCrmTables(db:Queryable):Promise<void>{
   await db.query("UPDATE orders SET display_order_number=lpad(order_number::text,6,'0') WHERE display_order_number IS NULL");
   await db.query("ALTER TABLE orders ALTER COLUMN display_order_number SET NOT NULL");
   await db.query(`CREATE TABLE IF NOT EXISTS order_settings (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),number_template text NOT NULL DEFAULT '{YYYY}{MM}{DD}-{SEQ:3}',timezone text NOT NULL DEFAULT 'Asia/Shanghai',updated_by uuid REFERENCES users(id) ON DELETE SET NULL,updated_at timestamptz NOT NULL DEFAULT now())`);
+  await db.query("ALTER TABLE order_settings ADD COLUMN IF NOT EXISTS text_template jsonb");
+  await db.query("ALTER TABLE order_settings ADD COLUMN IF NOT EXISTS image_template jsonb");
   await db.query("INSERT INTO order_settings(singleton) VALUES(true) ON CONFLICT(singleton) DO NOTHING");
   await db.query("CREATE TABLE IF NOT EXISTS order_daily_sequences (sequence_date date PRIMARY KEY,last_value integer NOT NULL CHECK(last_value>0),updated_at timestamptz NOT NULL DEFAULT now())");
   await db.query("UPDATE orders SET status='queued',sent_at=COALESCE(sent_at,created_at) WHERE summary_message_id IS NOT NULL AND status='draft'");
