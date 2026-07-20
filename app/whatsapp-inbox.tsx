@@ -1613,6 +1613,18 @@ function OrderDialog({
                 </button>
               )}
               </>}
+              {product.imageMediaId && (
+                <div className="order-product-image-preview">
+                  <ProductImage
+                    mediaId={product.imageMediaId}
+                    token={token}
+                    onToken={onToken}
+                    alt={product.imageName || product.name || "产品图片"}
+                    className="order-product-image"
+                  />
+                  <span title={product.imageName}>{product.imageName || "已选择产品图片"}</span>
+                </div>
+              )}
             </article>;
           })}
         </div>
@@ -1883,7 +1895,7 @@ function ProductImageMediaDialog({accountId,token,onToken,onClose,onSelect}:{acc
       <header><div><span className="login-logo"><Paperclip size={21}/></span><span><h2 id="product-image-media-title">从媒体与附件选择</h2><p>仅显示当前 WhatsApp 账号中可用的 PNG 和 JPG 图片。</p></span></div><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button></header>
       <div className="media-dropzone" onClick={()=>inputRef.current?.click()} role="button" tabIndex={0} onKeyDown={event=>{if(event.key==="Enter"||event.key===" ")inputRef.current?.click();}}><UploadCloud size={30}/><b>{busy?"正在上传…":"上传新图片到媒体与附件"}</b><span>PNG 或 JPG；单文件最大 64 MB</span><input ref={inputRef} type="file" multiple accept="image/png,image/jpeg" onChange={event=>{if(event.target.files)void upload(event.target.files);event.currentTarget.value="";}}/></div>
       <div className="media-library-head"><div><b>图片</b><span>{assets.length} 个文件</span></div><label><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索文件名"/></label></div>
-      <div className="media-grid">{visible.length?visible.map(asset=><button key={asset.id} className={`media-item ${selectedId===asset.id?"selected":""}`} onClick={()=>setSelectedId(asset.id)}><span className="media-kind image"><FileText size={22}/></span><span><b title={asset.fileName}>{asset.fileName}</b><small>{formatBytes(asset.size)} · {asset.usageCount?`已使用 ${asset.usageCount} 次`:"未使用"}</small></span></button>):<div className="media-empty"><FileText size={28}/><b>媒体与附件中暂无匹配图片</b><span>可从上方上传 PNG 或 JPG</span></div>}</div>
+      <div className="media-grid product-image-media-grid">{visible.length?visible.map(asset=><button key={asset.id} className={`media-item ${selectedId===asset.id?"selected":""}`} onClick={()=>setSelectedId(asset.id)}><ProductImage mediaId={asset.id} token={token} onToken={onToken} alt={asset.fileName} className="media-image-preview"/><span><b title={asset.fileName}>{asset.fileName}</b><small>{formatBytes(asset.size)} · {asset.usageCount?`已使用 ${asset.usageCount} 次`:"未使用"}</small></span></button>):<div className="media-empty"><FileText size={28}/><b>媒体与附件中暂无匹配图片</b><span>可从上方上传 PNG 或 JPG</span></div>}</div>
       {error&&<span className="login-error media-error">{error}</span>}
       <footer className="product-image-media-footer"><span>{selected?.fileName||"尚未选择图片"}</span><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" disabled={!selected||busy} onClick={()=>selected&&onSelect(selected)}>使用所选图片</button></footer>
     </section>
@@ -2063,11 +2075,13 @@ function ProductImage({
   token,
   onToken,
   alt,
+  className = "",
 }: {
   mediaId: string | null;
   token: string;
   onToken: (token: string) => void;
   alt: string;
+  className?: string;
 }) {
   const [url, setUrl] = useState("");
   useEffect(() => {
@@ -2092,7 +2106,7 @@ function ProductImage({
     };
   }, [mediaId, token, onToken]);
   return (
-    <div className="product-image">
+    <div className={`product-image ${className}`}>
       {url ? (
         <Image src={url} alt={alt} width={480} height={310} unoptimized />
       ) : (
