@@ -112,9 +112,11 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /创建订单/);
   assert.match(component, /编辑订单/);
   assert.match(component, /重新发送/);
-  assert.match(component, /发送英文版/);
+  assert.match(component, /英文原文/);
+  assert.match(component, /order-send-mode/);
+  assert.doesNotMatch(component, /order-send-english/);
   assert.match(component, /目标翻译语言/);
-  assert.match(component, /translate:false/);
+  assert.match(component, /setTranslate\(false\)/);
   assert.match(component, /clientSendId\s*:\s*crypto\.randomUUID/);
   assert.match(component, /method\s*:\s*order\s*\?\s*"PATCH"\s*:\s*"POST"/);
   assert.match(component, /客户阶段/);
