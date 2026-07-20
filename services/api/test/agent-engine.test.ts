@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { captionOrderDetailsImage, chunkText, groundOrderDetailsImageReply, groundOrderNumberReply, isConversationAgentActive, isReplySourceCurrent, isWithinBusinessHours, passesAutoReplyGate, resolveOrderDetailsImage, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
+import { captionOrderDetailsImage, chunkText, detectOrderDetailsLanguage, groundOrderDetailsImageReply, groundOrderNumberReply, isConversationAgentActive, isReplySourceCurrent, isWithinBusinessHours, passesAutoReplyGate, resolveOrderDetailsImage, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
 
 test("chunkText creates bounded overlapping chunks",()=>{
   const input=("A paragraph with useful knowledge. ").repeat(120);
@@ -66,7 +66,7 @@ test("order-detail image requests resolve the latest rendered order media",()=>{
 
 test("order-detail image requests never claim an unavailable attachment",()=>{
   const misleading:AgentDecision={decision:"auto_reply",reply:"Here is your image.",replyZh:"这是您的图片。",confidence:.9,citations:[],reason:"generated"};
-  const guarded=groundOrderDetailsImageReply(misleading,{requested:true,mediaId:null,orderNumber:"20260720003",orderId:"order-1",orderCount:1,explicitOrder:false});
+  const guarded=groundOrderDetailsImageReply(misleading,{requested:true,mediaId:null,orderNumber:"20260720003",orderId:"order-1",orderCount:1,explicitOrder:false,targetLanguage:null,languageLabel:null});
   assert.doesNotMatch(guarded.reply,/here is/i);
 });
 
@@ -79,4 +79,12 @@ test("multiple orders send the first image and ask the customer to confirm",()=>
 test("a follow-up order ID selects the matching image",()=>{
   const request=resolveOrderDetailsImage("001",[{id:"order-2",order_number:"002",rendered_media_id:"media-2"},{id:"order-1",order_number:"001",rendered_media_id:"media-1"}],true);
   assert.equal(request.requested,true);assert.equal(request.mediaId,"media-1");assert.equal(request.explicitOrder,true);
+});
+
+test("a requested image language bypasses an older rendered version",()=>{
+  assert.deepEqual(detectOrderDetailsLanguage("English version"),{code:"en",label:"English"});
+  const request=resolveOrderDetailsImage("English version",[{id:"order-1",order_number:"001",rendered_media_id:"old-arabic-media"}],true);
+  assert.equal(request.requested,true);assert.equal(request.targetLanguage,"en");assert.equal(request.mediaId,null);
+  const caption=captionOrderDetailsImage({decision:"auto_reply",reply:"image",confidence:.9,citations:[],reason:"model"},{...request,mediaId:"new-english-media"});
+  assert.match(caption.reply,/English version/);
 });
