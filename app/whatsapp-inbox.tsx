@@ -309,7 +309,7 @@ export function WhatsAppInbox() {
       </div>
     </>:<div className="chat-empty"><MessageCircle size={31}/><h2>选择一个真实会话</h2><p>这里不会再显示演示联系人或模拟消息。</p></div>}</section>
 
-    {detailsOpen&&active&&<CrmDetailsPanel active={active} token={apiToken} user={user} role={userRole} translationPreference={translationPreference} translationConfigured={translationConfigured} onToken={setApiToken} onClose={()=>setDetailsOpen(false)} onToast={setToast} onConversationChange={async change=>{await updateConversation(change);}} onChanged={async()=>{await Promise.all([loadWorkspace(apiToken,true),loadMessages(apiToken,active.id)]);}}/>}</>
+    {detailsOpen&&active&&<CrmDetailsPanel key={active.id} active={active} token={apiToken} user={user} role={userRole} translationPreference={translationPreference} translationConfigured={translationConfigured} onToken={setApiToken} onClose={()=>setDetailsOpen(false)} onToast={setToast} onConversationChange={async change=>{await updateConversation(change);}} onChanged={async()=>{await Promise.all([loadWorkspace(apiToken,true),loadMessages(apiToken,active.id)]);}}/>}</>
       :view==="orders"?<OrderManagement token={apiToken} accounts={accounts} onToken={setApiToken} onToast={setToast} onConversation={conversationId=>{const found=conversations.find(item=>item.id===conversationId);if(!found){setToast("该会话不在当前列表，请在消息中心搜索客户");openInbox();return;}setActiveId(conversationId);setDetailsOpen(true);openInbox();}}/>
       :view==="products"?<ProductManagement token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>
       :view==="agents"?<AgentManagement token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>
@@ -441,10 +441,6 @@ function CrmDetailsPanel({
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
   }, [load]);
-  useEffect(() => {
-    setAliasDraft(active.alias);
-    setAliasEditing(false);
-  }, [active.id, active.alias]);
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
