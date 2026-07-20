@@ -48,6 +48,19 @@ test("order sending and deletion ship with an idempotent database upgrade",async
   assert.match(migration,/ADD COLUMN IF NOT EXISTS deleted_at/);
 });
 
+test("order template defaults recover an empty settings singleton after migration",async()=>{
+  const [crm,migration,migrator]=await Promise.all([
+    readFile(new URL("../src/crm.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../infra/postgres/migrations/021_order_template_defaults.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(migration,/ALTER COLUMN text_template SET DEFAULT/);
+  assert.match(migration,/ALTER COLUMN image_template SET DEFAULT/);
+  assert.match(migration,/INSERT INTO order_settings\(singleton\)/);
+  assert.match(crm,/VALUES\(true,DEFAULT,DEFAULT\)/);
+  assert.match(migrator,/021_order_template_defaults\.sql/);
+});
+
 test("customer addresses are reusable while orders retain an address snapshot",async()=>{
   const [server,migration]=await Promise.all([
     readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
