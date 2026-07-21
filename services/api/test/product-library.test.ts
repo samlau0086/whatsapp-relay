@@ -56,6 +56,9 @@ test("the product editor previews the selected media image",async()=>{
   assert.match(dialog,/MediaImagePreview/);
   assert.match(dialog,/product-dialog-image-preview/);
   assert.match(dialog,/产品图片预览/);
+  const mediaDialog=await readFile(new URL("../../../app/product-image-media-dialog.tsx",import.meta.url),"utf8");
+  assert.match(mediaDialog,/requestRef=useRef\(request\)/);
+  assert.match(mediaDialog,/\},\[mediaId\]\)/);
 });
 
 test("API startup applies the latest product schema to persistent databases",async()=>{
