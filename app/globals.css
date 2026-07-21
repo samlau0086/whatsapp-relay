@@ -208,3 +208,95 @@ button { color:inherit; }
 .product-management .product-card footer button{height:34px;padding:0 10px;font-size:12px}
 @media(max-width:850px){.product-management .product-filters{grid-template-columns:1fr 1fr}.product-management .product-filters>label{grid-column:1/-1}}
 @media(max-width:700px){.product-management .list-view .product-card{min-height:0}.product-management .list-view .product-image{min-height:0}}
+
+/* Apply the same readable type scale across the rest of the workspace. */
+.management-panel:not(.product-management) .management-head .eyebrow{font-size:12px}
+.management-panel:not(.product-management) .management-head h1{font-size:28px;margin:7px 0}
+.management-panel:not(.product-management) .management-head p{font-size:14px;line-height:1.55;color:#64726b}
+.management-panel:not(.product-management) .primary-action,.management-panel:not(.product-management) .secondary-action{height:42px;padding:0 15px;font-size:13px}
+
+/* Order management. */
+.order-management-filters{gap:11px;margin-bottom:18px}
+.order-management-filters>label,.order-management-filters>select,.order-management-filters>input{height:44px;padding-left:12px;padding-right:12px}
+.order-management-filters>label input,.order-management-filters>select,.order-management-filters>input{font-size:13px}
+.order-table th{padding:13px 14px;font-size:12px}
+.order-table td{padding:15px 14px;font-size:13px}
+.order-table td b{font-size:13px}.order-table td small{font-size:12px}
+.order-row-actions button{width:34px;height:34px}.order-load-more{height:40px;font-size:13px}
+.order-details-meta dt{font-size:12px}.order-details-meta dd{font-size:13px}
+.order-details-items h3{font-size:15px}.order-details-items b,.order-details-items strong{font-size:13px}.order-details-items small{font-size:12px}
+.order-details-notes b{font-size:13px}.order-details-notes p{font-size:12px!important;line-height:1.55}
+.order-settings-form>label{font-size:13px}.order-settings-form>label input{font-size:13px}.order-settings-form>label small{font-size:12px}
+.order-variable-buttons button{font-size:12px}.order-number-preview span{font-size:12px}.order-number-preview b{font-size:14px}
+
+/* Agent management and help. */
+.management-enrollment{padding:14px 16px}.management-enrollment span b{font-size:14px}.management-enrollment span small{font-size:12px}
+.management-enrollment code{padding:10px;font-size:13px}.management-enrollment button{height:36px;font-size:13px}
+.management-summary span{font-size:12px}
+.management-panel>.agent-grid .agent-card-head b{font-size:14px}.management-panel>.agent-grid .agent-card-head small{font-size:12px}
+.management-panel>.agent-grid .agent-badge{font-size:12px}.management-panel>.agent-grid .agent-card dt{font-size:12px}.management-panel>.agent-grid .agent-card dd{font-size:13px}
+.management-panel>.agent-grid .agent-accounts h3{font-size:13px}.management-panel>.agent-grid .agent-accounts>div span b{font-size:13px}
+.management-panel>.agent-grid .agent-accounts>div span small,.management-panel>.agent-grid .agent-accounts>div em,.management-panel>.agent-grid .agent-accounts>p{font-size:12px}
+.management-panel>.agent-grid .agent-card footer button{height:34px;font-size:12px}
+.agent-timeout-note,.agent-permission-note{font-size:12px;line-height:1.5}
+.help-grid{max-width:900px}.help-grid>button,.help-grid>div{padding:21px}.help-grid b{font-size:14px}.help-grid small{font-size:12px;line-height:1.55}
+
+/* Settings pages. */
+.settings-section-head h2{font-size:19px}.settings-section-head p,.provider-form header p{font-size:13px;line-height:1.5}
+.provider-list b{font-size:14px}.provider-list small,.provider-list em{font-size:12px}
+.provider-form>label,.provider-form-grid label{font-size:13px}.provider-form label small{font-size:12px}
+.provider-form input[type="text"],.provider-form input[type="url"],.provider-form input[type="password"],.provider-form input:not([type]){height:42px;font-size:13px}
+.settings-panel .agent-card label,.settings-panel .agent-card select,.settings-panel .agent-card textarea{font-size:13px;line-height:1.5}
+.kb-assignment legend,.kb-assignment label{font-size:13px}
+.knowledge-create input,.knowledge-create button,.knowledge-select,.knowledge-name-editor input{font-size:13px}
+.knowledge-list small,.knowledge-detail header p,.knowledge-documents article small{font-size:12px}
+.knowledge-documents article em{font-size:12px}.faq-list b{font-size:14px}.faq-list p{font-size:12px;line-height:1.55}.faq-list article button{font-size:12px}
+.currency-rate-source,.currency-head,.provider-permission-note{font-size:13px}.currency-base-card label,.currency-base-card select,.currency-row input{font-size:13px}.currency-base-card small{font-size:12px}
+.payment-request-panel>header b{font-size:14px}.payment-request-panel>header small,.paypal-settings-form label>small{font-size:12px}.payment-request-panel>header>button,.payment-link input{font-size:13px}
+
+/* Inbox, conversations and customer details. */
+.workspace-title .eyebrow,.filters .section-label{font-size:12px}.workspace-title h1{font-size:21px}
+.account-switcher b,.account-status b{font-size:14px}.account-switcher small,.account-status small{font-size:12px}
+.filter-row{height:40px;font-size:14px}.filter-row em{font-size:12px}
+.conversation-head h2{font-size:18px}.conversation-head span{font-size:12px}.search-box{height:41px}.search-box input{font-size:13px}
+.empty-state b{font-size:14px}.empty-state span,.empty-note{font-size:12px}
+.conversation{padding-top:15px;padding-bottom:15px}.conversation-line b{font-size:14px}.conversation-line time{font-size:12px}
+.conversation-line.preview{font-size:13px}.conversation-line.preview em{font-size:11px}.conversation-copy>small{font-size:11px}
+.chat-person b{font-size:14px}.chat-person small{font-size:12px}.assign-button,.offline-banner{font-size:13px}
+.day-separator span{font-size:12px}.message-bubble p{font-size:14px}.message-bubble footer{font-size:11px}
+.outgoing-translation-source>span,.incoming-translation>span,.incoming-translation.loading,.incoming-translation.failed,.voice-translate-action{font-size:12px}
+.outgoing-translation-source>p{font-size:13px!important}.attachment-card b{font-size:13px}.attachment-card small{font-size:12px}
+.message-media-loading,.message-media-error{font-size:12px}.composer-tools{font-size:12px}.composer textarea{font-size:14px}.delivery-hint,.composer-error{font-size:11px}
+.details-panel h3{font-size:16px}.contact-card h2{font-size:18px}.contact-card p,.contact-online{font-size:12px}
+.contact-buttons button{font-size:12px}.detail-section h4{font-size:14px}.detail-section dl div{font-size:13px}
+.detail-title button,.tags span{font-size:12px}.shared-file b{font-size:13px}.shared-file small,.security-note b,.security-note small{font-size:12px}
+.conversation-state-button{height:40px;font-size:13px}.chat-empty h2{font-size:18px}.chat-empty p{font-size:13px}
+
+/* Common dialogs and pickers. */
+.login-dialog>p{font-size:14px;line-height:1.55}.login-dialog label{font-size:13px}.login-dialog input,.login-dialog select,.login-dialog textarea{font-size:14px}
+.login-submit{font-size:14px}.login-error,.login-safety{font-size:12px}.login-affiliation{font-size:11px}
+.translation-menu>header b{font-size:14px}.translation-toggle span b{font-size:13px}.translation-toggle span small{font-size:12px}
+.translation-language-grid>label>span,.language-picker>input,.language-options button span{font-size:12px}.language-options button small,.language-empty,.translation-menu>p{font-size:11px}
+.media-dialog>header p{font-size:13px}.media-dropzone b{font-size:14px}.media-dropzone span{font-size:12px}
+.media-library-head>div b{font-size:14px}.media-library-head>div span{font-size:12px}.media-library-head input,.media-filters button{font-size:12px}
+.media-item b{font-size:13px}.media-item small{font-size:12px}.media-empty b{font-size:14px}.media-empty span,.media-dialog>footer label{font-size:12px}
+
+/* Keep product imagery contained so card details always sit on a clean surface. */
+.product-management .card-view .product-image{
+  position:relative;
+  overflow:hidden;
+  flex:0 0 auto;
+  border-bottom:1px solid #e8eeeb;
+}
+.product-management .card-view .product-image img{
+  display:block;
+  width:100%;
+  height:100%;
+  max-width:100%;
+  object-fit:cover;
+}
+.product-management .card-view .product-card-copy{
+  position:relative;
+  z-index:1;
+  background:#fff;
+}
