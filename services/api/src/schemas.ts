@@ -79,10 +79,13 @@ export const reminderSchema=z.object({remindAt:z.string().datetime({offset:true}
 const moneySchema=z.coerce.number().nonnegative().max(99_999_999.99).refine(value=>Number.isInteger(value*100),"amount supports at most two decimals");
 export const currencySchema=z.enum(["USD","CNY","EUR","GBP","JPY","HKD","SGD","AUD","CAD","AED"]);
 export const productLabelSchema=z.object({name:z.string().trim().min(1).max(40),color:z.string().regex(/^#[0-9A-Fa-f]{6}$/)});
-const productContentSchema=z.object({name:z.string().trim().min(1).max(120),defaultUnitAmount:moneySchema,currency:currencySchema,imageMediaId:z.string().uuid().nullable().optional(),tags:z.array(productLabelSchema).max(30).default([])});
+export const productPriceTierSchema=z.object({minQuantity:z.coerce.number().int().min(1).max(999999),unitAmount:moneySchema});
+const productPriceTiersSchema=z.array(productPriceTierSchema).min(1).max(50).superRefine((tiers,ctx)=>{if(tiers[0]?.minQuantity!==1)ctx.addIssue({code:"custom",path:[0,"minQuantity"],message:"first tier must start at quantity 1"});for(let index=1;index<tiers.length;index++)if(tiers[index].minQuantity<=tiers[index-1].minQuantity)ctx.addIssue({code:"custom",path:[index,"minQuantity"],message:"tier quantities must be strictly increasing"});});
+const productContentSchema=z.object({name:z.string().trim().min(1).max(120),sku:z.string().trim().min(1).max(80),priceTiers:productPriceTiersSchema,currency:currencySchema,imageMediaId:z.string().uuid().nullable().optional(),tags:z.array(productLabelSchema).max(30).default([])});
 export const productCreateSchema=z.object({clientProductId:z.string().uuid()}).and(productContentSchema);
 export const productUpdateSchema=productContentSchema.partial().refine(value=>Object.keys(value).length>0,"at least one field is required");
-const orderItemSchema=z.object({name:z.string().trim().min(1).max(120),quantity:z.coerce.number().int().min(1).max(9999),unitAmount:moneySchema,imageMediaId:z.string().uuid().optional(),productId:z.string().uuid().optional(),clientProductId:z.string().uuid().optional()}).superRefine((value,ctx)=>{if(value.productId&&value.clientProductId)ctx.addIssue({code:"custom",path:["productId"],message:"productId and clientProductId are mutually exclusive"});});
+export const productCardSendSchema=z.object({accountId:z.string().uuid(),clientBatchId:z.string().min(8).max(96),productIds:z.array(z.string().uuid()).min(1).max(50),mode:z.enum(["individual","combined"]),showPrice:z.boolean()}).superRefine((value,ctx)=>{if(new Set(value.productIds).size!==value.productIds.length)ctx.addIssue({code:"custom",path:["productIds"],message:"product ids must be unique"});if(value.mode==="combined"&&value.productIds.length>10)ctx.addIssue({code:"custom",path:["productIds"],message:"combined cards support at most 10 products"});});
+const orderItemSchema=z.object({name:z.string().trim().min(1).max(120),sku:z.string().trim().min(1).max(80).optional(),quantity:z.coerce.number().int().min(1).max(9999),unitAmount:moneySchema,imageMediaId:z.string().uuid().optional(),productId:z.string().uuid().optional(),clientProductId:z.string().uuid().optional()}).superRefine((value,ctx)=>{if(value.productId&&value.clientProductId)ctx.addIssue({code:"custom",path:["productId"],message:"productId and clientProductId are mutually exclusive"});if(value.clientProductId&&!value.sku)ctx.addIssue({code:"custom",path:["sku"],message:"new products require a sku"});});
 const orderFeeSchema=z.object({name:z.string().trim().min(1).max(80),amount:moneySchema.refine(value=>value>0,"fee must be positive")});
 export const customerAddressSchema=z.object({
   label:z.string().trim().min(1).max(40),
@@ -105,5 +108,11 @@ export const orderUpdateSchema=orderContentSchema;
 export const orderAddressSchema=z.object({addressId:z.string().uuid().nullable().optional(),newAddress:customerAddressSchema.optional()}).superRefine((value,ctx)=>{if(value.addressId&&value.newAddress)ctx.addIssue({code:"custom",path:["addressId"],message:"addressId and newAddress are mutually exclusive"});});
 export const orderSendSchema=z.object({format:z.enum(["text","image"]).default("text"),clientSendId:z.string().uuid().optional(),translate:z.boolean().optional(),targetLanguage:languageCodeSchema.optional()}).default({format:"text"}).superRefine((value,ctx)=>{if(value.translate===true&&!value.targetLanguage)ctx.addIssue({code:"custom",path:["targetLanguage"],message:"target language is required when translation is requested"});});
 export const orderSettingsSchema=z.object({numberTemplate:z.string().min(1).max(80),timezone:z.string().min(1).max(100)});
+export const paypalSettingsSchema=z.object({
+  enabled:z.boolean(),
+  environment:z.enum(["sandbox","live"]),
+  clientId:z.string().trim().min(1).max(500).optional(),
+  clientSecret:z.string().trim().min(1).max(2000).optional(),
+});
 
 export const enrollmentSchema = z.object({ code: z.string().min(16), name: z.string().min(2).max(80), version: z.string(), platform: z.string() });
