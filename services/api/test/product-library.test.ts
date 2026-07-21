@@ -50,3 +50,10 @@ test("product descriptions and CSV image references are supported",async()=>{
   assert.match(dialog,/选择多张图片/);
   assert.match(dialog,/产品描述/);
 });
+
+test("the product editor previews the selected media image",async()=>{
+  const dialog=await readFile(new URL("../../../app/product-editor-dialog.tsx",import.meta.url),"utf8");
+  assert.match(dialog,/MediaImagePreview/);
+  assert.match(dialog,/product-dialog-image-preview/);
+  assert.match(dialog,/产品图片预览/);
+});
