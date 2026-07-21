@@ -77,7 +77,21 @@ export const conversationTagsSchema=z.object({tagIds:z.array(z.string().uuid()).
 export const noteSchema=z.object({body:z.string().trim().min(1).max(5000)});
 export const reminderSchema=z.object({remindAt:z.string().datetime({offset:true}).transform(value=>new Date(value)).refine(value=>value.getTime()>Date.now(),"reminder must be in the future")});
 const moneySchema=z.coerce.number().nonnegative().max(99_999_999.99).refine(value=>Number.isInteger(value*100),"amount supports at most two decimals");
-export const currencySchema=z.enum(["USD","CNY","EUR","GBP","JPY","HKD","SGD","AUD","CAD","AED"]);
+export const currencySchema=z.string().trim().transform(value=>value.toUpperCase()).pipe(z.string().regex(/^[A-Z]{3}$/,"currency must be a three-letter code"));
+export const currencySettingsSchema=z.object({
+  baseCurrency:currencySchema,
+  currencies:z.array(z.object({
+    code:currencySchema,
+    name:z.string().trim().min(1).max(80),
+    rate:z.coerce.number().positive().max(1_000_000),
+  })).min(1).max(100),
+}).superRefine((value,ctx)=>{
+  const codes=value.currencies.map(item=>item.code);
+  if(new Set(codes).size!==codes.length)ctx.addIssue({code:"custom",path:["currencies"],message:"currency codes must be unique"});
+  const base=value.currencies.find(item=>item.code===value.baseCurrency);
+  if(!base)ctx.addIssue({code:"custom",path:["baseCurrency"],message:"base currency must be included"});
+  else if(base.rate!==1)ctx.addIssue({code:"custom",path:["currencies",codes.indexOf(value.baseCurrency),"rate"],message:"base currency rate must equal 1"});
+});
 export const productLabelSchema=z.object({name:z.string().trim().min(1).max(40),color:z.string().regex(/^#[0-9A-Fa-f]{6}$/)});
 export const productPriceTierSchema=z.object({minQuantity:z.coerce.number().int().min(1).max(999999),unitAmount:moneySchema});
 const productPriceTiersSchema=z.array(productPriceTierSchema).min(1).max(50).superRefine((tiers,ctx)=>{if(tiers[0]?.minQuantity!==1)ctx.addIssue({code:"custom",path:[0,"minQuantity"],message:"first tier must start at quantity 1"});for(let index=1;index<tiers.length;index++)if(tiers[index].minQuantity<=tiers[index-1].minQuantity)ctx.addIssue({code:"custom",path:[index,"minQuantity"],message:"tier quantities must be strictly increasing"});});

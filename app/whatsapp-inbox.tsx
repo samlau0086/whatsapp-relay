@@ -51,10 +51,15 @@ type TtsProviderConfig={provider:TtsProviderId;enabled:boolean;keyConfigured:boo
 type TranslationProviderId="openai"|"openai_compatible";
 type TranslationProviderConfig={provider:TranslationProviderId;enabled:boolean;keyConfigured:boolean;baseUrl:string;model:string;transcriptionModel:string;updatedAt:string|null};
 type TranslationPreference={enabled:boolean;agentLanguage:string;customerLanguage:string;updatedAt:string|null};
+type CurrencyItem={code:string;name:string;rate:number};
+type CurrencyConfig={baseCurrency:string;currencies:CurrencyItem[]};
 type MessageTranslation={status:"idle"|"loading"|"translated"|"failed";text?:string;sourceText?:string;message?:string};
 type KnowledgeBaseItem={id:string;name:string;description:string;document_count?:number;faq_count?:number};
 type AgentDraft={id:string;text_content:string;reply_zh:string|null;reason:string;citations:string[];created_at:string};
 const DEFAULT_TRANSLATION_PREFERENCE:TranslationPreference={enabled:false,agentLanguage:"zh-CN",customerLanguage:"en",updatedAt:null};
+const DEFAULT_CURRENCY_CONFIG:CurrencyConfig={baseCurrency:"USD",currencies:[{code:"USD",name:"美元",rate:1},{code:"CNY",name:"人民币",rate:7.2},{code:"EUR",name:"欧元",rate:.92},{code:"GBP",name:"英镑",rate:.78},{code:"JPY",name:"日元",rate:157},{code:"HKD",name:"港币",rate:7.8},{code:"SGD",name:"新加坡元",rate:1.35},{code:"AUD",name:"澳元",rate:1.5},{code:"CAD",name:"加元",rate:1.37},{code:"AED",name:"阿联酋迪拉姆",rate:3.6725}]};
+
+function convertCurrency(amount:number,from:string,to:string,config:CurrencyConfig):number{if(from===to)return amount;const source=config.currencies.find(item=>item.code===from)?.rate,target=config.currencies.find(item=>item.code===to)?.rate;if(!source||!target)return amount;return amount/source*target;}
 
 function mapOrder(item:Record<string,unknown>,defaults:Partial<OrderItem>={}):OrderItem{return{
   id:String(item.id),orderNumber:String(item.display_order_number??item.order_number??""),conversationId:String(item.conversation_id??defaults.conversationId??""),accountId:String(item.account_id??defaults.accountId??""),accountName:String(item.account_name??defaults.accountName??""),customerName:String(item.customer_name??defaults.customerName??""),customerPhone:String(item.customer_phone??defaults.customerPhone??""),amount:Number(item.amount),currency:String(item.currency),description:String(item.description??""),status:String(item.status??"draft"),sendFormat:String(item.send_format??""),translateOnSend:Boolean(item.translate_on_send),targetLanguage:String(item.target_language??""),createdAt:String(item.created_at),createdByName:String(item.created_by_name??"已离职坐席"),messageStatus:String(item.message_status??item.status??"draft"),items:Array.isArray(item.items)?(item.items as Array<Record<string,unknown>>).map(product=>({id:String(product.id),name:String(product.name),quantity:Number(product.quantity),unitAmount:Number(product.unitAmount),imageMediaId:product.imageMediaId?String(product.imageMediaId):null,imageName:String(product.imageName??""),productId:product.productId?String(product.productId):null})):[],fees:Array.isArray(item.fees)?(item.fees as Array<Record<string,unknown>>).map(fee=>({id:String(fee.id),name:String(fee.name),amount:Number(fee.amount)})):[],addressId:item.address_id?String(item.address_id):null,address:item.shipping_address_snapshot?mapCustomerAddress(item.shipping_address_snapshot as Record<string,unknown>,item.address_id?String(item.address_id):""):null,paymentRequest:item.payment_request?mapPaymentRequest(item.payment_request as Record<string,unknown>):defaults.paymentRequest??null,
@@ -1207,6 +1212,7 @@ function OrderDialog({
         : [newDraftProduct()],
     ),
     [catalog, setCatalog] = useState<ProductItem[]>([]),
+    [currencyConfig,setCurrencyConfig]=useState<CurrencyConfig>(DEFAULT_CURRENCY_CONFIG),
     [fees, setFees] = useState<DraftFee[]>(() =>
       order
         ? order.fees.map((item) => ({
@@ -1216,7 +1222,7 @@ function OrderDialog({
           }))
         : [],
     ),
-    [currency, setCurrency] = useState(order?.currency ?? "USD"),
+    [currency, setCurrency] = useState(order?.currency ?? ""),
     [description, setDescription] = useState(order?.description ?? ""),
     [addresses, setAddresses] = useState<CustomerAddress[]>([]),
     [addressId, setAddressId] = useState(order?.addressId ?? ""),
@@ -1247,22 +1253,21 @@ function OrderDialog({
     const timer = window.setTimeout(
       () =>
         void (async () => {
-          const result = await authorizedFetch(
-            "/api/v1/products?limit=100",
-            token,
-          );
-          if (result.token !== token) onToken(result.token);
+          const [result,currencyResult] = await Promise.all([authorizedFetch(
+            "/api/v1/products?limit=100",token),authorizedFetch("/api/v1/currencies",token)]);
+          if (result.token !== token) onToken(result.token);else if(currencyResult.token!==token)onToken(currencyResult.token);
           if (result.response.ok) {
             const body = (await result.response.json()) as {
               data: Array<Record<string, unknown>>;
             };
             setCatalog(body.data.map(mapProduct));
           }
+          if(currencyResult.response.ok){const body=await currencyResult.response.json() as CurrencyConfig;setCurrencyConfig(body);if(!order)setCurrency(current=>current||body.baseCurrency);}
         })(),
       0,
     );
     return () => window.clearTimeout(timer);
-  }, [token, onToken]);
+  }, [token, onToken, order]);
   useEffect(()=>{let cancelled=false;void (async()=>{const result=await authorizedFetch(`/api/v1/conversations/${active.id}/addresses`,token);if(result.token!==token)onToken(result.token);if(result.response.ok){const body=await result.response.json() as {data:Array<Record<string,unknown>>};if(!cancelled)setAddresses(body.data.map(item=>mapCustomerAddress(item)));}})();return()=>{cancelled=true;};},[active.id,token,onToken]);
   function updateProduct(id: string, change: Partial<DraftProduct>) {
     setProducts((all) =>
@@ -1291,14 +1296,7 @@ function OrderDialog({
   function chooseCatalogProduct(rowId: string, productId: string) {
     const selected = catalog.find((item) => item.id === productId);
     if (!selected) return;
-    const hasOtherProduct = products.some(
-      (item) => item.id !== rowId && item.name.trim(),
-    );
-    if (hasOtherProduct && selected.currency !== currency) {
-      setError(`订单已有 ${currency} 商品，不能加入 ${selected.currency} 产品`);
-      return;
-    }
-    if (!hasOtherProduct) setCurrency(selected.currency);
+    const orderCurrency=currency||currencyConfig.baseCurrency;
     setError("");
     updateProduct(rowId, {
       mode: "library",
@@ -1306,12 +1304,13 @@ function OrderDialog({
       clientProductId: null,
       sku: selected.sku,
       name: selected.name,
-      unitAmount: tierPrice(selected,Number(products.find(item=>item.id===rowId)?.quantity)||1).toFixed(2),
+      unitAmount: convertCurrency(tierPrice(selected,Number(products.find(item=>item.id===rowId)?.quantity)||1),selected.currency,orderCurrency,currencyConfig).toFixed(2),
       priceLocked: false,
       imageMediaId: selected.imageMediaId,
       imageName: selected.imageName,
     });
   }
+  function changeCurrency(next:string){if(!currency){setCurrency(next);return;}setProducts(all=>all.map(item=>{const selected=catalog.find(product=>product.id===item.productId),amount=selected&&!item.priceLocked?tierPrice(selected,Number(item.quantity)||1):Number(item.unitAmount);const from=selected&&!item.priceLocked?selected.currency:currency;return{...item,unitAmount:Number.isFinite(amount)?convertCurrency(amount,from,next,currencyConfig).toFixed(2):item.unitAmount};}));setFees(all=>all.map(fee=>({...fee,amount:fee.amount?convertCurrency(Number(fee.amount),currency,next,currencyConfig).toFixed(2):fee.amount})));setCurrency(next);}
   function makeNewProduct(rowId: string) {
     updateProduct(rowId, {
       mode: "new",
@@ -1327,6 +1326,7 @@ function OrderDialog({
   }
   async function submit() {
     const money = /^\d+(?:\.\d{1,2})?$/;
+    if(!currency){setError("请先在设置中配置基准货币");return;}
     if (
       products.some(
         (item) =>
@@ -1457,34 +1457,17 @@ function OrderDialog({
             Currency
             <select
               value={currency}
-              disabled={products.some((product) => product.mode === "library")}
-              onChange={(event) => setCurrency(event.target.value)}
+              onChange={(event) => changeCurrency(event.target.value)}
             >
-              {[
-                "USD",
-                "CNY",
-                "EUR",
-                "GBP",
-                "JPY",
-                "HKD",
-                "SGD",
-                "AUD",
-                "CAD",
-                "AED",
-              ].map((item) => (
-                <option key={item}>{item}</option>
+              {currencyConfig.currencies.map((item) => (
+                <option key={item.code} value={item.code}>{item.code} · {item.name}</option>
               ))}
             </select>
           </label>
         </div>
         <div className="order-products">
           {products.map((product, index) => {
-            const hasOther = products.some(
-              (item) => item.id !== product.id && item.name.trim(),
-            );
-            const available = catalog.filter(
-              (item) => !hasOther || item.currency === currency,
-            );
+            const available = catalog;
             const sameName =
               product.mode === "new" &&
               Boolean(product.name.trim()) &&
@@ -1574,7 +1557,7 @@ function OrderDialog({
                   数量
                   <input
                     value={product.quantity}
-                    onChange={(event) => {const quantity=event.target.value,selectedProduct=catalog.find(item=>item.id===product.productId);updateProduct(product.id,{quantity,...(product.mode==="library"&&!product.priceLocked&&selectedProduct&&/^\d+$/.test(quantity)?{unitAmount:tierPrice(selectedProduct,Number(quantity)).toFixed(2)}:{})});}}
+                    onChange={(event) => {const quantity=event.target.value,selectedProduct=catalog.find(item=>item.id===product.productId);updateProduct(product.id,{quantity,...(product.mode==="library"&&!product.priceLocked&&selectedProduct&&/^\d+$/.test(quantity)?{unitAmount:convertCurrency(tierPrice(selectedProduct,Number(quantity)),selectedProduct.currency,currency,currencyConfig).toFixed(2)}:{})});}}
                     inputMode="numeric"
                   />
                 </label>
@@ -1935,9 +1918,9 @@ function AgentMemoryPanel({conversationId,token,onToken,onToast}:{conversationId
 }
 
 function SettingsPanel({token,role,accounts,onToken,onToast}:{token:string;role:string;accounts:Account[];onToken:(token:string)=>void;onToast:(text:string)=>void}){
-  const [tab,setTab]=useState<"agent"|"knowledge"|"translation"|"speech"|"orders">("agent");
+  const [tab,setTab]=useState<"agent"|"knowledge"|"translation"|"speech"|"currency"|"orders">("agent");
   if(role!=="admin")return <section className="management-panel"><EmptyState title="需要管理员权限" text="只有管理员可以查看或修改 AI Provider 与密钥配置。"/></section>;
-  return <section className="management-panel settings-panel"><header className="management-head"><div><span className="eyebrow">系统设置</span><h1>工作区配置</h1><p>集中管理自动回复、知识库、AI Provider 和业务规则。</p></div></header><nav className="settings-tabs" aria-label="系统设置"><button className={tab==="agent"?"active":""} onClick={()=>setTab("agent")}><Bot size={15}/>AI Agent</button><button className={tab==="knowledge"?"active":""} onClick={()=>setTab("knowledge")}><BookOpen size={15}/>知识库</button><button className={tab==="translation"?"active":""} onClick={()=>setTab("translation")}><Languages size={15}/>AI 翻译</button><button className={tab==="speech"?"active":""} onClick={()=>setTab("speech")}><Mic size={15}/>AI 语音</button><button className={tab==="orders"?"active":""} onClick={()=>setTab("orders")}><ClipboardList size={15}/>订单设置</button></nav>{tab==="agent"?<AiAgentSettingsPanel token={token} accounts={accounts} onToken={onToken} onToast={onToast}/>:tab==="knowledge"?<KnowledgeBaseSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="translation"?<TranslationSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="speech"?<TtsSettingsPanel token={token} role={role} onToken={onToken} onToast={onToast}/>:<OrderSettingsPanel token={token} onToken={onToken} onToast={onToast}/>}</section>;
+  return <section className="management-panel settings-panel"><header className="management-head"><div><span className="eyebrow">系统设置</span><h1>工作区配置</h1><p>集中管理自动回复、知识库、AI Provider 和业务规则。</p></div></header><nav className="settings-tabs" aria-label="系统设置"><button className={tab==="agent"?"active":""} onClick={()=>setTab("agent")}><Bot size={15}/>AI Agent</button><button className={tab==="knowledge"?"active":""} onClick={()=>setTab("knowledge")}><BookOpen size={15}/>知识库</button><button className={tab==="translation"?"active":""} onClick={()=>setTab("translation")}><Languages size={15}/>AI 翻译</button><button className={tab==="speech"?"active":""} onClick={()=>setTab("speech")}><Mic size={15}/>AI 语音</button><button className={tab==="currency"?"active":""} onClick={()=>setTab("currency")}><CreditCard size={15}/>货币管理</button><button className={tab==="orders"?"active":""} onClick={()=>setTab("orders")}><ClipboardList size={15}/>订单设置</button></nav>{tab==="agent"?<AiAgentSettingsPanel token={token} accounts={accounts} onToken={onToken} onToast={onToast}/>:tab==="knowledge"?<KnowledgeBaseSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="translation"?<TranslationSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="speech"?<TtsSettingsPanel token={token} role={role} onToken={onToken} onToast={onToast}/>:tab==="currency"?<CurrencySettingsPanel token={token} role={role} onToken={onToken} onToast={onToast}/>:<OrderSettingsPanel token={token} onToken={onToken} onToast={onToast}/>}</section>;
 }
 
 function AiAgentSettingsPanel({token,accounts,onToken,onToast}:{token:string;accounts:Account[];onToken:(token:string)=>void;onToast:(text:string)=>void}){
@@ -1968,6 +1951,18 @@ function KnowledgeBaseSettingsPanel({token,onToken,onToast}:{token:string;onToke
 
 function previewOrderNumber(template:string,timezone:string):string{
   try{const parts=new Intl.DateTimeFormat("en-CA",{timeZone:timezone,year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date()),value=(type:string)=>parts.find(part=>part.type===type)?.value??"";const year=value("year");return template.replace(/\{(?:YYYY|YY|MM|DD|SEQ:\d+)\}/g,token=>token==="{YYYY}"?year:token==="{YY}"?year.slice(-2):token==="{MM}"?value("month"):token==="{DD}"?value("day"):"1".padStart(Number(token.slice(5,-1)),"0"));}catch{return "时区或模板无效";}
+}
+
+function CurrencySettingsPanel({token,role,onToken,onToast}:{token:string;role:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){
+  const [config,setConfig]=useState<CurrencyConfig>(DEFAULT_CURRENCY_CONFIG),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[error,setError]=useState("");
+  const load=useCallback(async()=>{setLoading(true);try{const result=await authorizedFetch("/api/v1/currencies",token);if(result.token!==token)onToken(result.token);const body=await result.response.json() as CurrencyConfig&{message?:string};if(!result.response.ok)throw new Error(body.message??`HTTP ${result.response.status}`);setConfig(body);setError("");}catch(reason){setError(reason instanceof Error?reason.message:"货币配置加载失败");}finally{setLoading(false);}},[token,onToken]);
+  useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer);},[load]);
+  function update(code:string,change:Partial<CurrencyItem>){setConfig(value=>({...value,currencies:value.currencies.map(item=>item.code===code?{...item,...change}:item)}));}
+  function changeBase(code:string){setConfig(value=>{const divisor=value.currencies.find(item=>item.code===code)?.rate??1;return{baseCurrency:code,currencies:value.currencies.map(item=>({...item,rate:item.code===code?1:item.rate/divisor}))};});}
+  function remove(code:string){setConfig(value=>({...value,currencies:value.currencies.filter(item=>item.code!==code)}));}
+  async function save(){const codes=config.currencies.map(item=>item.code.trim().toUpperCase());if(!config.currencies.length||codes.some(code=>! /^[A-Z]{3}$/.test(code))||new Set(codes).size!==codes.length||config.currencies.some(item=>!item.name.trim()||!Number.isFinite(item.rate)||item.rate<=0)){setError("请填写不重复的三位币种代码、名称和大于 0 的汇率");return;}setSaving(true);setError("");try{const payload={baseCurrency:config.baseCurrency,currencies:config.currencies.map(item=>({...item,code:item.code.toUpperCase(),rate:item.code===config.baseCurrency?1:item.rate}))},result=await authorizedFetch("/api/v1/admin/currencies",token,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify(payload)});if(result.token!==token)onToken(result.token);const body=await result.response.json().catch(()=>({})) as {message?:string;error?:string};if(!result.response.ok)throw new Error(body.message??(result.response.status===403?"只有管理员可以修改货币配置":body.error)??`HTTP ${result.response.status}`);onToast("货币、基准货币和汇率已保存");await load();}catch(reason){setError(reason instanceof Error?reason.message:"货币配置保存失败");}finally{setSaving(false);}}
+  if(loading)return <EmptyState title="正在读取货币配置" text="请稍候…"/>;
+  return <div className="settings-provider-section currency-settings"><div className="settings-section-head"><div><h2>货币管理</h2><p>汇率表示 1 单位基准货币可兑换的目标币种数量；订单会按“原金额 ÷ 原币汇率 × 目标币汇率”换算。</p></div><button className="secondary-action" onClick={()=>void load()}><RefreshCw size={15}/>刷新</button></div><div className="currency-base-card"><label>基准货币<select value={config.baseCurrency} onChange={event=>changeBase(event.target.value)}>{config.currencies.map(item=><option key={item.code} value={item.code}>{item.code} · {item.name}</option>)}</select></label><small>切换基准货币会自动重算当前列表中的汇率，保持币种之间的兑换关系不变。</small></div><div className="currency-table"><div className="currency-row currency-head"><span>币种代码</span><span>显示名称</span><span>相对 {config.baseCurrency} 汇率</span><span/></div>{config.currencies.map((item,index)=><div className="currency-row" key={`${item.code}-${index}`}><input value={item.code} maxLength={3} disabled={item.code===config.baseCurrency} onChange={event=>{const next=event.target.value.toUpperCase().replace(/[^A-Z]/g,"");setConfig(value=>({...value,currencies:value.currencies.map((row,rowIndex)=>rowIndex===index?{...row,code:next}:row)}));}} aria-label="币种代码"/><input value={item.name} maxLength={80} onChange={event=>update(item.code,{name:event.target.value})} aria-label={`${item.code} 显示名称`}/><input type="number" min="0.00000001" step="any" value={item.rate} disabled={item.code===config.baseCurrency} onChange={event=>update(item.code,{rate:Number(event.target.value)})} aria-label={`${item.code} 汇率`}/><button className="danger-text" disabled={item.code===config.baseCurrency||config.currencies.length===1} onClick={()=>remove(item.code)} aria-label={`删除 ${item.code}`}><Trash2 size={14}/></button></div>)}</div><button className="secondary-action currency-add" onClick={()=>setConfig(value=>({...value,currencies:[...value.currencies,{code:"",name:"",rate:1}]}))} disabled={config.currencies.length>=100}><Plus size={14}/>添加货币</button>{role!=="admin"&&<p className="provider-permission-note">当前账号可查看货币与汇率；仅管理员可以保存修改。</p>}{error&&<span className="login-error">{error}</span>}<button className="primary-action provider-save" disabled={saving||role!=="admin"} onClick={()=>void save()}>{saving?<><RefreshCw className="spin" size={14}/>正在保存</>:<><Check size={14}/>保存货币配置</>}</button></div>;
 }
 
 function OrderSettingsPanel({token,onToken,onToast}:{token:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){
@@ -2056,20 +2051,20 @@ function OrderDetailsDialog({order,token,onToken,onToast,onPaymentChange,onClose
 function paymentStatusText(status:string){return({CREATING:"生成中",DRAFT:"草稿",SENT:"待付款",SHARED:"待付款",UNPAID:"待付款",PAYMENT_PENDING:"付款审核中",PARTIALLY_PAID:"部分付款",PAID:"已付款",MARKED_AS_PAID:"已付款",PAID_EXTERNAL:"已付款",CANCELLED:"已作废",AUTO_CANCELLED:"已自动作废",REFUNDED:"已退款",MARKED_AS_REFUNDED:"已退款",REFUNDED_EXTERNAL:"已退款",FAILED:"生成失败"} as Record<string,string>)[status.toUpperCase()]??status;}
 
 function ProductManagement({token,role,onToken,onToast}:{token:string;role:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){
-  const [products,setProducts]=useState<ProductItem[]>([]),[loading,setLoading]=useState(true),[error,setError]=useState(""),[query,setQuery]=useState(""),[currency,setCurrency]=useState(""),[tag,setTag]=useState(""),[editing,setEditing]=useState<ProductItem|"new"|null>(null);
-  const load=useCallback(async()=>{setLoading(true);try{const result=await authorizedFetch("/api/v1/products?limit=100",token);if(result.token!==token)onToken(result.token);if(!result.response.ok)throw new Error(`产品库加载失败（HTTP ${result.response.status}）`);const body=await result.response.json() as {data:Array<Record<string,unknown>>};setProducts(body.data.map(mapProduct));setError("");}catch(reason){setError(reason instanceof Error?reason.message:"产品库加载失败");}finally{setLoading(false);}},[token,onToken]);
+  const [products,setProducts]=useState<ProductItem[]>([]),[currencyConfig,setCurrencyConfig]=useState<CurrencyConfig>(DEFAULT_CURRENCY_CONFIG),[loading,setLoading]=useState(true),[error,setError]=useState(""),[query,setQuery]=useState(""),[currency,setCurrency]=useState(""),[tag,setTag]=useState(""),[editing,setEditing]=useState<ProductItem|"new"|null>(null);
+  const load=useCallback(async()=>{setLoading(true);try{const [result,currencyResult]=await Promise.all([authorizedFetch("/api/v1/products?limit=100",token),authorizedFetch("/api/v1/currencies",token)]);if(result.token!==token)onToken(result.token);else if(currencyResult.token!==token)onToken(currencyResult.token);if(!result.response.ok)throw new Error(`产品库加载失败（HTTP ${result.response.status}）`);const body=await result.response.json() as {data:Array<Record<string,unknown>>};setProducts(body.data.map(mapProduct));if(currencyResult.response.ok)setCurrencyConfig(await currencyResult.response.json() as CurrencyConfig);setError("");}catch(reason){setError(reason instanceof Error?reason.message:"产品库加载失败");}finally{setLoading(false);}},[token,onToken]);
   useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer);},[load]);
   const tagNames=useMemo(()=>[...new Set(products.flatMap(product=>product.tags.map(item=>item.name)))].sort((a,b)=>a.localeCompare(b,"zh-CN")),[products]);
   const visible=products.filter(product=>(!query||`${product.name} ${product.sku}`.toLowerCase().includes(query.toLowerCase()))&&(!currency||product.currency===currency)&&(!tag||product.tags.some(item=>item.name===tag)));
   async function remove(product:ProductItem){if(!window.confirm(`删除产品“${product.name}”？历史订单不会受到影响。`))return;const result=await authorizedFetch(`/api/v1/products/${product.id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);if(!result.response.ok){onToast(result.response.status===403?"只有主管或管理员可以删除产品":`删除失败（HTTP ${result.response.status}）`);return;}onToast("产品已从产品库移除，历史订单保持不变");await load();}
   return <section className="management-panel product-management"><header className="management-head"><div><span className="eyebrow">团队共享目录</span><h1>产品库</h1><p>集中维护产品 SKU、阶梯价格、图片和标签，创建订单或发送产品卡片时直接选用。</p></div><div><button className="secondary-action" onClick={()=>void load()}><RefreshCw size={15}/>刷新</button><button className="primary-action" onClick={()=>setEditing("new")}><Plus size={15}/>新增产品</button></div></header>
-    <div className="product-filters"><label><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索产品名称或 SKU"/></label><select value={currency} onChange={event=>setCurrency(event.target.value)} aria-label="按币种筛选"><option value="">全部币种</option>{CURRENCIES.map(item=><option key={item}>{item}</option>)}</select><select value={tag} onChange={event=>setTag(event.target.value)} aria-label="按标签筛选"><option value="">全部标签</option>{tagNames.map(item=><option key={item}>{item}</option>)}</select><span>{visible.length} 个产品</span></div>
+    <div className="product-filters"><label><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索产品名称或 SKU"/></label><select value={currency} onChange={event=>setCurrency(event.target.value)} aria-label="按币种筛选"><option value="">全部币种</option>{currencyConfig.currencies.map(item=><option key={item.code} value={item.code}>{item.code} · {item.name}</option>)}</select><select value={tag} onChange={event=>setTag(event.target.value)} aria-label="按标签筛选"><option value="">全部标签</option>{tagNames.map(item=><option key={item}>{item}</option>)}</select><span>{visible.length} 个产品</span></div>
     {loading?<EmptyState title="正在读取产品库" text="请稍候…"/>:error?<EmptyState title="产品库加载失败" text={error}/>:visible.length?<div className="product-grid">{visible.map(product=>{const last=product.priceTiers.at(-1);return <article className="product-card" key={product.id}><ProductImage mediaId={product.imageMediaId} token={token} onToken={onToken} alt={product.name}/><div className="product-card-copy"><header><span><b>{product.name}</b><small>{product.sku} · 更新于 {new Date(product.updatedAt).toLocaleDateString("zh-CN")}</small></span><strong>{product.currency} {last&&last.unitAmount!==product.defaultUnitAmount?`${last.unitAmount.toFixed(2)}–${product.defaultUnitAmount.toFixed(2)}`:product.defaultUnitAmount.toFixed(2)}</strong></header><div className="product-tier-summary">{product.priceTiers.map(tier=><span key={tier.minQuantity}>{tier.minQuantity}+ · {product.currency} {tier.unitAmount.toFixed(2)}</span>)}</div><div className="product-card-tags">{product.tags.length?product.tags.map(item=><i key={item.id} style={{background:item.color}}>{item.name}</i>):<span>暂无标签</span>}</div><footer><button onClick={()=>setEditing(product)}><Pencil size={13}/>编辑</button>{["admin","supervisor"].includes(role)&&<button className="danger-text" onClick={()=>void remove(product)}><Trash2 size={13}/>删除</button>}</footer></div></article>;})}</div>:<EmptyState title="暂无匹配产品" text="新增产品，或调整搜索与筛选条件"/>}
-    {editing&&<ProductEditorDialog product={editing==="new"?undefined:editing} products={products} request={(path,init)=>authorizedFetch(path,token,init)} onToken={onToken} onClose={()=>setEditing(null)} onSaved={async text=>{setEditing(null);onToast(text);await load();}}/>}
+    {editing&&<ProductEditorDialog product={editing==="new"?undefined:editing} products={products} currencies={currencyConfig.currencies} baseCurrency={currencyConfig.baseCurrency} request={(path,init)=>authorizedFetch(path,token,init)} onToken={onToken} onClose={()=>setEditing(null)} onSaved={async text=>{setEditing(null);onToast(text);await load();}}/>}
   </section>;
 }
 
-const CURRENCIES=["USD","CNY","EUR","GBP","JPY","HKD","SGD","AUD","CAD","AED"];
+const CURRENCIES=DEFAULT_CURRENCY_CONFIG.currencies.map(item=>item.code);
 function mapProduct(item:Record<string,unknown>):ProductItem{const priceTiers=Array.isArray(item.priceTiers)?(item.priceTiers as Array<Record<string,unknown>>).map(tier=>({minQuantity:Number(tier.minQuantity),unitAmount:Number(tier.unitAmount)})):[];return{id:String(item.id),sku:String(item.sku??""),name:String(item.name),defaultUnitAmount:priceTiers[0]?.unitAmount??Number(item.defaultUnitAmount),priceTiers,currency:String(item.currency),imageMediaId:item.imageMediaId?String(item.imageMediaId):null,imageName:String(item.imageName??""),tags:Array.isArray(item.tags)?(item.tags as Array<Record<string,unknown>>).map(mapTag):[],createdAt:String(item.createdAt),updatedAt:String(item.updatedAt)};}
 
 function ProductImage({

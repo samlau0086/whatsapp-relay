@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { contactAliasSchema, conversationTagsSchema, customerStageSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, orderUpdateSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
+import { contactAliasSchema, conversationTagsSchema, currencySettingsSchema, customerStageSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, orderUpdateSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
 
 const accountId="10000000-0000-4000-8000-000000000009";
 
@@ -72,7 +72,8 @@ test("orders validate idempotency, products, fees, currency, and translation",()
   assert.equal(orderSchema.safeParse({...valid,items:[{...valid.items[0],clientProductId:accountId,sku:"BAG-001"}]}).success,true);
   assert.equal(orderSchema.safeParse({...valid,clientOrderId:"order-1"}).success,false);
   assert.equal(orderSchema.safeParse({...valid,items:[{name:"Bag",quantity:1,unitAmount:19.999}]}).success,false);
-  assert.equal(orderSchema.safeParse({...valid,currency:"BTC"}).success,false);
+  assert.equal(orderSchema.safeParse({...valid,currency:"BTC"}).success,true);
+  assert.equal(orderSchema.safeParse({...valid,currency:"US"}).success,false);
   assert.equal(orderSchema.safeParse({...valid,items:[]}).success,false);
   assert.equal(orderSchema.safeParse({...valid,items:[{name:"Free sample",quantity:1,unitAmount:0}],fees:[]}).success,false);
   assert.equal(orderSchema.safeParse({...valid,translateOnSend:true}).success,false);
@@ -97,7 +98,8 @@ test("orders validate idempotency, products, fees, currency, and translation",()
 test("product library schemas validate SKU, tiered prices, and editable labels",()=>{
   const valid={clientProductId:accountId,name:" Leather bag ",sku:" BAG-001 ",priceTiers:[{minQuantity:1,unitAmount:19.95},{minQuantity:10,unitAmount:17.5}],currency:"USD",imageMediaId:accountId,tags:[{name:" VIP ",color:"#E8EEF7"}]};
   const parsed=productCreateSchema.parse(valid);assert.equal(parsed.name,"Leather bag");assert.equal(parsed.tags[0].name,"VIP");
-  assert.equal(productCreateSchema.safeParse({...valid,currency:"BTC"}).success,false);
+  assert.equal(productCreateSchema.safeParse({...valid,currency:"BTC"}).success,true);
+  assert.equal(productCreateSchema.safeParse({...valid,currency:"US1"}).success,false);
   assert.equal(productCreateSchema.safeParse({...valid,priceTiers:[{minQuantity:1,unitAmount:19.999}]}).success,false);
   assert.equal(productCreateSchema.safeParse({...valid,priceTiers:[{minQuantity:2,unitAmount:19.95}]}).success,false);
   assert.equal(productCreateSchema.safeParse({...valid,priceTiers:[{minQuantity:1,unitAmount:19.95},{minQuantity:1,unitAmount:18}]}).success,false);
@@ -106,4 +108,12 @@ test("product library schemas validate SKU, tiered prices, and editable labels",
   assert.equal(productUpdateSchema.safeParse({}).success,false);
   assert.equal(productCardSendSchema.safeParse({accountId,clientBatchId:"batch-001",productIds:[accountId],mode:"individual",showPrice:true}).success,true);
   assert.equal(productCardSendSchema.safeParse({accountId,clientBatchId:"batch-001",productIds:Array.from({length:11},(_,index)=>`10000000-0000-4000-8000-${String(index).padStart(12,"0")}`),mode:"combined",showPrice:false}).success,false);
+});
+
+test("currency settings require one included base currency with rate one",()=>{
+  const valid={baseCurrency:"USD",currencies:[{code:"USD",name:"美元",rate:1},{code:"CNY",name:"人民币",rate:7.2}]};
+  assert.equal(currencySettingsSchema.safeParse(valid).success,true);
+  assert.equal(currencySettingsSchema.safeParse({...valid,baseCurrency:"EUR"}).success,false);
+  assert.equal(currencySettingsSchema.safeParse({...valid,currencies:[{code:"USD",name:"美元",rate:2}]}).success,false);
+  assert.equal(currencySettingsSchema.safeParse({...valid,currencies:[valid.currencies[0],valid.currencies[0]]}).success,false);
 });

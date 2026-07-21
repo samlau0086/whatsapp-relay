@@ -8,7 +8,7 @@ import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } fro
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount, type Principal } from "./auth.js";
-import { contactAliasSchema, conversationTagsSchema, currencySchema, customerStageSchema, enrollmentSchema, loginSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderUpdateSchema, paypalSettingsSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
+import { contactAliasSchema, conversationTagsSchema, currencySchema, currencySettingsSchema, customerStageSchema, enrollmentSchema, loginSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderUpdateSchema, paypalSettingsSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
 import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
 import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline } from "./agent-hub.js";
 import { generateSpeech, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
@@ -35,6 +35,7 @@ await migrateAgentSchema();
 await ensureTtsProviderSettingsTable();
 await ensureTranslationTables();
 await ensureCrmTables(pool);
+await ensureCurrencySettingsTable();
 
 app.get("/health", async () => { await pool.query("SELECT 1"); return { status:"ok", version:"0.1.0", time:new Date().toISOString() }; });
 app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"RelayDesk API",version:"0.1.0"}, paths:{
@@ -51,6 +52,8 @@ app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"Rel
   "/api/v1/conversations/{id}/orders/{orderId}":{patch:{summary:"编辑订单"},delete:{summary:"从联系人资料中删除订单"}},
   "/api/v1/orders":{get:{summary:"集中查询订单"}},
   "/api/v1/admin/order-settings":{get:{summary:"读取订单号规则"},put:{summary:"更新订单号规则"}},
+  "/api/v1/currencies":{get:{summary:"读取工作区币种与汇率"}},
+  "/api/v1/admin/currencies":{put:{summary:"保存工作区币种、基准货币与汇率"}},
   "/api/v1/admin/paypal-settings":{get:{summary:"读取 PayPal 收款配置"},put:{summary:"保存 PayPal 收款配置"}},
   "/api/v1/orders/{orderId}/payment-request":{post:{summary:"创建 PayPal 付款请求"}},
   "/api/v1/orders/{orderId}/payment-request/refresh":{post:{summary:"刷新 PayPal 付款状态"}},
@@ -273,24 +276,26 @@ app.delete("/api/v1/tags/:id",{preHandler:authenticate},async(request,reply)=>{
 
 app.get("/api/v1/products",{preHandler:authenticate},async(request,reply)=>{
   const query=request.query as {q?:string;tag?:string;currency?:string;limit?:string;offset?:string};
-  if(query.currency&&!currencySchema.safeParse(query.currency).success)return reply.code(400).send({error:"invalid_currency"});
+  const parsedCurrency=query.currency?currencySchema.safeParse(query.currency):null;if(parsedCurrency&&!parsedCurrency.success)return reply.code(400).send({error:"invalid_currency"});
   const limit=Math.min(100,Math.max(1,Number(query.limit??40)||40)),offset=Math.max(0,Number(query.offset??0)||0);
   const result=await pool.query(`SELECT p.id,p.sku,p.name,p.default_unit_amount,p.currency,p.image_media_id,m.file_name image_name,p.created_at,p.updated_at,COALESCE(label_list.tags,'[]'::json) tags,COALESCE(price_list.price_tiers,'[]'::json) price_tiers
     FROM products p LEFT JOIN media m ON m.id=p.image_media_id
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',label.id,'name',label.name,'color',label.color) ORDER BY lower(label.name)) tags FROM product_labels label WHERE label.product_id=p.id) label_list ON true
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('minQuantity',tier.min_quantity,'unitAmount',tier.unit_amount) ORDER BY tier.min_quantity) price_tiers FROM product_price_tiers tier WHERE tier.product_id=p.id) price_list ON true
     WHERE p.deleted_at IS NULL AND ($1::text IS NULL OR p.name ILIKE '%'||$1||'%' OR p.sku ILIKE '%'||$1||'%') AND ($2::text IS NULL OR p.currency=$2) AND ($3::text IS NULL OR EXISTS(SELECT 1 FROM product_labels filter_label WHERE filter_label.product_id=p.id AND lower(filter_label.name)=lower($3)))
-    ORDER BY p.updated_at DESC,p.id LIMIT $4 OFFSET $5`,[query.q?.trim()||null,query.currency||null,query.tag?.trim()||null,limit+1,offset]);
+    ORDER BY p.updated_at DESC,p.id LIMIT $4 OFFSET $5`,[query.q?.trim()||null,parsedCurrency?.data??null,query.tag?.trim()||null,limit+1,offset]);
   return{data:result.rows.slice(0,limit).map(mapProductRow),hasMore:result.rows.length>limit,nextOffset:result.rows.length>limit?offset+limit:null};
 });
 
 app.post("/api/v1/products",{preHandler:authenticate},async(request,reply)=>{
   if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const principal=request.principal;const parsed=productCreateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  if(!await isConfiguredCurrency(parsed.data.currency))return reply.code(400).send({error:"currency_not_configured",message:"该币种未在货币管理中启用"});
   try{const result=await transaction(async client=>{const duplicate=await client.query("SELECT id FROM products WHERE client_product_id=$1",[parsed.data.clientProductId]);if(duplicate.rowCount)return{product:await productById(client,duplicate.rows[0].id),deduplicated:true};if(parsed.data.imageMediaId){const image=await client.query("SELECT id FROM media WHERE id=$1 AND account_id IS NULL AND status='ready' AND mime_type IN ('image/png','image/jpeg')",[parsed.data.imageMediaId]);if(!image.rowCount)return null;}const created=await client.query("INSERT INTO products(client_product_id,sku,name,default_unit_amount,currency,image_media_id,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id",[parsed.data.clientProductId,parsed.data.sku,parsed.data.name,parsed.data.priceTiers[0].unitAmount,parsed.data.currency,parsed.data.imageMediaId??null,principal.id]);await replaceProductLabels(client,created.rows[0].id,parsed.data.tags);await replaceProductPriceTiers(client,created.rows[0].id,parsed.data.priceTiers);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'product.create','product',$2,$3)",[principal.id,created.rows[0].id,JSON.stringify({source:"library",sku:parsed.data.sku,tagCount:parsed.data.tags.length,tierCount:parsed.data.priceTiers.length})]);return{product:await productById(client,created.rows[0].id),deduplicated:false};});if(!result)return reply.code(400).send({error:"invalid_product_image"});return reply.code(result.deduplicated?200:201).send({...result.product,deduplicated:result.deduplicated});}catch(error){if((error as {code?:string}).code==="23505")return reply.code(409).send({error:"sku_exists"});throw error;}
 });
 
 app.patch("/api/v1/products/:id",{preHandler:authenticate},async(request,reply)=>{
   if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const principal=request.principal;const parsed=productUpdateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});const {id}=request.params as {id:string};
+  if(parsed.data.currency&&!await isConfiguredCurrency(parsed.data.currency))return reply.code(400).send({error:"currency_not_configured",message:"该币种未在货币管理中启用"});
   try{const result=await transaction(async client=>{const found=await client.query("SELECT id FROM products WHERE id=$1 AND deleted_at IS NULL FOR UPDATE",[id]);if(!found.rowCount)return undefined;if(parsed.data.imageMediaId){const image=await client.query("SELECT id FROM media WHERE id=$1 AND account_id IS NULL AND status='ready' AND mime_type IN ('image/png','image/jpeg')",[parsed.data.imageMediaId]);if(!image.rowCount)return null;}const hasImage=Object.prototype.hasOwnProperty.call(parsed.data,"imageMediaId"),firstPrice=parsed.data.priceTiers?.[0].unitAmount;await client.query("UPDATE products SET sku=CASE WHEN $2 THEN $3 ELSE sku END,name=CASE WHEN $4 THEN $5 ELSE name END,default_unit_amount=CASE WHEN $6 THEN $7 ELSE default_unit_amount END,currency=CASE WHEN $8 THEN $9 ELSE currency END,image_media_id=CASE WHEN $10 THEN $11 ELSE image_media_id END,updated_at=now() WHERE id=$1",[id,parsed.data.sku!==undefined,parsed.data.sku??null,parsed.data.name!==undefined,parsed.data.name??null,firstPrice!==undefined,firstPrice??null,parsed.data.currency!==undefined,parsed.data.currency??null,hasImage,parsed.data.imageMediaId??null]);if(parsed.data.tags)await replaceProductLabels(client,id,parsed.data.tags);if(parsed.data.priceTiers)await replaceProductPriceTiers(client,id,parsed.data.priceTiers);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'product.update','product',$2,$3)",[principal.id,id,JSON.stringify({fields:Object.keys(parsed.data)})]);return await productById(client,id);});if(result===undefined)return reply.code(404).send({error:"not_found"});if(result===null)return reply.code(400).send({error:"invalid_product_image"});return result;}catch(error){if((error as {code?:string}).code==="23505")return reply.code(409).send({error:"sku_exists"});throw error;}
 });
 
@@ -366,6 +371,20 @@ app.get("/api/v1/orders",{preHandler:authenticate},async(request,reply)=>{
     ORDER BY o.created_at DESC,o.id DESC LIMIT $9`,[query.accountId??null,query.status??null,query.q?.trim()||null,query.dateFrom??null,query.dateTo??null,cursorDate,cursorId,accountIds,limit+1]);
   const hasMore=result.rows.length>limit,data=result.rows.slice(0,limit),last=data[data.length-1];
   return{data,nextCursor:hasMore&&last?Buffer.from(JSON.stringify({createdAt:last.created_at,id:last.id}),"utf8").toString("base64url"):null,total:Number(data[0]?.total_count??0)};
+});
+
+app.get("/api/v1/currencies",{preHandler:authenticate},async()=>{
+  const result=await pool.query("SELECT code,name,rate,is_base FROM currency_settings ORDER BY position,code");
+  return{baseCurrency:String(result.rows.find(row=>row.is_base)?.code??"USD"),currencies:result.rows.map(row=>({code:String(row.code),name:String(row.name),rate:Number(row.rate)}))};
+});
+
+app.put("/api/v1/admin/currencies",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
+  const parsed=currencySettingsSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  const nextCodes=parsed.data.currencies.map(item=>item.code),inUse=await pool.query("SELECT currency,source FROM (SELECT DISTINCT currency,'product'::text source FROM products WHERE deleted_at IS NULL UNION ALL SELECT DISTINCT currency,'order'::text source FROM orders WHERE deleted_at IS NULL) used WHERE NOT(currency=ANY($1::text[])) LIMIT 1",[nextCodes]);
+  if(inUse.rowCount)return reply.code(409).send({error:"currency_in_use",message:`${inUse.rows[0].currency} 仍被${inUse.rows[0].source==="product"?"产品":"订单"}使用，无法删除`});
+  await transaction(async client=>{await client.query("UPDATE currency_settings SET is_base=false");await client.query("DELETE FROM currency_settings WHERE NOT(code=ANY($1::text[]))",[nextCodes]);for(const [position,item] of parsed.data.currencies.entries())await client.query("INSERT INTO currency_settings(code,name,rate,is_base,position,updated_by) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(code) DO UPDATE SET name=EXCLUDED.name,rate=EXCLUDED.rate,is_base=EXCLUDED.is_base,position=EXCLUDED.position,updated_by=EXCLUDED.updated_by,updated_at=now()",[item.code,item.name,item.rate,item.code===parsed.data.baseCurrency,position,request.principal!.id]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'currency.settings.update','currency_settings','workspace',$2)",[request.principal!.id,JSON.stringify({baseCurrency:parsed.data.baseCurrency,currencies:parsed.data.currencies})]);});
+  return{baseCurrency:parsed.data.baseCurrency,currencies:parsed.data.currencies};
 });
 
 app.get("/api/v1/admin/order-settings",{preHandler:authenticate},async(request,reply)=>{
@@ -470,6 +489,7 @@ app.post("/api/v1/conversations/:id/product-cards/send",{preHandler:authenticate
 
 app.post("/api/v1/conversations/:id/orders",{preHandler:authenticate},async(request,reply)=>{
   if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const principal=request.principal;const parsed=orderSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});const {id}=request.params as {id:string};
+  if(!await isConfiguredCurrency(parsed.data.currency))return reply.code(400).send({error:"currency_not_configured",message:"该币种未在货币管理中启用"});
   const result=await transaction(async client=>{
     const conversation=await client.query("SELECT c.account_id,c.contact_id FROM conversations c WHERE c.id=$1",[id]);if(!conversation.rowCount||!canAccessAccount(principal,conversation.rows[0].account_id))return null;
     const duplicate=await client.query("SELECT id,display_order_number,conversation_id,status FROM orders WHERE client_order_id=$1",[parsed.data.clientOrderId]);if(duplicate.rowCount){if(duplicate.rows[0].conversation_id!==id)throw Object.assign(new Error("client_order_id_conflict"),{statusCode:409});return{...duplicate.rows[0],deduplicated:true};}
@@ -484,6 +504,7 @@ app.post("/api/v1/conversations/:id/orders",{preHandler:authenticate},async(requ
 
 app.patch("/api/v1/conversations/:conversationId/orders/:orderId",{preHandler:authenticate},async(request,reply)=>{
   if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const principal=request.principal;const parsed=orderUpdateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});const {conversationId,orderId}=request.params as {conversationId:string;orderId:string};
+  if(!await isConfiguredCurrency(parsed.data.currency))return reply.code(400).send({error:"currency_not_configured",message:"该币种未在货币管理中启用"});
   const access=await pool.query("SELECT c.account_id FROM orders o JOIN conversations c ON c.id=o.conversation_id WHERE o.id=$1 AND o.conversation_id=$2 AND o.deleted_at IS NULL",[orderId,conversationId]);if(!access.rowCount||!canAccessAccount(principal,access.rows[0].account_id))return reply.code(404).send({error:"not_found"});try{const cancellation=await cancelCurrentPaymentRequest(orderId,principal.id);if(cancellation==="paid")return reply.code(409).send({error:"paid_order_locked",message:"已付款订单不能修改商品、费用或金额"});}catch(error){request.log.warn({orderId,paypalError:error instanceof PayPalApiError?error.code:String(error)},"PayPal invoice cancellation failed before order update");return reply.code(502).send({error:"paypal_cancel_failed",message:"旧付款请求作废失败，订单未修改，请稍后重试"});}
   const result=await transaction(async client=>{const found=await client.query("SELECT o.display_order_number,o.status,c.account_id FROM orders o JOIN conversations c ON c.id=o.conversation_id WHERE o.id=$1 AND o.conversation_id=$2 AND o.deleted_at IS NULL FOR UPDATE OF o",[orderId,conversationId]);if(!found.rowCount||!canAccessAccount(principal,found.rows[0].account_id))return null;const clientProductIds=parsed.data.items.flatMap(item=>item.clientProductId?[item.clientProductId]:[]);if(new Set(clientProductIds).size!==clientProductIds.length)throw Object.assign(new Error("duplicate_client_product_id"),{statusCode:400});const mediaIds=parsed.data.items.flatMap(item=>item.imageMediaId?[item.imageMediaId]:[]);if(new Set(mediaIds).size!==mediaIds.length)throw Object.assign(new Error("duplicate_product_image"),{statusCode:400});if(mediaIds.length){const media=await client.query("SELECT id FROM media WHERE id=ANY($1::uuid[]) AND (account_id=$2 OR account_id IS NULL) AND status='ready' AND mime_type IN ('image/png','image/jpeg')",[mediaIds,found.rows[0].account_id]);if(media.rowCount!==mediaIds.length)throw Object.assign(new Error("invalid_product_image"),{statusCode:400});}const total=calculateOrderTotal(parsed.data.items,parsed.data.fees);await client.query("UPDATE orders SET amount=$2,currency=$3,description=$4,translate_on_send=$5,target_language=$6 WHERE id=$1",[orderId,total,parsed.data.currency,parsed.data.description??null,parsed.data.translateOnSend,parsed.data.targetLanguage??null]);const conversationTags=await client.query("SELECT t.name,t.color FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=$1 ORDER BY lower(t.name)",[conversationId]);const productIds=[];for(const item of parsed.data.items)productIds.push(await resolveOrderProduct(client,item,String(found.rows[0].display_order_number),parsed.data.currency,principal.id,conversationTags.rows));await client.query("DELETE FROM order_items WHERE order_id=$1",[orderId]);await client.query("DELETE FROM order_fees WHERE order_id=$1",[orderId]);for(const [position,item] of parsed.data.items.entries())await client.query("INSERT INTO order_items(order_id,position,product_name,quantity,unit_amount,image_media_id,product_id) VALUES($1,$2,$3,$4,$5,$6,$7)",[orderId,position,item.name,item.quantity,item.unitAmount,item.imageMediaId??null,productIds[position]]);for(const [position,fee] of parsed.data.fees.entries())await client.query("INSERT INTO order_fees(order_id,position,name,amount) VALUES($1,$2,$3,$4)",[orderId,position,fee.name,fee.amount]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'order.update','order',$2,$3)",[principal.id,orderId,JSON.stringify({conversationId,itemCount:parsed.data.items.length,feeCount:parsed.data.fees.length,translateOnSend:parsed.data.translateOnSend,previouslySent:found.rows[0].status!=="draft"})]);return{orderNumber:String(found.rows[0].display_order_number)};});if(!result)return reply.code(404).send({error:"not_found"});return{orderId,orderNumber:result.orderNumber,status:"updated"};
 });
@@ -781,7 +802,7 @@ async function replaceProductLabels(client:PoolClient,productId:string,labels:Pr
 async function replaceProductPriceTiers(client:PoolClient,productId:string,tiers:Array<{minQuantity:number;unitAmount:number}>){await client.query("DELETE FROM product_price_tiers WHERE product_id=$1",[productId]);for(const tier of tiers)await client.query("INSERT INTO product_price_tiers(product_id,min_quantity,unit_amount) VALUES($1,$2,$3)",[productId,tier.minQuantity,tier.unitAmount]);}
 
 async function resolveOrderProduct(client:PoolClient,item:OrderProductInput,orderNumber:string,currency:string,actorId:string,conversationLabels:ProductLabelInput[]):Promise<string|null>{
-  if(item.productId){const selected=await client.query("SELECT id FROM products WHERE id=$1 AND currency=$2",[item.productId,currency]);if(!selected.rowCount)throw Object.assign(new Error("invalid_order_product"),{statusCode:400});return selected.rows[0].id;}
+  if(item.productId){const selected=await client.query("SELECT id FROM products WHERE id=$1 AND deleted_at IS NULL",[item.productId]);if(!selected.rowCount)throw Object.assign(new Error("invalid_order_product"),{statusCode:400});return selected.rows[0].id;}
   if(!item.clientProductId)return null;
   const existing=await client.query("SELECT id,currency FROM products WHERE client_product_id=$1",[item.clientProductId]);if(existing.rowCount){if(existing.rows[0].currency!==currency)throw Object.assign(new Error("product_currency_mismatch"),{statusCode:400});return existing.rows[0].id;}
   const duplicateSku=await client.query("SELECT id FROM products WHERE deleted_at IS NULL AND lower(btrim(sku))=lower(btrim($1))",[item.sku]);if(duplicateSku.rowCount)throw Object.assign(new Error("sku_exists"),{statusCode:409});
@@ -895,6 +916,22 @@ async function ensureTtsProviderSettingsTable():Promise<void>{
   )`);
   await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS tts_provider_one_enabled_idx ON tts_provider_settings ((enabled)) WHERE enabled");
 }
+
+async function ensureCurrencySettingsTable():Promise<void>{
+  await pool.query(`CREATE TABLE IF NOT EXISTS currency_settings (
+    code text PRIMARY KEY CHECK (code ~ '^[A-Z]{3}$'),name text NOT NULL,
+    rate numeric(20,8) NOT NULL CHECK (rate > 0),is_base boolean NOT NULL DEFAULT false,
+    position integer NOT NULL DEFAULT 0,updated_by uuid REFERENCES users(id) ON DELETE SET NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now()
+  )`);
+  await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS currency_settings_one_base_idx ON currency_settings ((is_base)) WHERE is_base");
+  await pool.query(`INSERT INTO currency_settings(code,name,rate,is_base,position) SELECT * FROM (VALUES
+    ('USD','美元',1::numeric,true,0),('CNY','人民币',7.2,false,1),('EUR','欧元',0.92,false,2),('GBP','英镑',0.78,false,3),('JPY','日元',157,false,4),('HKD','港币',7.8,false,5),('SGD','新加坡元',1.35,false,6),('AUD','澳元',1.5,false,7),('CAD','加元',1.37,false,8),('AED','阿联酋迪拉姆',3.6725,false,9)) defaults(code,name,rate,is_base,position) WHERE NOT EXISTS (SELECT 1 FROM currency_settings) ON CONFLICT(code) DO NOTHING`);
+  await pool.query("ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_currency_check");
+  await pool.query("ALTER TABLE products DROP CONSTRAINT IF EXISTS products_currency_check");
+}
+
+async function isConfiguredCurrency(code:string):Promise<boolean>{const result=await pool.query("SELECT 1 FROM currency_settings WHERE code=$1",[code]);return Boolean(result.rowCount);}
 
 async function ensureAdmin():Promise<void>{
   const existing=await pool.query("SELECT id FROM users WHERE lower(email)=lower($1)",[config.ADMIN_EMAIL]);
