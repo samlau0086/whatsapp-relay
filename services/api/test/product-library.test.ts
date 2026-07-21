@@ -24,4 +24,13 @@ test("product routes enforce shared media, snapshots, idempotency, and soft dele
   assert.match(server,/product\.create/);
   assert.match(server,/product\.update/);
   assert.match(server,/product\.delete/);
+  assert.match(server,/app\.post\("\/api\/v1\/products\/bulk-import"/);
+  assert.match(server,/source:"csv_import"/);
+});
+
+test("bulk product import validates batches and is capped at 500 rows",async()=>{
+  const schemas=await readFile(new URL("../src/schemas.ts",import.meta.url),"utf8");
+  assert.match(schemas,/productBulkImportSchema/);
+  assert.match(schemas,/\.min\(1\)\.max\(500\)/);
+  assert.match(schemas,/duplicate sku in import/);
 });
