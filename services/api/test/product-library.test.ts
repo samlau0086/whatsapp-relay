@@ -57,3 +57,10 @@ test("the product editor previews the selected media image",async()=>{
   assert.match(dialog,/product-dialog-image-preview/);
   assert.match(dialog,/产品图片预览/);
 });
+
+test("API startup applies the latest product schema to persistent databases",async()=>{
+  const runner=await readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8");
+  assert.match(runner,/024_product_pricing_cards\.sql/);
+  assert.match(runner,/025_currency_management\.sql/);
+  assert.match(runner,/027_product_description\.sql/);
+});
