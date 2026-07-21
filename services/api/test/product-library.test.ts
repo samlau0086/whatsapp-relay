@@ -61,6 +61,24 @@ test("the product editor previews the selected media image",async()=>{
   assert.match(mediaDialog,/\},\[mediaId\]\)/);
 });
 
+test("product management offers compact card and list views",async()=>{
+  const [component,css]=await Promise.all([readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),readFile(new URL("../../../app/globals.css",import.meta.url),"utf8")]);
+  assert.match(component,/aria-label="卡片视图"/);
+  assert.match(component,/aria-label="列表视图"/);
+  assert.match(component,/product-grid \$\{view\}-view/);
+  assert.match(css,/\.product-grid\.card-view/);
+  assert.match(css,/\.product-grid\.list-view/);
+});
+
+test("product tags support searching existing labels and creating unmatched labels",async()=>{
+  const dialog=await readFile(new URL("../../../app/product-editor-dialog.tsx",import.meta.url),"utf8");
+  assert.match(dialog,/role="combobox"/);
+  assert.match(dialog,/role="listbox"/);
+  assert.match(dialog,/搜索或创建标签/);
+  assert.match(dialog,/创建“\{tagName\.trim\(\)\}”/);
+  assert.match(dialog,/products\.flatMap\(\(item\) => item\.tags\)/);
+});
+
 test("API startup applies the latest product schema to persistent databases",async()=>{
   const runner=await readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8");
   assert.match(runner,/024_product_pricing_cards\.sql/);
