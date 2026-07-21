@@ -300,3 +300,12 @@ button { color:inherit; }
   z-index:1;
   background:#fff;
 }
+.product-management .product-card>.product-library-image{
+  position:relative;
+  overflow:hidden;
+  isolation:isolate;
+}
+.product-management .card-view .product-card>.product-library-image img{
+  position:absolute;
+  inset:0;
+}
