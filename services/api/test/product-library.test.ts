@@ -15,6 +15,8 @@ test("product routes enforce shared media, snapshots, idempotency, and soft dele
   const server=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
   assert.match(server,/app\.get\("\/api\/v1\/products"/);
   assert.match(server,/app\.post\("\/api\/v1\/products\/media"/);
+  assert.match(server,/app\.get\("\/api\/v1\/products\/media"/);
+  assert.match(server,/mime_type IN \('image\/png','image\/jpeg'\)/);
   assert.match(server,/account_id IS NULL AND status='ready'/);
   assert.match(server,/client_product_id=\$1/);
   assert.match(server,/订单 #\$\{orderNumber\}/);

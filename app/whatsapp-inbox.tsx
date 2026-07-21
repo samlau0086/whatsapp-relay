@@ -14,6 +14,7 @@ import { ProductCardTemplateEditor } from "./product-card-template-editor";
 import { ProductCardSendDialog } from "./product-card-send-dialog";
 import { ProductEditorDialog } from "./product-editor-dialog";
 import { ProductImportDialog } from "./product-import-dialog";
+import { ProductImageMediaDialog } from "./product-image-media-dialog";
 
 const API_URL = (process.env.NEXT_PUBLIC_RELAY_API_URL ?? "").replace(/\/$/, "");
 const COLORS = ["#6b4f3a", "#305f72", "#9b5f72", "#477a62", "#705b86"];
@@ -1710,11 +1711,13 @@ function OrderDialog({
     </div>
     {imagePickerProductId && (
       <ProductImageMediaDialog
-        accountId={active.accountId}
-        token={token}
+        request={(path,init)=>authorizedFetch(path,token,init)}
         onToken={onToken}
         onClose={() => setImagePickerProductId(null)}
         onSelect={chooseMediaImage}
+        libraryPath={`/api/v1/media?accountId=${encodeURIComponent(active.accountId)}&limit=100`}
+        uploadPath={`/api/v1/media?accountId=${encodeURIComponent(active.accountId)}`}
+        description="仅显示当前 WhatsApp 账号中可用的 PNG 和 JPG 图片。"
       />
     )}
     </>
@@ -1814,55 +1817,6 @@ function MediaDialog({accountId,token,initialCaption,onToken,onToast,onClose,onS
   async function upload(files:FileList|File[]){const list=Array.from(files);if(!list.length)return;setBusy(true);setError("");try{let last:MediaAsset|null=null;for(const file of list){if(file.size>64*1024*1024)throw new Error(`${file.name} 超过 64 MB`);const form=new FormData();form.append("file",file);const result=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(accountId)}`,token,{method:"POST",body:form});if(result.token!==token)onToken(result.token);if(!result.response.ok)throw new Error(`${file.name} 上传失败（HTTP ${result.response.status}）`);const body=await result.response.json() as {mediaId:string;fileName:string;mimeType:string;size:number;sha256:string};last={id:body.mediaId,fileName:body.fileName,mimeType:body.mimeType,size:body.size,sha256:body.sha256,createdAt:new Date().toISOString(),usageCount:0};}await load();if(last)setSelectedId(last.id);onToast(list.length>1?`${list.length} 个文件已加入媒体库`:"文件已加入媒体库");}catch(reason){setError(reason instanceof Error?reason.message:"上传失败");}finally{setBusy(false);setDragging(false);}}
   async function remove(asset:MediaAsset){if(asset.usageCount>0){setError("该文件已被消息使用，不能删除");return;}if(!window.confirm(`从媒体库删除“${asset.fileName}”？`))return;setBusy(true);const result=await authorizedFetch(`/api/v1/media/${asset.id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);setBusy(false);if(!result.response.ok){setError(result.response.status===409?"该文件已被消息使用，不能删除":`删除失败（HTTP ${result.response.status}）`);return;}if(selectedId===asset.id)setSelectedId("");await load();onToast("文件已从媒体库删除");}
   return <div className="modal-backdrop media-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget&&!busy)onClose();}}><section className="media-dialog" role="dialog" aria-modal="true" aria-labelledby="media-dialog-title"><header><div><span className="login-logo"><Paperclip size={21}/></span><span><h2 id="media-dialog-title">媒体与附件</h2><p>上传一次，之后可在该 WhatsApp 账号的会话中复用。</p></span></div><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button></header><div className={`media-dropzone ${dragging?"dragging":""}`} onDragEnter={event=>{event.preventDefault();setDragging(true)}} onDragOver={event=>event.preventDefault()} onDragLeave={event=>{if(event.currentTarget===event.target)setDragging(false)}} onDrop={event=>{event.preventDefault();void upload(event.dataTransfer.files)}} onClick={()=>inputRef.current?.click()} role="button" tabIndex={0} onKeyDown={event=>{if(event.key==="Enter"||event.key===" ")inputRef.current?.click();}}><UploadCloud size={30}/><b>{busy?"正在上传…":"拖拽文件到这里，或点击选择"}</b><span>图片、MP4、OGG、MP3、PDF、ZIP；单文件最大 64 MB</span><input ref={inputRef} type="file" multiple accept="image/jpeg,image/png,image/webp,video/mp4,audio/ogg,audio/mpeg,application/pdf,application/zip" onChange={event=>{if(event.target.files)void upload(event.target.files);event.currentTarget.value="";}}/></div><div className="media-library-head"><div><b>媒体库</b><span>{assets.length} 个文件</span></div><label><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索文件名"/></label></div><div className="media-filters">{[["all","全部"],["image","图片"],["video","视频"],["audio","音频"],["document","文档"]].map(([value,label])=><button key={value} className={filter===value?"active":""} onClick={()=>setFilter(value)}>{label}</button>)}</div><div className="media-grid">{visible.length?visible.map(asset=>{const kind=mediaKind(asset.mimeType);return <button key={asset.id} className={`media-item ${kind==="image"?"with-image-preview":""} ${selectedId===asset.id?"selected":""}`} onClick={()=>setSelectedId(asset.id)}>{kind==="image"?<ProductImage mediaId={asset.id} token={token} onToken={onToken} alt={asset.fileName} className="media-library-preview"/>:<span className={`media-kind ${kind}`}><FileText size={22}/></span>}<span><b title={asset.fileName}>{asset.fileName}</b><small>{formatBytes(asset.size)} · {asset.usageCount?`已使用 ${asset.usageCount} 次`:"未使用"}</small></span><i role="button" tabIndex={0} aria-label={`删除 ${asset.fileName}`} onClick={event=>{event.stopPropagation();void remove(asset)}} onKeyDown={event=>{if(event.key==="Enter"){event.stopPropagation();void remove(asset);}}}><Trash2 size={14}/></i></button>}):<div className="media-empty"><FileText size={28}/><b>媒体库中暂无匹配文件</b><span>可从上方拖拽上传</span></div>}</div>{error&&<span className="login-error media-error">{error}</span>}<footer><label>附件说明（可选）<input value={caption} onChange={event=>setCaption(event.target.value)} maxLength={65536} placeholder="随附件一起发送的文字"/></label><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" disabled={!selected||busy} onClick={()=>selected&&void onSend(selected,caption.trim())}>发送所选附件</button></footer></section></div>;
-}
-
-function ProductImageMediaDialog({accountId,token,onToken,onClose,onSelect}:{accountId:string;token:string;onToken:(token:string)=>void;onClose:()=>void;onSelect:(asset:MediaAsset)=>void}) {
-  const [assets,setAssets]=useState<MediaAsset[]>([]);
-  const [selectedId,setSelectedId]=useState("");
-  const [query,setQuery]=useState("");
-  const [busy,setBusy]=useState(false);
-  const [error,setError]=useState("");
-  const inputRef=useRef<HTMLInputElement>(null);
-  const load=useCallback(async()=>{
-    const result=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(accountId)}&limit=100`,token);
-    if(result.token!==token)onToken(result.token);
-    if(!result.response.ok){setError(`媒体库加载失败（HTTP ${result.response.status}）`);return;}
-    const body=await result.response.json() as {data:Array<Record<string,unknown>>};
-    setAssets(body.data.map(mapMediaAsset).filter(item=>["image/png","image/jpeg"].includes(item.mimeType)));
-  },[accountId,token,onToken]);
-  useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer);},[load]);
-  useEffect(()=>{const key=(event:KeyboardEvent)=>{if(event.key==="Escape"&&!busy)onClose();};window.addEventListener("keydown",key);return()=>window.removeEventListener("keydown",key);},[busy,onClose]);
-  const visible=assets.filter(item=>!query||item.fileName.toLowerCase().includes(query.toLowerCase()));
-  const selected=assets.find(item=>item.id===selectedId)??null;
-  async function upload(files:FileList){
-    const list=Array.from(files);
-    if(!list.length)return;
-    setBusy(true);setError("");
-    try{
-      let lastId="";
-      for(const file of list){
-        if(!["image/png","image/jpeg"].includes(file.type))throw new Error(`${file.name} 不是 PNG 或 JPG 图片`);
-        if(file.size>64*1024*1024)throw new Error(`${file.name} 超过 64 MB`);
-        const form=new FormData();form.append("file",file);
-        const result=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(accountId)}`,token,{method:"POST",body:form});
-        if(result.token!==token)onToken(result.token);
-        if(!result.response.ok)throw new Error(`${file.name} 上传失败（HTTP ${result.response.status}）`);
-        const body=await result.response.json() as {mediaId:string};lastId=body.mediaId;
-      }
-      await load();setSelectedId(lastId);
-    }catch(reason){setError(reason instanceof Error?reason.message:"上传失败");}
-    finally{setBusy(false);}
-  }
-  return <div className="modal-backdrop media-backdrop product-image-media-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget&&!busy)onClose();}}>
-    <section className="media-dialog product-image-media-dialog" role="dialog" aria-modal="true" aria-labelledby="product-image-media-title">
-      <header><div><span className="login-logo"><Paperclip size={21}/></span><span><h2 id="product-image-media-title">从媒体与附件选择</h2><p>仅显示当前 WhatsApp 账号中可用的 PNG 和 JPG 图片。</p></span></div><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button></header>
-      <div className="media-dropzone" onClick={()=>inputRef.current?.click()} role="button" tabIndex={0} onKeyDown={event=>{if(event.key==="Enter"||event.key===" ")inputRef.current?.click();}}><UploadCloud size={30}/><b>{busy?"正在上传…":"上传新图片到媒体与附件"}</b><span>PNG 或 JPG；单文件最大 64 MB</span><input ref={inputRef} type="file" multiple accept="image/png,image/jpeg" onChange={event=>{if(event.target.files)void upload(event.target.files);event.currentTarget.value="";}}/></div>
-      <div className="media-library-head"><div><b>图片</b><span>{assets.length} 个文件</span></div><label><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索文件名"/></label></div>
-      <div className="media-grid product-image-media-grid">{visible.length?visible.map(asset=><button key={asset.id} className={`media-item ${selectedId===asset.id?"selected":""}`} onClick={()=>setSelectedId(asset.id)}><ProductImage mediaId={asset.id} token={token} onToken={onToken} alt={asset.fileName} className="media-image-preview"/><span><b title={asset.fileName}>{asset.fileName}</b><small>{formatBytes(asset.size)} · {asset.usageCount?`已使用 ${asset.usageCount} 次`:"未使用"}</small></span></button>):<div className="media-empty"><FileText size={28}/><b>媒体与附件中暂无匹配图片</b><span>可从上方上传 PNG 或 JPG</span></div>}</div>
-      {error&&<span className="login-error media-error">{error}</span>}
-      <footer className="product-image-media-footer"><span>{selected?.fileName||"尚未选择图片"}</span><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" disabled={!selected||busy} onClick={()=>selected&&onSelect(selected)}>使用所选图片</button></footer>
-    </section>
-  </div>;
 }
 
 function mapMediaAsset(item:Record<string,unknown>):MediaAsset{return{id:String(item.id),fileName:String(item.file_name??"未命名文件"),mimeType:String(item.mime_type??"application/octet-stream"),size:Number(item.byte_size??0),sha256:String(item.sha256??""),createdAt:String(item.created_at??""),usageCount:Number(item.usage_count??0)};}
