@@ -87,7 +87,8 @@ const providerKey=(provider:Provider)=>decryptAtRest(provider.api_key_encrypted,
 const trimSlash=(value:string)=>value.replace(/\/+$/,"");
 
 async function embed(provider:Provider,input:string[]):Promise<number[][]>{
-  const response=await fetch(`${trimSlash(provider.base_url)}/embeddings`,{method:"POST",headers:{authorization:`Bearer ${providerKey(provider)}`,"content-type":"application/json"},body:JSON.stringify({model:provider.embedding_model,input}),signal:AbortSignal.timeout(60_000)});
+  const requestBody:Record<string,unknown>={model:provider.embedding_model,input};if(provider.provider==="siliconflow")requestBody.dimensions=1536;
+  const response=await fetch(`${trimSlash(provider.base_url)}/embeddings`,{method:"POST",headers:{authorization:`Bearer ${providerKey(provider)}`,"content-type":"application/json"},body:JSON.stringify(requestBody),signal:AbortSignal.timeout(60_000)});
   if(!response.ok)throw new Error(`embedding_provider_http_${response.status}:${(await response.text()).slice(0,240)}`);const body=await response.json() as {data?:Array<{index:number;embedding:number[]}>};const values=(body.data??[]).sort((a,b)=>a.index-b.index).map(item=>item.embedding);if(values.length!==input.length||values.some(value=>value.length!==1536))throw new Error("embedding_provider_invalid_dimensions");return values;
 }
 

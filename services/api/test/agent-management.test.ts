@@ -41,3 +41,19 @@ test("agent management routes and legacy demo cleanup are shipped", async () => 
   assert.match(cleanup,/10000000-0000-4000-8000-000000000001/);
   await assert.rejects(access(new URL("../../../infra/postgres/migrations/002_seed_demo.sql",import.meta.url)));
 });
+
+test("OpenRouter and SiliconFlow agent provider presets are wired end to end",async()=>{
+  const server=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
+  const engine=await readFile(new URL("../src/agent-engine.ts",import.meta.url),"utf8");
+  const runner=await readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8");
+  const migration=await readFile(new URL("../../../infra/postgres/migrations/022_agent_provider_presets.sql",import.meta.url),"utf8");
+  const ui=await readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8");
+  assert.match(ui,/<option value="openrouter">OpenRouter<\/option>/);
+  assert.match(ui,/<option value="siliconflow">SiliconFlow<\/option>/);
+  assert.match(server,/https:\/\/openrouter\.ai\/api\/v1/);
+  assert.match(server,/https:\/\/api\.siliconflow\.cn\/v1/);
+  assert.match(server,/"openai","openrouter","siliconflow","openai_compatible"/);
+  assert.match(engine,/provider\.provider==="siliconflow"\)requestBody\.dimensions=1536/);
+  assert.match(runner,/022_agent_provider_presets\.sql/);
+  assert.match(migration,/CHECK\(provider IN \('openai','openrouter','siliconflow','openai_compatible'\)\)/);
+});
