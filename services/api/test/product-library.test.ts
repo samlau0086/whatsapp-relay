@@ -72,6 +72,15 @@ test("product management offers compact card and list views",async()=>{
   assert.match(css,/\.product-grid\.list-view/);
 });
 
+test("product pagination includes nearby pages, boundary shortcuts, and direct jump",async()=>{
+  const component=await readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8");
+  assert.match(component,/current-3/);
+  assert.match(component,/current\+3/);
+  assert.match(component,/product-pagination-ellipsis/);
+  assert.match(component,/跳转页码/);
+  assert.match(component,/jumpToPage/);
+});
+
 test("product tags support searching existing labels and creating unmatched labels",async()=>{
   const dialog=await readFile(new URL("../../../app/product-editor-dialog.tsx",import.meta.url),"utf8");
   assert.match(dialog,/role="combobox"/);
