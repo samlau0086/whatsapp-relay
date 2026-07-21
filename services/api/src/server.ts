@@ -280,13 +280,13 @@ app.get("/api/v1/products",{preHandler:authenticate},async(request,reply)=>{
   const query=request.query as {q?:string;tag?:string;currency?:string;limit?:string;offset?:string};
   const parsedCurrency=query.currency?currencySchema.safeParse(query.currency):null;if(parsedCurrency&&!parsedCurrency.success)return reply.code(400).send({error:"invalid_currency"});
   const limit=Math.min(100,Math.max(1,Number(query.limit??40)||40)),offset=Math.max(0,Number(query.offset??0)||0);
-  const result=await pool.query(`SELECT p.id,p.sku,p.name,p.description,p.default_unit_amount,p.currency,p.image_media_id,m.file_name image_name,p.created_at,p.updated_at,COALESCE(label_list.tags,'[]'::json) tags,COALESCE(price_list.price_tiers,'[]'::json) price_tiers
+  const [result,tagOptions]=await Promise.all([pool.query(`SELECT p.id,p.sku,p.name,p.description,p.default_unit_amount,p.currency,p.image_media_id,m.file_name image_name,p.created_at,p.updated_at,COUNT(*) OVER()::int total_count,COALESCE(label_list.tags,'[]'::json) tags,COALESCE(price_list.price_tiers,'[]'::json) price_tiers
     FROM products p LEFT JOIN media m ON m.id=p.image_media_id
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',label.id,'name',label.name,'color',label.color) ORDER BY lower(label.name)) tags FROM product_labels label WHERE label.product_id=p.id) label_list ON true
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('minQuantity',tier.min_quantity,'unitAmount',tier.unit_amount) ORDER BY tier.min_quantity) price_tiers FROM product_price_tiers tier WHERE tier.product_id=p.id) price_list ON true
     WHERE p.deleted_at IS NULL AND ($1::text IS NULL OR p.name ILIKE '%'||$1||'%' OR p.sku ILIKE '%'||$1||'%' OR p.description ILIKE '%'||$1||'%') AND ($2::text IS NULL OR p.currency=$2) AND ($3::text IS NULL OR EXISTS(SELECT 1 FROM product_labels filter_label WHERE filter_label.product_id=p.id AND lower(filter_label.name)=lower($3)))
-    ORDER BY p.updated_at DESC,p.id LIMIT $4 OFFSET $5`,[query.q?.trim()||null,parsedCurrency?.data??null,query.tag?.trim()||null,limit+1,offset]);
-  return{data:result.rows.slice(0,limit).map(mapProductRow),hasMore:result.rows.length>limit,nextOffset:result.rows.length>limit?offset+limit:null};
+    ORDER BY p.updated_at DESC,p.id LIMIT $4 OFFSET $5`,[query.q?.trim()||null,parsedCurrency?.data??null,query.tag?.trim()||null,limit+1,offset]),pool.query("SELECT DISTINCT label.name FROM product_labels label JOIN products p ON p.id=label.product_id WHERE p.deleted_at IS NULL ORDER BY label.name")]);
+  return{data:result.rows.slice(0,limit).map(mapProductRow),total:Number(result.rows[0]?.total_count??0),hasMore:result.rows.length>limit,nextOffset:result.rows.length>limit?offset+limit:null,tags:tagOptions.rows.map(row=>String(row.name))};
 });
 
 app.post("/api/v1/products",{preHandler:authenticate},async(request,reply)=>{

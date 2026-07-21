@@ -14,6 +14,8 @@ test("product library migration is idempotent and does not backfill historical o
 test("product routes enforce shared media, snapshots, idempotency, and soft deletion",async()=>{
   const server=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
   assert.match(server,/app\.get\("\/api\/v1\/products"/);
+  assert.match(server,/COUNT\(\*\) OVER\(\)::int total_count/);
+  assert.match(server,/tags:tagOptions\.rows/);
   assert.match(server,/app\.post\("\/api\/v1\/products\/media"/);
   assert.match(server,/app\.get\("\/api\/v1\/products\/media"/);
   assert.match(server,/mime_type IN \('image\/png','image\/jpeg'\)/);
