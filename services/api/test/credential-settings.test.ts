@@ -20,4 +20,9 @@ test("admin credential settings reload decrypted values without caching or loggi
   assert.match(ui,/setClientId\(String\(body\.clientId/);
   assert.match(ui,/value=\{current\.apiKey\}/);
   assert.match(ui,/value=\{provider\.api_key\}/);
+  assert.match(ui,/className="order-payment"/);
+  assert.match(ui,/className="order-summary-open"/);
+  assert.match(ui,/aria-label=\{`查看订单 #\$\{order\.orderNumber\} 详情`\}/);
+  assert.match(ui,/setPaymentOrderTarget\(order\)/);
+  assert.match(ui,/paymentOrderTarget &&/);
 });

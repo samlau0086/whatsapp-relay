@@ -392,6 +392,7 @@ function CrmDetailsPanel({
     [orderOpen, setOrderOpen] = useState(false),
     [editOrderTarget, setEditOrderTarget] = useState<OrderItem | null>(null),
     [sendOrderTarget, setSendOrderTarget] = useState<OrderSendTarget | null>(null),
+    [paymentOrderTarget, setPaymentOrderTarget] = useState<OrderItem | null>(null),
     [aliasEditing, setAliasEditing] = useState(false),
     [aliasDraft, setAliasDraft] = useState(active.alias),
     [aliasBusy, setAliasBusy] = useState(false),
@@ -462,12 +463,13 @@ function CrmDetailsPanel({
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (sendOrderTarget) setSendOrderTarget(null);
+      if (paymentOrderTarget) setPaymentOrderTarget(null);
+      else if (sendOrderTarget) setSendOrderTarget(null);
       else if (!orderOpen && !editOrderTarget) onClose();
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [onClose, orderOpen, editOrderTarget, sendOrderTarget]);
+  }, [onClose, orderOpen, editOrderTarget, sendOrderTarget, paymentOrderTarget]);
   async function request(path: string, init: RequestInit) {
     setBusy(true);
     setError("");
@@ -702,7 +704,7 @@ function CrmDetailsPanel({
                 <div className="order-list">
                   {details.orders.map((order) => (
                     <article key={order.id} className="order-summary-card">
-                      <span>
+                      <button className="order-summary-open" onClick={()=>setPaymentOrderTarget(order)} aria-label={`查看订单 #${order.orderNumber} 详情`}>
                         <b>
                           #{order.orderNumber} ·{" "}
                           {order.items.length} 件商品
@@ -719,7 +721,7 @@ function CrmDetailsPanel({
                           </small>
                         )}
                         {order.paymentRequest&&<small className={`payment-state ${order.paymentRequest.status.toLowerCase()}`}><CreditCard size={11}/>{paymentStatusText(order.paymentRequest.status)}</small>}
-                      </span>
+                      </button>
                       <div className="order-card-actions">
                         {order.status !== "draft" && (
                           <em
@@ -728,6 +730,15 @@ function CrmDetailsPanel({
                             {deliveryText(order.messageStatus)}
                           </em>
                         )}
+                        <button
+                          className="order-payment"
+                          disabled={busy}
+                          onClick={() => setPaymentOrderTarget(order)}
+                          aria-label={`${order.paymentRequest?"查看":"创建"}订单 #${order.orderNumber} 的 PayPal 付款请求`}
+                        >
+                          <CreditCard size={12} />
+                          {order.paymentRequest?"付款详情":"创建收款"}
+                        </button>
                         <button
                           className="order-edit"
                           disabled={busy}
@@ -1025,6 +1036,21 @@ function CrmDetailsPanel({
           busy={busy}
           onClose={() => setSendOrderTarget(null)}
           onSend={(format,translate,targetLanguage) => void sendOrder(sendOrderTarget.order,format,translate,targetLanguage)}
+        />
+      )}
+      {paymentOrderTarget && (
+        <OrderDetailsDialog
+          order={paymentOrderTarget}
+          token={token}
+          onToken={onToken}
+          onToast={onToast}
+          onPaymentChange={paymentRequest=>{
+            setPaymentOrderTarget(order=>order?{...order,paymentRequest}:order);
+            setDetails(value=>value?{...value,orders:value.orders.map(order=>order.id===paymentOrderTarget.id?{...order,paymentRequest}:order)}:value);
+          }}
+          onClose={()=>setPaymentOrderTarget(null)}
+          onEdit={()=>{setEditOrderTarget(paymentOrderTarget);setPaymentOrderTarget(null);}}
+          onConversation={()=>setPaymentOrderTarget(null)}
         />
       )}
     </>
