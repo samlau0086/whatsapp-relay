@@ -172,8 +172,10 @@ ipcMain.handle("account:reconnect", async (_event, input: {id:string}) => {
   const account=store.accounts().find(item=>item.id===input.id);if(!account)throw new Error("账号不存在");
   store.setAccountStatus(input.id,"offline","正在重新连接");
   const worker=workers.get(input.id);
-  if(worker?.connected)worker.send({type:"reconnect"});
-  else if(worker){intentionalRestarts.add(input.id);worker.kill();}
+  // Restarting the worker makes auto mode resolve the current Windows proxy
+  // again. A long-running worker may otherwise keep retrying a proxy endpoint
+  // that was selected when the app started but has since changed or recovered.
+  if(worker){intentionalRestarts.add(input.id);worker.kill();}
   else await startAccount(input.id,account.name,app.getPath("userData"));
   return {ok:true};
 });

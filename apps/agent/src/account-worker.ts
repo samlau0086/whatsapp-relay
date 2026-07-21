@@ -42,7 +42,7 @@ async function connect(options:Init):Promise<void>{
   const {version}=await fetchLatestBaileysVersion();
   const logger=pino({level:"warn"});
   if(generation!==connectionGeneration)return;
-  const activeSocket=makeWASocket({version,auth:auth.state,logger,browser:Browsers.windows("RelayDesk Agent"),syncFullHistory:false,markOnlineOnConnect:false,generateHighQualityLinkPreview:false,agent:proxyAgent,fetchAgent:proxyAgent,getMessage:async key=>key.id?auth.getMessage(key.id):undefined});
+  const activeSocket=makeWASocket({version,auth:auth.state,logger,browser:Browsers.windows("RelayDesk Agent"),connectTimeoutMs:60_000,syncFullHistory:false,markOnlineOnConnect:false,generateHighQualityLinkPreview:false,agent:proxyAgent,fetchAgent:proxyAgent,getMessage:async key=>key.id?auth.getMessage(key.id):undefined});
   socket=activeSocket;
   activeSocket.ev.on("creds.update",auth.saveCreds);
   activeSocket.ev.on("lid-mapping.update",({lid,pn})=>{if(generation!==connectionGeneration)return;void auth.saveLidMapping(lid,pn);emitIdentity(options.accountId,lid,pn);});

@@ -94,9 +94,11 @@ test("offline accounts can reconnect without clearing their saved session", () =
   const preload=readFileSync(new URL("../dist/preload.cjs",import.meta.url),"utf8");
   const renderer=readFileSync(new URL("../dist/renderer/index.html",import.meta.url),"utf8");
   assert.match(main,/account:reconnect/);
-  assert.match(main,/worker\.send\(\{ type: "reconnect" \}\)/);
+  assert.match(main,/intentionalRestarts\.add\(input\.id\)/);
+  assert.match(main,/worker\.kill\(\)/);
   assert.match(worker,/message\.type === "reconnect"/);
   assert.match(worker,/if \(reconnectTimer\)\s*return/);
+  assert.match(worker,/connectTimeoutMs: 60_000/);
   assert.match(preload,/reconnectAccount/);
   assert.match(renderer,/data-action="reconnect"/);
   assert.match(renderer,/重新连接/);
