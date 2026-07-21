@@ -253,6 +253,7 @@ button { color:inherit; }
 .knowledge-documents article em{font-size:12px}.faq-list b{font-size:14px}.faq-list p{font-size:12px;line-height:1.55}.faq-list article button{font-size:12px}
 .currency-rate-source,.currency-head,.provider-permission-note{font-size:13px}.currency-base-card label,.currency-base-card select,.currency-row input{font-size:13px}.currency-base-card small{font-size:12px}
 .payment-request-panel>header b{font-size:14px}.payment-request-panel>header small,.paypal-settings-form label>small{font-size:12px}.payment-request-panel>header>button,.payment-link input{font-size:13px}
+.secret-input{display:grid;grid-template-columns:minmax(0,1fr) 42px 42px;gap:6px;margin-top:5px}.provider-form .secret-input input{min-width:0;margin-top:0}.secret-input button{height:42px;border:1px solid #dce4df;border-radius:8px;background:#fff;color:#52665b;display:grid;place-items:center;cursor:pointer}.secret-input button:hover:not(:disabled){border-color:#28aa6d;color:#087548;background:#f0faf4}.secret-input button:focus-visible{outline:2px solid #28aa6d;outline-offset:2px}.secret-input button:disabled{opacity:.4;cursor:not-allowed}@media(max-width:480px){.secret-input{grid-template-columns:minmax(0,1fr) 40px 40px}}
 
 /* Inbox, conversations and customer details. */
 .workspace-title .eyebrow,.filters .section-label{font-size:12px}.workspace-title h1{font-size:21px}

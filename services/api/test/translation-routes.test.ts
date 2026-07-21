@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("translation routes enforce user preferences, provider secrecy, access checks, and caching",async()=>{
+test("translation routes enforce user preferences, admin-only credential access, access checks, and caching",async()=>{
   const [server,initialMigration,conversationMigration,audioMigration,outgoingSourceMigration]=await Promise.all([
     readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
     readFile(new URL("../../../infra/postgres/migrations/005_ai_translation.sql",import.meta.url),"utf8"),
@@ -16,8 +16,8 @@ test("translation routes enforce user preferences, provider secrecy, access chec
   assert.match(server,/api\/v1\/translations\/preview/);
   assert.match(server,/api\/v1\/translations\/messages/);
   assert.match(server,/canAccessAccount\(request\.principal,row\.account_id\)/);
-  assert.match(server,/api_key_encrypted IS NOT NULL key_configured/);
-  assert.match(server,/keyConfigured:Boolean\(row\?\.key_configured\)/);
+  assert.match(server,/keyConfigured:Boolean\(row\?\.api_key_encrypted\)/);
+  assert.match(server,/apiKey:row\?\.api_key_encrypted\?decryptAtRest/);
   assert.match(server,/ON CONFLICT\(message_id,target_language\) DO NOTHING/);
   assert.match(server,/ON CONFLICT\(message_id\) DO NOTHING/);
   assert.match(server,/transcribeAudio/);

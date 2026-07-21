@@ -25,7 +25,7 @@ import { DEFAULT_PRODUCT_CARD_TEMPLATE, parseProductCardTemplate, productCardTem
 import { renderProductCards, type ProductCardRenderProduct } from "./product-card-image.js";
 import { fetchLatestExchangeRates } from "./exchange-rates.js";
 
-const app = Fastify({ logger: { level: config.NODE_ENV === "production" ? "info" : "debug", redact:["req.headers.authorization","password"] }, bodyLimit: 2_000_000 });
+const app = Fastify({ logger: { level: config.NODE_ENV === "production" ? "info" : "debug", redact:["req.headers.authorization","req.body.password","req.body.apiKey","req.body.clientId","req.body.clientSecret"] }, bodyLimit: 2_000_000 });
 const s3 = new S3Client({ region:config.S3_REGION, endpoint:config.S3_ENDPOINT, forcePathStyle:true, credentials:{ accessKeyId:config.S3_ACCESS_KEY, secretAccessKey:config.S3_SECRET_KEY } });
 
 await app.register(cors, { origin:config.CORS_ORIGIN, credentials:true });
@@ -432,8 +432,9 @@ app.put("/api/v1/admin/order-settings",{preHandler:authenticate},async(request,r
 
 app.get("/api/v1/admin/paypal-settings",{preHandler:authenticate},async(request,reply)=>{
   if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
-  const result=await pool.query("SELECT enabled,environment,client_id_encrypted IS NOT NULL client_id_configured,client_secret_encrypted IS NOT NULL client_secret_configured,updated_at FROM paypal_settings WHERE singleton=true"),row=result.rows[0]??{};
-  return{enabled:Boolean(row.enabled),environment:row.environment??"sandbox",clientIdConfigured:Boolean(row.client_id_configured),clientSecretConfigured:Boolean(row.client_secret_configured),updatedAt:row.updated_at??null};
+  reply.header("cache-control","no-store");
+  const result=await pool.query("SELECT enabled,environment,client_id_encrypted,client_secret_encrypted,updated_at FROM paypal_settings WHERE singleton=true"),row=result.rows[0]??{};
+  return{enabled:Boolean(row.enabled),environment:row.environment??"sandbox",clientIdConfigured:Boolean(row.client_id_encrypted),clientSecretConfigured:Boolean(row.client_secret_encrypted),clientId:row.client_id_encrypted?decryptAtRest(row.client_id_encrypted,config.DATA_ENCRYPTION_KEY):"",clientSecret:row.client_secret_encrypted?decryptAtRest(row.client_secret_encrypted,config.DATA_ENCRYPTION_KEY):"",updatedAt:row.updated_at??null};
 });
 
 app.put("/api/v1/admin/paypal-settings",{preHandler:authenticate},async(request,reply)=>{
@@ -684,8 +685,9 @@ app.post("/api/v1/translations/messages", {preHandler:authenticate}, async(reque
 
 app.get("/api/v1/admin/translation-providers", {preHandler:authenticate}, async(request,reply)=>{
   if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
-  const result=await pool.query("SELECT provider,enabled,api_key_encrypted IS NOT NULL key_configured,base_url,model,transcription_model,updated_at FROM translation_provider_settings");const rows=new Map(result.rows.map(row=>[row.provider,row]));
-  return{data:TRANSLATION_PROVIDERS.map(provider=>{const row=rows.get(provider),defaults=translationProviderDefaults(provider);return{provider,enabled:Boolean(row?.enabled),keyConfigured:Boolean(row?.key_configured),baseUrl:row?.base_url??defaults.baseUrl,model:row?.model??defaults.model,transcriptionModel:row?.transcription_model??defaults.transcriptionModel,updatedAt:row?.updated_at??null};})};
+  reply.header("cache-control","no-store");
+  const result=await pool.query("SELECT provider,enabled,api_key_encrypted,base_url,model,transcription_model,updated_at FROM translation_provider_settings");const rows=new Map(result.rows.map(row=>[row.provider,row]));
+  return{data:TRANSLATION_PROVIDERS.map(provider=>{const row=rows.get(provider),defaults=translationProviderDefaults(provider);return{provider,enabled:Boolean(row?.enabled),keyConfigured:Boolean(row?.api_key_encrypted),apiKey:row?.api_key_encrypted?decryptAtRest(row.api_key_encrypted,config.DATA_ENCRYPTION_KEY):"",baseUrl:row?.base_url??defaults.baseUrl,model:row?.model??defaults.model,transcriptionModel:row?.transcription_model??defaults.transcriptionModel,updatedAt:row?.updated_at??null};})};
 });
 
 app.put("/api/v1/admin/translation-providers/:provider", {preHandler:authenticate}, async(request,reply)=>{
@@ -717,8 +719,9 @@ app.get("/api/v1/tts/status", {preHandler:authenticate}, async()=>{const result=
 
 app.get("/api/v1/admin/tts-providers", {preHandler:authenticate}, async(request,reply)=>{
   if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
-  const result=await pool.query("SELECT provider,enabled,api_key_encrypted IS NOT NULL key_configured,base_url,model,voice,updated_at FROM tts_provider_settings");const rows=new Map(result.rows.map(row=>[row.provider,row]));
-  return{data:TTS_PROVIDERS.map(provider=>{const row=rows.get(provider),defaults=ttsProviderDefaults(provider);return{provider,enabled:Boolean(row?.enabled),keyConfigured:Boolean(row?.key_configured),baseUrl:row?.base_url??defaults.baseUrl,model:row?.model??defaults.model,voice:row?.voice??defaults.voice,updatedAt:row?.updated_at??null};})};
+  reply.header("cache-control","no-store");
+  const result=await pool.query("SELECT provider,enabled,api_key_encrypted,base_url,model,voice,updated_at FROM tts_provider_settings");const rows=new Map(result.rows.map(row=>[row.provider,row]));
+  return{data:TTS_PROVIDERS.map(provider=>{const row=rows.get(provider),defaults=ttsProviderDefaults(provider);return{provider,enabled:Boolean(row?.enabled),keyConfigured:Boolean(row?.api_key_encrypted),apiKey:row?.api_key_encrypted?decryptAtRest(row.api_key_encrypted,config.DATA_ENCRYPTION_KEY):"",baseUrl:row?.base_url??defaults.baseUrl,model:row?.model??defaults.model,voice:row?.voice??defaults.voice,updatedAt:row?.updated_at??null};})};
 });
 
 app.put("/api/v1/admin/tts-providers/:provider", {preHandler:authenticate}, async(request,reply)=>{
@@ -745,9 +748,10 @@ app.delete("/api/v1/media/:id", {preHandler:authenticate}, async(request,reply)=
 
 app.get("/api/v1/admin/agent-provider",{preHandler:authenticate},async(request,reply)=>{
   if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
-  const rows=await pool.query("SELECT provider,enabled,base_url,model,embedding_model,(api_key_encrypted IS NOT NULL) key_configured,updated_at FROM agent_provider_settings ORDER BY provider");
+  reply.header("cache-control","no-store");
+  const rows=await pool.query("SELECT provider,enabled,base_url,model,embedding_model,api_key_encrypted,updated_at FROM agent_provider_settings ORDER BY provider");
   const defaults=[{provider:"openai",base_url:"https://api.openai.com/v1",model:"gpt-5.6-luna",embedding_model:"text-embedding-3-small"},{provider:"openrouter",base_url:"https://openrouter.ai/api/v1",model:"openai/gpt-oss-20b",embedding_model:"openai/text-embedding-3-small"},{provider:"siliconflow",base_url:"https://api.siliconflow.cn/v1",model:"deepseek-ai/DeepSeek-V3.2",embedding_model:"Qwen/Qwen3-Embedding-4B"},{provider:"openai_compatible",base_url:"",model:"",embedding_model:""}];
-  return{data:defaults.map(item=>{const row=rows.rows.find(value=>value.provider===item.provider);return row??{...item,enabled:false,key_configured:false,updated_at:null};})};
+  return{data:defaults.map(item=>{const row=rows.rows.find(value=>value.provider===item.provider);return row?{provider:row.provider,enabled:Boolean(row.enabled),key_configured:Boolean(row.api_key_encrypted),api_key:row.api_key_encrypted?decryptAtRest(row.api_key_encrypted,config.DATA_ENCRYPTION_KEY):"",base_url:row.base_url,model:row.model,embedding_model:row.embedding_model,updated_at:row.updated_at}:{...item,enabled:false,key_configured:false,api_key:"",updated_at:null};})};
 });
 
 app.put("/api/v1/admin/agent-provider/:provider",{preHandler:authenticate},async(request,reply)=>{
