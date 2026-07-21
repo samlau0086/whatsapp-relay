@@ -98,6 +98,9 @@ test("orders validate idempotency, products, fees, currency, and translation",()
 test("product library schemas validate SKU, tiered prices, and editable labels",()=>{
   const valid={clientProductId:accountId,name:" Leather bag ",sku:" BAG-001 ",priceTiers:[{minQuantity:1,unitAmount:19.95},{minQuantity:10,unitAmount:17.5}],currency:"USD",imageMediaId:accountId,tags:[{name:" VIP ",color:"#E8EEF7"}]};
   const parsed=productCreateSchema.parse(valid);assert.equal(parsed.name,"Leather bag");assert.equal(parsed.tags[0].name,"VIP");
+  assert.equal(parsed.description,"");
+  assert.equal(productCreateSchema.parse({...valid,description:" Full-grain leather "}).description,"Full-grain leather");
+  assert.equal(productCreateSchema.safeParse({...valid,description:"x".repeat(2001)}).success,false);
   assert.equal(productCreateSchema.safeParse({...valid,currency:"BTC"}).success,true);
   assert.equal(productCreateSchema.safeParse({...valid,currency:"US1"}).success,false);
   assert.equal(productCreateSchema.safeParse({...valid,priceTiers:[{minQuantity:1,unitAmount:19.999}]}).success,false);

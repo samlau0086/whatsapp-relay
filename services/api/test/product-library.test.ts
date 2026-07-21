@@ -34,3 +34,17 @@ test("bulk product import validates batches and is capped at 500 rows",async()=>
   assert.match(schemas,/\.min\(1\)\.max\(500\)/);
   assert.match(schemas,/duplicate sku in import/);
 });
+
+test("product descriptions and CSV image references are supported",async()=>{
+  const [migration,server,dialog]=await Promise.all([
+    readFile(new URL("../../../infra/postgres/migrations/027_product_description.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/product-import-dialog.tsx",import.meta.url),"utf8"),
+  ]);
+  assert.match(migration,/ADD COLUMN IF NOT EXISTS description/);
+  assert.match(server,/p\.description/);
+  assert.match(server,/product\.imageMediaId/);
+  assert.match(dialog,/imageFileName/);
+  assert.match(dialog,/选择多张图片/);
+  assert.match(dialog,/产品描述/);
+});
