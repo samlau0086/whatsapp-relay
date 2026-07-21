@@ -34,6 +34,7 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
     readFile(new URL("../app/whatsapp-inbox.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
+  const clipboard = await readFile(new URL("../app/clipboard-files.ts", import.meta.url), "utf8");
   assert.match(component, /离线队列已启用/);
   assert.match(component, /中心真实数据/);
   assert.match(component, /Agent 管理/);
@@ -51,9 +52,10 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /EmojiPicker/);
   assert.match(component, /MediaDialog/);
   assert.match(component, /onDrop=/);
-  assert.match(component, /clipboardData\?\.files/);
-  assert.match(component, /clipboardData\?\.items/);
-  assert.match(component, /navigator\.clipboard\?\.read/);
+  assert.match(clipboard, /clipboardData\?\.files/);
+  assert.match(clipboard, /clipboardData\?\.items/);
+  assert.match(clipboard, /navigator\.clipboard\?\.read/);
+  assert.match(clipboard, /randomText\(7\)/);
   assert.match(component, /window\.addEventListener\("paste"/);
   assert.match(component, /拖拽文件到这里/);
   assert.match(component, /发送所选附件/);

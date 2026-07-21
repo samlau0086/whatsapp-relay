@@ -15,6 +15,7 @@ import { ProductCardSendDialog } from "./product-card-send-dialog";
 import { ProductEditorDialog } from "./product-editor-dialog";
 import { ProductImportDialog } from "./product-import-dialog";
 import { ProductImageMediaDialog } from "./product-image-media-dialog";
+import { clipboardFiles } from "./clipboard-files";
 
 const API_URL = (process.env.NEXT_PUBLIC_RELAY_API_URL ?? "").replace(/\/$/, "");
 const COLORS = ["#6b4f3a", "#305f72", "#9b5f72", "#477a62", "#705b86"];
@@ -1830,7 +1831,6 @@ function kindText(kind:string){return({audio:"[语音消息]",image:"[图片]",v
 function statusText(status:string){return({online:"在线",pairing:"等待配对",offline:"离线",logged_out:"已退出",error:"异常"} as Record<string,string>)[status]??status;}
 function formatTime(date:Date){return Number.isNaN(date.getTime())?"":date.toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"});}
 function formatBytes(size:number){if(size<1024)return`${size} B`;if(size<1048576)return`${(size/1024).toFixed(1)} KB`;return`${(size/1048576).toFixed(1)} MB`;}
-async function clipboardFiles(event:ClipboardEvent){const direct=Array.from(event.clipboardData?.files??[]),items=Array.from(event.clipboardData?.items??[]).filter(item=>item.kind==="file").map(item=>item.getAsFile()).filter((file):file is File=>Boolean(file)),files=[...direct,...items].filter((file,index,all)=>all.findIndex(item=>item===file||(item.name===file.name&&item.size===file.size&&item.type===file.type))===index);if(files.length)return files;if(!navigator.clipboard?.read)return[];try{const contents=await navigator.clipboard.read(),fallback:File[]=[];for(const content of contents){const type=content.types.find(value=>value.startsWith("image/"));if(!type)continue;const blob=await content.getType(type),extension=type.split("/")[1]?.replace("jpeg","jpg")||"png";fallback.push(new File([blob],`clipboard-${Date.now()}.${extension}`,{type}));}return fallback;}catch{return[];}}
 function tokenSubject(token:string){try{return String(JSON.parse(atob(token.split(".")[1].replace(/-/g,"+").replace(/_/g,"/"))).sub??"");}catch{return"";}}
 function tokenRole(token:string){try{return String(JSON.parse(atob(token.split(".")[1].replace(/-/g,"+").replace(/_/g,"/"))).role??"");}catch{return"";}}
 async function authorizedFetch(path:string,token:string,init:RequestInit={}):Promise<{response:Response;token:string}>{
