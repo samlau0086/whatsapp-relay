@@ -104,6 +104,7 @@ test("product library schemas validate SKU, tiered prices, and editable labels",
   assert.equal(productCreateSchema.safeParse({...valid,currency:"BTC"}).success,true);
   assert.equal(productCreateSchema.safeParse({...valid,currency:"US1"}).success,false);
   assert.equal(productCreateSchema.safeParse({...valid,priceTiers:[{minQuantity:1,unitAmount:19.999}]}).success,false);
+  assert.equal(productCreateSchema.safeParse({...valid,priceTiers:[{minQuantity:1,unitAmount:9.2},{minQuantity:10,unitAmount:8.3},{minQuantity:100,unitAmount:7.5}]}).success,true);
   assert.equal(productCreateSchema.safeParse({...valid,priceTiers:[{minQuantity:2,unitAmount:19.95}]}).success,false);
   assert.equal(productCreateSchema.safeParse({...valid,priceTiers:[{minQuantity:1,unitAmount:19.95},{minQuantity:1,unitAmount:18}]}).success,false);
   assert.equal(productCreateSchema.safeParse({...valid,tags:[{name:"VIP",color:"green"}]}).success,false);

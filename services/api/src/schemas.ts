@@ -76,7 +76,7 @@ export const tagUpdateSchema=tagCreateSchema.partial().refine(value=>Object.keys
 export const conversationTagsSchema=z.object({tagIds:z.array(z.string().uuid()).max(20)});
 export const noteSchema=z.object({body:z.string().trim().min(1).max(5000)});
 export const reminderSchema=z.object({remindAt:z.string().datetime({offset:true}).transform(value=>new Date(value)).refine(value=>value.getTime()>Date.now(),"reminder must be in the future")});
-const moneySchema=z.coerce.number().nonnegative().max(99_999_999.99).refine(value=>Number.isInteger(value*100),"amount supports at most two decimals");
+const moneySchema=z.coerce.number().nonnegative().max(99_999_999.99).refine(value=>Math.abs(value*100-Math.round(value*100))<1e-7,"amount supports at most two decimals");
 export const currencySchema=z.string().trim().transform(value=>value.toUpperCase()).pipe(z.string().regex(/^[A-Z]{3}$/,"currency must be a three-letter code"));
 export const currencySettingsSchema=z.object({
   baseCurrency:currencySchema,

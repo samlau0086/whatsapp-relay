@@ -9,6 +9,14 @@ import {
 } from "./product-image-media-dialog";
 
 type RequestResult = { response: Response; token: string };
+type ProductErrorBody = {
+  error?: string;
+  message?: string;
+  details?: {
+    formErrors?: string[];
+    fieldErrors?: Record<string, string[]>;
+  };
+};
 type Tier = { minQuantity: number; unitAmount: number };
 type Tag = { id: string; name: string; color: string };
 type Product = {
@@ -187,16 +195,11 @@ export function ProductEditorDialog({
         },
       );
       onToken(result.token);
-      const body = (await result.response.json().catch(() => ({}))) as {
-        error?: string;
-        message?: string;
-      };
+      const body = (await result.response
+        .json()
+        .catch(() => ({}))) as ProductErrorBody;
       if (!result.response.ok)
-        throw new Error(
-          body.error === "sku_exists"
-            ? "SKU 已被另一个有效产品使用"
-            : (body.message ?? `保存失败（HTTP ${result.response.status}）`),
-        );
+        throw new Error(productSaveError(body, result.response.status));
       await onSaved(product ? "产品资料已更新" : "产品已加入团队产品库");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "产品保存失败");
@@ -554,4 +557,17 @@ export function ProductEditorDialog({
       )}
     </>
   );
+}
+
+function productSaveError(body: ProductErrorBody, status: number) {
+  if (body.error === "sku_exists") return "SKU 已被另一个有效产品使用";
+  if (body.error === "invalid_product_image")
+    return "所选产品图片不可用，请重新选择图片";
+  if (body.message) return body.message;
+  const field = Object.entries(body.details?.fieldErrors ?? {}).find(
+    ([, messages]) => messages.length,
+  );
+  if (field) return `${field[0]}：${field[1][0]}`;
+  if (body.details?.formErrors?.[0]) return body.details.formErrors[0];
+  return `保存失败（HTTP ${status}）`;
 }
