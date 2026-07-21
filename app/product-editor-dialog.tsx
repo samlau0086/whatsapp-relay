@@ -320,9 +320,26 @@ export function ProductEditorDialog({
                 <label>
                   单件价格
                   <input
+                    type="number"
                     value={tier.unitAmount}
                     inputMode="decimal"
+                    min="0"
+                    step="0.01"
                     placeholder="0.00"
+                    onPaste={(event) => {
+                      const value = event.clipboardData
+                        .getData("text")
+                        .replace(/\s+/g, "");
+                      if (!/^\d*(?:\.\d*)?$/.test(value)) return;
+                      event.preventDefault();
+                      setTiers((all) =>
+                        all.map((item) =>
+                          item.id === tier.id
+                            ? { ...item, unitAmount: value }
+                            : item,
+                        ),
+                      );
+                    }}
                     onChange={(event) =>
                       setTiers((all) =>
                         all.map((item) =>
