@@ -34,6 +34,21 @@ test("payment requests resolve SKU snapshots and never silently replace a missin
   assert.match(server,/regenerate=.*regenerate===true/);
 });
 
+test("Sandbox and Live PayPal credentials are migrated and selected independently",async()=>{
+  const [server,migration,migrator]=await Promise.all([
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../infra/postgres/migrations/031_paypal_environment_credentials.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(migration,/sandbox_client_id_encrypted/);
+  assert.match(migration,/live_client_id_encrypted/);
+  assert.match(migration,/WHERE environment='sandbox'/);
+  assert.match(migration,/WHERE environment='live'/);
+  assert.match(migrator,/031_paypal_environment_credentials\.sql/);
+  assert.match(server,/environment==="sandbox"\?row\.sandbox_client_id_encrypted:row\.live_client_id_encrypted/);
+  assert.doesNotMatch(server,/requiredEnvironment&&row\.environment!==requiredEnvironment/);
+});
+
 test("creates and shares an invoice while reusing the OAuth token",async()=>{
   clearPayPalTokenCache();const calls:Array<{url:string;init?:RequestInit}>=[];
   const request=async(input:string|URL|Request,init?:RequestInit)=>{const url=String(input);calls.push({url,init});if(url.endsWith("/v1/oauth2/token"))return new Response(JSON.stringify({access_token:"token",expires_in:3600}),{status:200,headers:{"content-type":"application/json"}});if(url.endsWith("/v2/invoicing/invoices"))return new Response(JSON.stringify({id:"INV2-123",status:"DRAFT"}),{status:201,headers:{"content-type":"application/json"}});if(url.endsWith("/send"))return new Response(JSON.stringify({rel:"payer-view",href:"https://www.sandbox.paypal.com/invoice/p/#INV2-123"}),{status:202,headers:{"content-type":"application/json"}});throw new Error(`unexpected ${url}`);};

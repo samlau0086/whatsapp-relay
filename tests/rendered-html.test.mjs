@@ -151,6 +151,9 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /按当前模板重新生成/);
   assert.match(component, /JSON\.stringify\(\{regenerate:true\}\)/);
   assert.match(component, /item\.sku\?`\$\{item\.sku\} · `/);
+  assert.match(component, /Sandbox 与 Live 凭据分别加密保存/);
+  assert.match(component, /sandboxClientId:credentials\.sandbox\.clientId/);
+  assert.match(component, /liveClientId:credentials\.live\.clientId/);
   assert.match(component, /method:"DELETE"/);
   assert.match(component, /文字版详情/);
   assert.match(component, /图片版完整详情/);

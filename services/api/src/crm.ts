@@ -94,6 +94,12 @@ export async function ensureCrmTables(db:Queryable):Promise<void>{
   await db.query("ALTER TABLE paypal_settings ADD COLUMN IF NOT EXISTS reference_template text NOT NULL DEFAULT 'Order #{{orderNumber}}'");
   await db.query("ALTER TABLE paypal_settings ADD COLUMN IF NOT EXISTS note_template text NOT NULL DEFAULT '{{orderNotes}}'");
   await db.query("ALTER TABLE paypal_settings ADD COLUMN IF NOT EXISTS item_name_template text NOT NULL DEFAULT '{{productName}}'");
+  await db.query("ALTER TABLE paypal_settings ADD COLUMN IF NOT EXISTS sandbox_client_id_encrypted text");
+  await db.query("ALTER TABLE paypal_settings ADD COLUMN IF NOT EXISTS sandbox_client_secret_encrypted text");
+  await db.query("ALTER TABLE paypal_settings ADD COLUMN IF NOT EXISTS live_client_id_encrypted text");
+  await db.query("ALTER TABLE paypal_settings ADD COLUMN IF NOT EXISTS live_client_secret_encrypted text");
+  await db.query("UPDATE paypal_settings SET sandbox_client_id_encrypted=COALESCE(sandbox_client_id_encrypted,client_id_encrypted),sandbox_client_secret_encrypted=COALESCE(sandbox_client_secret_encrypted,client_secret_encrypted) WHERE environment='sandbox'");
+  await db.query("UPDATE paypal_settings SET live_client_id_encrypted=COALESCE(live_client_id_encrypted,client_id_encrypted),live_client_secret_encrypted=COALESCE(live_client_secret_encrypted,client_secret_encrypted) WHERE environment='live'");
   await db.query("INSERT INTO paypal_settings(singleton) VALUES(true) ON CONFLICT(singleton) DO NOTHING");
   await db.query(`CREATE TABLE IF NOT EXISTS order_payment_requests (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),order_id uuid NOT NULL REFERENCES orders(id) ON DELETE CASCADE,provider text NOT NULL DEFAULT 'paypal' CHECK(provider='paypal'),environment text NOT NULL CHECK(environment IN ('sandbox','live')),provider_request_id text,payment_url text,status text NOT NULL DEFAULT 'CREATING',amount numeric(12,2) NOT NULL CHECK(amount>0),currency text NOT NULL,is_current boolean NOT NULL DEFAULT true,created_by uuid REFERENCES users(id) ON DELETE SET NULL,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now(),last_synced_at timestamptz,cancelled_at timestamptz,failure_reason text)`);
   await db.query("CREATE UNIQUE INDEX IF NOT EXISTS order_payment_requests_current_unique ON order_payment_requests(order_id) WHERE is_current");

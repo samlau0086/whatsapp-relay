@@ -13,11 +13,12 @@ test("admin credential settings reload decrypted values without caching or loggi
     assert.match(routeSource,/cache-control","no-store"/);
     assert.match(routeSource,/decryptAtRest/);
   }
-  assert.match(server,/"req.body.apiKey","req.body.clientId","req.body.clientSecret"/);
+  assert.match(server,/"req.body.apiKey","req.body.clientId","req.body.clientSecret","req.body.sandboxClientId","req.body.sandboxClientSecret","req.body.liveClientId","req.body.liveClientSecret"/);
   assert.match(ui,/function SecretField/);
   assert.match(ui,/navigator\.clipboard\?\.writeText/);
   assert.match(ui,/<EyeOff size=\{16\}\/>:<Eye size=\{16\}\/>/);
-  assert.match(ui,/setClientId\(String\(body\.clientId/);
+  assert.match(ui,/sandbox:\{clientId:String\(body\.sandboxClientId/);
+  assert.match(ui,/live:\{clientId:String\(body\.liveClientId/);
   assert.match(ui,/value=\{current\.apiKey\}/);
   assert.match(ui,/value=\{provider\.api_key\}/);
   assert.match(ui,/className="order-payment"/);
