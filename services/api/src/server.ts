@@ -43,7 +43,7 @@ app.get("/health", async () => { await pool.query("SELECT 1"); return { status:"
 app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"RelayDesk API",version:"0.1.0"}, paths:{
   "/api/v1/messages":{post:{summary:"发送单条消息",responses:{"202":{description:"已进入持久队列"}}}},
   "/api/v1/conversations":{get:{summary:"分页查询会话"},post:{summary:"创建或复用单个联系人会话并发送首条文本消息"}},
-  "/api/v1/conversations/{id}":{patch:{summary:"认领、收藏、更新客户阶段、关闭或标记已读"}},
+  "/api/v1/conversations/{id}":{patch:{summary:"认领、收藏、更新客户阶段、关闭或标记已读"},delete:{summary:"永久删除会话及其关联数据"}},
   "/api/v1/conversations/{id}/contact":{patch:{summary:"编辑联系人别名"}},
   "/api/v1/conversations/{id}/details":{get:{summary:"读取会话标签、备注、个人提醒与订单"}},
   "/api/v1/conversations/{id}/tags":{put:{summary:"替换会话标签"}},
@@ -240,6 +240,26 @@ app.patch("/api/v1/conversations/:id", { preHandler:authenticate }, async (reque
   if(["closed","archived"].includes(updated.rows[0].status)||["won","lost"].includes(updated.rows[0].customer_stage))await pool.query("UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error='conversation_no_longer_eligible' WHERE conversation_id=$1 AND state='pending' AND kind IN ('reply','followup')",[id]);
   await pool.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'conversation.update','conversation',$2,$3)",[request.principal.id,id,JSON.stringify(body)]);
   return updated.rows[0];
+});
+
+app.delete("/api/v1/conversations/:id", { preHandler:authenticate }, async (request,reply) => {
+  if(request.principal?.kind!=="user"||!["admin","supervisor"].includes(request.principal.role??""))return reply.code(403).send({error:"supervisor_required",message:"只有管理员或主管可以永久删除会话"});
+  const principal=request.principal,{id}=request.params as {id:string};
+  const result=await transaction(async client=>{
+    const conversation=await client.query("SELECT c.account_id,c.contact_id,co.wa_jid FROM conversations c JOIN contacts co ON co.id=c.contact_id WHERE c.id=$1 FOR UPDATE OF c",[id]);
+    if(!conversation.rowCount||!canAccessAccount(principal,conversation.rows[0].account_id))return"not_found" as const;
+    const payment=await client.query("SELECT 1 FROM order_payment_requests pr JOIN orders o ON o.id=pr.order_id WHERE o.conversation_id=$1 AND pr.is_current LIMIT 1",[id]);
+    if(payment.rowCount)return"payment_request_exists" as const;
+    const outbound=await client.query("SELECT 1 FROM outbound_commands oc JOIN messages m ON m.id=oc.message_id WHERE m.conversation_id=$1 AND oc.state IN ('pending','dispatched') LIMIT 1",[id]);
+    if(outbound.rowCount)return"outbound_pending" as const;
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'conversation.delete','conversation',$2,$3)",[principal.id,id,JSON.stringify({contactId:conversation.rows[0].contact_id,waJid:conversation.rows[0].wa_jid})]);
+    await client.query("DELETE FROM conversations WHERE id=$1",[id]);
+    return"deleted" as const;
+  });
+  if(result==="not_found")return reply.code(404).send({error:"not_found"});
+  if(result==="payment_request_exists")return reply.code(409).send({error:"payment_request_exists",message:"该会话存在付款请求，请先处理或删除相关订单"});
+  if(result==="outbound_pending")return reply.code(409).send({error:"outbound_pending",message:"该会话仍有待发送消息，请等待发送完成后再删除"});
+  return reply.code(204).send();
 });
 
 app.patch("/api/v1/conversations/:id/contact", { preHandler:authenticate }, async (request,reply) => {

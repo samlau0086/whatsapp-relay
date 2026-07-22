@@ -329,7 +329,7 @@ export function WhatsAppInbox() {
       </div>
     </>:<div className="chat-empty"><MessageCircle size={31}/><h2>选择一个真实会话</h2><p>这里不会再显示演示联系人或模拟消息。</p></div>}</section>
 
-    {detailsOpen&&active&&<CrmDetailsPanel key={active.id} active={active} token={apiToken} user={user} role={userRole} translationPreference={translationPreference} onToken={setApiToken} onClose={()=>setDetailsOpen(false)} onToast={setToast} onConversationChange={async change=>{await updateConversation(change);}} onChanged={async()=>{await Promise.all([loadWorkspace(apiToken,true),loadMessages(apiToken,active.id)]);}}/>}</>
+    {detailsOpen&&active&&<CrmDetailsPanel key={active.id} active={active} token={apiToken} user={user} role={userRole} translationPreference={translationPreference} onToken={setApiToken} onClose={()=>setDetailsOpen(false)} onToast={setToast} onConversationChange={async change=>{await updateConversation(change);}} onChanged={async()=>{await Promise.all([loadWorkspace(apiToken,true),loadMessages(apiToken,active.id)]);}} onDeleted={async()=>{setDetailsOpen(false);setActiveId("");setMessages(all=>{const next={...all};delete next[active.id];return next;});await loadWorkspace(apiToken,true);}}/>}</>
       :view==="orders"?<OrderManagement token={apiToken} accounts={accounts} onToken={setApiToken} onToast={setToast} onConversation={conversationId=>{const found=conversations.find(item=>item.id===conversationId);if(!found){setToast("该会话不在当前列表，请在消息中心搜索客户");openInbox();return;}setActiveId(conversationId);setDetailsOpen(true);openInbox();}}/>
       :view==="products"?<ProductManagement token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>
       :view==="agents"?<AgentManagement token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>
@@ -368,6 +368,7 @@ function CrmDetailsPanel({
   onToast,
   onConversationChange,
   onChanged,
+  onDeleted,
 }: {
   active: Conversation;
   token: string;
@@ -379,6 +380,7 @@ function CrmDetailsPanel({
   onToast: (text: string) => void;
   onConversationChange: (change: Record<string, unknown>) => Promise<void>;
   onChanged: () => Promise<void>;
+  onDeleted: () => Promise<void>;
 }) {
   const [details, setDetails] = useState<ConversationDetails | null>(null),
     [catalog, setCatalog] = useState<TagItem[]>([]),
@@ -511,6 +513,18 @@ function CrmDetailsPanel({
       onToast(aliasDraft.trim()?"联系人别名已保存":"联系人别名已清除");
     }catch(reason){setError(reason instanceof Error?reason.message:"别名保存失败");}
     finally{setAliasBusy(false);}
+  }
+  async function deleteConversation() {
+    if(!window.confirm(`永久删除会话“${active.name}”？\n\n消息记录、备注、提醒、订单和 AI 记录将一并删除，且无法恢复。`))return;
+    setBusy(true);setError("");
+    try{
+      const result=await authorizedFetch(`/api/v1/conversations/${active.id}`,token,{method:"DELETE"});
+      if(result.token!==token)onToken(result.token);
+      if(!result.response.ok){const body=await result.response.json().catch(()=>({})) as {message?:string};throw new Error(body.message??`删除失败（HTTP ${result.response.status}）`);}
+      onToast("会话已永久删除");
+      await onDeleted();
+    }catch(reason){setError(reason instanceof Error?reason.message:"会话删除失败");}
+    finally{setBusy(false);}
   }
   async function setStage(customerStage: string) {
     await onConversationChange({ customerStage });
@@ -974,6 +988,7 @@ function CrmDetailsPanel({
               </dl>
               <button
                 className="conversation-state-button"
+                disabled={busy}
                 onClick={() =>
                   void onConversationChange({
                     status:
@@ -987,6 +1002,11 @@ function CrmDetailsPanel({
                   ? "重新打开会话"
                   : "关闭会话"}
               </button>
+              {["admin", "supervisor"].includes(role) && (
+                <button className="conversation-delete-button" disabled={busy} onClick={() => void deleteConversation()}>
+                  <Trash2 size={14} />永久删除会话
+                </button>
+              )}
             </div>
           </>
         ) : null}

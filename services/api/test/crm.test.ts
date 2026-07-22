@@ -88,3 +88,17 @@ test("contact aliases stay independent from synchronized WhatsApp names",async()
   assert.match(hub,/const bestAlias=/);
   assert.doesNotMatch(hub,/UPDATE contacts SET[^\n]*alias=COALESCE\(NULLIF\(EXCLUDED\.display_name/);
 });
+
+test("conversation deletion is privileged and blocks unsafe cascading deletes",async()=>{
+  const [server,inbox]=await Promise.all([
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+  ]);
+  assert.match(server,/app\.delete\("\/api\/v1\/conversations\/:id"/);
+  assert.match(server,/\["admin","supervisor"\]\.includes/);
+  assert.match(server,/payment_request_exists/);
+  assert.match(server,/outbound_pending/);
+  assert.match(server,/conversation\.delete/);
+  assert.match(inbox,/永久删除会话/);
+  assert.match(inbox,/method:"DELETE"/);
+});
