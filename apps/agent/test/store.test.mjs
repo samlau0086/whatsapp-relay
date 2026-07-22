@@ -57,6 +57,7 @@ test("inbound WhatsApp replies are normalized before entering the durable outbox
   const client=readFileSync(new URL("../dist/central-client.js",import.meta.url),"utf8");
   assert.match(worker,/normalizeMessageContent/);
   assert.match(worker,/jidNormalizedUser/);
+  assert.match(worker,/rawJid\.endsWith\("@broadcast"\)/);
   assert.match(worker,/senderName: item\.pushName/);
   assert.match(worker,/getMessage:/);
   assert.match(worker,/saveMessage/);

@@ -24,7 +24,7 @@ test("product routes enforce shared media, snapshots, idempotency, and soft dele
   assert.match(server,/订单 #\$\{orderNumber\}/);
   assert.match(server,/SELECT t\.name,t\.color FROM conversation_tags/);
   assert.match(server,/deleted_at=now\(\),updated_at=now\(\)/);
-  assert.match(server,/INSERT INTO order_items\(order_id,position,product_name,quantity,unit_amount,image_media_id,product_id\)/);
+  assert.match(server,/INSERT INTO order_items\(order_id,position,product_name,product_sku,quantity,unit_amount,image_media_id,product_id\)/);
   assert.match(server,/product\.create/);
   assert.match(server,/product\.update/);
   assert.match(server,/product\.delete/);

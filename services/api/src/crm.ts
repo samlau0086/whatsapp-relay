@@ -78,6 +78,8 @@ export async function ensureCrmTables(db:Queryable):Promise<void>{
   await db.query("CREATE INDEX IF NOT EXISTS product_price_tiers_product_quantity_idx ON product_price_tiers(product_id,min_quantity)");
   await db.query("CREATE INDEX IF NOT EXISTS product_labels_name_idx ON product_labels(lower(name))");
   await db.query("CREATE INDEX IF NOT EXISTS order_items_product_idx ON order_items(product_id) WHERE product_id IS NOT NULL");
+  await db.query("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS product_sku text");
+  await db.query("UPDATE order_items item SET product_sku=product.sku FROM products product WHERE item.product_id=product.id AND item.product_sku IS NULL");
   await db.query("CREATE INDEX IF NOT EXISTS reminders_user_due_idx ON reminders(user_id,remind_at) WHERE dismissed_at IS NULL");
   await db.query("CREATE INDEX IF NOT EXISTS orders_conversation_created_idx ON orders(conversation_id,created_at DESC)");
   await db.query("CREATE INDEX IF NOT EXISTS orders_conversation_active_idx ON orders(conversation_id,created_at DESC) WHERE deleted_at IS NULL");

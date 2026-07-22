@@ -165,7 +165,7 @@ function normalizedIdentityJid(value:unknown,server:"lid"|"s.whatsapp.net"):stri
 
 async function ingestMessage(client: import("pg").PoolClient, agentId:string, payload: Record<string,unknown>): Promise<void> {
   const chatJid = String(payload.chatJid);
-  if (chatJid.endsWith("@g.us")) return;
+  if (chatJid.endsWith("@g.us") || chatJid.endsWith("@broadcast")) return;
   if(String(payload.kind??"text")==="text"&&!payload.text&&!payload.media)return;
   const accountId = String(payload.accountId);
   const account=await client.query("SELECT id FROM whatsapp_accounts WHERE id=$1 AND agent_id=$2",[accountId,agentId]);

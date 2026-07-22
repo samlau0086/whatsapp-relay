@@ -60,7 +60,7 @@ async function connect(options:Init):Promise<void>{
   });
   activeSocket.ev.on("messages.upsert",({messages})=>{if(generation!==connectionGeneration)return;void (async()=>{
     for(const item of messages){
-      const rawJid=jidNormalizedUser(item.key.remoteJid??undefined);if(!rawJid||rawJid.endsWith("@g.us")||!item.key.id||!item.message)continue;
+      const rawJid=jidNormalizedUser(item.key.remoteJid??undefined);if(!rawJid||rawJid.endsWith("@g.us")||rawJid.endsWith("@broadcast")||!item.key.id||!item.message)continue;
       const repositoryJid=rawJid.endsWith("@lid")?await activeSocket.signalRepository.lidMapping.getPNForLID(rawJid):null;
       const jid=jidNormalizedUser(repositoryJid??await auth.resolveJid(rawJid));
       if(rawJid.endsWith("@lid")&&jid.endsWith("@s.whatsapp.net"))emitIdentity(options.accountId,rawJid,jid,item.pushName??undefined);

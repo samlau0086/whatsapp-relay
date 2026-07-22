@@ -3,13 +3,13 @@ export const DEFAULT_PAYPAL_NOTE_TEMPLATE="{{orderNotes}}";
 export const DEFAULT_PAYPAL_ITEM_NAME_TEMPLATE="{{productName}}";
 
 export const PAYPAL_GLOBAL_TEMPLATE_VARIABLES=["orderNumber","currentDate","recipientName","address","phone","orderNotes","orderTotal","currency","customerName","customerPhone","productNames","productQuantity"] as const;
-export const PAYPAL_ITEM_TEMPLATE_VARIABLES=[...PAYPAL_GLOBAL_TEMPLATE_VARIABLES,"productName","unitAmount","lineTotal"] as const;
+export const PAYPAL_ITEM_TEMPLATE_VARIABLES=[...PAYPAL_GLOBAL_TEMPLATE_VARIABLES,"productName","sku","unitAmount","lineTotal"] as const;
 
 export type PayPalTemplateContext={
   orderNumber:string;currentDate:string;recipientName:string;address:string;phone:string;orderNotes:string;
   orderTotal:string;currency:string;customerName:string;customerPhone:string;productNames:string;productQuantity:string;
 };
-export type PayPalItemTemplateContext=PayPalTemplateContext&{productName:string;unitAmount:string;lineTotal:string};
+export type PayPalItemTemplateContext=PayPalTemplateContext&{productName:string;sku:string;unitAmount:string;lineTotal:string};
 
 export function validatePayPalTemplate(template:string,scope:"global"|"item"):string|null{
   const allowed:Set<string>=new Set(scope==="item"?PAYPAL_ITEM_TEMPLATE_VARIABLES:PAYPAL_GLOBAL_TEMPLATE_VARIABLES);

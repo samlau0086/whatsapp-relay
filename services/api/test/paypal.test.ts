@@ -16,9 +16,10 @@ test("maps order products and fees into invoice line items",()=>{
 });
 
 test("renders fixed text and supported PayPal template variables",()=>{
-  const context:PayPalItemTemplateContext={orderNumber:"20260721-001",currentDate:"2026-07-22",recipientName:"Sam",address:"Shanghai",phone:"13800000000",orderNotes:"Handle with care",orderTotal:"USD 29.00",currency:"USD",customerName:"Sam",customerPhone:"13800000000",productNames:"Product",productQuantity:"2",productName:"Product",unitAmount:"12.50",lineTotal:"25.00"};
+  const context:PayPalItemTemplateContext={orderNumber:"20260721-001",currentDate:"2026-07-22",recipientName:"Sam",address:"Shanghai",phone:"13800000000",orderNotes:"Handle with care",orderTotal:"USD 29.00",currency:"USD",customerName:"Sam",customerPhone:"13800000000",productNames:"Product",productQuantity:"2",productName:"Product",sku:"SKU-001",unitAmount:"12.50",lineTotal:"25.00"};
   assert.equal(renderPayPalTemplate("{{currentDate}} · {{recipientName}} · {{orderTotal}}",context),"2026-07-22 · Sam · USD 29.00");
   assert.equal(renderPayPalTemplate("{{productName}} × {{productQuantity}} ({{currency}} {{lineTotal}})",context),"Product × 2 (USD 25.00)");
+  assert.equal(renderPayPalTemplate("{{sku}} · {{productName}}",context),"SKU-001 · Product");
   assert.equal(validatePayPalTemplate("Order {{orderNumber}}","global"),null);
   assert.match(validatePayPalTemplate("{{productName}}","global")??"",/不支持的变量/);
   assert.match(validatePayPalTemplate("{{orderNumber}","global")??"",/变量格式无效/);
