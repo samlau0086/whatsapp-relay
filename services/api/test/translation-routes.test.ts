@@ -15,6 +15,10 @@ test("translation routes enforce user preferences, admin-only credential access,
   assert.match(server,/conversation_translation_preferences WHERE user_id=\$1 AND conversation_id=\$2/);
   assert.match(server,/api\/v1\/translations\/preview/);
   assert.match(server,/api\/v1\/translations\/messages/);
+  assert.match(server,/preference\.agent_language cached_translation_language/);
+  assert.match(server,/translation\.translated_text cached_translation_text/);
+  assert.match(server,/transcription\.transcript_text cached_transcription_text/);
+  assert.match(server,/preference\.user_id=\$4::uuid/);
   assert.match(server,/canAccessAccount\(request\.principal,row\.account_id\)/);
   assert.match(server,/keyConfigured:Boolean\(row\?\.api_key_encrypted\)/);
   assert.match(server,/apiKey:row\?\.api_key_encrypted\?decryptAtRest/);

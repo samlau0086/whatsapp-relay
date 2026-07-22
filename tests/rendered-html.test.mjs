@@ -104,6 +104,8 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /\/api\/v1\/me\/translation-preferences/);
   assert.match(component, /\/api\/v1\/translations\/preview/);
   assert.match(component, /\/api\/v1\/translations\/messages/);
+  assert.match(component, /cached_translation_text/);
+  assert.match(component, /cachedTranslations/);
   assert.match(component, /Custom Provider/);
   assert.match(component, /gpt-5\.6-luna/);
   assert.match(css, /\.translation-menu/);
@@ -177,6 +179,12 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /产品库已有同名产品/);
   assert.match(css, /\.product-grid/);
   assert.match(css, /\.product-dialog/);
+  assert.match(component, /全选本页/);
+  assert.match(component, /ProductBulkEditDialog/);
+  assert.match(component, /\/api\/v1\/products\/bulk-edit/);
+  assert.match(component, /按比例增加/);
+  assert.match(css, /\.product-bulk-toolbar/);
+  assert.match(css, /\.product-bulk-dialog/);
   assert.match(css, /\.order-product-mode/);
   assert.match(component, /ProductSearchDropdown/);
   assert.match(component, /role="combobox"/);
