@@ -9,10 +9,11 @@ const imageLayer=z.object({...geometry,type:z.literal("image"),mediaId:z.string(
 export const collageLayerSchema=z.discriminatedUnion("type",[productImageLayer,productTextLayer,textLayer,imageLayer]);
 export const collageTemplateSchema=z.object({
   version:z.literal(1),
-  canvas:z.object({width:z.number().int().min(320).max(4096),height:z.number().int().min(320).max(4096),backgroundColor:color.nullable().default("#FFFFFF"),backgroundMediaId:z.string().uuid().nullable().default(null)}).strict(),
+  canvas:z.object({width:z.number().int().min(320).max(4096),height:z.number().int().min(320).max(4096),padding:z.number().int().min(0).max(1000).default(48),backgroundColor:color.nullable().default("#FFFFFF"),backgroundMediaId:z.string().uuid().nullable().default(null)}).strict(),
   layers:z.array(collageLayerSchema).min(1).max(100),
 }).strict().superRefine((value,ctx)=>{
   if(value.canvas.width*value.canvas.height>16_000_000)ctx.addIssue({code:"custom",path:["canvas"],message:"canvas exceeds 16 megapixels"});
+  if(value.canvas.padding*2>=Math.min(value.canvas.width,value.canvas.height))ctx.addIssue({code:"custom",path:["canvas","padding"],message:"canvas padding leaves no usable content area"});
   const ids=new Set<string>(),slots=new Set<string>();
   for(const [index,layer] of value.layers.entries()){
     if(ids.has(layer.id))ctx.addIssue({code:"custom",path:["layers",index,"id"],message:"layer ids must be unique"});ids.add(layer.id);
@@ -31,7 +32,7 @@ export const materialGenerateSchema=z.object({clientGenerationId:z.string().uuid
 export type CollageTemplate=z.infer<typeof collageTemplateSchema>;
 export type CollageLayer=z.infer<typeof collageLayerSchema>;
 
-export const DEFAULT_COLLAGE_TEMPLATE:CollageTemplate={version:1,canvas:{width:1080,height:1080,backgroundColor:"#F4F7F5",backgroundMediaId:null},layers:[
+export const DEFAULT_COLLAGE_TEMPLATE:CollageTemplate={version:1,canvas:{width:1080,height:1080,padding:48,backgroundColor:"#F4F7F5",backgroundMediaId:null},layers:[
   {id:"title",type:"text",x:60,y:35,width:960,height:90,rotation:0,opacity:1,text:"FEATURED PRODUCTS",fontSize:48,fontWeight:"bold",color:"#153F2F",align:"center"},
   ...[0,1,2,3].flatMap(index=>{const col=index%2,row=Math.floor(index/2),slotId=`slot-${index+1}`,x=55+col*510,y=150+row*455;return [
     {id:`image-${index+1}`,type:"productImage" as const,slotId,x,y,width:460,height:330,rotation:0,opacity:1,fit:"cover" as const,radius:24,backgroundColor:"#FFFFFF"},

@@ -236,5 +236,10 @@ test("product workspace stays inside one root grid item", async () => {
   assert.match(component,/applyGridPreset\(2\)/);
   assert.match(component,/applyGridPreset\(3\)/);
   assert.match(component,/applyGridPreset\(4\)/);
+  assert.match(component,/applyGridPreset\(customRows,customColumns\)/);
+  assert.match(component,/>Padding<input/);
+  assert.match(component,/className="canvas-padding-guide"/);
   assert.match(css,/\.collage-grid-presets\{/);
+  assert.match(css,/\.collage-custom-grid\{/);
+  assert.match(css,/\.canvas-padding-guide\{/);
 });

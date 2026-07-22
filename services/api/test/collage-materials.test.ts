@@ -16,6 +16,9 @@ test("collage migration creates template, batch, and material asset records",asy
 test("collage template validation protects canvas, slots, and bindings",()=>{
   assert.equal(collageTemplateSchema.safeParse(DEFAULT_COLLAGE_TEMPLATE).success,true);
   assert.equal(productSlotIds(DEFAULT_COLLAGE_TEMPLATE).length,4);
+  const legacyTemplate=structuredClone(DEFAULT_COLLAGE_TEMPLATE) as typeof DEFAULT_COLLAGE_TEMPLATE&{canvas:{padding?:number}};delete legacyTemplate.canvas.padding;
+  const legacyResult=collageTemplateSchema.safeParse(legacyTemplate);assert.equal(legacyResult.success,true);if(legacyResult.success)assert.equal(legacyResult.data.canvas.padding,48);
+  assert.equal(collageTemplateSchema.safeParse({...DEFAULT_COLLAGE_TEMPLATE,canvas:{...DEFAULT_COLLAGE_TEMPLATE.canvas,padding:540}}).success,false);
   assert.equal(collageTemplateSchema.safeParse({...DEFAULT_COLLAGE_TEMPLATE,canvas:{...DEFAULT_COLLAGE_TEMPLATE.canvas,width:4096,height:4096}}).success,false);
   assert.equal(collageTemplateSchema.safeParse({...DEFAULT_COLLAGE_TEMPLATE,layers:DEFAULT_COLLAGE_TEMPLATE.layers.filter(layer=>layer.type!=="productImage")}).success,false);
   assert.equal(collageTemplateSchema.safeParse({...DEFAULT_COLLAGE_TEMPLATE,layers:[...DEFAULT_COLLAGE_TEMPLATE.layers,{...DEFAULT_COLLAGE_TEMPLATE.layers[0],id:DEFAULT_COLLAGE_TEMPLATE.layers[0].id}]}).success,false);
