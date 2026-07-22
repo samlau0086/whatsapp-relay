@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { PayPalApiError, PayPalClient, buildPayPalInvoice, clearPayPalTokenCache, paypalBaseUrl } from "../src/paypal.js";
 import { renderPayPalTemplate, validatePayPalTemplate, type PayPalItemTemplateContext } from "../src/paypal-template.js";
@@ -23,6 +24,14 @@ test("renders fixed text and supported PayPal template variables",()=>{
   assert.equal(validatePayPalTemplate("Order {{orderNumber}}","global"),null);
   assert.match(validatePayPalTemplate("{{productName}}","global")??"",/不支持的变量/);
   assert.match(validatePayPalTemplate("{{orderNumber}","global")??"",/变量格式无效/);
+});
+
+test("payment requests resolve SKU snapshots and never silently replace a missing SKU with the product name",async()=>{
+  const server=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
+  assert.match(server,/COALESCE\(NULLIF\(item\.product_sku,''\),NULLIF\(product\.sku,''\)\) sku/);
+  assert.match(server,/payment_request_template_data_missing/);
+  assert.match(server,/missing_order_item_sku/);
+  assert.match(server,/regenerate=.*regenerate===true/);
 });
 
 test("creates and shares an invoice while reusing the OAuth token",async()=>{

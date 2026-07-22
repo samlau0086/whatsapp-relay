@@ -148,6 +148,9 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /useState\(!isEnglishLanguage\(initialTargetLanguage\)\)/);
   assert.match(component, /Save order draft/);
   assert.match(component, /orders\/\$\{order\.id\}\/send/);
+  assert.match(component, /按当前模板重新生成/);
+  assert.match(component, /JSON\.stringify\(\{regenerate:true\}\)/);
+  assert.match(component, /item\.sku\?`\$\{item\.sku\} · `/);
   assert.match(component, /method:"DELETE"/);
   assert.match(component, /文字版详情/);
   assert.match(component, /图片版完整详情/);
