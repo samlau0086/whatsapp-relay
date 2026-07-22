@@ -188,3 +188,15 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /reply_zh/);
   assert.match(css, /\.agent-draft-copy/);
 });
+
+test("modal backdrops do not dismiss dialogs", async () => {
+  const modalSources = await Promise.all([
+    "product-card-send-dialog.tsx",
+    "product-editor-dialog.tsx",
+    "product-image-media-dialog.tsx",
+    "product-import-dialog.tsx",
+    "whatsapp-inbox.tsx",
+  ].map((file) => readFile(new URL(`../app/${file}`, import.meta.url), "utf8")));
+
+  assert.doesNotMatch(modalSources.join("\n"), /event\.target\s*===\s*event\.currentTarget/);
+});

@@ -1,6 +1,6 @@
 export type PayPalEnvironment="sandbox"|"live";
 export type PayPalInvoiceItem={name:string;quantity:number;unitAmount:number};
-export type PayPalInvoiceInput={requestId:string;orderNumber:string;currency:string;description?:string;items:PayPalInvoiceItem[]};
+export type PayPalInvoiceInput={requestId:string;reference:string;currency:string;note?:string;items:PayPalInvoiceItem[]};
 export type PayPalInvoiceResult={invoiceId:string;status:string;paymentUrl:string|null};
 
 export class PayPalApiError extends Error{
@@ -11,7 +11,7 @@ export function paypalBaseUrl(environment:PayPalEnvironment):string{return envir
 
 export function buildPayPalInvoice(input:PayPalInvoiceInput):Record<string,unknown>{
   return{
-    detail:{reference:`Order #${input.orderNumber}`,invoice_date:new Date().toISOString().slice(0,10),currency_code:input.currency,note:input.description||undefined,payment_term:{term_type:"DUE_ON_RECEIPT"}},
+    detail:{reference:input.reference,invoice_date:new Date().toISOString().slice(0,10),currency_code:input.currency,note:input.note||undefined,payment_term:{term_type:"DUE_ON_RECEIPT"}},
     items:input.items.map(item=>({name:item.name,quantity:String(item.quantity),unit_amount:{currency_code:input.currency,value:item.unitAmount.toFixed(2)},unit_of_measure:"QUANTITY"})),
     configuration:{partial_payment:{allow_partial_payment:false},allow_tip:false},
   };

@@ -128,6 +128,9 @@ export const paypalSettingsSchema=z.object({
   environment:z.enum(["sandbox","live"]),
   clientId:z.string().trim().min(1).max(500).optional(),
   clientSecret:z.string().trim().min(1).max(2000).optional(),
+  referenceTemplate:z.string().trim().min(1).max(500).default("Order #{{orderNumber}}"),
+  noteTemplate:z.string().trim().max(4000).default("{{orderNotes}}"),
+  itemNameTemplate:z.string().trim().min(1).max(500).default("{{productName}}"),
 });
 
 export const enrollmentSchema = z.object({ code: z.string().min(16), name: z.string().min(2).max(80), version: z.string(), platform: z.string() });

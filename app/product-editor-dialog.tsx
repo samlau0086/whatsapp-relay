@@ -216,9 +216,6 @@ export function ProductEditorDialog({
       <div
         className="modal-backdrop product-dialog-backdrop"
         role="presentation"
-        onMouseDown={(event) => {
-          if (event.target === event.currentTarget && !busy) onClose();
-        }}
       >
         <section
           className="login-dialog product-dialog product-tier-dialog"
