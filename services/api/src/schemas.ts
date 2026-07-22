@@ -131,6 +131,16 @@ export const orderSchema=z.object({clientOrderId:z.string().uuid()}).and(orderCo
 export const orderUpdateSchema=orderContentSchema;
 export const orderAddressSchema=z.object({addressId:z.string().uuid().nullable().optional(),newAddress:customerAddressSchema.optional()}).superRefine((value,ctx)=>{if(value.addressId&&value.newAddress)ctx.addIssue({code:"custom",path:["addressId"],message:"addressId and newAddress are mutually exclusive"});});
 export const orderSendSchema=z.object({format:z.enum(["text","image"]).default("text"),clientSendId:z.string().uuid().optional(),translate:z.boolean().optional(),targetLanguage:languageCodeSchema.optional()}).default({format:"text"}).superRefine((value,ctx)=>{if(value.translate===true&&!value.targetLanguage)ctx.addIssue({code:"custom",path:["targetLanguage"],message:"target language is required when translation is requested"});});
+const emailSubjectSchema=z.string().trim().min(1).max(200).refine(value=>!/[\r\n]/.test(value),"subject must not contain line breaks");
+export const emailProviderSettingsSchema=z.object({
+  enabled:z.boolean(),fromName:z.string().trim().min(1).max(120),fromEmail:z.string().trim().email().max(254),replyTo:z.string().trim().email().max(254).or(z.literal("")).default(""),
+  host:z.string().trim().max(255).optional(),port:z.coerce.number().int().min(1).max(65535).optional(),tls:z.enum(["tls","starttls"]).optional(),username:z.string().trim().max(255).optional(),secret:z.string().max(4096).optional(),
+});
+export const emailProviderTestSchema=z.object({recipientEmail:z.string().trim().email().max(254)});
+const emailCommon=z.object({clientSendId:z.string().uuid(),recipientEmailIds:z.array(z.string().uuid()).min(1).max(20),subject:emailSubjectSchema,messageBody:z.string().max(5000)});
+const emailOrderContent=z.object({type:z.literal("order"),orderId:z.string().uuid(),format:z.enum(["text","image"]),translate:z.boolean().optional(),targetLanguage:languageCodeSchema.optional()});
+const emailProductContent=z.object({type:z.literal("product_cards"),productIds:z.array(z.string().uuid()).min(1).max(50),mode:z.enum(["individual","combined"]),showPrice:z.boolean()});
+export const emailSendSchema=emailCommon.and(z.object({content:z.discriminatedUnion("type",[emailOrderContent,emailProductContent])})).superRefine((value,ctx)=>{if(value.content.type==="order"&&value.content.translate&&!value.content.targetLanguage)ctx.addIssue({code:"custom",path:["content","targetLanguage"],message:"target language is required"});if(value.content.type==="product_cards"){if(new Set(value.content.productIds).size!==value.content.productIds.length)ctx.addIssue({code:"custom",path:["content","productIds"],message:"product ids must be unique"});if(value.content.mode==="combined"&&value.content.productIds.length>10)ctx.addIssue({code:"custom",path:["content","productIds"],message:"combined cards support at most 10 products"});}});
 export const orderSettingsSchema=z.object({numberTemplate:z.string().min(1).max(80),timezone:z.string().min(1).max(100)});
 export const paypalSettingsSchema=z.object({
   enabled:z.boolean(),
