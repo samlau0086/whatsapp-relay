@@ -118,11 +118,14 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /CrmDetailsPanel/);
   assert.match(component, /function ContactManagement/);
   assert.match(component, /function ContactEditDialog/);
+  assert.match(component, /function ContactAddressDialog/);
   assert.match(component, /\/api\/v1\/contacts/);
   assert.match(component, /Primary Email/);
   assert.match(component, /编辑联系人/);
   assert.match(css, /\.contact-management/);
   assert.match(css, /\.contact-dialog/);
+  assert.match(css, /label\.primary-email-radio input\[type="radio"\]/);
+  assert.match(css, /\.contact-address-grid/);
   assert.match(component, /创建订单/);
   assert.match(component, /编辑订单/);
   assert.match(component, /重新发送/);

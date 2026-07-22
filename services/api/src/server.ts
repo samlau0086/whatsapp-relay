@@ -280,10 +280,11 @@ app.get("/api/v1/contacts",{preHandler:authenticate},async(request,reply)=>{
   if(query.accountId&&!canAccessAccount(request.principal,query.accountId))return reply.code(403).send({error:"account_forbidden"});
   const limit=Math.min(100,Math.max(1,Number(query.limit??30)||30)),offset=Math.max(0,Number(query.offset??0)||0),accountIds=request.principal?.accountIds??null;
   const result=await pool.query(`SELECT co.id,co.account_id,a.display_name account_name,co.alias,co.display_name contact_name,co.phone_e164,co.note,co.updated_at,c.id conversation_id,c.last_message_at,COUNT(*) OVER()::int total_count,
-    COALESCE(email_list.emails,'[]'::json) emails,COALESCE(method_list.methods,'[]'::json) methods
+    COALESCE(email_list.emails,'[]'::json) emails,COALESCE(method_list.methods,'[]'::json) methods,COALESCE(address_list.addresses,'[]'::json) addresses
     FROM contacts co JOIN whatsapp_accounts a ON a.id=co.account_id LEFT JOIN conversations c ON c.contact_id=co.id
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',email.id,'label',email.label,'email',email.email,'isPrimary',email.is_primary) ORDER BY email.position,email.id) emails FROM contact_emails email WHERE email.contact_id=co.id)email_list ON true
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',method.id,'type',method.type,'label',method.label,'value',method.value) ORDER BY method.position,method.id) methods FROM contact_methods method WHERE method.contact_id=co.id)method_list ON true
+    LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',address.id,'label',address.label,'recipientName',address.recipient_name,'phone',address.phone,'address',address.address) ORDER BY address.created_at,address.id) addresses FROM contact_addresses address WHERE address.contact_id=co.id)address_list ON true
     WHERE ($1::uuid IS NULL OR co.account_id=$1) AND ($2::uuid[] IS NULL OR co.account_id=ANY($2)) AND ($3::text IS NULL OR co.alias ILIKE '%'||$3||'%' OR co.display_name ILIKE '%'||$3||'%' OR co.phone_e164 ILIKE '%'||$3||'%' OR EXISTS(SELECT 1 FROM contact_emails e WHERE e.contact_id=co.id AND (e.email ILIKE '%'||$3||'%' OR e.label ILIKE '%'||$3||'%')) OR EXISTS(SELECT 1 FROM contact_methods m WHERE m.contact_id=co.id AND (m.value ILIKE '%'||$3||'%' OR m.label ILIKE '%'||$3||'%')))
     ORDER BY c.last_message_at DESC NULLS LAST,co.updated_at DESC,co.id LIMIT $4 OFFSET $5`,[query.accountId??null,accountIds,query.q?.trim()||null,limit,offset]);
   return{data:result.rows.map(mapContactRow),total:Number(result.rows[0]?.total_count??0),hasMore:offset+result.rows.length<Number(result.rows[0]?.total_count??0),nextOffset:offset+result.rows.length};
@@ -307,7 +308,10 @@ app.patch("/api/v1/contacts/:id",{preHandler:authenticate},async(request,reply)=
     for(const [position,email] of parsed.data.emails.entries())await client.query("INSERT INTO contact_emails(contact_id,label,email,is_primary,position) VALUES($1,$2,$3,$4,$5)",[id,email.label,email.email,email.isPrimary,position]);
     await client.query("DELETE FROM contact_methods WHERE contact_id=$1",[id]);
     for(const [position,method] of parsed.data.methods.entries())await client.query("INSERT INTO contact_methods(contact_id,type,label,value,position) VALUES($1,$2,$3,$4,$5)",[id,method.type,method.label,method.value,position]);
-    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'contact.profile.update','contact',$2,$3)",[principal.id,id,JSON.stringify({alias:parsed.data.alias,emailCount:parsed.data.emails.length,methodCount:parsed.data.methods.length,hasNote:Boolean(parsed.data.note)})]);
+    const retainedAddressIds:string[]=[];
+    for(const address of parsed.data.addresses){if(address.id){const saved=await client.query("UPDATE contact_addresses SET label=$3,recipient_name=$4,phone=$5,address=$6,updated_at=now() WHERE id=$1 AND contact_id=$2 RETURNING id",[address.id,id,address.label,address.recipientName||null,address.phone||null,address.address]);if(!saved.rowCount)throw Object.assign(new Error("invalid_contact_address"),{statusCode:400});retainedAddressIds.push(String(saved.rows[0].id));}else{const saved=await client.query("INSERT INTO contact_addresses(contact_id,label,recipient_name,phone,address,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",[id,address.label,address.recipientName||null,address.phone||null,address.address,principal.id]);retainedAddressIds.push(String(saved.rows[0].id));}}
+    await client.query("DELETE FROM contact_addresses WHERE contact_id=$1 AND NOT(id=ANY($2::uuid[]))",[id,retainedAddressIds]);
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'contact.profile.update','contact',$2,$3)",[principal.id,id,JSON.stringify({alias:parsed.data.alias,emailCount:parsed.data.emails.length,methodCount:parsed.data.methods.length,addressCount:parsed.data.addresses.length,hasNote:Boolean(parsed.data.note)})]);
     return true;
   });
   if(!updated)return reply.code(404).send({error:"not_found"});
@@ -881,17 +885,18 @@ type OrderProductInput={name:string;sku?:string;quantity:number;unitAmount:numbe
 type CustomerAddressInput={label:string;recipientName?:string;phone?:string;address:string};
 
 function mapContactRow(row:Record<string,unknown>){
-  const emails=Array.isArray(row.emails)?row.emails as Array<{id:string;label:string;email:string;isPrimary:boolean}>:[],methods=Array.isArray(row.methods)?row.methods as Array<{id:string;type:string;label:string;value:string}>:[];
-  return{id:String(row.id),accountId:String(row.account_id),accountName:String(row.account_name??""),alias:String(row.alias??""),contactName:String(row.contact_name??""),name:String(row.alias||row.contact_name||row.phone_e164||"未知联系人"),phone:String(row.phone_e164??""),note:String(row.note??""),emails,primaryEmail:primaryContactEmail(emails),methods,conversationId:row.conversation_id?String(row.conversation_id):null,lastMessageAt:row.last_message_at?String(row.last_message_at):null,updatedAt:String(row.updated_at??"")};
+  const emails=Array.isArray(row.emails)?row.emails as Array<{id:string;label:string;email:string;isPrimary:boolean}>:[],methods=Array.isArray(row.methods)?row.methods as Array<{id:string;type:string;label:string;value:string}>:[],addresses=Array.isArray(row.addresses)?row.addresses:[];
+  return{id:String(row.id),accountId:String(row.account_id),accountName:String(row.account_name??""),alias:String(row.alias??""),contactName:String(row.contact_name??""),name:String(row.alias||row.contact_name||row.phone_e164||"未知联系人"),phone:String(row.phone_e164??""),note:String(row.note??""),emails,primaryEmail:primaryContactEmail(emails),methods,addresses,conversationId:row.conversation_id?String(row.conversation_id):null,lastMessageAt:row.last_message_at?String(row.last_message_at):null,updatedAt:String(row.updated_at??"")};
 }
 
 async function contactProfileById(db:typeof pool|PoolClient,id:string){
-  const [contact,emails,methods]=await Promise.all([
+  const [contact,emails,methods,addresses]=await Promise.all([
     db.query("SELECT co.id,co.account_id,a.display_name account_name,co.alias,co.display_name contact_name,co.phone_e164,co.note,co.updated_at,c.id conversation_id,c.last_message_at FROM contacts co JOIN whatsapp_accounts a ON a.id=co.account_id LEFT JOIN conversations c ON c.contact_id=co.id WHERE co.id=$1",[id]),
     db.query("SELECT id,label,email,is_primary \"isPrimary\" FROM contact_emails WHERE contact_id=$1 ORDER BY position,id",[id]),
     db.query("SELECT id,type,label,value FROM contact_methods WHERE contact_id=$1 ORDER BY position,id",[id]),
+    db.query("SELECT id,label,recipient_name \"recipientName\",phone,address FROM contact_addresses WHERE contact_id=$1 ORDER BY created_at,id",[id]),
   ]);
-  return contact.rowCount?mapContactRow({...contact.rows[0],emails:emails.rows,methods:methods.rows}):null;
+  return contact.rowCount?mapContactRow({...contact.rows[0],emails:emails.rows,methods:methods.rows,addresses:addresses.rows}):null;
 }
 
 async function resolveOrderAddress(client:{query:(text:string,values?:unknown[])=>Promise<{rowCount:number|null;rows:Array<Record<string,unknown>>}>},contactId:string,actorId:string,addressId?:string|null,newAddress?:CustomerAddressInput){

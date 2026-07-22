@@ -71,6 +71,9 @@ test("contact profiles normalize email and select a single primary address",()=>
   assert.equal(profile.emails[0].email,"alice@example.com");
   assert.equal(profile.emails[0].isPrimary,true);
   assert.equal(profile.methods[0].value,"@alice");
+  const withAddress=contactUpdateSchema.parse({...profile,addresses:[{label:"Office",recipientName:"Alice",phone:"+8613800000000",address:"Shanghai"}]});
+  assert.equal(withAddress.addresses[0].label,"Office");
+  assert.equal(contactUpdateSchema.safeParse({...profile,addresses:[{label:"",address:""}]}).success,false);
   assert.equal(contactUpdateSchema.safeParse({...profile,emails:[profile.emails[0],{...profile.emails[0],isPrimary:false}]}).success,false);
   assert.equal(contactUpdateSchema.safeParse({...profile,emails:[profile.emails[0],{label:"Home",email:"other@example.com",isPrimary:true}]}).success,false);
   assert.equal(contactUpdateSchema.parse({...profile,emails:[]}).emails.length,0);

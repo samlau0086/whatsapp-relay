@@ -73,7 +73,8 @@ export const customerStageSchema=z.enum(["new","considering","qualified","won","
 export const contactAliasSchema=z.object({alias:z.string().trim().max(80)});
 const contactEmailSchema=z.object({label:z.string().trim().max(40).default(""),email:z.string().trim().toLowerCase().email().max(254),isPrimary:z.boolean().default(false)});
 const contactMethodSchema=z.object({type:z.enum(["phone","wechat","telegram","line","website","other"]),label:z.string().trim().max(40).default(""),value:z.string().trim().min(1).max(500)});
-export const contactUpdateSchema=z.object({alias:z.string().trim().max(80),note:z.string().trim().max(5000),emails:z.array(contactEmailSchema).max(20),methods:z.array(contactMethodSchema).max(30)}).superRefine((value,ctx)=>{
+const contactAddressSchema=z.object({id:z.string().uuid().optional(),label:z.string().trim().min(1).max(40),recipientName:z.string().trim().max(80).default(""),phone:z.string().trim().max(40).default(""),address:z.string().trim().min(1).max(1000)});
+export const contactUpdateSchema=z.object({alias:z.string().trim().max(80),note:z.string().trim().max(5000),emails:z.array(contactEmailSchema).max(20),methods:z.array(contactMethodSchema).max(30),addresses:z.array(contactAddressSchema).max(20).default([])}).superRefine((value,ctx)=>{
   const primaryCount=value.emails.filter(item=>item.isPrimary).length;
   if(primaryCount>1)ctx.addIssue({code:"custom",path:["emails"],message:"only one primary email is allowed"});
   const seen=new Set<string>();
