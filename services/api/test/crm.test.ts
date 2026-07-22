@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { calculateOrderTotal, canManageSharedRecord, formatOrderSummary, preferredCustomerStage } from "../src/crm.js";
+import { calculateOrderTotal, canManageSharedRecord, formatOrderSummary, preferredCustomerStage, primaryContactEmail } from "../src/crm.js";
 
 test("shared notes remain owner-managed with supervisor override",()=>{
   assert.equal(canManageSharedRecord("agent","user-1","user-1"),true);
   assert.equal(canManageSharedRecord("agent","user-1","user-2"),false);
   assert.equal(canManageSharedRecord("supervisor","user-1","user-2"),true);
   assert.equal(canManageSharedRecord("admin",null,"user-2"),true);
+});
+
+test("default contact email resolves only the primary address",()=>{
+  assert.equal(primaryContactEmail([{email:"secondary@example.com"},{email:"primary@example.com",isPrimary:true}]),"primary@example.com");
+  assert.equal(primaryContactEmail([]),null);
 });
 
 test("contact merges retain the furthest customer stage",()=>{
@@ -86,6 +91,9 @@ test("contact aliases stay independent from synchronized WhatsApp names",async()
   assert.match(server,/contact\.alias\.update/);
   assert.match(server,/COALESCE\(NULLIF\(co\.alias,''\),co\.display_name,co\.phone_e164\)/);
   assert.match(hub,/const bestAlias=/);
+  assert.match(hub,/INSERT INTO contact_emails/);
+  assert.match(hub,/INSERT INTO contact_methods/);
+  assert.match(hub,/UPDATE contact_addresses SET contact_id/);
   assert.doesNotMatch(hub,/UPDATE contacts SET[^\n]*alias=COALESCE\(NULLIF\(EXCLUDED\.display_name/);
 });
 
@@ -101,4 +109,20 @@ test("conversation deletion is privileged and blocks unsafe cascading deletes",a
   assert.match(server,/conversation\.delete/);
   assert.match(inbox,/永久删除会话/);
   assert.match(inbox,/method:"DELETE"/);
+});
+
+test("contact profile migration and routes preserve account-scoped contacts",async()=>{
+  const [server,migration,migrator]=await Promise.all([
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../infra/postgres/migrations/030_contact_profiles.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(migration,/CREATE TABLE IF NOT EXISTS contact_emails/);
+  assert.match(migration,/contact_emails_one_primary_unique/);
+  assert.match(migration,/REFERENCES contacts\(id\) ON DELETE CASCADE/);
+  assert.match(migration,/CREATE TABLE IF NOT EXISTS contact_methods/);
+  assert.match(migrator,/030_contact_profiles\.sql/);
+  assert.match(server,/\/api\/v1\/contacts/);
+  assert.match(server,/contact\.profile\.update/);
+  assert.match(server,/canAccessAccount/);
 });

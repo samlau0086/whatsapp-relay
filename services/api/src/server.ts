@@ -8,13 +8,13 @@ import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } fro
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount, type Principal } from "./auth.js";
-import { contactAliasSchema, conversationTagsSchema, currencySchema, currencySettingsSchema, customerStageSchema, enrollmentSchema, loginSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderUpdateSchema, paypalSettingsSchema, productBulkImportSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
+import { contactAliasSchema, contactUpdateSchema, conversationTagsSchema, currencySchema, currencySettingsSchema, customerStageSchema, enrollmentSchema, loginSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderUpdateSchema, paypalSettingsSchema, productBulkImportSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
 import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
 import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline } from "./agent-hub.js";
 import { generateSpeech, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
 import { TRANSLATION_PROVIDERS, transcribeAudio, translateText, translationProviderDefaults, type TranslationProvider, type TranslationProviderSetting } from "./translation-providers.js";
 import { normalizeTranscriptionAudio } from "./audio-normalizer.js";
-import { calculateOrderTotal, canManageSharedRecord, ensureCrmTables, type OrderSummaryFee, type OrderSummaryItem } from "./crm.js";
+import { calculateOrderTotal, canManageSharedRecord, ensureCrmTables, primaryContactEmail, type OrderSummaryFee, type OrderSummaryItem } from "./crm.js";
 import { renderTemplateOrderImage } from "./order-image.js";
 import { DEFAULT_IMAGE_ORDER_TEMPLATE, DEFAULT_TEXT_ORDER_TEMPLATE, orderTemplateSchema, orderTemplateUpdateSchema, parseOrderTemplate, parseTranslatedSemanticOrder, renderSemanticOrder, renderTextOrder, serializeSemanticOrder, type OrderTemplateFormat } from "./order-template.js";
 import { allocateOrderNumber, isValidTimeZone, orderNumberPreview, validateOrderNumberTemplate } from "./order-number.js";
@@ -41,6 +41,8 @@ await ensureCurrencySettingsTable();
 
 app.get("/health", async () => { await pool.query("SELECT 1"); return { status:"ok", version:"0.1.0", time:new Date().toISOString() }; });
 app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"RelayDesk API",version:"0.1.0"}, paths:{
+  "/api/v1/contacts":{get:{summary:"List contacts"}},
+  "/api/v1/contacts/{id}":{get:{summary:"Read contact profile"},patch:{summary:"Update contact profile"}},
   "/api/v1/messages":{post:{summary:"发送单条消息",responses:{"202":{description:"已进入持久队列"}}}},
   "/api/v1/conversations":{get:{summary:"分页查询会话"},post:{summary:"创建或复用单个联系人会话并发送首条文本消息"}},
   "/api/v1/conversations/{id}":{patch:{summary:"认领、收藏、更新客户阶段、关闭或标记已读"},delete:{summary:"永久删除会话及其关联数据"}},
@@ -223,7 +225,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request) =>
   const limit = Math.min(100,Math.max(1,Number(query.limit ?? 30)));
   if (query.accountId && !canAccessAccount(request.principal,query.accountId)) return { data:[], nextCursor:null };
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null;
-  const result = await pool.query(`SELECT c.id,c.status,c.favorite,c.unread_count,c.last_message_at,c.assigned_user_id,c.customer_stage,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164) display_name,co.alias,co.display_name contact_name,co.phone_e164,co.avatar_url,a.id account_id,a.display_name account_name,a.status account_status,m.text_content last_message,m.kind last_message_kind,COALESCE(tag_list.tags,'[]'::json) tags,r.remind_at FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN whatsapp_accounts a ON a.id=c.account_id LEFT JOIN LATERAL (SELECT text_content,kind FROM messages WHERE conversation_id=c.id ORDER BY occurred_at DESC LIMIT 1)m ON true LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true LEFT JOIN reminders r ON r.conversation_id=c.id AND r.user_id=$5::uuid AND r.dismissed_at IS NULL WHERE a.agent_id IS NOT NULL AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::text IS NULL OR c.status::text=$2) AND ($3::text IS NULL OR co.alias ILIKE '%'||$3||'%' OR co.display_name ILIKE '%'||$3||'%' OR co.phone_e164 ILIKE '%'||$3||'%') AND ($4::timestamptz IS NULL OR c.last_message_at<$4) ORDER BY c.last_message_at DESC NULLS LAST LIMIT $6`, [query.accountId ?? null,query.status ?? null,query.q ?? null,query.before ?? null,principalUserId,limit+1]);
+  const result = await pool.query(`SELECT c.id,c.status,c.favorite,c.unread_count,c.last_message_at,c.assigned_user_id,c.customer_stage,co.id contact_id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164) display_name,co.alias,co.display_name contact_name,co.phone_e164,co.avatar_url,(SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) primary_email,COALESCE((SELECT json_agg(json_build_object('id',method.id,'type',method.type,'label',method.label,'value',method.value) ORDER BY method.position,method.id) FROM contact_methods method WHERE method.contact_id=co.id),'[]'::json) contact_methods,a.id account_id,a.display_name account_name,a.status account_status,m.text_content last_message,m.kind last_message_kind,COALESCE(tag_list.tags,'[]'::json) tags,r.remind_at FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN whatsapp_accounts a ON a.id=c.account_id LEFT JOIN LATERAL (SELECT text_content,kind FROM messages WHERE conversation_id=c.id ORDER BY occurred_at DESC LIMIT 1)m ON true LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true LEFT JOIN reminders r ON r.conversation_id=c.id AND r.user_id=$5::uuid AND r.dismissed_at IS NULL WHERE a.agent_id IS NOT NULL AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::text IS NULL OR c.status::text=$2) AND ($3::text IS NULL OR co.alias ILIKE '%'||$3||'%' OR co.display_name ILIKE '%'||$3||'%' OR co.phone_e164 ILIKE '%'||$3||'%') AND ($4::timestamptz IS NULL OR c.last_message_at<$4) ORDER BY c.last_message_at DESC NULLS LAST LIMIT $6`, [query.accountId ?? null,query.status ?? null,query.q ?? null,query.before ?? null,principalUserId,limit+1]);
   const hasMore = result.rows.length > limit; const data = result.rows.slice(0,limit);
   return { data, nextCursor:hasMore ? data[data.length-1]?.last_message_at : null };
 });
@@ -268,9 +270,48 @@ app.patch("/api/v1/conversations/:id/contact", { preHandler:authenticate }, asyn
   const {id}=request.params as {id:string};const current=await pool.query("SELECT c.account_id,c.contact_id FROM conversations c WHERE c.id=$1",[id]);
   if(!current.rowCount||!canAccessAccount(request.principal,current.rows[0].account_id))return reply.code(404).send({error:"not_found"});
   const alias=parsed.data.alias||null;
-  const result=await pool.query("UPDATE contacts SET alias=$2 WHERE id=$1 RETURNING alias,COALESCE(NULLIF(alias,''),display_name,phone_e164) display_name",[current.rows[0].contact_id,alias]);
+  const result=await pool.query("UPDATE contacts SET alias=$2,updated_at=now() WHERE id=$1 RETURNING alias,COALESCE(NULLIF(alias,''),display_name,phone_e164) display_name",[current.rows[0].contact_id,alias]);
   await pool.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'contact.alias.update','contact',$2,$3)",[request.principal.id,current.rows[0].contact_id,JSON.stringify({alias})]);
   return result.rows[0];
+});
+
+app.get("/api/v1/contacts",{preHandler:authenticate},async(request,reply)=>{
+  const query=request.query as {q?:string;accountId?:string;limit?:string;offset?:string};
+  if(query.accountId&&!canAccessAccount(request.principal,query.accountId))return reply.code(403).send({error:"account_forbidden"});
+  const limit=Math.min(100,Math.max(1,Number(query.limit??30)||30)),offset=Math.max(0,Number(query.offset??0)||0),accountIds=request.principal?.accountIds??null;
+  const result=await pool.query(`SELECT co.id,co.account_id,a.display_name account_name,co.alias,co.display_name contact_name,co.phone_e164,co.note,co.updated_at,c.id conversation_id,c.last_message_at,COUNT(*) OVER()::int total_count,
+    COALESCE(email_list.emails,'[]'::json) emails,COALESCE(method_list.methods,'[]'::json) methods
+    FROM contacts co JOIN whatsapp_accounts a ON a.id=co.account_id LEFT JOIN conversations c ON c.contact_id=co.id
+    LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',email.id,'label',email.label,'email',email.email,'isPrimary',email.is_primary) ORDER BY email.position,email.id) emails FROM contact_emails email WHERE email.contact_id=co.id)email_list ON true
+    LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',method.id,'type',method.type,'label',method.label,'value',method.value) ORDER BY method.position,method.id) methods FROM contact_methods method WHERE method.contact_id=co.id)method_list ON true
+    WHERE ($1::uuid IS NULL OR co.account_id=$1) AND ($2::uuid[] IS NULL OR co.account_id=ANY($2)) AND ($3::text IS NULL OR co.alias ILIKE '%'||$3||'%' OR co.display_name ILIKE '%'||$3||'%' OR co.phone_e164 ILIKE '%'||$3||'%' OR EXISTS(SELECT 1 FROM contact_emails e WHERE e.contact_id=co.id AND (e.email ILIKE '%'||$3||'%' OR e.label ILIKE '%'||$3||'%')) OR EXISTS(SELECT 1 FROM contact_methods m WHERE m.contact_id=co.id AND (m.value ILIKE '%'||$3||'%' OR m.label ILIKE '%'||$3||'%')))
+    ORDER BY c.last_message_at DESC NULLS LAST,co.updated_at DESC,co.id LIMIT $4 OFFSET $5`,[query.accountId??null,accountIds,query.q?.trim()||null,limit,offset]);
+  return{data:result.rows.map(mapContactRow),total:Number(result.rows[0]?.total_count??0),hasMore:offset+result.rows.length<Number(result.rows[0]?.total_count??0),nextOffset:offset+result.rows.length};
+});
+
+app.get("/api/v1/contacts/:id",{preHandler:authenticate},async(request,reply)=>{
+  const {id}=request.params as {id:string},profile=await contactProfileById(pool,id);
+  if(!profile||!canAccessAccount(request.principal,profile.accountId))return reply.code(404).send({error:"not_found"});
+  return profile;
+});
+
+app.patch("/api/v1/contacts/:id",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const parsed=contactUpdateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  const principal=request.principal,{id}=request.params as {id:string};
+  const updated=await transaction(async client=>{
+    const current=await client.query("SELECT account_id FROM contacts WHERE id=$1 FOR UPDATE",[id]);
+    if(!current.rowCount||!canAccessAccount(principal,current.rows[0].account_id))return false;
+    await client.query("UPDATE contacts SET alias=$2,note=$3,updated_at=now() WHERE id=$1",[id,parsed.data.alias||null,parsed.data.note||null]);
+    await client.query("DELETE FROM contact_emails WHERE contact_id=$1",[id]);
+    for(const [position,email] of parsed.data.emails.entries())await client.query("INSERT INTO contact_emails(contact_id,label,email,is_primary,position) VALUES($1,$2,$3,$4,$5)",[id,email.label,email.email,email.isPrimary,position]);
+    await client.query("DELETE FROM contact_methods WHERE contact_id=$1",[id]);
+    for(const [position,method] of parsed.data.methods.entries())await client.query("INSERT INTO contact_methods(contact_id,type,label,value,position) VALUES($1,$2,$3,$4,$5)",[id,method.type,method.label,method.value,position]);
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'contact.profile.update','contact',$2,$3)",[principal.id,id,JSON.stringify({alias:parsed.data.alias,emailCount:parsed.data.emails.length,methodCount:parsed.data.methods.length,hasNote:Boolean(parsed.data.note)})]);
+    return true;
+  });
+  if(!updated)return reply.code(404).send({error:"not_found"});
+  return contactProfileById(pool,id);
 });
 
 app.get("/api/v1/tags",{preHandler:authenticate},async()=>{
@@ -344,17 +385,18 @@ app.post("/api/v1/products/media",{preHandler:authenticate},async(request,reply)
 });
 
 app.get("/api/v1/conversations/:id/details",{preHandler:authenticate},async(request,reply)=>{
-  const {id}=request.params as {id:string};const conversation=await pool.query("SELECT account_id,customer_stage FROM conversations WHERE id=$1",[id]);
+  const {id}=request.params as {id:string};const conversation=await pool.query("SELECT account_id,customer_stage,contact_id FROM conversations WHERE id=$1",[id]);
   if(!conversation.rowCount||!canAccessAccount(request.principal,conversation.rows[0].account_id))return reply.code(404).send({error:"not_found"});
   const userId=request.principal?.kind==="user"?request.principal.id:null;
-  const [tags,notes,reminder,orders,addresses]=await Promise.all([
+  const [tags,notes,reminder,orders,addresses,contact]=await Promise.all([
     pool.query("SELECT t.id,t.name,t.color FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=$1 ORDER BY lower(t.name)",[id]),
     pool.query("SELECT n.id,n.body,n.user_id,n.created_at,n.updated_at,u.display_name author_name FROM notes n LEFT JOIN users u ON u.id=n.user_id WHERE n.conversation_id=$1 ORDER BY n.created_at DESC LIMIT 50",[id]),
     userId?pool.query("SELECT id,remind_at,created_at,updated_at FROM reminders WHERE conversation_id=$1 AND user_id=$2 AND dismissed_at IS NULL",[id,userId]):Promise.resolve({rows:[]}),
     pool.query("SELECT o.id,o.display_order_number,o.order_number,o.amount,o.currency,o.description,o.status,o.send_format,o.translate_on_send,o.target_language,o.address_id,o.shipping_address_snapshot,o.created_at,u.display_name created_by_name,COALESCE(m.status::text,o.status) message_status,COALESCE(item_list.items,'[]'::json) items,COALESCE(fee_list.fees,'[]'::json) fees,payment.payment_request FROM orders o LEFT JOIN users u ON u.id=o.created_by LEFT JOIN messages m ON m.id=o.summary_message_id LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',i.id,'name',i.product_name,'sku',i.product_sku,'quantity',i.quantity,'unitAmount',i.unit_amount,'imageMediaId',i.image_media_id,'imageName',media.file_name,'productId',i.product_id) ORDER BY i.position) items FROM order_items i LEFT JOIN media ON media.id=i.image_media_id WHERE i.order_id=o.id)item_list ON true LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',f.id,'name',f.name,'amount',f.amount) ORDER BY f.position) fees FROM order_fees f WHERE f.order_id=o.id)fee_list ON true LEFT JOIN LATERAL (SELECT json_build_object('id',pr.id,'invoiceId',pr.provider_request_id,'url',pr.payment_url,'status',pr.status,'amount',pr.amount,'currency',pr.currency,'environment',pr.environment,'createdAt',pr.created_at,'lastSyncedAt',pr.last_synced_at) payment_request FROM order_payment_requests pr WHERE pr.order_id=o.id AND pr.is_current ORDER BY pr.created_at DESC LIMIT 1)payment ON true WHERE o.conversation_id=$1 AND o.deleted_at IS NULL ORDER BY o.created_at DESC LIMIT 20",[id]),
     pool.query("SELECT ca.id,ca.label,ca.recipient_name,ca.phone,ca.address,ca.created_at,ca.updated_at FROM contact_addresses ca JOIN conversations c ON c.contact_id=ca.contact_id WHERE c.id=$1 ORDER BY ca.created_at DESC",[id]),
+    contactProfileById(pool,conversation.rows[0].contact_id),
   ]);
-  return{customerStage:conversation.rows[0].customer_stage,tags:tags.rows,notes:notes.rows,reminder:reminder.rows[0]??null,orders:orders.rows,addresses:addresses.rows};
+  return{customerStage:conversation.rows[0].customer_stage,contact,tags:tags.rows,notes:notes.rows,reminder:reminder.rows[0]??null,orders:orders.rows,addresses:addresses.rows};
 });
 
 app.get("/api/v1/conversations/:id/addresses",{preHandler:authenticate},async(request,reply)=>{
@@ -837,6 +879,20 @@ async function mapWithConcurrency<T,R>(items:T[],limit:number,work:(item:T)=>Pro
 type ProductLabelInput={name:string;color:string};
 type OrderProductInput={name:string;sku?:string;quantity:number;unitAmount:number;imageMediaId?:string;productId?:string;clientProductId?:string};
 type CustomerAddressInput={label:string;recipientName?:string;phone?:string;address:string};
+
+function mapContactRow(row:Record<string,unknown>){
+  const emails=Array.isArray(row.emails)?row.emails as Array<{id:string;label:string;email:string;isPrimary:boolean}>:[],methods=Array.isArray(row.methods)?row.methods as Array<{id:string;type:string;label:string;value:string}>:[];
+  return{id:String(row.id),accountId:String(row.account_id),accountName:String(row.account_name??""),alias:String(row.alias??""),contactName:String(row.contact_name??""),name:String(row.alias||row.contact_name||row.phone_e164||"未知联系人"),phone:String(row.phone_e164??""),note:String(row.note??""),emails,primaryEmail:primaryContactEmail(emails),methods,conversationId:row.conversation_id?String(row.conversation_id):null,lastMessageAt:row.last_message_at?String(row.last_message_at):null,updatedAt:String(row.updated_at??"")};
+}
+
+async function contactProfileById(db:typeof pool|PoolClient,id:string){
+  const [contact,emails,methods]=await Promise.all([
+    db.query("SELECT co.id,co.account_id,a.display_name account_name,co.alias,co.display_name contact_name,co.phone_e164,co.note,co.updated_at,c.id conversation_id,c.last_message_at FROM contacts co JOIN whatsapp_accounts a ON a.id=co.account_id LEFT JOIN conversations c ON c.contact_id=co.id WHERE co.id=$1",[id]),
+    db.query("SELECT id,label,email,is_primary \"isPrimary\" FROM contact_emails WHERE contact_id=$1 ORDER BY position,id",[id]),
+    db.query("SELECT id,type,label,value FROM contact_methods WHERE contact_id=$1 ORDER BY position,id",[id]),
+  ]);
+  return contact.rowCount?mapContactRow({...contact.rows[0],emails:emails.rows,methods:methods.rows}):null;
+}
 
 async function resolveOrderAddress(client:{query:(text:string,values?:unknown[])=>Promise<{rowCount:number|null;rows:Array<Record<string,unknown>>}>},contactId:string,actorId:string,addressId?:string|null,newAddress?:CustomerAddressInput){
   if(addressId){const found=await client.query("SELECT id,label,recipient_name,phone,address FROM contact_addresses WHERE id=$1 AND contact_id=$2",[addressId,contactId]);if(!found.rowCount)throw Object.assign(new Error("invalid_customer_address"),{statusCode:400});const row=found.rows[0];return{id:String(row.id),snapshot:{label:String(row.label),recipientName:String(row.recipient_name??""),phone:String(row.phone??""),address:String(row.address)}};}

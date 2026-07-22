@@ -131,13 +131,19 @@ async function mergeContactIdentity(client:import("pg").PoolClient,agentId:strin
   if(!accountId||!lidJid||!phoneJid)throw new Error("invalid_contact_identity");
   const owned=await client.query("SELECT id FROM whatsapp_accounts WHERE id=$1 AND agent_id=$2",[accountId,agentId]);if(!owned.rowCount)throw new Error("contact_identity_account_not_owned_by_agent");
   const phone=`+${phoneJid.split("@")[0]}`;
-  const found=await client.query("SELECT id,wa_jid,phone_e164,display_name,alias FROM contacts WHERE account_id=$1 AND (wa_jid=ANY($2::text[]) OR phone_e164=$3) ORDER BY CASE WHEN wa_jid=$4 THEN 0 WHEN phone_e164=$3 THEN 1 ELSE 2 END,id FOR UPDATE",[accountId,[phoneJid,lidJid],phone,phoneJid]);
+  const found=await client.query("SELECT id,wa_jid,phone_e164,display_name,alias,note FROM contacts WHERE account_id=$1 AND (wa_jid=ANY($2::text[]) OR phone_e164=$3) ORDER BY CASE WHEN wa_jid=$4 THEN 0 WHEN phone_e164=$3 THEN 1 ELSE 2 END,id FOR UPDATE",[accountId,[phoneJid,lidJid],phone,phoneJid]);
   if(!found.rowCount)return null;
   const target=found.rows[0];
   const suppliedName=typeof payload.displayName==="string"&&!/^\+?\d+$/.test(payload.displayName)?payload.displayName:null;
   const bestName=suppliedName??found.rows.map(row=>String(row.display_name??"")).find(name=>name&&!/^\+?\d+$/.test(name))??target.display_name??phone;
   const bestAlias=found.rows.map(row=>String(row.alias??"").trim()).find(Boolean)??null;
   for(const source of found.rows.slice(1)){
+    await client.query("UPDATE contacts SET note=CASE WHEN NULLIF(btrim(note),'') IS NULL THEN $2 WHEN NULLIF(btrim($2),'') IS NULL OR note=$2 THEN note ELSE note||E'\\n\\n'||$2 END,updated_at=now() WHERE id=$1",[target.id,source.note??null]);
+    const targetPrimary=await client.query("SELECT 1 FROM contact_emails WHERE contact_id=$1 AND is_primary LIMIT 1",[target.id]);
+    await client.query("INSERT INTO contact_emails(contact_id,label,email,is_primary,position,created_at,updated_at) SELECT $1,label,email,false,position+1000,created_at,updated_at FROM contact_emails WHERE contact_id=$2 ON CONFLICT(contact_id,lower(email)) DO NOTHING",[target.id,source.id]);
+    if(!targetPrimary.rowCount)await client.query("UPDATE contact_emails SET is_primary=true,updated_at=now() WHERE id=(SELECT email.id FROM contact_emails email WHERE email.contact_id=$1 ORDER BY email.email=(SELECT source_email.email FROM contact_emails source_email WHERE source_email.contact_id=$2 AND source_email.is_primary LIMIT 1) DESC,email.position,email.id LIMIT 1)",[target.id,source.id]);
+    await client.query("INSERT INTO contact_methods(contact_id,type,label,value,position,created_at,updated_at) SELECT $1,source.type,source.label,source.value,source.position+1000,source.created_at,source.updated_at FROM contact_methods source WHERE source.contact_id=$2 AND NOT EXISTS(SELECT 1 FROM contact_methods target_method WHERE target_method.contact_id=$1 AND target_method.type=source.type AND lower(target_method.label)=lower(source.label) AND target_method.value=source.value)",[target.id,source.id]);
+    await client.query("UPDATE contact_addresses SET contact_id=$1,updated_at=now() WHERE contact_id=$2",[target.id,source.id]);
     const targetConversation=await client.query("SELECT id FROM conversations WHERE account_id=$1 AND contact_id=$2",[accountId,target.id]);
     const sourceConversation=await client.query("SELECT id FROM conversations WHERE account_id=$1 AND contact_id=$2",[accountId,source.id]);
     if(sourceConversation.rowCount&&targetConversation.rowCount){
@@ -154,7 +160,7 @@ async function mergeContactIdentity(client:import("pg").PoolClient,agentId:strin
     await client.query("UPDATE messages SET sender_contact_id=$1 WHERE sender_contact_id=$2",[target.id,source.id]);
     await client.query("DELETE FROM contacts WHERE id=$1",[source.id]);
   }
-  await client.query("UPDATE contacts SET wa_jid=$2,phone_e164=$3,display_name=$4,alias=$5,last_seen_at=COALESCE(last_seen_at,now()) WHERE id=$1",[target.id,phoneJid,phone,bestName,bestAlias]);
+  await client.query("UPDATE contacts SET wa_jid=$2,phone_e164=$3,display_name=$4,alias=$5,last_seen_at=COALESCE(last_seen_at,now()),updated_at=now() WHERE id=$1",[target.id,phoneJid,phone,bestName,bestAlias]);
   return String(target.id);
 }
 

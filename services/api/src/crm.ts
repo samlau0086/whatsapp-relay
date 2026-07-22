@@ -8,6 +8,10 @@ export function canManageSharedRecord(role:string|undefined,ownerId:string|null,
   return ownerId===principalId||role==="admin"||role==="supervisor";
 }
 
+export function primaryContactEmail(emails:Array<{email:string;isPrimary?:boolean;is_primary?:boolean}>):string|null{
+  return emails.find(item=>item.isPrimary||item.is_primary)?.email??null;
+}
+
 export type OrderSummaryItem={name:string;quantity:number;unitAmount:number};
 export type OrderSummaryFee={name:string;amount:number};
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { contactAliasSchema, conversationTagsSchema, currencySettingsSchema, customerStageSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, orderUpdateSchema, productBulkImportSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
+import { contactAliasSchema, contactUpdateSchema, conversationTagsSchema, currencySettingsSchema, customerStageSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, orderUpdateSchema, productBulkImportSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
 
 const accountId="10000000-0000-4000-8000-000000000009";
 
@@ -63,6 +63,17 @@ test("CRM schemas enforce stages, tags, notes, and reminder dates",()=>{
   assert.equal(noteSchema.safeParse({body:"x".repeat(5001)}).success,false);
   assert.equal(reminderSchema.safeParse({remindAt:new Date(Date.now()+60_000).toISOString()}).success,true);
   assert.equal(reminderSchema.safeParse({remindAt:new Date(Date.now()-60_000).toISOString()}).success,false);
+});
+
+test("contact profiles normalize email and select a single primary address",()=>{
+  const profile=contactUpdateSchema.parse({alias:" Alice ",note:" Follow up ",emails:[{label:"Work",email:" ALICE@EXAMPLE.COM ",isPrimary:false}],methods:[{type:"telegram",label:"Sales",value:" @alice "}]});
+  assert.equal(profile.alias,"Alice");
+  assert.equal(profile.emails[0].email,"alice@example.com");
+  assert.equal(profile.emails[0].isPrimary,true);
+  assert.equal(profile.methods[0].value,"@alice");
+  assert.equal(contactUpdateSchema.safeParse({...profile,emails:[profile.emails[0],{...profile.emails[0],isPrimary:false}]}).success,false);
+  assert.equal(contactUpdateSchema.safeParse({...profile,emails:[profile.emails[0],{label:"Home",email:"other@example.com",isPrimary:true}]}).success,false);
+  assert.equal(contactUpdateSchema.parse({...profile,emails:[]}).emails.length,0);
 });
 
 test("orders validate idempotency, products, fees, currency, and translation",()=>{
