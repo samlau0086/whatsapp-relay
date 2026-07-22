@@ -233,4 +233,8 @@ test("product workspace stays inside one root grid item", async () => {
   assert.match(component,/return <div className="product-workspace"><nav className="product-workspace-tabs">/);
   assert.match(css,/\.product-workspace\{grid-column:2\/-1;/);
   assert.match(css,/\.product-workspace>\.management-panel\{grid-column:auto;flex:1;/);
+  assert.match(component,/applyGridPreset\(2\)/);
+  assert.match(component,/applyGridPreset\(3\)/);
+  assert.match(component,/applyGridPreset\(4\)/);
+  assert.match(css,/\.collage-grid-presets\{/);
 });

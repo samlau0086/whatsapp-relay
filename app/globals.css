@@ -329,6 +329,7 @@ button { color:inherit; }
   overflow:hidden;
   isolation:isolate;
 }
+.collage-grid-presets{min-height:43px;padding:6px 10px;border-bottom:1px solid #d8e1dc;background:#f8fbf9;display:flex;align-items:center;gap:6px}.collage-grid-presets b{margin-right:3px;font-size:10px;color:#42544a}.collage-grid-presets button{height:29px;border:1px solid #cfe0d7;border-radius:7px;background:#fff;padding:0 11px;color:#176f4c;font-size:10px;font-weight:650;cursor:pointer}.collage-grid-presets button:hover{border-color:#209461;background:#edf8f2}.collage-grid-presets span{margin-left:auto;color:#7b8982;font-size:9px}
 .product-management .card-view .product-card>.product-library-image img{
   position:absolute;
   inset:0;
