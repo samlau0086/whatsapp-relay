@@ -224,3 +224,13 @@ test("modal backdrops do not dismiss dialogs", async () => {
 
   assert.doesNotMatch(modalSources.join("\n"), /event\.target\s*===\s*event\.currentTarget/);
 });
+
+test("product workspace stays inside one root grid item", async () => {
+  const [component,css]=await Promise.all([
+    readFile(new URL("../app/collage-materials.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../app/globals.css",import.meta.url),"utf8"),
+  ]);
+  assert.match(component,/return <div className="product-workspace"><nav className="product-workspace-tabs">/);
+  assert.match(css,/\.product-workspace\{grid-column:2\/-1;/);
+  assert.match(css,/\.product-workspace>\.management-panel\{grid-column:auto;flex:1;/);
+});
