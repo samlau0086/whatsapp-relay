@@ -190,6 +190,9 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /按比例增加/);
   assert.match(css, /\.product-bulk-toolbar/);
   assert.match(css, /\.product-bulk-dialog/);
+  assert.match(component, /PRODUCT_PAGE_SIZES = \[24,32,48,64\]/);
+  assert.match(component, /每页产品数/);
+  assert.match(css, /\.product-page-size/);
   assert.match(css, /\.order-product-mode/);
   assert.match(component, /ProductSearchDropdown/);
   assert.match(component, /role="combobox"/);

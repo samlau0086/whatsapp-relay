@@ -79,6 +79,9 @@ test("product pagination includes nearby pages, boundary shortcuts, and direct j
   assert.match(component,/product-pagination-ellipsis/);
   assert.match(component,/跳转页码/);
   assert.match(component,/jumpToPage/);
+  assert.match(component,/PRODUCT_PAGE_SIZES = \[24,32,48,64\]/);
+  assert.match(component,/aria-label="每页产品数"/);
+  assert.match(component,/Math\.ceil\(total\/pageSize\)/);
 });
 
 test("product tags support searching existing labels and creating unmatched labels",async()=>{
