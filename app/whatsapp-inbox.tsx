@@ -2432,8 +2432,10 @@ function TtsSettingsPanel({token,role,onToken,onToast}:{token:string;role:string
 }
 
 function ContactAvatar({contact,token,onToken,size="medium"}:{contact:Pick<ContactProfile,"id"|"name"|"avatarUrl">;token:string;onToken:(token:string)=>void;size?:"medium"|"large"}){
-  const [url,setUrl]=useState("");
-  useEffect(()=>{if(!contact.avatarUrl){setUrl("");return;}const controller=new AbortController();let objectUrl="";void(async()=>{try{const result=await authorizedFetch(`/api/v1/contacts/${contact.id}/avatar`,token,{signal:controller.signal});if(result.token!==token)onToken(result.token);if(!result.response.ok)return;objectUrl=URL.createObjectURL(await result.response.blob());setUrl(objectUrl);}catch{} })();return()=>{controller.abort();if(objectUrl)URL.revokeObjectURL(objectUrl);};},[contact.id,contact.avatarUrl,token,onToken]);
+  const avatarKey=`${contact.id}:${contact.avatarUrl??""}`;
+  const [loadedAvatar,setLoadedAvatar]=useState({key:"",url:""});
+  useEffect(()=>{if(!contact.avatarUrl)return;const controller=new AbortController();let objectUrl="";void(async()=>{try{const result=await authorizedFetch(`/api/v1/contacts/${contact.id}/avatar`,token,{signal:controller.signal});if(result.token!==token)onToken(result.token);if(!result.response.ok)return;objectUrl=URL.createObjectURL(await result.response.blob());setLoadedAvatar({key:avatarKey,url:objectUrl});}catch{} })();return()=>{controller.abort();if(objectUrl)URL.revokeObjectURL(objectUrl);};},[avatarKey,contact.id,contact.avatarUrl,token,onToken]);
+  const url=loadedAvatar.key===avatarKey?loadedAvatar.url:"";
   return <span className={`contact-avatar ${size}`}>{url?<img src={url} alt=""/>:<span>{contact.name.slice(0,2).toUpperCase()}</span>}</span>;
 }
 

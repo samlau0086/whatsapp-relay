@@ -1,7 +1,7 @@
 "use client";
 
 import {useCallback,useEffect,useState,type ReactNode} from "react";
-import {Bot,CalendarDays,Check,ChevronLeft,ChevronRight,Clock3,Filter,GanttChart,GripVertical,List,Plus,RefreshCw,Search,Send,Sparkles,Trash2,UserRound,X} from "lucide-react";
+import {Bot,CalendarDays,Check,ChevronLeft,ChevronRight,Clock3,Filter,GanttChart,GripVertical,List,Plus,RefreshCw,Search,Send,Sparkles,Trash2,X} from "lucide-react";
 
 type RequestResult={response:Response;token:string};
 type Account={id:string;name:string;status:string};
