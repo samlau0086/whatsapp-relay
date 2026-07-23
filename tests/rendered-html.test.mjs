@@ -249,3 +249,17 @@ test("product workspace stays inside one root grid item", async () => {
   assert.match(css,/\.collage-custom-grid\{/);
   assert.match(css,/\.canvas-padding-guide\{/);
 });
+
+test("workspace navigation is URL based", async () => {
+  const [component, route] = await Promise.all([
+    readFile(new URL("../app/whatsapp-inbox.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/[view]/page.tsx", import.meta.url), "utf8"),
+  ]);
+  for (const view of ["inbox", "contacts", "tasks", "orders", "products", "agents", "settings", "help"]) {
+    assert.match(component, new RegExp(`${view}:"/${view}"`));
+    assert.match(route, new RegExp(`"${view}"`));
+  }
+  assert.match(component, /router\.push\(WORKSPACE_PATHS\[nextView\]\)/);
+  assert.match(component, /const pathView=pathname\.split\("\/"\)\[1\] as WorkspaceView/);
+  assert.match(component, /const view=pathView in WORKSPACE_PATHS\?pathView:initialView/);
+});

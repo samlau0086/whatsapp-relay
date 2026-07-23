@@ -9,6 +9,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { OrderTemplateEditor, type TemplateFormat } from "./order-template-editor";
 import { ProductCardTemplateEditor } from "./product-card-template-editor";
 import { ProductCardSendDialog } from "./product-card-send-dialog";
@@ -58,6 +59,16 @@ type ChatMessage = {
 type EmailActivity={id:string;subject:string;recipients:Array<{email:string;label:string}>;contentType:string;status:"queued"|"sending"|"retrying"|"accepted"|"failed";attempt:number;lastError:string;createdAt:string;senderName:string;attachmentCount:number};
 type User = {id:string;email:string;displayName:string;role:string};
 type WorkspaceView = "inbox"|"contacts"|"tasks"|"orders"|"products"|"agents"|"settings"|"help";
+const WORKSPACE_PATHS:Record<WorkspaceView,string>={
+  inbox:"/inbox",
+  contacts:"/contacts",
+  tasks:"/tasks",
+  orders:"/orders",
+  products:"/products",
+  agents:"/agents",
+  settings:"/settings",
+  help:"/help",
+};
 type ManagedAgent = {id:string;name:string;status:string;version?:string;protocol_version?:number;platform?:string;last_seen_at?:string;last_acked_cursor:number;created_at:string;accounts:Array<{id:string;display_name:string;phone_e164?:string;status:string;status_reason?:string;last_event_at?:string}>};
 type MediaAsset = {id:string;fileName:string;mimeType:string;size:number;sha256:string;createdAt:string;usageCount:number};
 type TtsProviderId="openai"|"elevenlabs"|"azure"|"openai_compatible";
@@ -85,7 +96,11 @@ function mapPaymentRequest(item:Record<string,unknown>):PaymentRequest{return{id
 
 function mapCustomerAddress(item:Record<string,unknown>,id=String(item.id??"")):CustomerAddress{return{id,label:String(item.label??"地址"),recipientName:String(item.recipientName??item.recipient_name??""),phone:String(item.phone??""),address:String(item.address??"")};}
 
-export function WhatsAppInbox() {
+export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}) {
+  const router=useRouter();
+  const pathname=usePathname();
+  const pathView=pathname.split("/")[1] as WorkspaceView;
+  const view=pathView in WORKSPACE_PATHS?pathView:initialView;
   const [accounts,setAccounts]=useState<Account[]>([]);
   const [conversations,setConversations]=useState<Conversation[]>([]);
   const [messages,setMessages]=useState<Record<string,ChatMessage[]>>({});
@@ -104,7 +119,6 @@ export function WhatsAppInbox() {
   const [sessionReady,setSessionReady]=useState(false);
   const [loading,setLoading]=useState(true);
   const [loadError,setLoadError]=useState("");
-  const [view,setView]=useState<WorkspaceView>("inbox");
   const [newConversationOpen,setNewConversationOpen]=useState(false);
   const [mediaOpen,setMediaOpen]=useState(false);
   const [productCardsOpen,setProductCardsOpen]=useState(false);
@@ -307,7 +321,10 @@ export function WhatsAppInbox() {
   const onlineCount=accounts.filter(item=>item.status==="online").length;
   const profileText=(user?.displayName||user?.email||"坐席").slice(0,1).toUpperCase();
   const userRole=user?.role||tokenRole(apiToken);
-  const openInbox=(nextFilter="全部会话")=>{setView("inbox");setFilter(nextFilter);};
+  const navigate=(nextView:WorkspaceView)=>{
+    router.push(WORKSPACE_PATHS[nextView]);
+  };
+  const openInbox=(nextFilter="全部会话")=>{navigate("inbox");setFilter(nextFilter);};
   const completeLogin=(token:string,nextUser:User)=>{sessionStorage.setItem("relayAccessToken",token);sessionStorage.setItem("relayUser",JSON.stringify(nextUser));setApiToken(token);setUser(nextUser);setAuthOpen(false);setSessionReady(true);void loadWorkspace(token);};
 
   if(!sessionReady)return <AccessPortal loading onLogin={()=>{}}/>;
@@ -317,16 +334,16 @@ export function WhatsAppInbox() {
     {toast&&<div className="toast"><Check size={15}/>{toast}</div>}
     <nav className="rail" aria-label="全局导航"><button className="brand-mark" onClick={()=>openInbox()} aria-label="RelayDesk 消息中心"><Sparkles size={19}/></button><div className="rail-nav">
       <button className={view==="inbox"&&filter==="全部会话"?"rail-button active":"rail-button"} onClick={()=>openInbox()} aria-label="消息中心" title="消息中心"><MessageCircle size={18}/></button>
-      <button className={view==="contacts"?"rail-button active":"rail-button"} onClick={()=>setView("contacts")} aria-label="联系人管理" title="联系人管理"><Users size={18}/></button>
-      <button className={view==="tasks"?"rail-button active":"rail-button"} onClick={()=>setView("tasks")} aria-label="任务中心" title="任务中心"><ClipboardList size={18}/></button>
-      <button className={view==="orders"?"rail-button active":"rail-button"} onClick={()=>setView("orders")} aria-label="订单管理" title="订单管理"><ClipboardList size={18}/></button>
-      <button className={view==="products"?"rail-button active":"rail-button"} onClick={()=>setView("products")} aria-label="产品库" title="产品库"><ShoppingBag size={18}/></button>
-      <button className={view==="agents"?"rail-button active":"rail-button"} onClick={()=>setView("agents")} aria-label="Agent 管理" title="Agent 管理"><MonitorSmartphone size={18}/></button>
+      <button className={view==="contacts"?"rail-button active":"rail-button"} onClick={()=>navigate("contacts")} aria-label="联系人管理" title="联系人管理"><Users size={18}/></button>
+      <button className={view==="tasks"?"rail-button active":"rail-button"} onClick={()=>navigate("tasks")} aria-label="任务中心" title="任务中心"><ClipboardList size={18}/></button>
+      <button className={view==="orders"?"rail-button active":"rail-button"} onClick={()=>navigate("orders")} aria-label="订单管理" title="订单管理"><ClipboardList size={18}/></button>
+      <button className={view==="products"?"rail-button active":"rail-button"} onClick={()=>navigate("products")} aria-label="产品库" title="产品库"><ShoppingBag size={18}/></button>
+      <button className={view==="agents"?"rail-button active":"rail-button"} onClick={()=>navigate("agents")} aria-label="Agent 管理" title="Agent 管理"><MonitorSmartphone size={18}/></button>
       <button className="rail-button" onClick={()=>{openInbox();window.setTimeout(()=>{const composer=document.querySelector<HTMLTextAreaElement>(".composer textarea");if(composer)composer.focus();else setToast("请先选择一个真实会话");},0);}} aria-label="发送消息" title="发送消息"><Send size={18}/></button>
       <button className={view==="inbox"&&filter==="收藏"?"rail-button active":"rail-button"} onClick={()=>openInbox("收藏")} aria-label="收藏会话" title="收藏会话"><Star size={18}/></button>
       <button className={view==="inbox"&&filter==="已关闭"?"rail-button active":"rail-button"} onClick={()=>openInbox("已关闭")} aria-label="已关闭会话" title="已关闭会话"><Clock3 size={18}/></button>
       <button className={view==="inbox"&&filter==="已归档"?"rail-button active":"rail-button"} onClick={()=>openInbox("已归档")} aria-label="已归档会话" title="已归档会话"><Archive size={18}/></button>
-    </div><div className="rail-bottom"><button className={view==="help"?"rail-button active":"rail-button"} onClick={()=>setView("help")} aria-label="帮助" title="帮助"><CircleHelp size={18}/></button><button className={view==="settings"?"rail-button active":"rail-button"} onClick={()=>setView("settings")} aria-label="系统设置" title="系统设置"><Settings size={18}/></button><button className="profile-button" onClick={()=>setAuthOpen(true)} aria-label="账户"><span className="avatar small coral">{profileText}</span></button></div></nav>
+    </div><div className="rail-bottom"><button className={view==="help"?"rail-button active":"rail-button"} onClick={()=>navigate("help")} aria-label="帮助" title="帮助"><CircleHelp size={18}/></button><button className={view==="settings"?"rail-button active":"rail-button"} onClick={()=>navigate("settings")} aria-label="系统设置" title="系统设置"><Settings size={18}/></button><button className="profile-button" onClick={()=>setAuthOpen(true)} aria-label="账户"><span className="avatar small coral">{profileText}</span></button></div></nav>
 
     {view==="inbox"?<><aside className={`filters ${sidebarOpen?"mobile-open":""}`}><div className="mobile-filter-head"><b>收件箱</b><button onClick={()=>setSidebarOpen(false)} aria-label="关闭筛选"><X size={18}/></button></div><div className="workspace-title"><div><span className="eyebrow">工作空间</span><h1>消息中心</h1></div><button onClick={()=>setNewConversationOpen(true)} aria-label="新建会话" title="新建会话"><Plus size={16}/></button></div>
       <label className="account-switcher"><span className="wa-dot"><Phone size={13}/></span><span><b>WhatsApp 账号</b><small>{onlineCount} 在线 · {accounts.length-onlineCount} 离线</small></span><ChevronDown size={15}/><select aria-label="筛选 WhatsApp 账号" value={selectedAccount} onChange={event=>setSelectedAccount(event.target.value)}><option value="">全部账号</option>{accounts.map(account=><option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
@@ -361,7 +378,7 @@ export function WhatsAppInbox() {
       :view==="products"?<ProductWorkspace token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast} products={onOpenMaterials=><ProductManagement token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast} onOpenMaterials={onOpenMaterials}/>}/>
       :view==="agents"?<AgentManagement token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>
       :view==="settings"?<SettingsPanel token={apiToken} role={userRole} accounts={accounts} onToken={setApiToken} onToast={setToast}/>
-      :<HelpPanel onInbox={()=>openInbox()} onAgents={()=>setView("agents")}/>
+      :<HelpPanel onInbox={()=>openInbox()} onAgents={()=>navigate("agents")}/>
     }
 
     {authOpen&&<LoginDialog
@@ -370,7 +387,7 @@ export function WhatsAppInbox() {
       onLogin={completeLogin}
       onLogout={logout}
     />}
-    {newConversationOpen&&<NewConversationDialog accounts={accounts} token={apiToken} onToken={setApiToken} onClose={()=>setNewConversationOpen(false)} onCreated={async(conversationId,accountId,accessToken)=>{setNewConversationOpen(false);setView("inbox");setFilter("全部会话");setSelectedAccount(accountId);await loadWorkspace(accessToken,true);setActiveId(conversationId);setToast("新会话已创建，首条消息已进入发送队列");}}/>}
+    {newConversationOpen&&<NewConversationDialog accounts={accounts} token={apiToken} onToken={setApiToken} onClose={()=>setNewConversationOpen(false)} onCreated={async(conversationId,accountId,accessToken)=>{setNewConversationOpen(false);navigate("inbox");setFilter("全部会话");setSelectedAccount(accountId);await loadWorkspace(accessToken,true);setActiveId(conversationId);setToast("新会话已创建，首条消息已进入发送队列");}}/>}
     {mediaOpen&&active&&<MediaDialog accountId={active.accountId} token={apiToken} initialCaption={draft} onToken={setApiToken} onToast={setToast} onClose={()=>setMediaOpen(false)} onSend={sendMediaAsset}/>}
     {productCardsOpen&&active&&<ProductCardSendDialog accountId={active.accountId} conversationId={active.id} contactId={active.contactId} request={(path,init)=>authorizedFetch(path,apiToken,init)} onToken={setApiToken} onClose={()=>setProductCardsOpen(false)} onSent={text=>{setToast(text);void loadMessages(apiToken,active.id);}}/>}
     {ttsOpen&&active&&<TextToSpeechDialog accountId={active.accountId} token={apiToken} initialText={draft} onToken={setApiToken} onClose={()=>setTtsOpen(false)} onSend={async asset=>{setTtsOpen(false);await sendMediaAsset(asset,"");}}/>}
