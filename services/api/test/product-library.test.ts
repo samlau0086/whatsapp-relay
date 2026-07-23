@@ -63,6 +63,19 @@ test("the product editor previews the selected media image",async()=>{
   assert.match(mediaDialog,/\},\[mediaId\]\)/);
 });
 
+test("product card sending recovers from a lost response without duplicating the batch",async()=>{
+  const [dialog,server]=await Promise.all([
+    readFile(new URL("../../../app/product-card-send-dialog.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(dialog,/pendingBatchRef/);
+  assert.match(dialog,/requestJsonWithTimeout/);
+  assert.match(dialog,/waitForBatch/);
+  assert.match(dialog,/正在确认发送状态/);
+  assert.match(server,/product-cards\/batches\/:batchId/);
+  assert.match(server,/left\(client_message_id,length\(\$3\)\+1\)=\$3\|\|':'/);
+});
+
 test("product management offers compact card and list views",async()=>{
   const [component,css]=await Promise.all([readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),readFile(new URL("../../../app/globals.css",import.meta.url),"utf8")]);
   assert.match(component,/aria-label="卡片视图"/);

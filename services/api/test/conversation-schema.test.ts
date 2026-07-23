@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationTagsSchema, currencySettingsSchema, customerStageSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, orderUpdateSchema, productBulkEditSchema, productBulkImportSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
+import { contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationTagsSchema, currencySettingsSchema, customerStageSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, orderUpdateSchema, productBulkEditSchema, productBulkImportSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
 
 const accountId="10000000-0000-4000-8000-000000000009";
 
@@ -141,6 +141,8 @@ test("product library schemas validate SKU, tiered prices, and editable labels",
   assert.equal(productBulkEditSchema.safeParse({productIds:[accountId,accountId],operation:{field:"title",mode:"prefix",value:"New "}}).success,false);
   assert.equal(productCardSendSchema.safeParse({accountId,clientBatchId:"batch-001",productIds:[accountId],mode:"individual",showPrice:true}).success,true);
   assert.equal(productCardSendSchema.safeParse({accountId,clientBatchId:"batch-001",productIds:Array.from({length:11},(_,index)=>`10000000-0000-4000-8000-${String(index).padStart(12,"0")}`),mode:"combined",showPrice:false}).success,false);
+  assert.equal(productCardBatchStatusSchema.safeParse({accountId,batchId:"batch-001"}).success,true);
+  assert.equal(productCardBatchStatusSchema.safeParse({accountId,batchId:"batch:%"}).success,false);
 });
 
 test("currency settings require one included base currency with rate one",()=>{
