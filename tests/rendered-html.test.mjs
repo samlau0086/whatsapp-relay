@@ -163,7 +163,9 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /文字版详情/);
   assert.match(component, /图片版完整详情/);
   assert.match(component, /不会撤回已发送的 WhatsApp 消息/);
-  assert.match(component, /\/reminder/);
+  assert.match(component, /\/api\/v1\/tasks\?contactId=/);
+  assert.match(component, /快捷添加/);
+  assert.match(component, /该联系人暂无任务/);
   assert.match(css, /\.crm-details/);
   assert.match(css, /\.details-backdrop/);
   assert.match(css, /\.order-builder/);
@@ -271,4 +273,16 @@ test("task requests stay stable and inbox polling stops on other views", async (
   assert.doesNotMatch(component, /<TaskCenter[^>]+request=\{\(path,init\)=>authorizedFetch/);
   assert.match(component, /if\(view!=="inbox"\|\|!apiToken\)return;const timer=window\.setInterval\(\(\)=>void loadWorkspace/);
   assert.match(component, /if\(view!=="inbox"\|\|!apiToken\|\|!effectiveActiveId\)return;const initial=/);
+});
+
+test("agent provider reload selects the enabled provider", async () => {
+  const component = await readFile(new URL("../app/whatsapp-inbox.tsx", import.meta.url), "utf8");
+  assert.match(
+    component,
+    /setProviderId\(value=>body\.data\.find\(item=>item\.enabled\)\?\.provider\?\?\(body\.data\.some\(item=>item\.provider===value\)\?value:"openai"\)\)/,
+  );
+  assert.doesNotMatch(
+    component,
+    /setProviderId\(value=>body\.data\.some\(item=>item\.provider===value\)\?value:\(body\.data\.find\(item=>item\.enabled\)\?\.provider\?\?"openai"\)\)/,
+  );
 });

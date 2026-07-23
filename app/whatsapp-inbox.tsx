@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  Archive, Bell, Bookmark, Check, CheckCheck, ChevronDown, CircleHelp, Clock3, FileText,
+  Archive, Bell, Bookmark, CalendarDays, Check, CheckCheck, ChevronDown, CircleHelp, Clock3, FileText,
   Inbox, Info, Languages, Mail, Menu, MessageCircle, Mic, MonitorSmartphone, Paperclip, Phone, Plus,
   Pencil, RefreshCw, Search, Send, Settings, ShieldCheck, ShoppingBag, Smile, Sparkles, Star, Trash2, UploadCloud, UserPlus,
   Users, Wifi, WifiOff, X, ClipboardList, ExternalLink, Bot, Brain, BookOpen, MapPin, Copy, CreditCard, LayoutGrid, List, Eye, EyeOff,
@@ -48,7 +48,9 @@ type CustomerAddress={id:string;label:string;recipientName:string;phone:string;a
 type PaymentRequest={id:string;invoiceId:string|null;url:string|null;status:string;amount:number;currency:string;environment:string;createdAt:string;lastSyncedAt:string|null};
 type OrderItem={id:string;orderNumber:string;conversationId:string;accountId:string;accountName:string;customerName:string;customerPhone:string;amount:number;currency:string;description:string;status:string;sendFormat:string;translateOnSend:boolean;targetLanguage:string;createdAt:string;createdByName:string;messageStatus:string;items:OrderProductItem[];fees:OrderFeeItem[];addressId:string|null;address:CustomerAddress|null;paymentRequest:PaymentRequest|null};
 type OrderSendTarget={order:OrderItem};
-type ConversationDetails={customerStage:string;contact:ContactProfile|null;tags:TagItem[];notes:NoteItem[];reminder:{id:string;remindAt:string;createdAt:string;updatedAt:string}|null;orders:OrderItem[]};
+type ContactTaskSummary={id:string;title:string;kind:"general"|"message";status:string;dueAt:string;sendAt:string|null;assignedUserName:string|null};
+type ConversationDetails={customerStage:string;contact:ContactProfile|null;tags:TagItem[];notes:NoteItem[];orders:OrderItem[]};
+const CONTACT_TASK_STATUS:Record<string,string>={planned:"计划中",in_progress:"进行中",waiting_approval:"待审批",scheduled:"待发送",completed:"已完成",overdue:"已逾期",failed:"失败",cancelled:"已取消"};
 type ChatMessage = {
   id:string; direction:"in"|"out"; kind:string; text:string; time:string;occurredAt?:string;
   translationSourceText?:string;
@@ -436,7 +438,11 @@ function CrmDetailsPanel({
     [tagName, setTagName] = useState(""),
     [tagColor, setTagColor] = useState("#DFF5E8"),
     [noteDraft, setNoteDraft] = useState(""),
-    [reminderValue, setReminderValue] = useState(""),
+    [contactTasks, setContactTasks] = useState<ContactTaskSummary[]>([]),
+    [taskTitle, setTaskTitle] = useState(""),
+    [taskKind, setTaskKind] = useState<"general"|"message">("general"),
+    [taskDueAt, setTaskDueAt] = useState(()=>toDateTimeLocal(new Date(Date.now()+86400000).toISOString())),
+    [taskMinAt] = useState(()=>Date.now()),
     [orderOpen, setOrderOpen] = useState(false),
     [editOrderTarget, setEditOrderTarget] = useState<OrderItem | null>(null),
     [sendOrderTarget, setSendOrderTarget] = useState<OrderSendTarget | null>(null),
@@ -445,21 +451,21 @@ function CrmDetailsPanel({
     [addressEditing, setAddressEditing] = useState(false),
     [aliasEditing, setAliasEditing] = useState(false),
     [aliasDraft, setAliasDraft] = useState(active.alias),
-    [aliasBusy, setAliasBusy] = useState(false),
-    [currentTime] = useState(() => Date.now());
+    [aliasBusy, setAliasBusy] = useState(false);
   const canManageTags = ["admin", "supervisor"].includes(role);
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [detailResult, tagResult] = await Promise.all([
+      const [detailResult, tagResult, taskResult] = await Promise.all([
         authorizedFetch(`/api/v1/conversations/${active.id}/details`, token),
         authorizedFetch("/api/v1/tags", token),
+        authorizedFetch(`/api/v1/tasks?contactId=${encodeURIComponent(active.contactId)}&limit=20`,token),
       ]);
       const nextToken =
-        detailResult.token !== token ? detailResult.token : tagResult.token;
+        detailResult.token !== token ? detailResult.token : tagResult.token !== token ? tagResult.token : taskResult.token;
       if (nextToken !== token) onToken(nextToken);
-      if (!detailResult.response.ok || !tagResult.response.ok)
+      if (!detailResult.response.ok || !tagResult.response.ok || !taskResult.response.ok)
         throw new Error("联系人业务资料加载失败");
       const body = (await detailResult.response.json()) as Record<
           string,
@@ -467,8 +473,8 @@ function CrmDetailsPanel({
         >,
         tagBody = (await tagResult.response.json()) as {
           data: Array<Record<string, unknown>>;
-        };
-      const reminder = body.reminder as Record<string, unknown> | null;
+        },
+        taskBody=(await taskResult.response.json()) as {data?:Array<Record<string,unknown>>};
       setDetails({
         customerStage: String(body.customerStage ?? active.customerStage),
         contact:body.contact&&typeof body.contact==="object"?mapContactProfile(body.contact as Record<string,unknown>):null,
@@ -485,28 +491,18 @@ function CrmDetailsPanel({
               updatedAt: String(item.updated_at),
             }))
           : [],
-        reminder: reminder
-          ? {
-              id: String(reminder.id),
-              remindAt: String(reminder.remind_at),
-              createdAt: String(reminder.created_at),
-              updatedAt: String(reminder.updated_at),
-            }
-          : null,
         orders: Array.isArray(body.orders)
           ? (body.orders as Array<Record<string, unknown>>).map(item=>mapOrder(item,{conversationId:active.id,accountId:active.accountId,accountName:active.account,customerName:active.name,customerPhone:active.phone}))
           : [],
       });
       setCatalog(tagBody.data.map(mapTag));
-      setReminderValue(
-        reminder ? toDateTimeLocal(String(reminder.remind_at)) : "",
-      );
+      setContactTasks((taskBody.data??[]).map(item=>({id:String(item.id),title:String(item.title??""),kind:item.kind==="message"?"message":"general",status:String(item.status??"planned"),dueAt:String(item.due_at),sendAt:item.send_at?String(item.send_at):null,assignedUserName:item.assigned_user_name?String(item.assigned_user_name):null})));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "加载失败");
     } finally {
       setLoading(false);
     }
-  }, [active.id, active.customerStage, active.accountId, active.account, active.name, active.phone, token, onToken]);
+  }, [active.id, active.contactId, active.customerStage, active.accountId, active.account, active.name, active.phone, token, onToken]);
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
@@ -636,23 +632,15 @@ function CrmDetailsPanel({
         method: "DELETE",
       });
   }
-  async function saveReminder() {
-    if (!reminderValue) return;
-    await request(`/api/v1/conversations/${active.id}/reminder`, {
-      method: "PUT",
+  async function createQuickTask() {
+    const dueAt=new Date(taskDueAt);
+    if(!taskTitle.trim()||Number.isNaN(dueAt.getTime())||dueAt.getTime()<=Date.now())return;
+    const ok=await request("/api/v1/tasks",{
+      method:"POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ remindAt: new Date(reminderValue).toISOString() }),
+      body:JSON.stringify({accountId:active.accountId,contactId:active.contactId,conversationId:active.id,assignedUserId:user?.id??null,kind:taskKind,title:taskTitle.trim(),description:"",status:"planned",progress:0,startAt:new Date().toISOString(),dueAt:dueAt.toISOString(),sendAt:taskKind==="message"?dueAt.toISOString():null,sendMode:"approval",recurrence:null,personaOverride:null,toolOverrides:null,dependencyIds:[]}),
     });
-    onToast("提醒已设置");
-  }
-  async function clearReminder() {
-    const ok = await request(`/api/v1/conversations/${active.id}/reminder`, {
-      method: "DELETE",
-    });
-    if (ok) {
-      setReminderValue("");
-      onToast("提醒已取消");
-    }
+    if(ok){setTaskTitle("");setTaskDueAt(toDateTimeLocal(new Date(Date.now()+86400000).toISOString()));onToast(taskKind==="message"?"定时消息任务已创建":"任务已创建");}
   }
   async function sendOrder(order: OrderItem, format: "text" | "image", translate: boolean, targetLanguage?: string, email?:{recipientEmailIds:string[];subject:string;messageBody:string}) {
     setBusy(true);
@@ -974,35 +962,26 @@ function CrmDetailsPanel({
               </div>
             </div>
             <div className="detail-section crm-section">
-              <h4>提醒</h4>
-              {details.reminder &&
-                new Date(details.reminder.remindAt).getTime() <=
-                  currentTime && (
-                  <p className="reminder-due">
-                    <Bell size={13} />
-                    此提醒已到期
-                  </p>
-                )}
-              <input
-                className="crm-select"
-                type="datetime-local"
-                value={reminderValue}
-                min={toDateTimeLocal(new Date(currentTime).toISOString())}
-                onChange={(event) => setReminderValue(event.target.value)}
-              />
-              <div className="reminder-actions">
-                <button
-                  className="crm-primary"
-                  disabled={busy || !reminderValue}
-                  onClick={() => void saveReminder()}
-                >
-                  {details.reminder ? "重新安排" : "设置提醒"}
+              <h4 className="detail-title"><span>任务</span><Link href="/tasks">查看全部</Link></h4>
+              <div className="contact-task-list">
+                {contactTasks.length?contactTasks.slice(0,6).map(task=><article key={task.id}>
+                  <span className={`contact-task-icon ${task.kind}`} aria-hidden="true">{task.kind==="message"?<Send size={12}/>:<ClipboardList size={12}/>}</span>
+                  <span><b>{task.title}</b><small><CalendarDays size={10}/>{formatDateTime(task.sendAt??task.dueAt)}{task.assignedUserName?` · ${task.assignedUserName}`:""}</small></span>
+                  <em className={task.status}>{CONTACT_TASK_STATUS[task.status]??task.status}</em>
+                </article>):<p className="crm-empty">该联系人暂无任务</p>}
+              </div>
+              <div className="contact-quick-task">
+                <div>
+                  <select className="crm-select" value={taskKind} onChange={event=>setTaskKind(event.target.value as "general"|"message")} aria-label="任务类型">
+                    <option value="general">普通任务</option>
+                    <option value="message">定时消息</option>
+                  </select>
+                  <input className="crm-select" value={taskTitle} onChange={event=>setTaskTitle(event.target.value)} placeholder={taskKind==="message"?"例如：发送报价跟进":"例如：电话回访"} maxLength={200}/>
+                </div>
+                <input className="crm-select" type="datetime-local" value={taskDueAt} min={toDateTimeLocal(new Date(taskMinAt).toISOString())} onChange={event=>setTaskDueAt(event.target.value)}/>
+                <button className="crm-primary" disabled={busy||!taskTitle.trim()||!taskDueAt||new Date(taskDueAt).getTime()<=taskMinAt} onClick={()=>void createQuickTask()}>
+                  <Plus size={12}/>快捷添加{taskKind==="message"?"定时消息":"任务"}
                 </button>
-                {details.reminder && (
-                  <button disabled={busy} onClick={() => void clearReminder()}>
-                    取消提醒
-                  </button>
-                )}
               </div>
             </div>
             <div className="detail-section">
@@ -2010,7 +1989,7 @@ function EmailSettingsPanel({token,onToken,onToast}:{token:string;onToken:(token
 
 function AiAgentSettingsPanel({token,accounts,onToken,onToast}:{token:string;accounts:Account[];onToken:(token:string)=>void;onToast:(text:string)=>void}){
   const [providers,setProviders]=useState<Array<{provider:string;enabled:boolean;key_configured:boolean;api_key:string;base_url:string;model:string;embedding_model:string}>>([]),[providerId,setProviderId]=useState("openai"),[accountId,setAccountId]=useState(accounts[0]?.id??""),[kbs,setKbs]=useState<KnowledgeBaseItem[]>([]),[settings,setSettings]=useState({enabled:false,persona:"You are a helpful, concise customer service agent.",replyLanguage:"auto",timezone:"Asia/Shanghai",businessStart:"09:00",businessEnd:"18:00",confidenceThreshold:.8,followupEnabled:true,followupDelaysHours:[24,72],knowledgeBaseIds:[] as string[]}),[saving,setSaving]=useState(false);
-  const loadProvider=useCallback(async()=>{const result=await authorizedFetch("/api/v1/admin/agent-provider",token);if(result.token!==token)onToken(result.token);if(result.response.ok){const body=await result.response.json() as {data:typeof providers};setProviders(body.data);setProviderId(value=>body.data.some(item=>item.provider===value)?value:(body.data.find(item=>item.enabled)?.provider??"openai"));}},[token,onToken]);
+  const loadProvider=useCallback(async()=>{const result=await authorizedFetch("/api/v1/admin/agent-provider",token);if(result.token!==token)onToken(result.token);if(result.response.ok){const body=await result.response.json() as {data:typeof providers};setProviders(body.data);setProviderId(value=>body.data.find(item=>item.enabled)?.provider??(body.data.some(item=>item.provider===value)?value:"openai"));}},[token,onToken]);
   const loadAccount=useCallback(async()=>{if(!accountId)return;const [result,kbResult]=await Promise.all([authorizedFetch(`/api/v1/accounts/${accountId}/agent-settings`,token),authorizedFetch("/api/v1/knowledge-bases",token)]);if(result.token!==token)onToken(result.token);if(kbResult.token!==token)onToken(kbResult.token);if(kbResult.response.ok)setKbs((await kbResult.response.json()).data);if(result.response.ok){const body=await result.response.json() as Record<string,unknown>;setSettings({enabled:Boolean(body.enabled),persona:String(body.persona??""),replyLanguage:String(body.reply_language??"auto"),timezone:String(body.timezone??"UTC"),businessStart:String(body.business_start??"09:00").slice(0,5),businessEnd:String(body.business_end??"18:00").slice(0,5),confidenceThreshold:Number(body.confidence_threshold??.8),followupEnabled:body.followup_enabled!==false,followupDelaysHours:(body.followup_delays_hours as number[])??[24,72],knowledgeBaseIds:(body.knowledgeBaseIds as string[])??[]});}},[accountId,token,onToken]);
   useEffect(()=>{const timer=window.setTimeout(()=>void loadProvider(),0);return()=>window.clearTimeout(timer);},[loadProvider]);useEffect(()=>{if(!accountId&&accounts[0]){const timer=window.setTimeout(()=>setAccountId(accounts[0].id),0);return()=>window.clearTimeout(timer);}},[accountId,accounts]);useEffect(()=>{const timer=window.setTimeout(()=>void loadAccount(),0);return()=>window.clearTimeout(timer);},[loadAccount]);const provider=providers.find(item=>item.provider===providerId);
   async function saveProvider(){if(!provider)return;setSaving(true);const result=await authorizedFetch(`/api/v1/admin/agent-provider/${providerId}`,token,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({enabled:provider.enabled,apiKey:provider.api_key.trim()||undefined,baseUrl:provider.base_url,model:provider.model,embeddingModel:provider.embedding_model})});if(result.token!==token)onToken(result.token);setSaving(false);onToast(result.response.ok?"Agent Provider 已保存":"Provider 保存失败");if(result.response.ok)await loadProvider();}
