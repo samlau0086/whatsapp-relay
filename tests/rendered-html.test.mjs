@@ -75,7 +75,12 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(css, /@media\(max-width:980px\)/);
   assert.match(css, /prefers-reduced-motion/);
   assert.match(component, /messagesRef/);
-  assert.match(component, /scrollMessagesToEnd/);
+  assert.match(component, /scrollMessagesToEnd=useCallback\(\(\)=>/);
+  assert.match(
+    component,
+    /container\.scrollTo\(\{top:container\.scrollHeight,behavior:"smooth"\}\)/,
+  );
+  assert.doesNotMatch(component, /scrollMessagesToEnd\("smooth"\)/);
   assert.match(component, /container\.scrollTop=container\.scrollHeight/);
   assert.match(component, /onLoad=\{onReady\}/);
   assert.match(

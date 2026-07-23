@@ -170,10 +170,10 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const currentEmailActivities=useMemo(()=>active?emailActivities[active.id]??[]:[],[active,emailActivities]);
   const latestMessageId=currentMessages.at(-1)?.id??"";
   const taskRequest=useCallback((path:string,init?:RequestInit)=>authorizedFetch(path,apiToken,init),[apiToken]);
-  const scrollMessagesToEnd=useCallback((behavior:ScrollBehavior="smooth")=>{
+  const scrollMessagesToEnd=useCallback(()=>{
     window.requestAnimationFrame(()=>{
       const container=messagesRef.current;
-      if(container)container.scrollTo({top:container.scrollHeight,behavior});
+      if(container)container.scrollTo({top:container.scrollHeight,behavior:"smooth"});
     });
   },[]);
 
@@ -184,7 +184,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   },[effectiveActiveId,latestMessageId]);
 
   useEffect(()=>{
-    if(latestMessageId)scrollMessagesToEnd("smooth");
+    if(latestMessageId)scrollMessagesToEnd();
   },[latestMessageId,scrollMessagesToEnd]);
 
   const logout=useCallback(()=>{
