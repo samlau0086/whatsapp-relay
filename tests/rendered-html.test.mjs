@@ -263,3 +263,12 @@ test("workspace navigation is URL based", async () => {
   assert.match(component, /const pathView=pathname\.split\("\/"\)\[1\] as WorkspaceView/);
   assert.match(component, /const view=pathView in WORKSPACE_PATHS\?pathView:initialView/);
 });
+
+test("task requests stay stable and inbox polling stops on other views", async () => {
+  const component = await readFile(new URL("../app/whatsapp-inbox.tsx", import.meta.url), "utf8");
+  assert.match(component, /const taskRequest=useCallback\(\(path:string,init\?:RequestInit\)=>authorizedFetch\(path,apiToken,init\),\[apiToken\]\)/);
+  assert.match(component, /<TaskCenter token=\{apiToken\} accounts=\{accounts\} request=\{taskRequest\}/);
+  assert.doesNotMatch(component, /<TaskCenter[^>]+request=\{\(path,init\)=>authorizedFetch/);
+  assert.match(component, /if\(view!=="inbox"\|\|!apiToken\)return;const timer=window\.setInterval\(\(\)=>void loadWorkspace/);
+  assert.match(component, /if\(view!=="inbox"\|\|!apiToken\|\|!effectiveActiveId\)return;const initial=/);
+});

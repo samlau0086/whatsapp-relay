@@ -167,6 +167,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const currentMessages=useMemo(()=>active?messages[active.id]??[]:[],[active,messages]);
   const currentEmailActivities=useMemo(()=>active?emailActivities[active.id]??[]:[],[active,emailActivities]);
   const latestMessageId=currentMessages.at(-1)?.id??"";
+  const taskRequest=useCallback((path:string,init?:RequestInit)=>authorizedFetch(path,apiToken,init),[apiToken]);
   const scrollMessagesToEnd=useCallback((behavior:ScrollBehavior="smooth")=>{
     window.requestAnimationFrame(()=>{
       const container=messagesRef.current;
@@ -224,7 +225,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     }catch{setToast("消息加载失败，正在等待下次同步");}
   },[logout]);
 
-  useEffect(()=>{if(!apiToken||!active||!currentEmailActivities.some(item=>["queued","sending","retrying"].includes(item.status)))return;const timer=window.setInterval(()=>void loadMessages(apiToken,active.id),3000);return()=>window.clearInterval(timer);},[apiToken,active,currentEmailActivities,loadMessages]);
+  useEffect(()=>{if(view!=="inbox"||!apiToken||!active||!currentEmailActivities.some(item=>["queued","sending","retrying"].includes(item.status)))return;const timer=window.setInterval(()=>void loadMessages(apiToken,active.id),3000);return()=>window.clearInterval(timer);},[view,apiToken,active,currentEmailActivities,loadMessages]);
 
   const loadTranslationSettings=useCallback(async(token:string,conversationId:string)=>{
     const sequence=++translationLoadSequence.current;
@@ -262,9 +263,9 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   },[loadWorkspace]);
   useEffect(()=>{const timer=window.setTimeout(()=>{if(window.matchMedia("(max-width: 1280px)").matches)setDetailsOpen(false);},0);return()=>window.clearTimeout(timer);},[]);
 
-  useEffect(()=>{if(!apiToken)return;const timer=window.setInterval(()=>void loadWorkspace(apiToken,true),5000);return()=>window.clearInterval(timer);},[apiToken,loadWorkspace]);
-  useEffect(()=>{if(!apiToken||!effectiveActiveId)return;const initial=window.setTimeout(()=>void loadMessages(apiToken,effectiveActiveId,true),0);const timer=window.setInterval(()=>void loadMessages(apiToken,effectiveActiveId),3000);return()=>{window.clearTimeout(initial);window.clearInterval(timer);};},[apiToken,effectiveActiveId,loadMessages]);
-  useEffect(()=>{if(!apiToken||!effectiveActiveId)return;const timer=window.setTimeout(()=>void loadTranslationSettings(apiToken,effectiveActiveId),0);return()=>window.clearTimeout(timer);},[apiToken,view,effectiveActiveId,loadTranslationSettings]);
+  useEffect(()=>{if(view!=="inbox"||!apiToken)return;const timer=window.setInterval(()=>void loadWorkspace(apiToken,true),5000);return()=>window.clearInterval(timer);},[view,apiToken,loadWorkspace]);
+  useEffect(()=>{if(view!=="inbox"||!apiToken||!effectiveActiveId)return;const initial=window.setTimeout(()=>void loadMessages(apiToken,effectiveActiveId,true),0);const timer=window.setInterval(()=>void loadMessages(apiToken,effectiveActiveId),3000);return()=>{window.clearTimeout(initial);window.clearInterval(timer);};},[view,apiToken,effectiveActiveId,loadMessages]);
+  useEffect(()=>{if(view!=="inbox"||!apiToken||!effectiveActiveId)return;const timer=window.setTimeout(()=>void loadTranslationSettings(apiToken,effectiveActiveId),0);return()=>window.clearTimeout(timer);},[view,apiToken,effectiveActiveId,loadTranslationSettings]);
   useEffect(()=>{const timer=window.setTimeout(()=>setMessageTranslations({}),0);return()=>window.clearTimeout(timer);},[translationPreference.agentLanguage]);
   useEffect(()=>{if(!apiToken||!translationPreference.enabled||!translationConfigured)return;const ids=currentMessages.filter(message=>message.direction==="in"&&((message.kind==="text"&&message.text.trim())||(message.kind==="audio"&&message.attachment))&&!messageTranslations[message.id]).map(message=>message.id);if(!ids.length)return;const timer=window.setTimeout(()=>void loadIncomingTranslations(apiToken,ids,translationPreference.agentLanguage),0);return()=>window.clearTimeout(timer);},[apiToken,currentMessages,translationPreference.enabled,translationPreference.agentLanguage,translationConfigured,messageTranslations,loadIncomingTranslations]);
   useEffect(()=>{if(!toast)return;const timer=window.setTimeout(()=>setToast(""),3200);return()=>window.clearTimeout(timer);},[toast]);
@@ -373,7 +374,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
 
     {detailsOpen&&active&&<CrmDetailsPanel key={active.id} active={active} token={apiToken} user={user} role={userRole} translationPreference={translationPreference} onToken={setApiToken} onClose={()=>setDetailsOpen(false)} onToast={setToast} onConversationChange={async change=>{await updateConversation(change);}} onChanged={async()=>{await Promise.all([loadWorkspace(apiToken,true),loadMessages(apiToken,active.id)]);}} onDeleted={async()=>{setDetailsOpen(false);setActiveId("");setMessages(all=>{const next={...all};delete next[active.id];return next;});await loadWorkspace(apiToken,true);}}/>}</>
       :view==="contacts"?<ContactManagement token={apiToken} role={userRole} accounts={accounts} onToken={setApiToken} onToast={setToast} onConversation={conversationId=>{const found=conversations.find(item=>item.id===conversationId);if(!found){setToast("该会话不在当前列表，请在消息中心搜索联系人");openInbox();return;}setActiveId(conversationId);setDetailsOpen(true);openInbox();}}/>
-      :view==="tasks"?<TaskCenter token={apiToken} accounts={accounts} request={(path,init)=>authorizedFetch(path,apiToken,init)} onToken={setApiToken} onToast={setToast}/>
+      :view==="tasks"?<TaskCenter token={apiToken} accounts={accounts} request={taskRequest} onToken={setApiToken} onToast={setToast}/>
       :view==="orders"?<OrderManagement token={apiToken} accounts={accounts} onToken={setApiToken} onToast={setToast} onConversation={conversationId=>{const found=conversations.find(item=>item.id===conversationId);if(!found){setToast("该会话不在当前列表，请在消息中心搜索客户");openInbox();return;}setActiveId(conversationId);setDetailsOpen(true);openInbox();}}/>
       :view==="products"?<ProductWorkspace token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast} products={onOpenMaterials=><ProductManagement token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast} onOpenMaterials={onOpenMaterials}/>}/>
       :view==="agents"?<AgentManagement token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>
