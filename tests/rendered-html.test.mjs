@@ -199,6 +199,9 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(css, /\.product-tier-editor/);
   assert.match(css, /\.product-search-dropdown/);
   assert.match(component, /AI Agent/);
+  assert.match(component, /TaskCenter/);
+  assert.match(component, /任务中心/);
+  assert.match(component, /TaskAgentSettingsPanel/);
   assert.match(component, /知识库/);
   assert.match(component, /编辑知识库/);
   assert.match(component, /删除知识库/);

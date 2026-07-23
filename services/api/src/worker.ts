@@ -4,6 +4,7 @@ import { decryptAtRest, signWebhook } from "./security.js";
 import { config } from "./config.js";
 import { processOneAgentJob } from "./agent-engine.js";
 import { processOneEmail } from "./email.js";
+import { processOneTaskCycle } from "./task-engine.js";
 
 let stopping=false;
 let lastRetention=0;
@@ -13,8 +14,9 @@ process.on("SIGINT",()=>{stopping=true;});
 while(!stopping){
   const agentWork=await processOneAgentJob();
   const emailWork=await processOneEmail();
+  const taskWork=await processOneTaskCycle();
   const delivery=await claimWebhook();
-  if(delivery)await deliverWebhook(delivery);else if(!agentWork&&!emailWork)await sleep(750);
+  if(delivery)await deliverWebhook(delivery);else if(!agentWork&&!emailWork&&!taskWork)await sleep(750);
   await requeueCommands();
   await enforceRetention();
 }
