@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { contactAliasSchema, contactUpdateSchema, conversationTagsSchema, currencySettingsSchema, customerStageSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, orderUpdateSchema, productBulkEditSchema, productBulkImportSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
+import { contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationTagsSchema, currencySettingsSchema, customerStageSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, orderUpdateSchema, productBulkEditSchema, productBulkImportSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
 
 const accountId="10000000-0000-4000-8000-000000000009";
 
@@ -14,6 +14,13 @@ test("new conversation normalizes a single international phone number",()=>{
 test("new conversation rejects local or empty destinations",()=>{
   assert.equal(newConversationSchema.safeParse({accountId,phone:"0138000",firstMessage:"您好",clientMessageId:"new-chat-002"}).success,false);
   assert.equal(newConversationSchema.safeParse({accountId,phone:"+8613800138000",firstMessage:" ",clientMessageId:"new-chat-003"}).success,false);
+});
+
+test("contact input normalizes WhatsApp numbers for create and edit",()=>{
+  const created=contactCreateSchema.parse({accountId,phone:"+86 138-0013-8000",name:" Alice "});
+  assert.equal(created.phone,"8613800138000");
+  assert.equal(created.name,"Alice");
+  assert.equal(contactCreateSchema.safeParse({accountId,phone:"100",name:"Alice"}).success,false);
 });
 
 test("text-to-speech validates text and speed",()=>{

@@ -8,7 +8,7 @@ import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } fro
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount, type Principal } from "./auth.js";
-import { contactAliasSchema, contactUpdateSchema, conversationTagsSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderUpdateSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
+import { contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationTagsSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderUpdateSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
 import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
 import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline } from "./agent-hub.js";
 import { generateSpeech, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
@@ -288,11 +288,22 @@ app.patch("/api/v1/conversations/:id/contact", { preHandler:authenticate }, asyn
   return result.rows[0];
 });
 
+app.post("/api/v1/contacts",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const parsed=contactCreateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  if(!canAccessAccount(request.principal,parsed.data.accountId))return reply.code(403).send({error:"account_forbidden"});
+  const phone=`+${parsed.data.phone}`,waJid=`${parsed.data.phone}@s.whatsapp.net`;
+  try{
+    const created=await transaction(async client=>{const contact=await client.query("INSERT INTO contacts(account_id,wa_jid,phone_e164,display_name,alias,updated_at) VALUES($1,$2,$3,$4,$4,now()) RETURNING id",[parsed.data.accountId,waJid,phone,parsed.data.name]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'contact.create','contact',$2,$3)",[request.principal!.id,contact.rows[0].id,JSON.stringify({accountId:parsed.data.accountId,phone})]);return contact.rows[0];});
+    return reply.code(201).send(await contactProfileById(pool,String(created.id)));
+  }catch(error){if((error as {code?:string}).code==="23505")return reply.code(409).send({error:"contact_exists",message:"该 WhatsApp 号码已存在于当前账号的联系人中"});throw error;}
+});
+
 app.get("/api/v1/contacts",{preHandler:authenticate},async(request,reply)=>{
   const query=request.query as {q?:string;accountId?:string;limit?:string;offset?:string};
   if(query.accountId&&!canAccessAccount(request.principal,query.accountId))return reply.code(403).send({error:"account_forbidden"});
   const limit=Math.min(100,Math.max(1,Number(query.limit??30)||30)),offset=Math.max(0,Number(query.offset??0)||0),accountIds=request.principal?.accountIds??null;
-  const result=await pool.query(`SELECT co.id,co.account_id,a.display_name account_name,co.alias,co.display_name contact_name,co.phone_e164,co.note,co.updated_at,c.id conversation_id,c.last_message_at,COUNT(*) OVER()::int total_count,
+  const result=await pool.query(`SELECT co.id,co.account_id,a.display_name account_name,co.alias,co.display_name contact_name,co.phone_e164,co.avatar_url,co.note,co.updated_at,c.id conversation_id,c.last_message_at,COUNT(*) OVER()::int total_count,
     COALESCE(email_list.emails,'[]'::json) emails,COALESCE(method_list.methods,'[]'::json) methods,COALESCE(address_list.addresses,'[]'::json) addresses
     FROM contacts co JOIN whatsapp_accounts a ON a.id=co.account_id LEFT JOIN conversations c ON c.contact_id=co.id
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',email.id,'label',email.label,'email',email.email,'isPrimary',email.is_primary) ORDER BY email.position,email.id) emails FROM contact_emails email WHERE email.contact_id=co.id)email_list ON true
@@ -314,9 +325,12 @@ app.patch("/api/v1/contacts/:id",{preHandler:authenticate},async(request,reply)=
   const parsed=contactUpdateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
   const principal=request.principal,{id}=request.params as {id:string};
   const updated=await transaction(async client=>{
-    const current=await client.query("SELECT account_id FROM contacts WHERE id=$1 FOR UPDATE",[id]);
+    const current=await client.query("SELECT co.account_id,co.phone_e164,EXISTS(SELECT 1 FROM conversations c WHERE c.contact_id=co.id) has_conversation FROM contacts co WHERE co.id=$1 FOR UPDATE",[id]);
     if(!current.rowCount||!canAccessAccount(principal,current.rows[0].account_id))return false;
-    await client.query("UPDATE contacts SET alias=$2,note=$3,updated_at=now() WHERE id=$1",[id,parsed.data.alias||null,parsed.data.note||null]);
+    const nextPhone=parsed.data.phone?`+${parsed.data.phone}`:null,phoneChanged=Boolean(nextPhone&&nextPhone!==current.rows[0].phone_e164);
+    if(phoneChanged&&current.rows[0].phone_e164&&current.rows[0].has_conversation)return"phone_locked" as const;
+    if(phoneChanged){const duplicate=await client.query("SELECT 1 FROM contacts WHERE account_id=$1 AND wa_jid=$2 AND id<>$3 LIMIT 1",[current.rows[0].account_id,`${parsed.data.phone}@s.whatsapp.net`,id]);if(duplicate.rowCount)return"contact_exists" as const;}
+    await client.query("UPDATE contacts SET alias=$2,note=$3,phone_e164=CASE WHEN $4::text IS NULL THEN phone_e164 ELSE $4 END,wa_jid=CASE WHEN $5::text IS NULL THEN wa_jid ELSE $5 END,updated_at=now() WHERE id=$1",[id,parsed.data.alias||null,parsed.data.note||null,nextPhone,parsed.data.phone?`${parsed.data.phone}@s.whatsapp.net`:null]);
     await client.query("DELETE FROM contact_emails WHERE contact_id=$1",[id]);
     for(const [position,email] of parsed.data.emails.entries())await client.query("INSERT INTO contact_emails(contact_id,label,email,is_primary,position) VALUES($1,$2,$3,$4,$5)",[id,email.label,email.email,email.isPrimary,position]);
     await client.query("DELETE FROM contact_methods WHERE contact_id=$1",[id]);
@@ -324,11 +338,37 @@ app.patch("/api/v1/contacts/:id",{preHandler:authenticate},async(request,reply)=
     const retainedAddressIds:string[]=[];
     for(const address of parsed.data.addresses){if(address.id){const saved=await client.query("UPDATE contact_addresses SET label=$3,recipient_name=$4,phone=$5,address=$6,updated_at=now() WHERE id=$1 AND contact_id=$2 RETURNING id",[address.id,id,address.label,address.recipientName||null,address.phone||null,address.address]);if(!saved.rowCount)throw Object.assign(new Error("invalid_contact_address"),{statusCode:400});retainedAddressIds.push(String(saved.rows[0].id));}else{const saved=await client.query("INSERT INTO contact_addresses(contact_id,label,recipient_name,phone,address,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",[id,address.label,address.recipientName||null,address.phone||null,address.address,principal.id]);retainedAddressIds.push(String(saved.rows[0].id));}}
     await client.query("DELETE FROM contact_addresses WHERE contact_id=$1 AND NOT(id=ANY($2::uuid[]))",[id,retainedAddressIds]);
-    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'contact.profile.update','contact',$2,$3)",[principal.id,id,JSON.stringify({alias:parsed.data.alias,emailCount:parsed.data.emails.length,methodCount:parsed.data.methods.length,addressCount:parsed.data.addresses.length,hasNote:Boolean(parsed.data.note)})]);
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'contact.profile.update','contact',$2,$3)",[principal.id,id,JSON.stringify({alias:parsed.data.alias,phoneChanged,emailCount:parsed.data.emails.length,methodCount:parsed.data.methods.length,addressCount:parsed.data.addresses.length,hasNote:Boolean(parsed.data.note)})]);
     return true;
   });
   if(!updated)return reply.code(404).send({error:"not_found"});
+  if(updated==="phone_locked")return reply.code(409).send({error:"phone_locked",message:"该联系人已有对应会话，WhatsApp 号码不可修改"});
+  if(updated==="contact_exists")return reply.code(409).send({error:"contact_exists",message:"该 WhatsApp 号码已存在于当前账号的联系人中"});
   return contactProfileById(pool,id);
+});
+
+app.delete("/api/v1/contacts/:id",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user"||!["admin","supervisor"].includes(request.principal.role??""))return reply.code(403).send({error:"supervisor_required",message:"只有管理员或主管可以删除联系人"});
+  const principal=request.principal,{id}=request.params as {id:string};
+  const removed=await transaction(async client=>{const current=await client.query("SELECT account_id,avatar_url FROM contacts WHERE id=$1 FOR UPDATE",[id]);if(!current.rowCount||!canAccessAccount(principal,current.rows[0].account_id))return null;const payment=await client.query("SELECT 1 FROM order_payment_requests pr JOIN orders o ON o.id=pr.order_id JOIN conversations c ON c.id=o.conversation_id WHERE c.contact_id=$1 AND pr.is_current LIMIT 1",[id]);if(payment.rowCount)return"payment_request_exists" as const;const outbound=await client.query("SELECT 1 FROM outbound_commands oc JOIN messages m ON m.id=oc.message_id JOIN conversations c ON c.id=m.conversation_id WHERE c.contact_id=$1 AND oc.state IN ('pending','dispatched') LIMIT 1",[id]);if(outbound.rowCount)return"outbound_pending" as const;const pendingEmail=await client.query("SELECT 1 FROM email_messages e JOIN conversations c ON c.id=e.conversation_id WHERE c.contact_id=$1 AND e.status IN ('queued','sending','retrying') LIMIT 1",[id]);if(pendingEmail.rowCount)return"email_pending" as const;await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'contact.delete','contact',$2,$3)",[principal.id,id,JSON.stringify({accountId:current.rows[0].account_id})]);await client.query("DELETE FROM contacts WHERE id=$1",[id]);return{avatarUrl:String(current.rows[0].avatar_url??"")};});
+  if(!removed)return reply.code(404).send({error:"not_found"});
+  if(removed==="payment_request_exists")return reply.code(409).send({error:"payment_request_exists",message:"该联系人的会话存在付款请求，暂时不能删除"});
+  if(removed==="outbound_pending")return reply.code(409).send({error:"outbound_pending",message:"该联系人的会话仍有待发送消息，发送完成后才能删除"});
+  if(removed==="email_pending")return reply.code(409).send({error:"email_pending",message:"该联系人的会话仍有待发送邮件，发送完成后才能删除"});
+  if(removed.avatarUrl.startsWith("contact-avatars/"))await s3.send(new DeleteObjectCommand({Bucket:config.S3_BUCKET,Key:removed.avatarUrl})).catch(()=>undefined);
+  return reply.code(204).send();
+});
+
+app.get("/api/v1/contacts/:id/avatar",{preHandler:authenticate},async(request,reply)=>{
+  const {id}=request.params as {id:string};const found=await pool.query("SELECT account_id,avatar_url FROM contacts WHERE id=$1",[id]);if(!found.rowCount||!canAccessAccount(request.principal,found.rows[0].account_id))return reply.code(404).send({error:"not_found"});const objectKey=String(found.rows[0].avatar_url??"");if(!objectKey.startsWith("contact-avatars/"))return reply.code(404).send({error:"avatar_not_found"});const object=await s3.send(new GetObjectCommand({Bucket:config.S3_BUCKET,Key:objectKey}));reply.header("content-type","image/webp").header("cache-control","private, max-age=300");return reply.send(object.Body);
+});
+
+app.post("/api/v1/contacts/:id/avatar",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const {id}=request.params as {id:string};const current=await pool.query("SELECT account_id,avatar_url FROM contacts WHERE id=$1",[id]);if(!current.rowCount||!canAccessAccount(request.principal,current.rows[0].account_id))return reply.code(404).send({error:"not_found"});const file=await request.file();if(!file)return reply.code(400).send({error:"file_required"});if(!["image/jpeg","image/png","image/webp"].includes(file.mimetype))return reply.code(415).send({error:"unsupported_media_type",message:"头像仅支持 JPG、PNG 或 WebP 图片"});const bytes=await file.toBuffer();if(bytes.length>5*1024*1024)return reply.code(413).send({error:"file_too_large",message:"头像文件不能超过 5 MB"});let avatar:Buffer;try{avatar=await import("sharp").then(({default:sharp})=>sharp(bytes).rotate().resize(512,512,{fit:"cover",withoutEnlargement:true}).webp({quality:86}).toBuffer());}catch{return reply.code(400).send({error:"invalid_image",message:"无法读取该图片"});}const objectKey=`contact-avatars/${current.rows[0].account_id}/${id}/${randomBytes(16).toString("hex")}.webp`;await s3.send(new PutObjectCommand({Bucket:config.S3_BUCKET,Key:objectKey,Body:avatar,ContentType:"image/webp"}));await transaction(async client=>{await client.query("UPDATE contacts SET avatar_url=$2,updated_at=now() WHERE id=$1",[id,objectKey]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'contact.avatar.update','contact',$2,$3)",[request.principal!.id,id,JSON.stringify({byteSize:avatar.length})]);});const previous=String(current.rows[0].avatar_url??"");if(previous.startsWith("contact-avatars/"))await s3.send(new DeleteObjectCommand({Bucket:config.S3_BUCKET,Key:previous})).catch(()=>undefined);return reply.code(200).send({avatarUrl:`/api/v1/contacts/${id}/avatar`});
+});
+
+app.delete("/api/v1/contacts/:id/avatar",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const {id}=request.params as {id:string};const current=await pool.query("SELECT account_id,avatar_url FROM contacts WHERE id=$1",[id]);if(!current.rowCount||!canAccessAccount(request.principal,current.rows[0].account_id))return reply.code(404).send({error:"not_found"});await pool.query("UPDATE contacts SET avatar_url=NULL,updated_at=now() WHERE id=$1",[id]);const previous=String(current.rows[0].avatar_url??"");if(previous.startsWith("contact-avatars/"))await s3.send(new DeleteObjectCommand({Bucket:config.S3_BUCKET,Key:previous})).catch(()=>undefined);return reply.code(204).send();
 });
 
 app.get("/api/v1/tags",{preHandler:authenticate},async()=>{
@@ -1033,12 +1073,12 @@ type CustomerAddressInput={label:string;recipientName?:string;phone?:string;addr
 
 function mapContactRow(row:Record<string,unknown>){
   const emails=Array.isArray(row.emails)?row.emails as Array<{id:string;label:string;email:string;isPrimary:boolean}>:[],methods=Array.isArray(row.methods)?row.methods as Array<{id:string;type:string;label:string;value:string}>:[],addresses=Array.isArray(row.addresses)?row.addresses:[];
-  return{id:String(row.id),accountId:String(row.account_id),accountName:String(row.account_name??""),alias:String(row.alias??""),contactName:String(row.contact_name??""),name:String(row.alias||row.contact_name||row.phone_e164||"未知联系人"),phone:String(row.phone_e164??""),note:String(row.note??""),emails,primaryEmail:primaryContactEmail(emails),methods,addresses,conversationId:row.conversation_id?String(row.conversation_id):null,lastMessageAt:row.last_message_at?String(row.last_message_at):null,updatedAt:String(row.updated_at??"")};
+  return{id:String(row.id),accountId:String(row.account_id),accountName:String(row.account_name??""),alias:String(row.alias??""),contactName:String(row.contact_name??""),name:String(row.alias||row.contact_name||row.phone_e164||"未知联系人"),phone:String(row.phone_e164??""),avatarUrl:row.avatar_url?`/api/v1/contacts/${row.id}/avatar`:null,note:String(row.note??""),emails,primaryEmail:primaryContactEmail(emails),methods,addresses,conversationId:row.conversation_id?String(row.conversation_id):null,hasConversation:Boolean(row.conversation_id),lastMessageAt:row.last_message_at?String(row.last_message_at):null,updatedAt:String(row.updated_at??"")};
 }
 
 async function contactProfileById(db:typeof pool|PoolClient,id:string){
   const [contact,emails,methods,addresses]=await Promise.all([
-    db.query("SELECT co.id,co.account_id,a.display_name account_name,co.alias,co.display_name contact_name,co.phone_e164,co.note,co.updated_at,c.id conversation_id,c.last_message_at FROM contacts co JOIN whatsapp_accounts a ON a.id=co.account_id LEFT JOIN conversations c ON c.contact_id=co.id WHERE co.id=$1",[id]),
+    db.query("SELECT co.id,co.account_id,a.display_name account_name,co.alias,co.display_name contact_name,co.phone_e164,co.avatar_url,co.note,co.updated_at,c.id conversation_id,c.last_message_at FROM contacts co JOIN whatsapp_accounts a ON a.id=co.account_id LEFT JOIN conversations c ON c.contact_id=co.id WHERE co.id=$1",[id]),
     db.query("SELECT id,label,email,is_primary \"isPrimary\" FROM contact_emails WHERE contact_id=$1 ORDER BY position,id",[id]),
     db.query("SELECT id,type,label,value FROM contact_methods WHERE contact_id=$1 ORDER BY position,id",[id]),
     db.query("SELECT id,label,recipient_name \"recipientName\",phone,address FROM contact_addresses WHERE contact_id=$1 ORDER BY created_at,id",[id]),

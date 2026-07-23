@@ -124,6 +124,10 @@ test("contact profile migration and routes preserve account-scoped contacts",asy
   assert.match(migrator,/030_contact_profiles\.sql/);
   assert.match(server,/\/api\/v1\/contacts/);
   assert.match(server,/contact\.profile\.update/);
+  assert.match(server,/contact\.create/);
+  assert.match(server,/contact\.delete/);
+  assert.match(server,/contact\.avatar\.update/);
+  assert.match(server,/phone_locked/);
   assert.match(server,/UPDATE contact_addresses SET label=/);
   assert.match(server,/DELETE FROM contact_addresses WHERE contact_id/);
   assert.match(server,/canAccessAccount/);
