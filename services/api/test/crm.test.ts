@@ -132,3 +132,16 @@ test("contact profile migration and routes preserve account-scoped contacts",asy
   assert.match(server,/DELETE FROM contact_addresses WHERE contact_id/);
   assert.match(server,/canAccessAccount/);
 });
+
+test("contact avatars reuse the account media picker",async()=>{
+  const [inbox,mediaDialog]=await Promise.all([
+    readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/product-image-media-dialog.tsx",import.meta.url),"utf8"),
+  ]);
+  assert.match(inbox,/title="选择联系人头像"/);
+  assert.match(inbox,/libraryPath=\{`\/api\/v1\/media\?accountId=/);
+  assert.match(inbox,/acceptedMimeTypes=\{\["image\/jpeg","image\/png","image\/webp"\]\}/);
+  assert.match(inbox,/maxFileSize=\{5\*1024\*1024\}/);
+  assert.match(mediaDialog,/acceptedMimeTypes=/);
+  assert.match(mediaDialog,/item\.size<=maxFileSize/);
+});
