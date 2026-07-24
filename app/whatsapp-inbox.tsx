@@ -2002,16 +2002,442 @@ function CloudApiSettingsPanel({token,onToken,onToast}:{token:string;onToken:(to
   return <div className="agent-settings-grid cloud-api-settings"><section className="provider-form agent-card"><header><div><h2>添加 Meta Cloud API 账号</h2><p>凭据会加密保存，保存后不会再次返回明文。</p></div></header><label>账号显示名称<input value={form.displayName} onChange={event=>setForm(value=>({...value,displayName:event.target.value}))} placeholder="例如：新加坡销售"/></label><div className="provider-form-grid"><label>WABA ID<input value={form.wabaId} onChange={event=>setForm(value=>({...value,wabaId:event.target.value}))}/></label><label>Phone Number ID<input value={form.phoneNumberId} onChange={event=>setForm(value=>({...value,phoneNumberId:event.target.value}))}/></label></div><label>长期 Access Token<input type="password" value={form.accessToken} onChange={event=>setForm(value=>({...value,accessToken:event.target.value}))} autoComplete="off"/></label><label>Meta App Secret<input type="password" value={form.appSecret} onChange={event=>setForm(value=>({...value,appSecret:event.target.value}))} autoComplete="off"/></label>{error&&<span className="login-error">{error}</span>}<button className="primary-action" disabled={busy||Object.values(form).some(value=>!value.trim())} onClick={()=>void create()}><Plus size={14}/>{busy?"正在验证…":"验证并添加账号"}</button>{verifyToken&&<div className="enrollment-result"><span>Webhook Verify Token（仅显示一次）</span><code>{verifyToken}</code><button onClick={()=>void navigator.clipboard.writeText(verifyToken)}><Copy size={13}/>复制</button><small>Callback URL：{`${API_URL}/api/v1/meta/whatsapp/webhook`}</small></div>}</section><section className="provider-form agent-card"><header><div><h2>Cloud API 账号</h2><p>检查 Webhook、凭据与模板同步状态。</p></div><button className="secondary-action" onClick={()=>void load()}><RefreshCw size={14}/>刷新</button></header>{accounts.length?accounts.map(account=><article className="cloud-account-row" key={account.id}><div><b>{account.display_name}</b><small>{account.phone_e164||account.phone_number_id} · {account.enabled?"已启用":"已停用"}</small><small>凭据：{account.credentialsStatus} · Webhook：{account.webhookStatus}</small><small>模板同步：{account.last_template_sync_at?formatDateTime(account.last_template_sync_at):"尚未同步"}</small></div><div><button onClick={()=>void action(account,"test")}>测试</button><button onClick={()=>void action(account,"sync")}>同步模板</button><button onClick={()=>void action(account,"reset")}>重置 Verify Token</button><button onClick={()=>void action(account,"toggle")}>{account.enabled?"停用":"启用"}</button></div></article>):<p className="empty-note">尚未添加 Cloud API 账号</p>}</section></div>;
 }
 
-function TaskAgentSettingsPanel({token,accounts,onToken,onToast}:{token:string;accounts:Account[];onToken:(token:string)=>void;onToast:(text:string)=>void}){
-  const tools=["knowledge_search","contact_profile_read","conversation_memory_read","recent_messages_read","order_summary_read","create_task","generate_draft","queue_message"],names:Record<string,string>={knowledge_search:"知识库检索",contact_profile_read:"联系人资料",conversation_memory_read:"聊天记忆",recent_messages_read:"近期消息",order_summary_read:"订单摘要",create_task:"创建任务",generate_draft:"生成草稿",queue_message:"加入发送队列"};
-  type Holiday={id:string;name:string;month:number;day:number};
-  const defaults:Holiday[]=[{id:"new_year",name:"新年",month:1,day:1},{id:"valentines",name:"情人节",month:2,day:14},{id:"halloween",name:"万圣节",month:10,day:31},{id:"christmas",name:"圣诞节",month:12,day:25}];
-  const [accountId,setAccountId]=useState(accounts[0]?.id??""),[settings,setSettings]=useState({timezone:"UTC",holidayRegions:["global"],holidays:defaults,defaultLeadDays:14,draftLeadHours:72,defaultSendMode:"approval",leapDayPolicy:"feb28",defaultTools:tools.filter(tool=>tool!=="queue_message")}),[newHoliday,setNewHoliday]=useState({name:"",month:1,day:1}),[loading,setLoading]=useState(false);
-  const load=useCallback(async()=>{if(!accountId)return;setLoading(true);const result=await authorizedFetch(`/api/v1/accounts/${accountId}/task-settings`,token);if(result.token!==token)onToken(result.token);if(result.response.ok){const body=await result.response.json() as Record<string,unknown>;setSettings({timezone:String(body.timezone??"UTC"),holidayRegions:(body.holiday_regions as string[])??["global"],holidays:(body.holiday_definitions as Holiday[])??defaults,defaultLeadDays:Number(body.default_lead_days??14),draftLeadHours:Number(body.draft_lead_hours??72),defaultSendMode:String(body.default_send_mode??"approval"),leapDayPolicy:String(body.leap_day_policy??"feb28"),defaultTools:(body.default_tools as string[])??[]});}setLoading(false);},[accountId,token,onToken]);useEffect(()=>{const timer=setTimeout(()=>void load(),0);return()=>clearTimeout(timer);},[load]);
-  async function save(){setLoading(true);const result=await authorizedFetch(`/api/v1/accounts/${accountId}/task-settings`,token,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify(settings)});if(result.token!==token)onToken(result.token);setLoading(false);const body=await result.response.json().catch(()=>({})) as {message?:string};onToast(result.response.ok?"任务 Agent 规则已保存":body.message??"任务 Agent 规则保存失败");}
-  function patchHoliday(id:string,patch:Partial<Holiday>){setSettings(value=>({...value,holidays:value.holidays.map(item=>item.id===id?{...item,...patch}:item)}));}
-  function addHoliday(){const name=newHoliday.name.trim();if(!name)return;setSettings(value=>({...value,holidays:[...value.holidays,{id:`custom_${Date.now().toString(36)}`,name,month:newHoliday.month,day:newHoliday.day}]}));setNewHoliday({name:"",month:1,day:1});}
-  return <div className="agent-settings-grid"><section className="provider-form agent-card task-date-settings"><header><div><h2>节日与日期任务</h2><p>系统提前创建任务，临近发送时再读取最新资料生成草稿。</p></div></header><label>WhatsApp 账号<select value={accountId} onChange={event=>setAccountId(event.target.value)}>{accounts.map(account=><option key={account.id} value={account.id}>{account.name}</option>)}</select></label><label>任务时区<TimezoneSearchDropdown value={settings.timezone} onChange={timezone=>setSettings(value=>({...value,timezone}))} label="搜索并选择任务时区"/><small>生日、特殊日期和节日任务都按此时区计算日期与发送时间。</small></label><div className="provider-form-grid"><label>默认提前天数<input type="number" min="0" max="365" value={settings.defaultLeadDays} onChange={event=>setSettings(value=>({...value,defaultLeadDays:Number(event.target.value)}))}/></label><label>草稿提前小时<input type="number" min="0" max="8760" value={settings.draftLeadHours} onChange={event=>setSettings(value=>({...value,draftLeadHours:Number(event.target.value)}))}/></label><label>默认发送策略<select value={settings.defaultSendMode} onChange={event=>setSettings(value=>({...value,defaultSendMode:event.target.value}))}><option value="approval">审批后发送</option><option value="auto">自动发送</option></select></label><label>2 月 29 日策略<select value={settings.leapDayPolicy} onChange={event=>setSettings(value=>({...value,leapDayPolicy:event.target.value}))}><option value="feb28">非闰年于 2 月 28 日</option><option value="mar1">非闰年于 3 月 1 日</option><option value="leap_year_only">仅闰年创建</option></select></label></div><div className="holiday-editor"><div className="holiday-editor-head"><span><b>节日</b><small>可编辑名称与日期，或删除不需要的节日。</small></span><em>{settings.holidays.length} 个</em></div><div className="holiday-list">{settings.holidays.map(item=><div className="holiday-row" key={item.id}><input value={item.name} maxLength={80} aria-label="节日名称" onChange={event=>patchHoliday(item.id,{name:event.target.value})}/><input type="number" min="1" max="12" value={item.month} aria-label={`${item.name}月份`} onChange={event=>patchHoliday(item.id,{month:Number(event.target.value)})}/><span>月</span><input type="number" min="1" max="31" value={item.day} aria-label={`${item.name}日期`} onChange={event=>patchHoliday(item.id,{day:Number(event.target.value)})}/><span>日</span><button type="button" aria-label={`删除${item.name}`} onClick={()=>setSettings(value=>({...value,holidays:value.holidays.filter(holiday=>holiday.id!==item.id)}))}><Trash2 size={14}/></button></div>)}</div><div className="holiday-add"><input value={newHoliday.name} maxLength={80} placeholder="节日名称" aria-label="新节日名称" onChange={event=>setNewHoliday(value=>({...value,name:event.target.value}))}/><input type="number" min="1" max="12" value={newHoliday.month} aria-label="新节日月份" onChange={event=>setNewHoliday(value=>({...value,month:Number(event.target.value)}))}/><span>月</span><input type="number" min="1" max="31" value={newHoliday.day} aria-label="新节日日期" onChange={event=>setNewHoliday(value=>({...value,day:Number(event.target.value)}))}/><span>日</span><button type="button" disabled={!newHoliday.name.trim()} onClick={addHoliday}><Plus size={14}/>添加</button></div></div></section><section className="provider-form agent-card"><header><div><h2>工具权限</h2><p>任务可继承这些账号默认权限；高风险发送工具需明确开启。</p></div></header><fieldset className="task-tools">{tools.map(tool=><label key={tool} className={tool==="queue_message"?"risk":""}><input type="checkbox" checked={settings.defaultTools.includes(tool)} onChange={event=>setSettings(value=>({...value,defaultTools:event.target.checked?[...value.defaultTools,tool]:value.defaultTools.filter(item=>item!==tool)}))}/><span><b>{names[tool]}</b>{tool==="queue_message"&&<small>允许自动任务进入 WhatsApp 队列</small>}</span></label>)}</fieldset><button className="primary-action" disabled={loading||!accountId||settings.holidays.some(item=>!item.name.trim())} onClick={()=>void save()}><Check size={14}/>{loading?"正在保存…":"保存任务 Agent 规则"}</button></section></div>;
+function TaskAgentSettingsPanel({
+  token,
+  accounts,
+  onToken,
+  onToast,
+}: {
+  token: string;
+  accounts: Account[];
+  onToken: (token: string) => void;
+  onToast: (text: string) => void;
+}) {
+  const tools = [
+      "knowledge_search",
+      "contact_profile_read",
+      "conversation_memory_read",
+      "recent_messages_read",
+      "order_summary_read",
+      "create_task",
+      "generate_draft",
+      "queue_message",
+    ],
+    names: Record<string, string> = {
+      knowledge_search: "知识库检索",
+      contact_profile_read: "联系人资料",
+      conversation_memory_read: "聊天记忆",
+      recent_messages_read: "近期消息",
+      order_summary_read: "订单摘要",
+      create_task: "创建任务",
+      generate_draft: "生成草稿",
+      queue_message: "加入发送队列",
+    };
+  type Holiday = { id: string; name: string; month: number; day: number };
+  const defaults = useMemo<Holiday[]>(
+    () => [
+      { id: "new_year", name: "新年", month: 1, day: 1 },
+      { id: "valentines", name: "情人节", month: 2, day: 14 },
+      { id: "halloween", name: "万圣节", month: 10, day: 31 },
+      { id: "christmas", name: "圣诞节", month: 12, day: 25 },
+    ],
+    [],
+  );
+  const [accountId, setAccountId] = useState(accounts[0]?.id ?? ""),
+    [settings, setSettings] = useState({
+      timezone: "UTC",
+      holidayRegions: ["global"],
+      holidays: defaults,
+      defaultLeadDays: 14,
+      draftLeadHours: 72,
+      defaultSendMode: "approval",
+      leapDayPolicy: "feb28",
+      defaultTools: tools.filter((tool) => tool !== "queue_message"),
+    }),
+    [newHoliday, setNewHoliday] = useState({ name: "", month: 1, day: 1 }),
+    [loading, setLoading] = useState(false),
+    [arranging, setArranging] = useState(false);
+  const load = useCallback(async () => {
+    if (!accountId) return;
+    setLoading(true);
+    const result = await authorizedFetch(
+      `/api/v1/accounts/${accountId}/task-settings`,
+      token,
+    );
+    if (result.token !== token) onToken(result.token);
+    if (result.response.ok) {
+      const body = (await result.response.json()) as Record<string, unknown>;
+      setSettings({
+        timezone: String(body.timezone ?? "UTC"),
+        holidayRegions: (body.holiday_regions as string[]) ?? ["global"],
+        holidays: (body.holiday_definitions as Holiday[]) ?? defaults,
+        defaultLeadDays: Number(body.default_lead_days ?? 14),
+        draftLeadHours: Number(body.draft_lead_hours ?? 72),
+        defaultSendMode: String(body.default_send_mode ?? "approval"),
+        leapDayPolicy: String(body.leap_day_policy ?? "feb28"),
+        defaultTools: (body.default_tools as string[]) ?? [],
+      });
+    }
+    setLoading(false);
+  }, [accountId, token, onToken, defaults]);
+  useEffect(() => {
+    const timer = setTimeout(() => void load(), 0);
+    return () => clearTimeout(timer);
+  }, [load]);
+  async function save(quiet = false) {
+    setLoading(true);
+    const result = await authorizedFetch(
+      `/api/v1/accounts/${accountId}/task-settings`,
+      token,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(settings),
+      },
+    );
+    if (result.token !== token) onToken(result.token);
+    setLoading(false);
+    const body = (await result.response.json().catch(() => ({}))) as {
+      message?: string;
+    };
+    if (!quiet || !result.response.ok)
+      onToast(
+        result.response.ok
+          ? "任务 Agent 规则已保存"
+          : (body.message ?? "任务 Agent 规则保存失败"),
+      );
+    return result.response.ok;
+  }
+  async function arrangeHolidays() {
+    setArranging(true);
+    try {
+      if (!(await save(true))) return;
+      const result = await authorizedFetch(
+        `/api/v1/accounts/${accountId}/task-settings/arrange-holidays`,
+        token,
+        { method: "POST" },
+      );
+      if (result.token !== token) onToken(result.token);
+      const body = (await result.response.json().catch(() => ({}))) as {
+        contactCount?: number;
+        holidayCount?: number;
+        ruleCount?: number;
+        taskCount?: number;
+        message?: string;
+      };
+      if (!result.response.ok) {
+        onToast(body.message ?? "AI Agent 安排失败");
+        return;
+      }
+      onToast(
+        `AI Agent 已为 ${body.contactCount ?? 0} 位联系人安排 ${body.ruleCount ?? 0} 个节日计划${body.taskCount ? `，${body.taskCount} 个任务已进入执行窗口` : ""}`,
+      );
+    } finally {
+      setArranging(false);
+    }
+  }
+  function patchHoliday(id: string, patch: Partial<Holiday>) {
+    setSettings((value) => ({
+      ...value,
+      holidays: value.holidays.map((item) =>
+        item.id === id ? { ...item, ...patch } : item,
+      ),
+    }));
+  }
+  function addHoliday() {
+    const name = newHoliday.name.trim();
+    if (!name) return;
+    setSettings((value) => ({
+      ...value,
+      holidays: [
+        ...value.holidays,
+        {
+          id: `custom_${Date.now().toString(36)}`,
+          name,
+          month: newHoliday.month,
+          day: newHoliday.day,
+        },
+      ],
+    }));
+    setNewHoliday({ name: "", month: 1, day: 1 });
+  }
+  return (
+    <div className="agent-settings-grid">
+      <section className="provider-form agent-card task-date-settings">
+        <header>
+          <div>
+            <h2>节日与日期任务</h2>
+            <p>系统提前创建任务，临近发送时再读取最新资料生成草稿。</p>
+          </div>
+        </header>
+        <label>
+          WhatsApp 账号
+          <select
+            value={accountId}
+            onChange={(event) => setAccountId(event.target.value)}
+          >
+            {accounts.map((account) => (
+              <option key={account.id} value={account.id}>
+                {account.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          任务时区
+          <TimezoneSearchDropdown
+            value={settings.timezone}
+            onChange={(timezone) =>
+              setSettings((value) => ({ ...value, timezone }))
+            }
+            label="搜索并选择任务时区"
+          />
+          <small>生日、特殊日期和节日任务都按此时区计算日期与发送时间。</small>
+        </label>
+        <div className="provider-form-grid">
+          <label>
+            默认提前天数
+            <input
+              type="number"
+              min="0"
+              max="365"
+              value={settings.defaultLeadDays}
+              onChange={(event) =>
+                setSettings((value) => ({
+                  ...value,
+                  defaultLeadDays: Number(event.target.value),
+                }))
+              }
+            />
+          </label>
+          <label>
+            草稿提前小时
+            <input
+              type="number"
+              min="0"
+              max="8760"
+              value={settings.draftLeadHours}
+              onChange={(event) =>
+                setSettings((value) => ({
+                  ...value,
+                  draftLeadHours: Number(event.target.value),
+                }))
+              }
+            />
+          </label>
+          <label>
+            默认发送策略
+            <select
+              value={settings.defaultSendMode}
+              onChange={(event) =>
+                setSettings((value) => ({
+                  ...value,
+                  defaultSendMode: event.target.value,
+                }))
+              }
+            >
+              <option value="approval">审批后发送</option>
+              <option value="auto">自动发送</option>
+            </select>
+          </label>
+          <label>
+            2 月 29 日策略
+            <select
+              value={settings.leapDayPolicy}
+              onChange={(event) =>
+                setSettings((value) => ({
+                  ...value,
+                  leapDayPolicy: event.target.value,
+                }))
+              }
+            >
+              <option value="feb28">非闰年于 2 月 28 日</option>
+              <option value="mar1">非闰年于 3 月 1 日</option>
+              <option value="leap_year_only">仅闰年创建</option>
+            </select>
+          </label>
+        </div>
+        <div className="holiday-editor">
+          <div className="holiday-editor-head">
+            <span>
+              <b>节日</b>
+              <small>保存当前设置，并为账号内所有联系人建立节日计划。</small>
+            </span>
+            <div className="holiday-editor-actions">
+              <em>{settings.holidays.length} 个</em>
+              <button
+                type="button"
+                disabled={
+                  arranging ||
+                  loading ||
+                  !accountId ||
+                  !settings.defaultTools.includes("create_task") ||
+                  settings.holidays.length === 0 ||
+                  settings.holidays.some((item) => !item.name.trim())
+                }
+                onClick={() => void arrangeHolidays()}
+                title={
+                  settings.defaultTools.includes("create_task")
+                    ? "为全部联系人建立节日问候计划"
+                    : "请先开启“创建任务”工具权限"
+                }
+              >
+                <Sparkles size={13} />
+                {arranging ? "正在安排…" : "AI Agent 一键安排"}
+              </button>
+            </div>
+          </div>
+          <div className="holiday-list">
+            {settings.holidays.map((item) => (
+              <div className="holiday-row" key={item.id}>
+                <input
+                  value={item.name}
+                  maxLength={80}
+                  aria-label="节日名称"
+                  onChange={(event) =>
+                    patchHoliday(item.id, { name: event.target.value })
+                  }
+                />
+                <input
+                  type="number"
+                  min="1"
+                  max="12"
+                  value={item.month}
+                  aria-label={`${item.name}月份`}
+                  onChange={(event) =>
+                    patchHoliday(item.id, { month: Number(event.target.value) })
+                  }
+                />
+                <span>月</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="31"
+                  value={item.day}
+                  aria-label={`${item.name}日期`}
+                  onChange={(event) =>
+                    patchHoliday(item.id, { day: Number(event.target.value) })
+                  }
+                />
+                <span>日</span>
+                <button
+                  type="button"
+                  aria-label={`删除${item.name}`}
+                  onClick={() =>
+                    setSettings((value) => ({
+                      ...value,
+                      holidays: value.holidays.filter(
+                        (holiday) => holiday.id !== item.id,
+                      ),
+                    }))
+                  }
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="holiday-add">
+            <input
+              value={newHoliday.name}
+              maxLength={80}
+              placeholder="节日名称"
+              aria-label="新节日名称"
+              onChange={(event) =>
+                setNewHoliday((value) => ({
+                  ...value,
+                  name: event.target.value,
+                }))
+              }
+            />
+            <input
+              type="number"
+              min="1"
+              max="12"
+              value={newHoliday.month}
+              aria-label="新节日月份"
+              onChange={(event) =>
+                setNewHoliday((value) => ({
+                  ...value,
+                  month: Number(event.target.value),
+                }))
+              }
+            />
+            <span>月</span>
+            <input
+              type="number"
+              min="1"
+              max="31"
+              value={newHoliday.day}
+              aria-label="新节日日期"
+              onChange={(event) =>
+                setNewHoliday((value) => ({
+                  ...value,
+                  day: Number(event.target.value),
+                }))
+              }
+            />
+            <span>日</span>
+            <button
+              type="button"
+              disabled={!newHoliday.name.trim()}
+              onClick={addHoliday}
+            >
+              <Plus size={14} />
+              添加
+            </button>
+          </div>
+        </div>
+      </section>
+      <section className="provider-form agent-card">
+        <header>
+          <div>
+            <h2>工具权限</h2>
+            <p>任务可继承这些账号默认权限；高风险发送工具需明确开启。</p>
+          </div>
+        </header>
+        <fieldset className="task-tools">
+          {tools.map((tool) => (
+            <label
+              key={tool}
+              className={tool === "queue_message" ? "risk" : ""}
+            >
+              <input
+                type="checkbox"
+                checked={settings.defaultTools.includes(tool)}
+                onChange={(event) =>
+                  setSettings((value) => ({
+                    ...value,
+                    defaultTools: event.target.checked
+                      ? [...value.defaultTools, tool]
+                      : value.defaultTools.filter((item) => item !== tool),
+                  }))
+                }
+              />
+              <span>
+                <b>{names[tool]}</b>
+                {tool === "queue_message" && (
+                  <small>允许自动任务进入 WhatsApp 队列</small>
+                )}
+              </span>
+            </label>
+          ))}
+        </fieldset>
+        <button
+          className="primary-action"
+          disabled={
+            loading ||
+            !accountId ||
+            settings.holidays.some((item) => !item.name.trim())
+          }
+          onClick={() => void save()}
+        >
+          <Check size={14} />
+          {loading ? "正在保存…" : "保存任务 Agent 规则"}
+        </button>
+      </section>
+    </div>
+  );
 }
 
 function EmailSettingsPanel({token,onToken,onToast}:{token:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){

@@ -277,6 +277,58 @@ async function ensureContactRulesAndTasks(): Promise<void> {
   }
 }
 
+export async function arrangeAccountHolidayTasks(
+  accountId: string,
+): Promise<{
+  contactCount: number;
+  holidayCount: number;
+  ruleCount: number;
+  taskCount: number;
+}> {
+  const [settings, result] = await Promise.all([
+    pool.query(
+      "SELECT timezone,holiday_definitions,enabled_holidays,default_lead_days,default_send_mode,leap_day_policy FROM account_task_settings WHERE account_id=$1",
+      [accountId],
+    ),
+    pool.query(
+      `SELECT id contact_id,account_id,COALESCE(NULLIF(alias,''),display_name,phone_e164) contact_name
+       FROM contacts WHERE account_id=$1`,
+      [accountId],
+    ),
+  ]);
+  const accountSettings = settings.rows[0] ?? {};
+  const enabledHolidays = new Set<string>(
+    Array.isArray(accountSettings.enabled_holidays)
+      ? accountSettings.enabled_holidays.map(String)
+      : [],
+  );
+  const holidays = holidayDefinitions(
+    accountSettings.holiday_definitions,
+  ).filter((holiday) => enabledHolidays.has(holiday.id));
+  let taskCount = 0;
+  for (const row of result.rows) {
+    for (const holiday of holidays) {
+      if (
+        await ensureAnnualContactTask(
+          { ...row, ...accountSettings },
+          "holiday",
+          holiday.id,
+          holiday.month,
+          holiday.day,
+          `为 ${row.contact_name} 准备${holiday.name}问候`,
+        )
+      )
+        taskCount++;
+    }
+  }
+  return {
+    contactCount: result.rowCount ?? 0,
+    holidayCount: holidays.length,
+    ruleCount: (result.rowCount ?? 0) * holidays.length,
+    taskCount,
+  };
+}
+
 async function ensureAnnualContactTask(
   row: Record<string, unknown>,
   source: string,
@@ -300,7 +352,7 @@ async function ensureAnnualContactTask(
       row.default_send_mode,
     ],
   );
-  await ensureTaskOccurrence({ ...row, ...rule.rows[0] }, month, day, title);
+  return ensureTaskOccurrence({ ...row, ...rule.rows[0] }, month, day, title);
 }
 
 async function ensureTaskOccurrence(
@@ -308,7 +360,7 @@ async function ensureTaskOccurrence(
   month: number,
   day: number,
   title: string,
-) {
+): Promise<boolean> {
   const timezone = String(row.timezone ?? "UTC"),
     today = localParts(new Date(), timezone),
     lead = Number(row.lead_days ?? row.default_lead_days ?? 14);
@@ -331,17 +383,17 @@ async function ensureTaskOccurrence(
       String(row.leap_day_policy ?? "feb28"),
     );
   }
-  if (!observed) return;
+  if (!observed) return false;
   const distance = daysBetween(today, {
     year,
     month: observed.month,
     day: observed.day,
   });
-  if (distance < 0 || distance > lead) return;
+  if (distance < 0 || distance > lead) return false;
   const sendAt = zonedDate(year, observed.month, observed.day, 9, 0, timezone),
     startAt = new Date(sendAt.getTime() - lead * 86400000),
     dueAt = sendAt;
-  await pool.query(
+  const result = await pool.query(
     `INSERT INTO tasks(account_id,contact_id,rule_id,kind,source,source_key,occurrence_date,title,description,status,start_at,due_at,send_at,send_mode,tool_overrides) VALUES($1,$2,$3,'message',$4,$5,$6,$7,$8,'planned',$9,$10,$10,$11,$12) ON CONFLICT(rule_id,contact_id,occurrence_date) WHERE rule_id IS NOT NULL AND occurrence_date IS NOT NULL DO UPDATE SET title=EXCLUDED.title,description=EXCLUDED.description,start_at=EXCLUDED.start_at,due_at=EXCLUDED.due_at,send_at=EXCLUDED.send_at,send_mode=EXCLUDED.send_mode,updated_at=now() WHERE tasks.status='planned'`,
     [
       row.account_id,
@@ -358,6 +410,7 @@ async function ensureTaskOccurrence(
       row.tool_overrides ?? null,
     ],
   );
+  return Boolean(result.rowCount);
 }
 
 export async function markOverdueTasks(): Promise<void> {

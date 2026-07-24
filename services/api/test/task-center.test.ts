@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {readFile} from "node:fs/promises";
 import test from "node:test";
 import {accountTaskSettingsSchema,contactUpdateSchema,taskCreateSchema,taskUpdateSchema} from "../src/schemas.js";
 import {effectiveTaskTools,isLeapYear,nextRecurringDate,observedDate} from "../src/task-engine.js";
@@ -45,4 +46,18 @@ test("task tool overrides replace account defaults with a deny-by-default list",
   assert.equal(accountTaskSettingsSchema.safeParse(settings).success,true);
   assert.equal(accountTaskSettingsSchema.safeParse({...settings,holidays:[{id:"bad",name:"无效日期",month:2,day:30}]}).success,false);
   assert.equal(accountTaskSettingsSchema.safeParse({...settings,holidays:[settings.holidays[0],settings.holidays[0]]}).success,false);
+});
+
+test("holiday plans can be arranged for every contact from task settings",async()=>{
+  const [routes,engine]=await Promise.all([
+    readFile(new URL("../src/task-routes.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/task-engine.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(routes,/task-settings\/arrange-holidays/);
+  assert.match(routes,/create_task_required/);
+  assert.match(routes,/task\.holidays\.arrange/);
+  assert.match(engine,/export async function arrangeAccountHolidayTasks/);
+  assert.match(engine,/contactCount/);
+  assert.match(engine,/ruleCount/);
+  assert.match(engine,/taskCount/);
 });
