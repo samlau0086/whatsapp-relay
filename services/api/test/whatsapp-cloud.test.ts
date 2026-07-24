@@ -39,6 +39,13 @@ test("Cloud credentials are encrypted, redacted, and never returned by account r
   assert.match(server,/"req\.body\.accessToken","req\.body\.appSecret"/);
 });
 
+test("production deployment supplies the required Graph API version",async()=>{
+  const workflow=await readFile(new URL("../../../.github/workflows/deploy-vps.yml",import.meta.url),"utf8");
+  assert.match(workflow,/META_GRAPH_API_VERSION: \$\{\{ vars\.META_GRAPH_API_VERSION \|\| 'v26\.0' \}\}/);
+  assert.match(workflow,/"META_GRAPH_API_VERSION"/);
+  assert.match(workflow,/META_GRAPH_API_VERSION: process\.env\.META_GRAPH_API_VERSION/);
+});
+
 test("all outbound command inserts pass through the shared transport guard",async()=>{
   const files=["server.ts","agent-engine.ts","task-engine.ts"];
   for(const file of files){

@@ -92,6 +92,7 @@ jobs:
       S3_ACCESS_KEY: ${{ vars.S3_ACCESS_KEY || 'relay' }}
       PUBLIC_API_URL: ${{ vars.PUBLIC_API_URL }}
       CORS_ORIGIN: ${{ vars.CORS_ORIGIN || vars.PUBLIC_API_URL }}
+      META_GRAPH_API_VERSION: ${{ vars.META_GRAPH_API_VERSION || 'v26.0' }}
     steps:
       - name: Check out source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -131,6 +132,7 @@ jobs:
             "S3_SECRET_KEY",
             "PUBLIC_API_URL",
             "CORS_ORIGIN",
+            "META_GRAPH_API_VERSION",
           ];
           const missing = required.filter((name) => !process.env[name]);
           if (missing.length) {
@@ -168,6 +170,7 @@ jobs:
             S3_SECRET_KEY: process.env.S3_SECRET_KEY,
             CORS_ORIGIN: process.env.CORS_ORIGIN,
             PUBLIC_API_URL: process.env.PUBLIC_API_URL,
+            META_GRAPH_API_VERSION: process.env.META_GRAPH_API_VERSION,
             MINIO_ROOT_USER: process.env.S3_ACCESS_KEY,
             MINIO_ROOT_PASSWORD: process.env.S3_SECRET_KEY,
             BIND_ADDRESS: "127.0.0.1",
