@@ -1,16 +1,32 @@
 import { z } from "zod";
 
 export const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1) });
+const templateParameterSchema=z.union([
+  z.object({type:z.literal("text"),text:z.string().trim().min(1).max(1024)}),
+  z.object({type:z.enum(["image","video","document"]),mediaId:z.string().uuid()}),
+]);
+const messageTemplateSchema=z.object({
+  name:z.string().trim().min(1).max(512),
+  language:z.string().trim().min(2).max(35),
+  components:z.array(z.object({
+    type:z.enum(["header","body","button"]),
+    sub_type:z.enum(["quick_reply","url"]).optional(),
+    index:z.coerce.number().int().min(0).max(9).optional(),
+    parameters:z.array(templateParameterSchema).max(20),
+  })).max(20).default([]),
+});
 export const messageSchema = z.object({
   accountId: z.string().uuid(),
   conversationId: z.string().uuid(),
   clientMessageId: z.string().min(8).max(128),
-  type: z.enum(["text","image","video","audio","document","location","contact"]),
+  type: z.enum(["text","image","video","audio","document","location","contact","template"]),
   text: z.string().max(65536).optional(),
   translationSourceText: z.string().trim().min(1).max(65536).optional(),
   mediaId: z.string().uuid().optional(),
   quotedMessageId: z.string().uuid().optional(),
+  template: messageTemplateSchema.optional(),
 }).superRefine((value, ctx) => {
+  if(value.type==="template"&&!value.template)ctx.addIssue({code:"custom",path:["template"],message:"template message requires template data"});
   if (value.type === "text" && !value.text?.trim()) ctx.addIssue({ code:"custom", path:["text"], message:"文本消息不能为空" });
   if (value.type !== "text" && value.translationSourceText) ctx.addIssue({ code:"custom", path:["translationSourceText"], message:"只有文本消息可以保存翻译原文" });
   if (["image","video","audio","document"].includes(value.type) && !value.mediaId) ctx.addIssue({ code:"custom", path:["mediaId"], message:"媒体消息必须提供 mediaId" });
@@ -65,9 +81,13 @@ export const newConversationSchema = z.object({
   accountId: z.string().uuid(),
   phone: z.string().transform(value=>value.trim().replace(/[\s()+.-]/g,"")).refine(value=>/^[1-9]\d{6,14}$/.test(value),"请输入包含国家代码的有效号码"),
   displayName: z.string().trim().min(1).max(80).optional(),
-  firstMessage: z.string().trim().min(1).max(65536),
+  firstMessage: z.string().trim().min(1).max(65536).optional(),
+  message:z.discriminatedUnion("type",[
+    z.object({type:z.literal("text"),text:z.string().trim().min(1).max(65536)}),
+    z.object({type:z.literal("template"),template:messageTemplateSchema}),
+  ]).optional(),
   clientMessageId: z.string().min(8).max(128),
-});
+}).refine(value=>Boolean(value.firstMessage||value.message),{path:["message"],message:"firstMessage or message is required"});
 
 export const customerStageSchema=z.enum(["new","considering","qualified","won","lost"]);
 export const contactAliasSchema=z.object({alias:z.string().trim().max(80)});
@@ -98,7 +118,8 @@ export const taskCreateSchema=taskContentBase.superRefine(validateTaskTimes);
 export const taskUpdateSchema=taskContentBase.partial().refine(value=>Object.keys(value).length>0,"at least one field is required").superRefine(validateTaskTimes);
 export const taskDraftResolveSchema=z.object({text:z.string().trim().min(1).max(65536).optional()});
 export const taskRescheduleSchema=z.object({startAt:z.string().datetime({offset:true}),dueAt:z.string().datetime({offset:true}),sendAt:z.string().datetime({offset:true}).nullable().optional()}).superRefine((value,ctx)=>{if(new Date(value.dueAt)<new Date(value.startAt))ctx.addIssue({code:"custom",path:["dueAt"],message:"dueAt must not precede startAt"});});
-export const accountTaskSettingsSchema=z.object({holidayRegions:z.array(z.string().trim().min(1).max(40)).min(1).max(20),enabledHolidays:z.array(z.enum(["new_year","valentines","halloween","christmas"])).max(4),defaultLeadDays:z.coerce.number().int().min(0).max(365),draftLeadHours:z.coerce.number().int().min(0).max(8760),defaultSendMode:z.enum(["approval","auto"]),leapDayPolicy:z.enum(["feb28","mar1","leap_year_only"]),defaultTools:z.array(taskToolSchema).max(8)});
+const holidayDefinitionSchema=z.object({id:z.string().trim().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),name:z.string().trim().min(1).max(80),month:z.coerce.number().int().min(1).max(12),day:z.coerce.number().int().min(1).max(31)}).superRefine((value,ctx)=>{if(new Date(Date.UTC(2024,value.month-1,value.day)).getUTCMonth()!==value.month-1)ctx.addIssue({code:"custom",path:["day"],message:"invalid calendar date"});});
+export const accountTaskSettingsSchema=z.object({timezone:z.string().trim().min(1).max(100),holidays:z.array(holidayDefinitionSchema).max(50).superRefine((items,ctx)=>{const ids=new Set<string>();for(const [index,item] of items.entries()){if(ids.has(item.id))ctx.addIssue({code:"custom",path:[index,"id"],message:"duplicate holiday id"});ids.add(item.id);}}),holidayRegions:z.array(z.string().trim().min(1).max(40)).min(1).max(20).default(["global"]),defaultLeadDays:z.coerce.number().int().min(0).max(365),draftLeadHours:z.coerce.number().int().min(0).max(8760),defaultSendMode:z.enum(["approval","auto"]),leapDayPolicy:z.enum(["feb28","mar1","leap_year_only"]),defaultTools:z.array(taskToolSchema).max(8)});
 export const tagCreateSchema=z.object({name:z.string().trim().min(1).max(40),color:z.string().regex(/^#[0-9A-Fa-f]{6}$/)});
 export const tagUpdateSchema=tagCreateSchema.partial().refine(value=>Object.keys(value).length>0,"at least one field is required");
 export const conversationTagsSchema=z.object({tagIds:z.array(z.string().uuid()).max(20)});

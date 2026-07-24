@@ -41,5 +41,8 @@ test("recurrence produces the next occurrence and respects until",()=>{
 test("task tool overrides replace account defaults with a deny-by-default list",()=>{
   assert.deepEqual(effectiveTaskTools(["knowledge_search","generate_draft"],null),["knowledge_search","generate_draft"]);
   assert.deepEqual(effectiveTaskTools(["knowledge_search"],["contact_profile_read","queue_message","unknown"]),["contact_profile_read","queue_message"]);
-  assert.equal(accountTaskSettingsSchema.safeParse({holidayRegions:["global"],enabledHolidays:["christmas"],defaultLeadDays:14,draftLeadHours:72,defaultSendMode:"approval",leapDayPolicy:"feb28",defaultTools:["generate_draft"]}).success,true);
+  const settings={timezone:"Asia/Shanghai",holidayRegions:["global"],holidays:[{id:"christmas",name:"圣诞节",month:12,day:25},{id:"custom_midyear",name:"年中客户日",month:6,day:18}],defaultLeadDays:14,draftLeadHours:72,defaultSendMode:"approval",leapDayPolicy:"feb28",defaultTools:["generate_draft"]};
+  assert.equal(accountTaskSettingsSchema.safeParse(settings).success,true);
+  assert.equal(accountTaskSettingsSchema.safeParse({...settings,holidays:[{id:"bad",name:"无效日期",month:2,day:30}]}).success,false);
+  assert.equal(accountTaskSettingsSchema.safeParse({...settings,holidays:[settings.holidays[0],settings.holidays[0]]}).success,false);
 });

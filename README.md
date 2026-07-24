@@ -104,7 +104,18 @@ flowchart LR
 
 RelayDesk 是一个自托管的 WhatsApp 多账号消息聚合平台。它由中心 Web/API、持久任务 Worker、PostgreSQL、Redis、对象存储以及运行在 Windows 上的本地 WhatsApp Agent 组成。
 
-> 本地账号连接使用社区维护的 WhatsApp Web 多设备协议，不是 Meta 官方 Cloud API。请只用于获得授权的业务会话，不要发送垃圾消息或批量营销内容。上游协议变化和账号风控无法由本项目完全消除。
+> RelayDesk 同时支持本地 WhatsApp Web 多设备账号和 Meta 官方 Cloud API 账号。请只用于获得授权的业务会话，不要发送垃圾消息或未经同意的营销内容。
+
+### Meta WhatsApp Business Cloud API
+
+管理员可在“系统设置 → WhatsApp API”填写 WABA ID、Phone Number ID、长期 Access Token 和 Meta App Secret。凭据在 PostgreSQL 中加密保存，保存后不会通过 API 返回明文。
+
+1. 在部署环境设置 `META_GRAPH_API_VERSION`（例如 `.env.example` 中的版本），生产环境缺少该变量时 API 会拒绝启动。
+2. 添加账号后复制一次性显示的 Verify Token。
+3. 在 Meta App 中将 Callback URL 设置为 `https://你的域名/api/v1/meta/whatsapp/webhook`，并订阅 WhatsApp 消息事件。
+4. 完成 Webhook challenge 后，在设置页测试凭据并同步已审核模板。
+
+Cloud API 新会话必须通过已审核模板发起。客户回复后会开启 24 小时服务窗口，窗口内可发送普通文本和媒体；窗口关闭后，RelayDesk 会在入队前阻止普通消息并引导坐席选择模板。
 
 ## 已实现能力
 
