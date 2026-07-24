@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationTagsSchema, currencySettingsSchema, customerStageSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, orderUpdateSchema, productBulkEditSchema, productBulkImportSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
+import { contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, currencySettingsSchema, customerStageSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, orderUpdateSchema, productBulkEditSchema, productBulkImportSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
 
 const accountId="10000000-0000-4000-8000-000000000009";
 
@@ -14,6 +14,12 @@ test("new conversation normalizes a single international phone number",()=>{
 test("new conversation rejects local or empty destinations",()=>{
   assert.equal(newConversationSchema.safeParse({accountId,phone:"0138000",firstMessage:"您好",clientMessageId:"new-chat-002"}).success,false);
   assert.equal(newConversationSchema.safeParse({accountId,phone:"+8613800138000",firstMessage:" ",clientMessageId:"new-chat-003"}).success,false);
+});
+
+test("account automation accepts only supported default conversation modes",()=>{
+  for(const mode of ["cautious","full","human_paused"])assert.equal(conversationAgentModeSchema.safeParse(mode).success,true);
+  assert.equal(conversationAgentModeSchema.safeParse("active").success,false);
+  assert.equal(conversationAgentModeSchema.safeParse("").success,false);
 });
 
 test("contact input normalizes WhatsApp numbers for create and edit",()=>{

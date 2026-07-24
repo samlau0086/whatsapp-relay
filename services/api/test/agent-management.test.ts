@@ -42,6 +42,20 @@ test("agent management routes and legacy demo cleanup are shipped", async () => 
   await assert.rejects(access(new URL("../../../infra/postgres/migrations/002_seed_demo.sql",import.meta.url)));
 });
 
+test("new conversations inherit the account default takeover mode without rewriting existing conversations", async () => {
+  const migration=await readFile(new URL("../../../infra/postgres/migrations/037_account_default_conversation_mode.sql",import.meta.url),"utf8");
+  const migrator=await readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8");
+  const server=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
+  assert.match(migration,/ADD COLUMN IF NOT EXISTS default_conversation_mode/);
+  assert.match(migration,/CHECK \(default_conversation_mode IN \('cautious', 'full', 'human_paused'\)\)/);
+  assert.match(migration,/AFTER INSERT ON conversations/);
+  assert.match(migration,/ON CONFLICT\(conversation_id\) DO NOTHING/);
+  assert.doesNotMatch(migration,/UPDATE conversation_agent_state/);
+  assert.match(migrator,/037_account_default_conversation_mode\.sql/);
+  assert.match(server,/default_conversation_mode/);
+  assert.match(server,/defaultConversationMode/);
+});
+
 test("OpenRouter and SiliconFlow agent provider presets are wired end to end",async()=>{
   const server=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
   const engine=await readFile(new URL("../src/agent-engine.ts",import.meta.url),"utf8");

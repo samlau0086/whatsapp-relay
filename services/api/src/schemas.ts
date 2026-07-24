@@ -90,6 +90,7 @@ export const newConversationSchema = z.object({
 }).refine(value=>Boolean(value.firstMessage||value.message),{path:["message"],message:"firstMessage or message is required"});
 
 export const customerStageSchema=z.enum(["new","considering","qualified","won","lost"]);
+export const conversationAgentModeSchema=z.enum(["cautious","full","human_paused"]);
 export const contactAliasSchema=z.object({alias:z.string().trim().max(80)});
 const whatsappPhoneSchema=z.string().transform(value=>value.trim().replace(/[\s()+.-]/g,"")).refine(value=>/^[1-9]\d{6,14}$/.test(value),"请输入包含国家代码的有效号码");
 export const contactCreateSchema=z.object({accountId:z.string().uuid(),name:z.string().trim().min(1).max(80),phone:whatsappPhoneSchema});
