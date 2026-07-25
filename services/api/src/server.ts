@@ -134,7 +134,7 @@ app.post("/api/v1/agents/enroll", async (request, reply) => {
   const credential = `rda_${randomBytes(32).toString("base64url")}`;
   const result = await pool.query("UPDATE agents SET credential_hash=$2,enrollment_code_hash=NULL,enrollment_expires_at=NULL,name=$3,version=$4,platform=$5,status='offline' WHERE enrollment_code_hash=$1 AND enrollment_expires_at>now() AND status='pending' RETURNING id", [codeHash,hashSecret(credential),parsed.data.name,parsed.data.version,parsed.data.platform]);
   if (!result.rowCount) return reply.code(401).send({ error:"invalid_or_expired_enrollment" });
-  return { agentId:result.rows[0].id, credential, protocolVersion:1, websocketUrl:"/agent/ws" };
+  return { agentId:result.rows[0].id, credential, protocolVersion:2, websocketUrl:"/agent/ws" };
 });
 
 app.post("/api/v1/agents/enrollment", {preHandler:authenticate}, async(request,reply)=>{
@@ -897,12 +897,13 @@ app.post("/api/v1/messages", { preHandler:authenticate }, async (request, reply)
   const parsed=messageSchema.safeParse(request.body); if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
   if(!canAccessAccount(request.principal,parsed.data.accountId))return reply.code(403).send({error:"account_forbidden"});
   const result=await transaction(async(client)=>{
-    const conversation=await client.query("SELECT c.id,c.account_id,a.agent_id,a.status,a.transport,co.wa_jid FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id JOIN contacts co ON co.id=c.contact_id WHERE c.id=$1 AND c.account_id=$2",[parsed.data.conversationId,parsed.data.accountId]);
+    const conversation=await client.query("SELECT c.id,c.account_id,a.agent_id,a.status,a.transport,agent.protocol_version agent_protocol_version,co.wa_jid FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id LEFT JOIN agents agent ON agent.id=a.agent_id JOIN contacts co ON co.id=c.contact_id WHERE c.id=$1 AND c.account_id=$2",[parsed.data.conversationId,parsed.data.accountId]);
     if(!conversation.rowCount) return null;
     if(parsed.data.mediaId){const media=await client.query("SELECT id FROM media WHERE id=$1 AND (account_id=$2 OR account_id IS NULL) AND status='ready'",[parsed.data.mediaId,parsed.data.accountId]);if(!media.rowCount)throw Object.assign(new Error("media_not_found"),{statusCode:404});}
     const existing=await client.query("SELECT id,status FROM messages WHERE account_id=$1 AND client_message_id=$2",[parsed.data.accountId,parsed.data.clientMessageId]); if(existing.rowCount)return {messageId:existing.rows[0].id,status:existing.rows[0].status,deduplicated:true,agentId:conversation.rows[0].agent_id};
     const quoted=parsed.data.quotedMessageId?await client.query("SELECT id,whatsapp_message_id,direction,kind,text_content FROM messages WHERE id=$1 AND account_id=$2 AND conversation_id=$3",[parsed.data.quotedMessageId,parsed.data.accountId,parsed.data.conversationId]):null;
     if(parsed.data.quotedMessageId&&(!quoted?.rowCount||!quoted.rows[0].whatsapp_message_id))throw Object.assign(new Error("quoted_message_not_found"),{statusCode:404});
+    if(parsed.data.quotedMessageId&&conversation.rows[0].transport==="web"&&Number(conversation.rows[0].agent_protocol_version)!==2)throw Object.assign(new Error("agent_upgrade_required"),{statusCode:409});
     const templateText=parsed.data.type==="template"?`[Template] ${parsed.data.template!.name} (${parsed.data.template!.language})`:parsed.data.text??null;
     const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,translation_source_text,media_id,quoted_message_id,status,occurred_at,provider_payload) VALUES($1,$2,$3,$4,'out',$5,$6,$7,$8,$9,'queued',now(),$10) RETURNING id,status",[parsed.data.conversationId,parsed.data.accountId,request.principal?.kind==='user'?request.principal.id:null,parsed.data.clientMessageId,parsed.data.type,templateText,parsed.data.translationSourceText??null,parsed.data.mediaId??null,parsed.data.quotedMessageId??null,parsed.data.template?JSON.stringify(parsed.data.template):null]);
     await client.query("UPDATE conversations SET status='open',closed_at=NULL,last_message_at=now() WHERE id=$1",[parsed.data.conversationId]);

@@ -4,7 +4,7 @@ import { pool, transaction } from "./db.js";
 import { hashSecret } from "./security.js";
 import { enqueueInboundAgentWork } from "./agent-engine.js";
 
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 const HEARTBEAT_TIMEOUT_SECONDS = 45;
 const liveAgents = new Map<string, WebSocket>();
 let watchdog:NodeJS.Timeout|undefined;
@@ -27,7 +27,6 @@ export async function registerAgentHub(app: FastifyInstance): Promise<void> {
       liveAgents.delete(agent.id);
       void markAgentOffline(agent.id,"agent_disconnected");
     });
-    await dispatchPending(agent.id, socket);
   });
   watchdog??=setInterval(()=>void markStaleAgentsOffline().catch(error=>app.log.error({error},"agent heartbeat watchdog failed")),15_000);
   app.addHook("onClose",async()=>{if(watchdog){clearInterval(watchdog);watchdog=undefined;}});
@@ -72,7 +71,7 @@ async function handleFrame(agentId: string, socket: WebSocket, raw: string): Pro
   if (Buffer.byteLength(raw) > 2_000_000) { socket.close(4009, "frame_too_large"); return; }
   const frame = JSON.parse(raw) as AgentFrame;
   if (frame.type === "hello") {
-    if (frame.protocolVersion !== PROTOCOL_VERSION) { socket.send(JSON.stringify({ type:"incompatible", supportedVersion:PROTOCOL_VERSION })); return; }
+    if (frame.protocolVersion !== PROTOCOL_VERSION) { socket.send(JSON.stringify({ type:"incompatible", supportedVersion:PROTOCOL_VERSION })); socket.close(4002,"protocol_upgrade_required"); return; }
     await pool.query("UPDATE agents SET version=$2,protocol_version=$3,platform=$4,last_seen_at=now() WHERE id=$1", [agentId, frame.agentVersion, frame.protocolVersion, frame.platform]);
     await dispatchPending(agentId, socket);
     return;

@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 export type AccountStatus = "pairing" | "online" | "offline" | "logged_out" | "error";
 export type MessageKind = "text" | "image" | "video" | "audio" | "document" | "location" | "contact";

@@ -311,7 +311,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     const clientMessageId=crypto.randomUUID(),quoted=selectedReply?messageQuote(selectedReply):undefined;setDraft("");setReplyTo(null);setTranslationPreview(null);setTranslationError("");
     setMessages(all=>({...all,[active.id]:[...(all[active.id]??[]),{id:clientMessageId,direction:"out",kind:"text",text,translationSourceText,quoted,time:formatTime(new Date()),status:"queued"}]}));
     const result=await authorizedFetch("/api/v1/messages",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId:active.accountId,conversationId:active.id,clientMessageId,type:"text",text,...(translationSourceText?{translationSourceText}:{}),...(quoted?{quotedMessageId:quoted.id}:{})})});const response=result.response;if(result.token!==apiToken)setApiToken(result.token);
-    if(!response.ok){setToast(`消息入队失败（HTTP ${response.status}）`);setMessages(all=>({...all,[active.id]:(all[active.id]??[]).map(item=>item.id===clientMessageId?{...item,status:"failed"}:item)}));return;}
+    if(!response.ok){const body=await response.json().catch(()=>({})) as {error?:string};setToast(body.error==="agent_upgrade_required"?"请先升级 Windows Agent 后再使用指定回复":`消息入队失败（HTTP ${response.status}）`);setMessages(all=>({...all,[active.id]:(all[active.id]??[]).map(item=>item.id===clientMessageId?{...item,status:"failed"}:item)}));return;}
     setToast(active.accountStatus==="online"?"消息已进入发送队列":"账号离线，消息已持久化排队");void loadMessages(apiToken,active.id);
   }
 
@@ -320,7 +320,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     const kind=mediaKind(asset.mimeType),clientMessageId=crypto.randomUUID(),quoted=selectedReply?messageQuote(selectedReply):undefined;setDraft("");setReplyTo(null);
     setMessages(all=>({...all,[active.id]:[...(all[active.id]??[]),{id:clientMessageId,direction:"out",kind,text:caption,quoted,time:formatTime(new Date()),status:"queued",attachment:{id:asset.id,name:asset.fileName,mime:asset.mimeType,size:formatBytes(asset.size)}}]}));
     const queued=await authorizedFetch("/api/v1/messages",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId:active.accountId,conversationId:active.id,clientMessageId,type:kind,text:caption||undefined,mediaId:asset.id,...(quoted?{quotedMessageId:quoted.id}:{})})});if(queued.token!==apiToken)setApiToken(queued.token);
-    if(!queued.response.ok){setToast(`附件消息入队失败（HTTP ${queued.response.status}）`);setMessages(all=>({...all,[active.id]:(all[active.id]??[]).map(item=>item.id===clientMessageId?{...item,status:"failed"}:item)}));return;}
+    if(!queued.response.ok){const body=await queued.response.json().catch(()=>({})) as {error?:string};setToast(body.error==="agent_upgrade_required"?"请先升级 Windows Agent 后再使用指定回复":`附件消息入队失败（HTTP ${queued.response.status}）`);setMessages(all=>({...all,[active.id]:(all[active.id]??[]).map(item=>item.id===clientMessageId?{...item,status:"failed"}:item)}));return;}
     setMediaOpen(false);setMaterialLibraryOpen(false);setToast(active.accountStatus==="online"?"附件已进入发送队列":"账号离线，附件已持久化排队");void loadMessages(queued.token,active.id);
   }
 

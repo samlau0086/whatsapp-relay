@@ -8,7 +8,7 @@ const timeout = setTimeout(() => {
   app.exit(1);
 }, 45_000);
 
-ipcMain.handle("agent:state", () => ({baseUrl:"https://relay.test",enrolled:true,connection:"online",version:"smoke",protocolVersion:1,accounts:[{id:"account-smoke",name:"测试账号",status:"online"}],proxy:{mode:"auto",url:"",effective:"系统代理：127.0.0.1:7897"}}));
+ipcMain.handle("agent:state", () => ({baseUrl:"https://relay.test",enrolled:true,connection:"online",version:"smoke",protocolVersion:2,accounts:[{id:"account-smoke",name:"测试账号",status:"online"}],proxy:{mode:"auto",url:"",effective:"系统代理：127.0.0.1:7897"}}));
 ipcMain.handle("agent:diagnostics", () => ({ok:true}));
 ipcMain.handle("agent:enroll", () => ({ok:true}));
 ipcMain.handle("account:add", () => ({ok:true}));

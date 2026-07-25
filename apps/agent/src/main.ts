@@ -8,7 +8,7 @@ import QRCode from "qrcode";
 import { AgentStore } from "./store.js";
 import { CentralClient } from "./central-client.js";
 
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 const DEFAULT_CENTRAL_URL = "https://wsdesk.geekmt.com";
 const STABLE_USER_DATA = join(app.getPath("appData"), "@relaydesk", "windows-agent");
 mkdirSync(STABLE_USER_DATA,{recursive:true});

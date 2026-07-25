@@ -1,4 +1,4 @@
-# Agent 协议 v1
+# Agent 协议 v2
 
 Agent 通过 TLS WebSocket 主动连接 `/agent/ws`，并在 HTTP Upgrade 请求中使用设备 Bearer Credential。所有帧为 JSON。
 

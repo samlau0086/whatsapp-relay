@@ -42,6 +42,24 @@ test("agent management routes and legacy demo cleanup are shipped", async () => 
   await assert.rejects(access(new URL("../../../infra/postgres/migrations/002_seed_demo.sql",import.meta.url)));
 });
 
+test("quoted replies require the v2 Windows Agent protocol",async()=>{
+  const [server,hub,agentMain,protocol,agentPackage]=await Promise.all([
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/agent-hub.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../apps/agent/src/main.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../packages/protocol/src/index.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../apps/agent/package.json",import.meta.url),"utf8"),
+  ]);
+  assert.match(hub,/const PROTOCOL_VERSION = 2/);
+  assert.match(agentMain,/const PROTOCOL_VERSION = 2/);
+  assert.match(protocol,/PROTOCOL_VERSION = 2/);
+  assert.match(hub,/socket\.close\(4002,"protocol_upgrade_required"\)/);
+  assert.doesNotMatch(hub,/liveAgents\.set\(agent\.id, socket\);[\s\S]{0,500}dispatchPending\(agent\.id, socket\)/);
+  assert.match(server,/agent_upgrade_required/);
+  assert.match(server,/agent_protocol_version\)!==2/);
+  assert.equal(JSON.parse(agentPackage).version,"0.1.23");
+});
+
 test("new conversations inherit the account default takeover mode without rewriting existing conversations", async () => {
   const migration=await readFile(new URL("../../../infra/postgres/migrations/037_account_default_conversation_mode.sql",import.meta.url),"utf8");
   const migrator=await readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8");
