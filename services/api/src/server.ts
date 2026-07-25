@@ -8,7 +8,7 @@ import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } fro
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount, hasScope, type Principal } from "./auth.js";
-import { apiKeyCreateSchema, contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, materialSendBatchStatusSchema, materialSendSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderUpdateSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productSkuQuerySchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
+import { apiKeyCreateSchema, contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, materialSendBatchStatusSchema, materialSendSchema, messageRetrySchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderUpdateSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productSkuQuerySchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
 import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
 import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline } from "./agent-hub.js";
 import { generateSpeech, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
@@ -66,6 +66,7 @@ app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"Rel
   "/api/v1/tasks/{id}/generate":{post:{summary:"Generate a personalized message draft"}},
   "/api/v1/tasks/{id}/approve":{post:{summary:"Approve and schedule a task draft"}},
   "/api/v1/messages":{post:{summary:"发送单条消息",responses:{"202":{description:"已进入持久队列"}}}},
+  "/api/v1/messages/{id}/retry":{post:{summary:"人工重新发送失败或待确认的消息",responses:{"202":{description:"新消息已进入持久队列"}}}},
   "/api/v1/admin/whatsapp-cloud/accounts":{get:{summary:"读取 Cloud API 账号"},post:{summary:"验证并添加 Cloud API 账号"}},
   "/api/v1/admin/whatsapp-cloud/accounts/{id}":{patch:{summary:"更新或停用 Cloud API 账号"}},
   "/api/v1/admin/whatsapp-cloud/accounts/{id}/test":{post:{summary:"验证 Cloud API 凭据"}},
@@ -1030,6 +1031,50 @@ app.post("/api/v1/messages", { preHandler:authenticate }, async (request, reply)
   });
   if(!result)return reply.code(404).send({error:"conversation_not_found"});
   if(result.agentId)void dispatchPending(result.agentId); return reply.code(202).send(result);
+});
+
+app.post("/api/v1/messages/:id/retry", { preHandler:authenticate }, async (request, reply) => {
+  const {id}=request.params as {id:string};
+  const parsed=messageRetrySchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  const result=await transaction(async client=>{
+    const original=await client.query(
+      `SELECT m.*,c.id conversation_id,c.account_id,a.agent_id,co.wa_jid,oc.payload command_payload
+         FROM messages m
+         JOIN conversations c ON c.id=m.conversation_id
+         JOIN whatsapp_accounts a ON a.id=c.account_id
+         JOIN contacts co ON co.id=c.contact_id
+         LEFT JOIN LATERAL (
+           SELECT payload FROM outbound_commands WHERE message_id=m.id AND command='send_message' ORDER BY sequence DESC LIMIT 1
+         ) oc ON true
+        WHERE m.id=$1
+        FOR UPDATE OF m`,
+      [id],
+    );
+    if(!original.rowCount||!canAccessAccount(request.principal,original.rows[0].account_id))return null;
+    const row=original.rows[0];
+    if(row.direction!=="out"||!["failed","uncertain"].includes(String(row.status)))throw Object.assign(new Error("message_not_retryable"),{statusCode:409});
+    if(!row.command_payload)throw Object.assign(new Error("original_command_not_found"),{statusCode:409});
+    const existing=await client.query("SELECT id,status,provider_payload FROM messages WHERE account_id=$1 AND client_message_id=$2",[row.account_id,parsed.data.clientMessageId]);
+    if(existing.rowCount){
+      const retryOf=(existing.rows[0].provider_payload as Record<string,unknown>|null)?.retryOfMessageId;
+      if(retryOf!==id)throw Object.assign(new Error("client_message_id_conflict"),{statusCode:409});
+      return{messageId:String(existing.rows[0].id),status:String(existing.rows[0].status),deduplicated:true,agentId:row.agent_id};
+    }
+    const providerPayload={...(row.provider_payload&&typeof row.provider_payload==="object"?row.provider_payload:{}),retryOfMessageId:id};
+    const message=await client.query(
+      "INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,translation_source_text,media_id,quoted_message_id,status,occurred_at,provider_payload) VALUES($1,$2,$3,$4,'out',$5,$6,$7,$8,$9,'queued',now(),$10) RETURNING id",
+      [row.conversation_id,row.account_id,request.principal?.kind==="user"?request.principal.id:null,parsed.data.clientMessageId,row.kind,row.text_content,row.translation_source_text,row.media_id,row.quoted_message_id,JSON.stringify(providerPayload)],
+    );
+    const payload={...(row.command_payload as Record<string,unknown>),clientMessageId:parsed.data.clientMessageId,messageId:String(message.rows[0].id),conversationId:String(row.conversation_id),accountId:String(row.account_id),toJid:String(row.wa_jid)};
+    const queued=await queueWhatsAppCommand(client,{accountId:String(row.account_id),conversationId:String(row.conversation_id),messageId:String(message.rows[0].id),payload:payload as Parameters<typeof queueWhatsAppCommand>[1]["payload"]});
+    await client.query("UPDATE conversations SET status='open',closed_at=NULL,last_message_at=now() WHERE id=$1",[row.conversation_id]);
+    if(request.principal?.kind==="user")await pauseAgentForHuman(client,row.conversation_id);
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'message.retry','message',$3,$4)",[request.principal?.kind,request.principal?.id,message.rows[0].id,JSON.stringify({originalMessageId:id,commandId:queued.commandId,originalStatus:row.status})]);
+    return{messageId:String(message.rows[0].id),status:"queued",deduplicated:false,agentId:queued.agentId};
+  });
+  if(!result)return reply.code(404).send({error:"not_found"});
+  if(result.agentId)void dispatchPending(result.agentId);
+  return reply.code(202).send(result);
 });
 
 app.get("/api/v1/me/translation-preferences", {preHandler:authenticate}, async(request,reply)=>{

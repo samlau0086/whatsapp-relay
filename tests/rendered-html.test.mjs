@@ -351,3 +351,18 @@ test("inbox quick replies support search, media types, and conversation translat
   assert.match(css,/\.message-actions\{/);
   assert.match(css,/\.message-save-quick-reply/);
 });
+
+test("failed and uncertain messages expose a manual resend action", async () => {
+  const [component,css,server]=await Promise.all([
+    readFile(new URL("../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../app/globals.css",import.meta.url),"utf8"),
+    readFile(new URL("../services/api/src/server.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(component,/message\.status==="failed"\|\|message\.status==="uncertain"/);
+  assert.match(component,/重新发送这条消息/);
+  assert.match(component,/消息可能已经送达/);
+  assert.match(component,/api\/v1\/messages\/\$\{message\.id\}\/retry/);
+  assert.match(css,/\.message-retry-action\{/);
+  assert.match(server,/app\.post\("\/api\/v1\/messages\/:id\/retry"/);
+  assert.match(server,/retryOfMessageId/);
+});

@@ -34,6 +34,10 @@ export const messageSchema = z.object({
   if (["image","video","audio","document"].includes(value.type) && !value.mediaId) ctx.addIssue({ code:"custom", path:["mediaId"], message:"媒体消息必须提供 mediaId" });
 });
 
+export const messageRetrySchema = z.object({
+  clientMessageId: z.string().min(8).max(128),
+});
+
 export const textToSpeechSchema = z.object({
   accountId: z.string().uuid(),
   text: z.string().trim().min(1).max(4096),
