@@ -13,6 +13,13 @@ test("collage migration creates template, batch, and material asset records",asy
   assert.match(migration,/CREATE TABLE IF NOT EXISTS material_assets/);
 });
 
+test("collage generation dialog loads selections larger than one 64-item product page in batches",async()=>{
+  const dialog=await readFile(new URL("../../../app/collage-materials.tsx",import.meta.url),"utf8");
+  assert.match(dialog,/PRODUCT_SELECTION_BATCH_SIZE=50/);
+  assert.match(dialog,/productIds\.slice\(start,start\+PRODUCT_SELECTION_BATCH_SIZE\)/);
+  assert.match(dialog,/productBodies\.flatMap\(body=>body\.data\)/);
+});
+
 test("collage template validation protects canvas, slots, and bindings",()=>{
   assert.equal(collageTemplateSchema.safeParse(DEFAULT_COLLAGE_TEMPLATE).success,true);
   assert.equal(productSlotIds(DEFAULT_COLLAGE_TEMPLATE).length,4);
