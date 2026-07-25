@@ -18,6 +18,7 @@ import { calculateOrderTotal, canManageSharedRecord, ensureCrmTables, primaryCon
 import { renderTemplateOrderImage } from "./order-image.js";
 import { DEFAULT_IMAGE_ORDER_TEMPLATE, DEFAULT_TEXT_ORDER_TEMPLATE, orderTemplateSchema, orderTemplateUpdateSchema, parseOrderTemplate, parseTranslatedSemanticOrder, renderSemanticOrder, renderTextOrder, serializeSemanticOrder, type OrderTemplateFormat } from "./order-template.js";
 import { allocateOrderNumber, isValidTimeZone, orderNumberPreview, validateOrderNumberTemplate } from "./order-number.js";
+import { resolveContactTimeZone } from "./contact-timezone.js";
 import { pauseAgentForHuman } from "./agent-engine.js";
 import { migrateAgentSchema } from "./migrate-agent.js";
 import { PayPalApiError, PayPalClient, clearPayPalTokenCache, type PayPalEnvironment } from "./paypal.js";
@@ -331,7 +332,7 @@ app.get("/api/v1/contacts",{preHandler:authenticate},async(request,reply)=>{
   const query=request.query as {q?:string;accountId?:string;limit?:string;offset?:string};
   if(query.accountId&&!canAccessAccount(request.principal,query.accountId))return reply.code(403).send({error:"account_forbidden"});
   const limit=Math.min(100,Math.max(1,Number(query.limit??30)||30)),offset=Math.max(0,Number(query.offset??0)||0),accountIds=request.principal?.accountIds??null;
-  const result=await pool.query(`SELECT co.id,co.account_id,a.display_name account_name,co.alias,co.display_name contact_name,co.phone_e164,co.avatar_url,co.note,co.birthday_month,co.birthday_day,co.birthday_year,co.updated_at,c.id conversation_id,c.last_message_at,COUNT(*) OVER()::int total_count,
+  const result=await pool.query(`SELECT co.id,co.account_id,a.display_name account_name,co.alias,co.display_name contact_name,co.phone_e164,co.avatar_url,co.note,co.timezone,co.birthday_month,co.birthday_day,co.birthday_year,co.updated_at,c.id conversation_id,c.last_message_at,COUNT(*) OVER()::int total_count,
     COALESCE(email_list.emails,'[]'::json) emails,COALESCE(method_list.methods,'[]'::json) methods,COALESCE(address_list.addresses,'[]'::json) addresses,COALESCE(date_list.special_dates,'[]'::json) special_dates
     FROM contacts co JOIN whatsapp_accounts a ON a.id=co.account_id LEFT JOIN conversations c ON c.contact_id=co.id
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',email.id,'label',email.label,'email',email.email,'isPrimary',email.is_primary) ORDER BY email.position,email.id) emails FROM contact_emails email WHERE email.contact_id=co.id)email_list ON true
@@ -352,6 +353,7 @@ app.get("/api/v1/contacts/:id",{preHandler:authenticate},async(request,reply)=>{
 app.patch("/api/v1/contacts/:id",{preHandler:authenticate},async(request,reply)=>{
   if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
   const parsed=contactUpdateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  if(parsed.data.timezone&&!isValidTimeZone(parsed.data.timezone))return reply.code(400).send({error:"invalid_timezone",message:"请输入有效的 IANA 时区"});
   const principal=request.principal,{id}=request.params as {id:string};
   const updated=await transaction(async client=>{
     const current=await client.query("SELECT co.account_id,co.phone_e164,EXISTS(SELECT 1 FROM conversations c WHERE c.contact_id=co.id) has_conversation FROM contacts co WHERE co.id=$1 FOR UPDATE",[id]);
@@ -359,7 +361,7 @@ app.patch("/api/v1/contacts/:id",{preHandler:authenticate},async(request,reply)=
     const nextPhone=parsed.data.phone?`+${parsed.data.phone}`:null,phoneChanged=Boolean(nextPhone&&nextPhone!==current.rows[0].phone_e164);
     if(phoneChanged&&current.rows[0].phone_e164&&current.rows[0].has_conversation)return"phone_locked" as const;
     if(phoneChanged){const duplicate=await client.query("SELECT 1 FROM contacts WHERE account_id=$1 AND wa_jid=$2 AND id<>$3 LIMIT 1",[current.rows[0].account_id,`${parsed.data.phone}@s.whatsapp.net`,id]);if(duplicate.rowCount)return"contact_exists" as const;}
-    await client.query("UPDATE contacts SET alias=$2,note=$3,phone_e164=CASE WHEN $4::text IS NULL THEN phone_e164 ELSE $4 END,wa_jid=CASE WHEN $5::text IS NULL THEN wa_jid ELSE $5 END,birthday_month=CASE WHEN $6 THEN $7 ELSE birthday_month END,birthday_day=CASE WHEN $6 THEN $8 ELSE birthday_day END,birthday_year=CASE WHEN $6 THEN $9 ELSE birthday_year END,updated_at=now() WHERE id=$1",[id,parsed.data.alias||null,parsed.data.note||null,nextPhone,parsed.data.phone?`${parsed.data.phone}@s.whatsapp.net`:null,parsed.data.birthday!==undefined,parsed.data.birthday?.month??null,parsed.data.birthday?.day??null,parsed.data.birthday?.year??null]);
+    await client.query("UPDATE contacts SET alias=$2,note=$3,phone_e164=CASE WHEN $4::text IS NULL THEN phone_e164 ELSE $4 END,wa_jid=CASE WHEN $5::text IS NULL THEN wa_jid ELSE $5 END,birthday_month=CASE WHEN $6 THEN $7 ELSE birthday_month END,birthday_day=CASE WHEN $6 THEN $8 ELSE birthday_day END,birthday_year=CASE WHEN $6 THEN $9 ELSE birthday_year END,timezone=CASE WHEN $10 THEN $11 ELSE timezone END,updated_at=now() WHERE id=$1",[id,parsed.data.alias||null,parsed.data.note||null,nextPhone,parsed.data.phone?`${parsed.data.phone}@s.whatsapp.net`:null,parsed.data.birthday!==undefined,parsed.data.birthday?.month??null,parsed.data.birthday?.day??null,parsed.data.birthday?.year??null,parsed.data.timezone!==undefined,parsed.data.timezone||null]);
     if(parsed.data.birthday!==undefined){await client.query("UPDATE task_rules SET enabled=false,updated_at=now() WHERE contact_id=$1 AND source='birthday'",[id]);await client.query("UPDATE tasks SET status='cancelled',last_error='contact_birthday_changed',updated_at=now() WHERE contact_id=$1 AND source='birthday' AND status IN ('planned','in_progress','waiting_approval','scheduled','overdue')",[id]);}
     await client.query("DELETE FROM contact_emails WHERE contact_id=$1",[id]);
     for(const [position,email] of parsed.data.emails.entries())await client.query("INSERT INTO contact_emails(contact_id,label,email,is_primary,position) VALUES($1,$2,$3,$4,$5)",[id,email.label,email.email,email.isPrimary,position]);
@@ -1178,12 +1180,13 @@ type CustomerAddressInput={label:string;recipientName?:string;phone?:string;addr
 
 function mapContactRow(row:Record<string,unknown>){
   const emails=Array.isArray(row.emails)?row.emails as Array<{id:string;label:string;email:string;isPrimary:boolean}>:[],methods=Array.isArray(row.methods)?row.methods as Array<{id:string;type:string;label:string;value:string}>:[],addresses=Array.isArray(row.addresses)?row.addresses:[],specialDates=Array.isArray(row.special_dates)?row.special_dates:[];
-  return{id:String(row.id),accountId:String(row.account_id),accountName:String(row.account_name??""),alias:String(row.alias??""),contactName:String(row.contact_name??""),name:String(row.alias||row.contact_name||row.phone_e164||"未知联系人"),phone:String(row.phone_e164??""),avatarUrl:row.avatar_url?`/api/v1/contacts/${row.id}/avatar`:null,note:String(row.note??""),birthday:row.birthday_month?{month:Number(row.birthday_month),day:Number(row.birthday_day),year:row.birthday_year?Number(row.birthday_year):null}:null,specialDates,emails,primaryEmail:primaryContactEmail(emails),methods,addresses,conversationId:row.conversation_id?String(row.conversation_id):null,hasConversation:Boolean(row.conversation_id),lastMessageAt:row.last_message_at?String(row.last_message_at):null,updatedAt:String(row.updated_at??"")};
+  const zone=resolveContactTimeZone(String(row.phone_e164??""),row.timezone?String(row.timezone):null);
+  return{id:String(row.id),accountId:String(row.account_id),accountName:String(row.account_name??""),alias:String(row.alias??""),contactName:String(row.contact_name??""),name:String(row.alias||row.contact_name||row.phone_e164||"未知联系人"),phone:String(row.phone_e164??""),avatarUrl:row.avatar_url?`/api/v1/contacts/${row.id}/avatar`:null,note:String(row.note??""),timezone:row.timezone?String(row.timezone):null,effectiveTimezone:zone.timeZone,timezoneSource:zone.source,inferredCountry:zone.country,birthday:row.birthday_month?{month:Number(row.birthday_month),day:Number(row.birthday_day),year:row.birthday_year?Number(row.birthday_year):null}:null,specialDates,emails,primaryEmail:primaryContactEmail(emails),methods,addresses,conversationId:row.conversation_id?String(row.conversation_id):null,hasConversation:Boolean(row.conversation_id),lastMessageAt:row.last_message_at?String(row.last_message_at):null,updatedAt:String(row.updated_at??"")};
 }
 
 async function contactProfileById(db:typeof pool|PoolClient,id:string){
   const [contact,emails,methods,addresses,specialDates]=await Promise.all([
-    db.query("SELECT co.id,co.account_id,a.display_name account_name,co.alias,co.display_name contact_name,co.phone_e164,co.avatar_url,co.note,co.birthday_month,co.birthday_day,co.birthday_year,co.updated_at,c.id conversation_id,c.last_message_at FROM contacts co JOIN whatsapp_accounts a ON a.id=co.account_id LEFT JOIN conversations c ON c.contact_id=co.id WHERE co.id=$1",[id]),
+    db.query("SELECT co.id,co.account_id,a.display_name account_name,co.alias,co.display_name contact_name,co.phone_e164,co.avatar_url,co.note,co.timezone,co.birthday_month,co.birthday_day,co.birthday_year,co.updated_at,c.id conversation_id,c.last_message_at FROM contacts co JOIN whatsapp_accounts a ON a.id=co.account_id LEFT JOIN conversations c ON c.contact_id=co.id WHERE co.id=$1",[id]),
     db.query("SELECT id,label,email,is_primary \"isPrimary\" FROM contact_emails WHERE contact_id=$1 ORDER BY position,id",[id]),
     db.query("SELECT id,type,label,value FROM contact_methods WHERE contact_id=$1 ORDER BY position,id",[id]),
     db.query("SELECT id,label,recipient_name \"recipientName\",phone,address FROM contact_addresses WHERE contact_id=$1 ORDER BY created_at,id",[id]),

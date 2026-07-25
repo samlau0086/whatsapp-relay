@@ -3,6 +3,7 @@ import {readFile} from "node:fs/promises";
 import test from "node:test";
 import {accountTaskSettingsSchema,contactUpdateSchema,taskCreateSchema,taskUpdateSchema} from "../src/schemas.js";
 import {effectiveTaskTools,isLeapYear,nextRecurringDate,observedDate} from "../src/task-engine.js";
+import {inferContactTimeZone,resolveContactTimeZone} from "../src/contact-timezone.js";
 
 const accountId="10000000-0000-4000-8000-000000000009";
 const contactId="20000000-0000-4000-8000-000000000009";
@@ -22,6 +23,23 @@ test("contact profiles validate birthday and reusable special dates",()=>{
   assert.equal(contactUpdateSchema.safeParse(profile).success,true);
   assert.equal(contactUpdateSchema.safeParse({...profile,birthday:{month:2,day:30,year:null}}).success,false);
   assert.equal(contactUpdateSchema.safeParse({...profile,specialDates:[{kind:"custom",label:"",month:8,day:12}]}).success,false);
+});
+
+test("contact time zones prefer explicit settings and otherwise follow the phone country",()=>{
+  assert.deepEqual(inferContactTimeZone("+86 13800138000"),{country:"中国",timeZone:"Asia/Shanghai"});
+  assert.deepEqual(inferContactTimeZone("+44 20 7946 0958"),{country:"英国",timeZone:"Europe/London"});
+  assert.deepEqual(resolveContactTimeZone("+852 6123 4567",null),{country:"中国香港",timeZone:"Asia/Hong_Kong",source:"country"});
+  assert.deepEqual(resolveContactTimeZone("+1 212 555 0100","America/Los_Angeles"),{country:"美国/加拿大",timeZone:"America/Los_Angeles",source:"custom"});
+  assert.deepEqual(resolveContactTimeZone("+999123456",null),{country:null,timeZone:"UTC",source:"fallback"});
+});
+
+test("contact time zone migration is applied by the API startup migrator",async()=>{
+  const [migration,migrator]=await Promise.all([
+    readFile(new URL("../../../infra/postgres/migrations/038_contact_timezone.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(migration,/ADD COLUMN IF NOT EXISTS timezone text/);
+  assert.match(migrator,/038_contact_timezone\.sql/);
 });
 
 test("leap-day observation follows account policy",()=>{
