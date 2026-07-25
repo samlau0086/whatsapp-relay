@@ -80,10 +80,10 @@ export function MaterialLibrarySendDialog({accountId,conversationId,customerName
   }
 
   async function waitForBatch(batchId:string){
-    const deadline=Date.now()+20_000,path=`/api/v1/conversations/${conversationId}/materials/batches/${encodeURIComponent(batchId)}?accountId=${encodeURIComponent(accountId)}`;
-    while(Date.now()<deadline){
+    const path=`/api/v1/conversations/${conversationId}/materials/batches/${encodeURIComponent(batchId)}?accountId=${encodeURIComponent(accountId)}`;
+    for(let attempt=0;attempt<5;attempt+=1){
       try{const {result,body}=await requestJsonWithTimeout(path,{},3_500);if(result.response.ok&&body.committed===true)return true;if(result.response.status>=400&&result.response.status<500&&result.response.status!==404)return false;}catch{}
-      await new Promise(resolve=>window.setTimeout(resolve,750));
+      if(attempt<4)await new Promise(resolve=>window.setTimeout(resolve,750));
     }
     return false;
   }
