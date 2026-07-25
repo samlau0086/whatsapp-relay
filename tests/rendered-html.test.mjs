@@ -345,6 +345,9 @@ test("inbox quick replies support search, media types, and conversation translat
   assert.match(component,/item\.sourceMessageId!==message\.id/);
   assert.match(css,/\.quick-reply-menu\{/);
   assert.match(css,/\.quick-reply-options\{/);
+  assert.match(css,/\.quick-reply-options\{flex:1 1 auto;min-height:0;/);
+  assert.match(css,/\.composer-tools \.quick-reply-options>button\{place-items:initial;/);
+  assert.match(css,/\.quick-reply-filters\{min-height:42px;/);
   assert.match(css,/\.message-actions\{/);
   assert.match(css,/\.message-save-quick-reply/);
 });
