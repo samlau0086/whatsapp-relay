@@ -62,7 +62,31 @@ test("product automation can query and atomically update products by SKU",async(
   assert.match(server,/lower\(btrim\(p\.sku\)\)=ANY/);
   assert.match(server,/source:"sku_bulk_update"/);
   assert.match(server,/missingSkus/);
+  assert.match(server,/hasScope\(request\.principal,"products:read"\)/);
+  assert.match(server,/hasScope\(request\.principal,"products:write"\)/);
   assert.match(server,/replaceProductLabels\(client,current\.id,update\.tags\)/);
+});
+
+test("administrators can manage scoped API keys from the web settings page",async()=>{
+  const [schemas,server,component,css]=await Promise.all([
+    readFile(new URL("../src/schemas.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/globals.css",import.meta.url),"utf8"),
+  ]);
+  assert.match(schemas,/apiKeyCreateSchema/);
+  assert.match(server,/app\.get\("\/api\/v1\/api-keys"/);
+  assert.match(server,/app\.post\("\/api\/v1\/api-keys"/);
+  assert.match(server,/app\.delete\("\/api\/v1\/api-keys\/:id"/);
+  assert.match(server,/api_key\.create/);
+  assert.match(server,/api_key\.revoke/);
+  assert.match(component,/function ApiKeySettingsPanel/);
+  assert.match(component,/products:read/);
+  assert.match(component,/products:write/);
+  assert.match(component,/API 密钥/);
+  assert.match(component,/密钥仅在创建后显示一次/);
+  assert.match(css,/\.api-key-settings/);
+  assert.doesNotMatch(server,/SELECT [^;]*secret_hash[^;]*FROM api_keys ORDER BY/);
 });
 
 test("product descriptions and CSV image references are supported",async()=>{

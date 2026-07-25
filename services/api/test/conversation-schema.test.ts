@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, currencySettingsSchema, customerStageSchema, materialSendSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, orderUpdateSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productSkuQuerySchema, productUpdateSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
+import { apiKeyCreateSchema, contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, currencySettingsSchema, customerStageSchema, materialSendSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, orderUpdateSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productSkuQuerySchema, productUpdateSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
 
 const accountId="10000000-0000-4000-8000-000000000009";
+
+test("API keys use bounded names, known scopes, and supported expiration windows",()=>{
+  assert.equal(apiKeyCreateSchema.safeParse({name:"Product enrichment",scopes:["products:read","products:write"],expiresInDays:90}).success,true);
+  assert.equal(apiKeyCreateSchema.safeParse({name:"Product enrichment",scopes:["products:admin"],expiresInDays:90}).success,false);
+  assert.equal(apiKeyCreateSchema.safeParse({name:"Product enrichment",scopes:["products:read","products:read"],expiresInDays:90}).success,false);
+  assert.equal(apiKeyCreateSchema.safeParse({name:"Product enrichment",scopes:["products:read"],expiresInDays:7}).success,false);
+});
 
 test("new conversation normalizes a single international phone number",()=>{
   const parsed=newConversationSchema.parse({accountId,phone:"+86 138-0013-8000",displayName:" 客户 ",firstMessage:" 您好 ",clientMessageId:"new-chat-001"});

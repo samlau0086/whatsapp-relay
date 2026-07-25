@@ -26,3 +26,7 @@ export async function authenticate(request: FastifyRequest, reply: FastifyReply)
 export function canAccessAccount(principal: Principal | undefined, accountId: string): boolean {
   return Boolean(principal && (!principal.accountIds || principal.accountIds.includes(accountId)));
 }
+
+export function hasScope(principal: Principal | undefined, scope: string): boolean {
+  return Boolean(principal && (principal.kind==="user" || principal.scopes.includes("*") || principal.scopes.includes(scope)));
+}

@@ -7,8 +7,8 @@ import websocket from "@fastify/websocket";
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
-import { authenticate, canAccessAccount, type Principal } from "./auth.js";
-import { contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, materialSendBatchStatusSchema, materialSendSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderUpdateSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productSkuQuerySchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
+import { authenticate, canAccessAccount, hasScope, type Principal } from "./auth.js";
+import { apiKeyCreateSchema, contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, materialSendBatchStatusSchema, materialSendSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderUpdateSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productSkuQuerySchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
 import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
 import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline } from "./agent-hub.js";
 import { generateSpeech, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
@@ -222,10 +222,24 @@ app.delete("/agent/accounts/:id", async(request,reply)=>{
   return reply.code(204).send();
 });
 
+app.get("/api/v1/api-keys", {preHandler:authenticate}, async(request,reply)=>{
+  if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
+  const result=await pool.query("SELECT id,name,key_prefix,scopes,last_used_at,expires_at,revoked_at,created_at FROM api_keys ORDER BY created_at DESC");
+  return{data:result.rows.map(row=>({id:String(row.id),name:String(row.name),keyPrefix:String(row.key_prefix),scopes:row.scopes,lastUsedAt:row.last_used_at,expiresAt:row.expires_at,revokedAt:row.revoked_at,createdAt:row.created_at}))};
+});
+
 app.post("/api/v1/api-keys", {preHandler:authenticate}, async(request,reply)=>{
-  if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});const body=request.body as {name?:string;scopes?:string[];accountIds?:string[]};const secret=`rdk_${randomBytes(32).toString("base64url")}`;
-  const created=await pool.query("INSERT INTO api_keys(name,key_prefix,secret_hash,scopes,account_ids) VALUES($1,$2,$3,$4,$5) RETURNING id,name,scopes,account_ids,created_at",[body.name?.trim()||"External system",secret.slice(0,12),hashSecret(secret),body.scopes??["messages:read","messages:send"],body.accountIds??null]);
-  return reply.code(201).send({...created.rows[0],secret});
+  if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});const parsed=apiKeyCreateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});const secret=`rdk_${randomBytes(32).toString("base64url")}`;
+  const created=await pool.query("INSERT INTO api_keys(name,key_prefix,secret_hash,scopes,expires_at) VALUES($1,$2,$3,$4,CASE WHEN $5::int IS NULL THEN NULL ELSE now()+make_interval(days=>$5) END) RETURNING id,name,key_prefix,scopes,expires_at,created_at",[parsed.data.name,secret.slice(0,12),hashSecret(secret),parsed.data.scopes,parsed.data.expiresInDays]);
+  await pool.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'api_key.create','api_key',$2,$3)",[request.principal.id,created.rows[0].id,JSON.stringify({name:parsed.data.name,scopes:parsed.data.scopes,expiresInDays:parsed.data.expiresInDays})]);
+  return reply.code(201).send({id:String(created.rows[0].id),name:String(created.rows[0].name),keyPrefix:String(created.rows[0].key_prefix),scopes:created.rows[0].scopes,expiresAt:created.rows[0].expires_at,createdAt:created.rows[0].created_at,secret});
+});
+
+app.delete("/api/v1/api-keys/:id", {preHandler:authenticate}, async(request,reply)=>{
+  if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});const {id}=request.params as {id:string};if(!/^[0-9a-f-]{36}$/i.test(id))return reply.code(400).send({error:"invalid_request"});
+  const revoked=await pool.query("UPDATE api_keys SET revoked_at=now() WHERE id=$1 AND revoked_at IS NULL RETURNING id,name,key_prefix",[id]);if(!revoked.rowCount)return reply.code(404).send({error:"not_found"});
+  await pool.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'api_key.revoke','api_key',$2,$3)",[request.principal.id,id,JSON.stringify({name:revoked.rows[0].name,keyPrefix:revoked.rows[0].key_prefix})]);
+  return reply.code(204).send();
 });
 
 app.post("/api/v1/webhooks", {preHandler:authenticate}, async(request,reply)=>{
@@ -443,6 +457,7 @@ app.get("/api/v1/products",{preHandler:authenticate},async(request,reply)=>{
 });
 
 app.post("/api/v1/products/query",{preHandler:authenticate},async(request,reply)=>{
+  if(!hasScope(request.principal,"products:read"))return reply.code(403).send({error:"insufficient_scope",requiredScope:"products:read"});
   const parsed=productSkuQuerySchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
   const normalizedSkus=parsed.data.skus.map(sku=>sku.toLocaleLowerCase()),result=await pool.query(`SELECT p.id,p.sku,p.name,p.description,p.default_unit_amount,p.currency,p.image_media_id,m.file_name image_name,p.created_at,p.updated_at,COALESCE(label_list.tags,'[]'::json) tags,COALESCE(price_list.price_tiers,'[]'::json) price_tiers
     FROM products p LEFT JOIN media m ON m.id=p.image_media_id
@@ -492,12 +507,12 @@ app.post("/api/v1/products/bulk-import",{preHandler:authenticate},async(request,
 });
 
 app.patch("/api/v1/products/bulk-update",{preHandler:authenticate},async(request,reply)=>{
-  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const principal=request.principal,parsed=productBulkUpdateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  if(!hasScope(request.principal,"products:write"))return reply.code(403).send({error:"insufficient_scope",requiredScope:"products:write"});const principal=request.principal!,parsed=productBulkUpdateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
   try{const result=await transaction(async client=>{
     const normalizedSkus=parsed.data.products.map(product=>product.sku.toLocaleLowerCase()),found=await client.query("SELECT id,sku,lower(btrim(sku)) normalized_sku FROM products WHERE deleted_at IS NULL AND lower(btrim(sku))=ANY($1::text[]) FOR UPDATE",[normalizedSkus]),bySku=new Map(found.rows.map(row=>[String(row.normalized_sku),{id:String(row.id),sku:String(row.sku)}]));
     const missingSkus=parsed.data.products.filter(product=>!bySku.has(product.sku.toLocaleLowerCase())).map(product=>product.sku);if(missingSkus.length)throw Object.assign(new Error("product_unavailable"),{statusCode:409,missingSkus});
     const products=[];
-    for(const update of parsed.data.products){const current=bySku.get(update.sku.toLocaleLowerCase())!,fields=Object.keys(update).filter(field=>field!=="sku");await client.query("UPDATE products SET name=CASE WHEN $2 THEN $3 ELSE name END,description=CASE WHEN $4 THEN $5 ELSE description END,updated_at=now() WHERE id=$1",[current.id,update.name!==undefined,update.name??null,update.description!==undefined,update.description??null]);if(update.tags!==undefined)await replaceProductLabels(client,current.id,update.tags);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'product.update','product',$2,$3)",[principal.id,current.id,JSON.stringify({source:"sku_bulk_update",sku:current.sku,fields})]);products.push(await productById(client,current.id));}
+    for(const update of parsed.data.products){const current=bySku.get(update.sku.toLocaleLowerCase())!,fields=Object.keys(update).filter(field=>field!=="sku");await client.query("UPDATE products SET name=CASE WHEN $2 THEN $3 ELSE name END,description=CASE WHEN $4 THEN $5 ELSE description END,updated_at=now() WHERE id=$1",[current.id,update.name!==undefined,update.name??null,update.description!==undefined,update.description??null]);if(update.tags!==undefined)await replaceProductLabels(client,current.id,update.tags);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'product.update','product',$3,$4)",[principal.kind,principal.id,current.id,JSON.stringify({source:"sku_bulk_update",sku:current.sku,fields})]);products.push(await productById(client,current.id));}
     return products;
   });return{updated:result.length,products:result};}catch(error){const status=(error as {statusCode?:number}).statusCode;if(status)return reply.code(status).send({error:(error as Error).message,missingSkus:(error as {missingSkus?:string[]}).missingSkus});throw error;}
 });
