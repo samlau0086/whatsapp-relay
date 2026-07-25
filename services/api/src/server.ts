@@ -8,7 +8,7 @@ import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } fro
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount, type Principal } from "./auth.js";
-import { contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderUpdateSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
+import { contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, materialSendBatchStatusSchema, materialSendSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderUpdateSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
 import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
 import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline } from "./agent-hub.js";
 import { generateSpeech, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
@@ -28,6 +28,7 @@ import { fetchLatestExchangeRates } from "./exchange-rates.js";
 import { emailShell, ensureEmailTables, escapeHtml, sendProviderTest, verifySmtp, type EmailProvider, type EmailProviderConfig } from "./email.js";
 import { collageTemplateCreateSchema, collageTemplateUpdateSchema, materialGenerateSchema, parseCollageTemplate, productSlotIds, DEFAULT_COLLAGE_TEMPLATE, MATERIAL_PRODUCT_LIMIT, type CollageTemplate } from "./collage-template.js";
 import { renderCollagePage, type CollageProduct } from "./collage-image.js";
+import { stitchMaterialImages } from "./material-stitch-image.js";
 import { registerTaskRoutes } from "./task-routes.js";
 import {registerWhatsAppCloudRoutes} from "./whatsapp-cloud.js";
 import {isTemplateRequiredError,queueWhatsAppCommand} from "./whatsapp-outbound.js";
@@ -74,6 +75,8 @@ app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"Rel
   "/api/v1/conversations/{id}":{patch:{summary:"认领、收藏、更新客户阶段、关闭或标记已读"},delete:{summary:"永久删除会话及其关联数据"}},
   "/api/v1/conversations/{id}/contact":{patch:{summary:"编辑联系人别名"}},
   "/api/v1/conversations/{id}/details":{get:{summary:"读取会话标签、备注、个人提醒与订单"}},
+  "/api/v1/conversations/{id}/materials/send":{post:{summary:"拼接或逐张发送当前素材批次中的图片"}},
+  "/api/v1/conversations/{id}/materials/batches/{batchId}":{get:{summary:"确认素材图片发送批次状态"}},
   "/api/v1/conversations/{id}/tags":{put:{summary:"替换会话标签"}},
   "/api/v1/conversations/{id}/notes":{post:{summary:"添加团队共享备注"}},
   "/api/v1/conversations/{id}/reminder":{put:{summary:"设置当前坐席提醒"},delete:{summary:"取消当前坐席提醒"}},
@@ -540,6 +543,60 @@ app.post("/api/v1/materials/generate",{preHandler:authenticate},async(request,re
 app.get("/api/v1/materials",{preHandler:authenticate},async(request)=>{const query=request.query as {q?:string;limit?:string;offset?:string},limit=Math.min(50,Math.max(1,Number(query.limit??20))),offset=Math.max(0,Number(query.offset??0));const [rows,count]=await Promise.all([pool.query(`SELECT b.id,b.name,b.template_id,b.template_name,b.created_at,u.display_name created_by_name,jsonb_array_length(b.product_snapshot)::int product_count,COUNT(a.media_id)::int page_count,(array_agg(a.media_id ORDER BY a.page_index))[1] cover_media_id FROM material_batches b LEFT JOIN users u ON u.id=b.created_by LEFT JOIN material_assets a ON a.batch_id=b.id WHERE ($1::text IS NULL OR b.name ILIKE '%'||$1||'%' OR b.template_name ILIKE '%'||$1||'%') GROUP BY b.id,u.display_name ORDER BY b.created_at DESC,b.id LIMIT $2 OFFSET $3`,[query.q?.trim()||null,limit,offset]),pool.query("SELECT COUNT(*)::int total FROM material_batches b WHERE ($1::text IS NULL OR b.name ILIKE '%'||$1||'%' OR b.template_name ILIKE '%'||$1||'%')",[query.q?.trim()||null])]);return{data:rows.rows,total:Number(count.rows[0]?.total??0)};});
 app.get("/api/v1/materials/:id",{preHandler:authenticate},async(request,reply)=>{const {id}=request.params as {id:string},batch=await materialBatchById(id);return batch??reply.code(404).send({error:"not_found"});});
 app.delete("/api/v1/materials/:id",{preHandler:authenticate},async(request,reply)=>{if(!canManageMaterials(request.principal))return reply.code(403).send({error:"supervisor_required"});const {id}=request.params as {id:string},found=await pool.query("SELECT a.media_id,m.object_key,((SELECT COUNT(*) FROM messages msg WHERE msg.media_id=m.id)+(SELECT COUNT(*) FROM order_items item WHERE item.image_media_id=m.id)+(SELECT COUNT(*) FROM orders o WHERE o.rendered_media_id=m.id)+(SELECT COUNT(*) FROM products p WHERE p.image_media_id=m.id)+(SELECT COUNT(*) FROM email_attachments e WHERE e.media_id=m.id))::int external_usage_count FROM material_assets a JOIN media m ON m.id=a.media_id WHERE a.batch_id=$1 ORDER BY a.page_index",[id]);if(!found.rowCount)return reply.code(404).send({error:"not_found"});const pageCount=found.rows.length,removable=found.rows.filter(row=>Number(row.external_usage_count)===0);await transaction(async client=>{await client.query("DELETE FROM material_assets WHERE batch_id=$1",[id]);await client.query("DELETE FROM material_batches WHERE id=$1",[id]);if(removable.length)await client.query("DELETE FROM media WHERE id=ANY($1::uuid[])",[removable.map(row=>row.media_id)]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'material.delete','material_batch',$2,$3)",[request.principal!.id,id,JSON.stringify({pageCount,removedMediaCount:removable.length,retainedMediaCount:pageCount-removable.length})]);});await Promise.allSettled(removable.map(row=>s3.send(new DeleteObjectCommand({Bucket:config.S3_BUCKET,Key:row.object_key}))));return reply.code(204).send();});
+
+app.post("/api/v1/conversations/:id/materials/send",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const principal=request.principal,{id}=request.params as {id:string},parsed=materialSendSchema.safeParse(request.body);
+  if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  const input=parsed.data,contextResult=await pool.query("SELECT c.account_id,a.agent_id,co.wa_jid FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id JOIN contacts co ON co.id=c.contact_id WHERE c.id=$1 AND c.account_id=$2",[id,input.accountId]);
+  if(!contextResult.rowCount||!canAccessAccount(principal,input.accountId))return reply.code(404).send({error:"conversation_not_found"});
+  const context=contextResult.rows[0],clientMessageIds=input.mode==="stitched"?[`${input.clientBatchId}:material:stitched`]:input.mediaIds.map((_,index)=>`${input.clientBatchId}:material:p:${index}`);
+  const existing=await pool.query("SELECT id,client_message_id FROM messages WHERE account_id=$1 AND client_message_id=ANY($2::text[]) ORDER BY occurred_at,id",[input.accountId,clientMessageIds]);
+  if(existing.rowCount){if(existing.rowCount!==clientMessageIds.length)return reply.code(409).send({error:"material_send_batch_conflict"});return reply.code(200).send({deduplicated:true,messageIds:existing.rows.map(row=>String(row.id))});}
+  const selected=await pool.query("SELECT a.media_id,a.page_index,m.object_key,m.file_name,m.mime_type,m.byte_size FROM material_assets a JOIN media m ON m.id=a.media_id WHERE a.batch_id=$1 AND a.media_id=ANY($2::uuid[]) AND m.status='ready' AND m.mime_type IN ('image/png','image/jpeg','image/webp') ORDER BY a.page_index",[input.materialBatchId,input.mediaIds]);
+  if(selected.rowCount!==input.mediaIds.length)return reply.code(400).send({error:"invalid_material_selection",message:"所选图片必须来自同一个素材批次"});
+
+  let uploaded:{objectKey:string;bytes:Buffer;fileName:string;mimeType:"image/png"|"image/jpeg";sha256:string}|null=null,committed=false;
+  try{
+    if(input.mode==="stitched"){
+      const images=await Promise.all(selected.rows.map(async row=>{const object=await s3.send(new GetObjectCommand({Bucket:config.S3_BUCKET,Key:row.object_key}));if(!object.Body)throw Object.assign(new Error("material_image_unavailable"),{statusCode:409});return Buffer.from(await object.Body.transformToByteArray());}));
+      let stitched;try{stitched=await stitchMaterialImages(images,input.orientation);}catch(error){if((error as Error).message==="material_stitch_too_large")return reply.code(413).send({error:"material_stitch_too_large",message:"拼接图片过大，请减少选择数量"});throw error;}
+      const sha256=createHash("sha256").update(stitched.bytes).digest("hex"),fileName=`material-${input.clientBatchId}.${stitched.extension}`,objectKey=`material-sends/${input.accountId}/${new Date().toISOString().slice(0,10)}/${randomBytes(16).toString("hex")}.${stitched.extension}`;
+      await s3.send(new PutObjectCommand({Bucket:config.S3_BUCKET,Key:objectKey,Body:stitched.bytes,ContentType:stitched.mimeType,Metadata:{sha256,source:"material-stitch",orientation:input.orientation}}));
+      uploaded={objectKey,bytes:stitched.bytes,fileName,mimeType:stitched.mimeType,sha256};
+    }
+    const result=await transaction(async client=>{
+      const duplicate=await client.query("SELECT id FROM messages WHERE account_id=$1 AND client_message_id=ANY($2::text[])",[input.accountId,clientMessageIds]);if(duplicate.rowCount)throw Object.assign(new Error("material_send_batch_conflict"),{statusCode:409});
+      let stitchedMediaId:string|null=null;
+      if(uploaded){const media=await client.query("INSERT INTO media(account_id,object_key,file_name,mime_type,byte_size,sha256) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",[input.accountId,uploaded.objectKey,uploaded.fileName,uploaded.mimeType,uploaded.bytes.length,uploaded.sha256]);stitchedMediaId=String(media.rows[0].id);}
+      const messageIds:string[]=[];
+      const outgoing=input.mode==="stitched"?[{mediaId:stitchedMediaId!,fileName:uploaded!.fileName}]:selected.rows.map(row=>({mediaId:String(row.media_id),fileName:String(row.file_name)}));
+      const baseTime=Date.now();
+      for(const [index,item] of outgoing.entries()){
+        const clientMessageId=clientMessageIds[index],caption=index===0?(input.caption?.trim()||null):null,occurredAt=new Date(baseTime+index).toISOString();
+        const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,media_id,status,occurred_at) VALUES($1,$2,$3,$4,'out','image',$5,$6,'queued',$7) RETURNING id",[id,input.accountId,principal.id,clientMessageId,caption,item.mediaId,occurredAt]);
+        await queueWhatsAppCommand(client,{accountId:input.accountId,conversationId:id,messageId:message.rows[0].id,payload:{accountId:input.accountId,conversationId:id,clientMessageId,type:"image",...(caption?{text:caption}:{}),mediaId:item.mediaId,messageId:message.rows[0].id,toJid:context.wa_jid}});
+        messageIds.push(String(message.rows[0].id));
+      }
+      await client.query("UPDATE conversations SET status='open',closed_at=NULL,last_message_at=now() WHERE id=$1",[id]);
+      await pauseAgentForHuman(client,id);
+      await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'material.send','conversation',$2,$3)",[principal.id,id,JSON.stringify({clientBatchId:input.clientBatchId,materialBatchId:input.materialBatchId,mediaIds:selected.rows.map(row=>String(row.media_id)),mode:input.mode,orientation:input.orientation,captioned:Boolean(input.caption?.trim()),messageIds})]);
+      return{deduplicated:false,messageIds};
+    });
+    committed=true;if(context.agent_id)void dispatchPending(context.agent_id);return reply.code(202).send(result);
+  }finally{if(uploaded&&!committed)await s3.send(new DeleteObjectCommand({Bucket:config.S3_BUCKET,Key:uploaded.objectKey})).catch(()=>undefined);}
+});
+
+app.get("/api/v1/conversations/:id/materials/batches/:batchId",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const {id,batchId}=request.params as {id:string;batchId:string},parsed=materialSendBatchStatusSchema.safeParse({batchId,accountId:(request.query as {accountId?:string}).accountId});
+  if(!parsed.success)return reply.code(400).send({error:"invalid_request"});
+  const access=await pool.query("SELECT account_id FROM conversations WHERE id=$1 AND account_id=$2",[id,parsed.data.accountId]);
+  if(!access.rowCount||!canAccessAccount(request.principal,parsed.data.accountId))return reply.code(404).send({error:"conversation_not_found"});
+  const messages=await pool.query("SELECT id,status,client_message_id FROM messages WHERE conversation_id=$1 AND account_id=$2 AND left(client_message_id,length($3)+10)=$3||':material:' ORDER BY occurred_at,id",[id,parsed.data.accountId,parsed.data.batchId]);
+  if(!messages.rowCount)return reply.code(404).send({committed:false,status:"not_found",messageIds:[]});
+  return{committed:true,status:messages.rows.every(row=>row.status==="sent")?"sent":messages.rows.some(row=>row.status==="failed")?"failed":"queued",messageIds:messages.rows.map(row=>String(row.id)),messages:messages.rows.map(row=>({id:String(row.id),status:String(row.status),clientMessageId:String(row.client_message_id)}))};
+});
 
 app.get("/api/v1/conversations/:id/details",{preHandler:authenticate},async(request,reply)=>{
   const {id}=request.params as {id:string};const conversation=await pool.query("SELECT account_id,customer_stage,contact_id FROM conversations WHERE id=$1",[id]);

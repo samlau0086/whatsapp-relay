@@ -53,6 +53,13 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /MediaDialog/);
   assert.match(component, /MaterialLibrarySendDialog/);
   assert.match(component, /打开素材库/);
+  const materialSendDialog = await readFile(new URL("../app/material-library-send-dialog.tsx", import.meta.url), "utf8");
+  assert.match(materialSendDialog, /拼接发送/);
+  assert.match(materialSendDialog, /逐个发送/);
+  assert.match(materialSendDialog, /竖向/);
+  assert.match(materialSendDialog, /横向/);
+  assert.match(materialSendDialog, /一次最多选择 10 张素材图片/);
+  assert.match(materialSendDialog, /materials\/batches/);
   assert.match(component, /onDrop=/);
   assert.match(clipboard, /clipboardData\?\.files/);
   assert.match(clipboard, /clipboardData\?\.items/);
