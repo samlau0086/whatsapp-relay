@@ -149,11 +149,12 @@ test("product library schemas validate SKU, tiered prices, and editable labels",
   assert.equal(productCardSendSchema.safeParse({accountId,clientBatchId:"batch-001",productIds:Array.from({length:11},(_,index)=>`10000000-0000-4000-8000-${String(index).padStart(12,"0")}`),mode:"combined",showPrice:false}).success,false);
   assert.equal(productCardBatchStatusSchema.safeParse({accountId,batchId:"batch-001"}).success,true);
   assert.equal(productCardBatchStatusSchema.safeParse({accountId,batchId:"batch:%"}).success,false);
-  const materialMediaIds=Array.from({length:10},(_,index)=>`20000000-0000-4000-8000-${String(index).padStart(12,"0")}`),materialBase={accountId,clientBatchId:"material-batch-001",materialBatchId:"30000000-0000-4000-8000-000000000001",mode:"stitched" as const};
+  const materialMediaIds=Array.from({length:10},(_,index)=>`20000000-0000-4000-8000-${String(index).padStart(12,"0")}`),materialBatchIds=["30000000-0000-4000-8000-000000000001","30000000-0000-4000-8000-000000000002"],materialBase={accountId,clientBatchId:"material-batch-001",materialBatchIds,mode:"stitched" as const};
   assert.equal(materialSendSchema.parse({...materialBase,mediaIds:[materialMediaIds[0]]}).orientation,"vertical");
   assert.equal(materialSendSchema.safeParse({...materialBase,mediaIds:materialMediaIds,orientation:"horizontal"}).success,true);
   assert.equal(materialSendSchema.safeParse({...materialBase,mediaIds:[...materialMediaIds,"20000000-0000-4000-8000-000000000011"]}).success,false);
   assert.equal(materialSendSchema.safeParse({...materialBase,mediaIds:[materialMediaIds[0],materialMediaIds[0]]}).success,false);
+  assert.equal(materialSendSchema.safeParse({...materialBase,materialBatchIds:[materialBatchIds[0],materialBatchIds[0]],mediaIds:[materialMediaIds[0]]}).success,false);
 });
 
 test("currency settings require one included base currency with rate one",()=>{

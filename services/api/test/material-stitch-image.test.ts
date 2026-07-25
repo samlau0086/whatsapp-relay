@@ -32,10 +32,12 @@ test("stitching reports an explicit error when even minimum output cannot fit",a
   await assert.rejects(()=>stitchMaterialImages([image,image],"vertical",10),/material_stitch_too_large/);
 });
 
-test("material send routes keep ordering, first-caption behavior, and idempotent batch status",async()=>{
+test("material send routes keep cross-library ordering, first-caption behavior, and idempotent batch status",async()=>{
   const server=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
   assert.match(server,/\/api\/v1\/conversations\/:id\/materials\/send/);
-  assert.match(server,/ORDER BY a\.page_index/);
+  assert.match(server,/a\.batch_id=ANY\(\$1::uuid\[\]\)/);
+  assert.match(server,/ORDER BY array_position\(\$1::uuid\[\],a\.batch_id\),a\.page_index/);
+  assert.match(server,/selectedBatchIds\.length!==input\.materialBatchIds\.length/);
   assert.match(server,/caption=index===0/);
   assert.match(server,/material_send_batch_conflict/);
   assert.match(server,/\/api\/v1\/conversations\/:id\/materials\/batches\/:batchId/);

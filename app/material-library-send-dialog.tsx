@@ -7,6 +7,7 @@ type RequestResult={response:Response;token:string};
 type Request=(path:string,init?:RequestInit)=>Promise<RequestResult>;
 type MaterialSummary={id:string;name:string;templateName:string;createdAt:string;createdByName:string;pageCount:number;coverMediaId:string|null};
 type MaterialAsset={mediaId:string;pageIndex:number;fileName:string;byteSize:number};
+type SelectedMaterialAsset=MaterialAsset&{batchId:string};
 type SendMode="stitched"|"individual";
 type StitchOrientation="vertical"|"horizontal";
 
@@ -15,6 +16,7 @@ export function MaterialLibrarySendDialog({accountId,conversationId,customerName
   const [selectedBatchId,setSelectedBatchId]=useState("");
   const [assets,setAssets]=useState<MaterialAsset[]>([]);
   const [selectedMediaIds,setSelectedMediaIds]=useState<string[]>([]);
+  const [assetCache,setAssetCache]=useState<Record<string,SelectedMaterialAsset>>({});
   const [mode,setMode]=useState<SendMode>("stitched");
   const [orientation,setOrientation]=useState<StitchOrientation>("vertical");
   const [query,setQuery]=useState("");
@@ -26,6 +28,7 @@ export function MaterialLibrarySendDialog({accountId,conversationId,customerName
   const [error,setError]=useState("");
   const requestRef=useRef(request),onTokenRef=useRef(onToken);
   const pendingBatchRef=useRef<{id:string;fingerprint:string}|null>(null);
+  const defaultSelectionAppliedRef=useRef(false);
 
   useEffect(()=>{requestRef.current=request;onTokenRef.current=onToken;},[request,onToken]);
   const loadBatches=useCallback(async()=>{
@@ -44,7 +47,7 @@ export function MaterialLibrarySendDialog({accountId,conversationId,customerName
 
   const loadDetail=useCallback(async(id:string)=>{
     if(!id)return;
-    setDetailLoading(true);setError("");setSelectedMediaIds([]);pendingBatchRef.current=null;
+    setDetailLoading(true);setError("");
     try{
       const result=await requestRef.current(`/api/v1/materials/${id}`);
       onTokenRef.current(result.token);
@@ -52,7 +55,11 @@ export function MaterialLibrarySendDialog({accountId,conversationId,customerName
       if(!result.response.ok)throw new Error(String(body.error??`素材图片加载失败（HTTP ${result.response.status}）`));
       const next=Array.isArray(body.assets)?body.assets.map(value=>mapAsset(value as Record<string,unknown>)):[];
       setAssets(next);
-      setSelectedMediaIds(next[0]?[next[0].mediaId]:[]);
+      setAssetCache(current=>Object.fromEntries([...Object.entries(current),...next.map(asset=>[asset.mediaId,{...asset,batchId:id}])]));
+      if(!defaultSelectionAppliedRef.current&&next[0]){
+        defaultSelectionAppliedRef.current=true;
+        setSelectedMediaIds([next[0].mediaId]);
+      }
     }catch(reason){setAssets([]);setError(reason instanceof Error?reason.message:"素材图片加载失败");}
     finally{setDetailLoading(false);}
   },[]);
@@ -63,7 +70,11 @@ export function MaterialLibrarySendDialog({accountId,conversationId,customerName
 
   const visible=useMemo(()=>{const keyword=query.trim().toLowerCase();return keyword?items.filter(item=>`${item.name} ${item.templateName}`.toLowerCase().includes(keyword)):items;},[items,query]);
   const selectedBatch=items.find(item=>item.id===selectedBatchId);
-  const selectedAssets=assets.filter(item=>selectedMediaIds.includes(item.mediaId));
+  const selectedAssets=useMemo(()=>{
+    const batchOrder=new Map(items.map((item,index)=>[item.id,index]));
+    return selectedMediaIds.flatMap(mediaId=>assetCache[mediaId]?[assetCache[mediaId]]:[]).sort((left,right)=>(batchOrder.get(left.batchId)??Number.MAX_SAFE_INTEGER)-(batchOrder.get(right.batchId)??Number.MAX_SAFE_INTEGER)||left.pageIndex-right.pageIndex);
+  },[assetCache,items,selectedMediaIds]);
+  const selectionOrder=useMemo(()=>new Map(selectedAssets.map((asset,index)=>[asset.mediaId,index+1])),[selectedAssets]);
   const busy=sending||confirming;
 
   function toggle(mediaId:string){
@@ -95,12 +106,12 @@ export function MaterialLibrarySendDialog({accountId,conversationId,customerName
   }
 
   async function send(){
-    if(!selectedBatchId||!selectedAssets.length||busy)return;
-    const mediaIds=selectedAssets.map(item=>item.mediaId),fingerprint=JSON.stringify({selectedBatchId,mediaIds,mode,orientation,caption:caption.trim()});
+    if(!selectedAssets.length||busy)return;
+    const mediaIds=selectedAssets.map(item=>item.mediaId),materialBatchIds=[...new Set(selectedAssets.map(item=>item.batchId))],fingerprint=JSON.stringify({materialBatchIds,mediaIds,mode,orientation,caption:caption.trim()});
     const pending=pendingBatchRef.current?.fingerprint===fingerprint?pendingBatchRef.current:{id:`material-${crypto.randomUUID()}`,fingerprint};
     pendingBatchRef.current=pending;setSending(true);setConfirming(false);setError("");
     try{
-      const {result,body}=await requestJsonWithTimeout(`/api/v1/conversations/${conversationId}/materials/send`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId,clientBatchId:pending.id,materialBatchId:selectedBatchId,mediaIds,mode,orientation,caption:caption.trim()||undefined})},15_000);
+      const {result,body}=await requestJsonWithTimeout(`/api/v1/conversations/${conversationId}/materials/send`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId,clientBatchId:pending.id,materialBatchIds,mediaIds,mode,orientation,caption:caption.trim()||undefined})},15_000);
       if(!result.response.ok)throw Object.assign(new Error(materialSendError(body,result.response.status)),{definitive:true});
       completeSend();
     }catch(reason){
@@ -116,11 +127,11 @@ export function MaterialLibrarySendDialog({accountId,conversationId,customerName
   return <div className="modal-backdrop material-send-backdrop" role="presentation"><section className="material-send-dialog" role="dialog" aria-modal="true" aria-labelledby="material-send-title">
     <header><div className="material-send-heading"><span><LayoutGrid size={20}/></span><div><h2 id="material-send-title">从素材库发送图片</h2><p>多选、拼接或逐张发送给 {customerName}</p></div></div><button className="material-send-close" onClick={onClose} disabled={busy} aria-label="关闭素材库"><X size={18}/></button></header>
     <div className="material-send-body">
-      <aside><label className="material-send-search"><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索素材名称或模板" autoFocus/></label><div className="material-send-batches">{loading?<Loading text="正在读取素材库…"/>:visible.length?visible.map(item=><button key={item.id} className={selectedBatchId===item.id?"active":""} onClick={()=>setSelectedBatchId(item.id)}><MaterialImage mediaId={item.coverMediaId} request={request} onToken={onToken}/><span><b>{item.name}</b><small>{item.templateName} · {item.pageCount} 张</small><small>{item.createdByName||"团队成员"} · {formatDate(item.createdAt)}</small></span></button>):<div className="material-send-empty"><ImageIcon size={27}/><b>{query?"没有匹配的素材":"素材库还是空的"}</b><span>{query?"换个关键词试试":"请先在产品库生成素材"}</span></div>}</div></aside>
+      <aside><label className="material-send-search"><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索素材名称或模板" autoFocus/></label><div className="material-send-batches">{loading?<Loading text="正在读取素材库…"/>:visible.length?visible.map(item=>{const selectedCount=selectedAssets.filter(asset=>asset.batchId===item.id).length;return <button key={item.id} className={selectedBatchId===item.id?"active":""} onClick={()=>setSelectedBatchId(item.id)}><MaterialImage mediaId={item.coverMediaId} request={request} onToken={onToken}/><span><b>{item.name}</b><small>{item.templateName} · {item.pageCount} 张</small><small>{item.createdByName||"团队成员"} · {formatDate(item.createdAt)}</small></span>{selectedCount>0&&<em className="material-batch-selected-count">{selectedCount}</em>}</button>}):<div className="material-send-empty"><ImageIcon size={27}/><b>{query?"没有匹配的素材":"素材库还是空的"}</b><span>{query?"换个关键词试试":"请先在产品库生成素材"}</span></div>}</div></aside>
       <main>
-        <div className="material-send-selection-head"><div><b>{selectedBatch?.name??"选择一个素材批次"}</b><span>{assets.length?`当前批次共 ${assets.length} 张，一次最多选择 10 张`:""}</span></div><span className="material-selected-indicator"><Check size={13}/>已选择 {selectedAssets.length} 张</span></div>
-        <div className="material-send-options"><div role="group" aria-label="发送方式"><button className={mode==="stitched"?"active":""} onClick={()=>{setMode("stitched");pendingBatchRef.current=null}}><LayoutGrid size={14}/>拼接发送</button><button className={mode==="individual"?"active":""} onClick={()=>{setMode("individual");pendingBatchRef.current=null}}><Rows3 size={14}/>逐个发送</button></div>{mode==="stitched"&&<div role="group" aria-label="拼接方向"><span>拼接方向</span><button className={orientation==="vertical"?"active":""} onClick={()=>{setOrientation("vertical");pendingBatchRef.current=null}}>竖向</button><button className={orientation==="horizontal"?"active":""} onClick={()=>{setOrientation("horizontal");pendingBatchRef.current=null}}>横向</button></div>}<small>{mode==="stitched"?"按页码顺序无缝拼接为一张图片":"按页码顺序逐张发送，说明文字仅附在第一张"}</small></div>
-        <div className="material-send-assets">{detailLoading?<Loading text="正在加载图片…"/>:assets.length?assets.map(asset=>{const selected=selectedMediaIds.includes(asset.mediaId),order=selectedAssets.findIndex(item=>item.mediaId===asset.mediaId)+1;return <button key={asset.mediaId} className={selected?"selected":""} onClick={()=>toggle(asset.mediaId)} aria-pressed={selected}><MaterialImage mediaId={asset.mediaId} request={request} onToken={onToken}/><span>第 {asset.pageIndex+1} 张 · {formatBytes(asset.byteSize)}</span>{selected&&<i aria-label={`已选，第 ${order} 张`}><b>{order}</b><Check size={12}/></i>}</button>}):!loading&&<div className="material-send-empty"><ImageIcon size={30}/><b>暂无可发送图片</b><span>请从左侧选择其他素材</span></div>}</div>
+        <div className="material-send-selection-head"><div><b>{selectedBatch?.name??"选择一个素材批次"}</b><span>{assets.length?`当前素材库共 ${assets.length} 张，可跨素材库选择最多 10 张`:""}</span></div><span className="material-selected-indicator"><Check size={13}/>已跨库选择 {selectedAssets.length} 张</span></div>
+        <div className="material-send-options"><div role="group" aria-label="发送方式"><button className={mode==="stitched"?"active":""} onClick={()=>{setMode("stitched");pendingBatchRef.current=null}}><LayoutGrid size={14}/>拼接发送</button><button className={mode==="individual"?"active":""} onClick={()=>{setMode("individual");pendingBatchRef.current=null}}><Rows3 size={14}/>逐个发送</button></div>{mode==="stitched"&&<div role="group" aria-label="拼接方向"><span>拼接方向</span><button className={orientation==="vertical"?"active":""} onClick={()=>{setOrientation("vertical");pendingBatchRef.current=null}}>竖向</button><button className={orientation==="horizontal"?"active":""} onClick={()=>{setOrientation("horizontal");pendingBatchRef.current=null}}>横向</button></div>}<small>{mode==="stitched"?"按素材库顺序和页码无缝拼接":"按素材库顺序和页码逐张发送，说明仅附第一张"}</small></div>
+        <div className="material-send-assets">{detailLoading?<Loading text="正在加载图片…"/>:assets.length?assets.map(asset=>{const selected=selectedMediaIds.includes(asset.mediaId),order=selectionOrder.get(asset.mediaId)??0;return <button key={asset.mediaId} className={selected?"selected":""} onClick={()=>toggle(asset.mediaId)} aria-pressed={selected}><MaterialImage mediaId={asset.mediaId} request={request} onToken={onToken}/><span>第 {asset.pageIndex+1} 张 · {formatBytes(asset.byteSize)}</span>{selected&&<i aria-label={`已选，第 ${order} 张`}><b>{order}</b><Check size={12}/></i>}</button>}):!loading&&<div className="material-send-empty"><ImageIcon size={30}/><b>暂无可发送图片</b><span>请从左侧选择其他素材</span></div>}</div>
       </main>
     </div>
     {error&&<p className="material-send-error">{error}</p>}

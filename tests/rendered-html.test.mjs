@@ -59,6 +59,10 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(materialSendDialog, /竖向/);
   assert.match(materialSendDialog, /横向/);
   assert.match(materialSendDialog, /一次最多选择 10 张素材图片/);
+  assert.match(materialSendDialog, /已跨库选择/);
+  assert.match(materialSendDialog, /materialBatchIds/);
+  assert.match(materialSendDialog, /assetCache/);
+  assert.doesNotMatch(materialSendDialog, /setSelectedMediaIds\(\[\]\)/);
   assert.match(materialSendDialog, /materials\/batches/);
   assert.match(component, /onDrop=/);
   assert.match(clipboard, /clipboardData\?\.files/);

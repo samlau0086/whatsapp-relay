@@ -76,7 +76,7 @@ app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"Rel
   "/api/v1/conversations/{id}":{patch:{summary:"认领、收藏、更新客户阶段、关闭或标记已读"},delete:{summary:"永久删除会话及其关联数据"}},
   "/api/v1/conversations/{id}/contact":{patch:{summary:"编辑联系人别名"}},
   "/api/v1/conversations/{id}/details":{get:{summary:"读取会话标签、备注、个人提醒与订单"}},
-  "/api/v1/conversations/{id}/materials/send":{post:{summary:"拼接或逐张发送当前素材批次中的图片"}},
+  "/api/v1/conversations/{id}/materials/send":{post:{summary:"跨素材库拼接或逐张发送所选图片"}},
   "/api/v1/conversations/{id}/materials/batches/{batchId}":{get:{summary:"确认素材图片发送批次状态"}},
   "/api/v1/conversations/{id}/tags":{put:{summary:"替换会话标签"}},
   "/api/v1/conversations/{id}/notes":{post:{summary:"添加团队共享备注"}},
@@ -555,8 +555,9 @@ app.post("/api/v1/conversations/:id/materials/send",{preHandler:authenticate},as
   const context=contextResult.rows[0],clientMessageIds=input.mode==="stitched"?[`${input.clientBatchId}:material:stitched`]:input.mediaIds.map((_,index)=>`${input.clientBatchId}:material:p:${index}`);
   const existing=await pool.query("SELECT id,client_message_id FROM messages WHERE account_id=$1 AND client_message_id=ANY($2::text[]) ORDER BY occurred_at,id",[input.accountId,clientMessageIds]);
   if(existing.rowCount){if(existing.rowCount!==clientMessageIds.length)return reply.code(409).send({error:"material_send_batch_conflict"});return reply.code(200).send({deduplicated:true,messageIds:existing.rows.map(row=>String(row.id))});}
-  const selected=await pool.query("SELECT a.media_id,a.page_index,m.object_key,m.file_name,m.mime_type,m.byte_size FROM material_assets a JOIN media m ON m.id=a.media_id WHERE a.batch_id=$1 AND a.media_id=ANY($2::uuid[]) AND m.status='ready' AND m.mime_type IN ('image/png','image/jpeg','image/webp') ORDER BY a.page_index",[input.materialBatchId,input.mediaIds]);
-  if(selected.rowCount!==input.mediaIds.length)return reply.code(400).send({error:"invalid_material_selection",message:"所选图片必须来自同一个素材批次"});
+  const selected=await pool.query("SELECT a.batch_id,a.media_id,a.page_index,m.object_key,m.file_name,m.mime_type,m.byte_size FROM material_assets a JOIN media m ON m.id=a.media_id WHERE a.batch_id=ANY($1::uuid[]) AND a.media_id=ANY($2::uuid[]) AND m.status='ready' AND m.mime_type IN ('image/png','image/jpeg','image/webp') ORDER BY array_position($1::uuid[],a.batch_id),a.page_index",[input.materialBatchIds,input.mediaIds]);
+  const selectedBatchIds=[...new Set(selected.rows.map(row=>String(row.batch_id)))];
+  if(selected.rowCount!==input.mediaIds.length||selectedBatchIds.length!==input.materialBatchIds.length)return reply.code(400).send({error:"invalid_material_selection",message:"所选图片必须来自指定的素材库"});
 
   let uploaded:{objectKey:string;bytes:Buffer;fileName:string;mimeType:"image/png"|"image/jpeg";sha256:string}|null=null,committed=false;
   try{
@@ -582,7 +583,7 @@ app.post("/api/v1/conversations/:id/materials/send",{preHandler:authenticate},as
       }
       await client.query("UPDATE conversations SET status='open',closed_at=NULL,last_message_at=now() WHERE id=$1",[id]);
       await pauseAgentForHuman(client,id);
-      await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'material.send','conversation',$2,$3)",[principal.id,id,JSON.stringify({clientBatchId:input.clientBatchId,materialBatchId:input.materialBatchId,mediaIds:selected.rows.map(row=>String(row.media_id)),mode:input.mode,orientation:input.orientation,captioned:Boolean(input.caption?.trim()),messageIds})]);
+      await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'material.send','conversation',$2,$3)",[principal.id,id,JSON.stringify({clientBatchId:input.clientBatchId,materialBatchIds:input.materialBatchIds,mediaIds:selected.rows.map(row=>String(row.media_id)),mode:input.mode,orientation:input.orientation,captioned:Boolean(input.caption?.trim()),messageIds})]);
       return{deduplicated:false,messageIds};
     });
     committed=true;if(context.agent_id)void dispatchPending(context.agent_id);return reply.code(202).send(result);
