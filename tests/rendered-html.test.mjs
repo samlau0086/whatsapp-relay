@@ -51,6 +51,8 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /\/api\/v1\/media/);
   assert.match(component, /EmojiPicker/);
   assert.match(component, /MediaDialog/);
+  assert.match(component, /MaterialLibrarySendDialog/);
+  assert.match(component, /打开素材库/);
   assert.match(component, /onDrop=/);
   assert.match(clipboard, /clipboardData\?\.files/);
   assert.match(clipboard, /clipboardData\?\.items/);
@@ -70,6 +72,7 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(css, /border-radius:0; box-shadow:none/);
   assert.match(css, /\.new-conversation-dialog/);
   assert.match(css, /\.media-dialog/);
+  assert.match(css, /\.material-send-dialog/);
   assert.match(css, /\.emoji-picker/);
   assert.match(css, /\.management-panel/);
   assert.match(css, /@media\(max-width:980px\)/);
