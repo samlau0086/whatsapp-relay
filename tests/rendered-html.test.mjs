@@ -337,6 +337,14 @@ test("inbox quick replies support search, media types, and conversation translat
   assert.match(component,/translationEnabled/);
   assert.match(component,/sendQuickReplyMedia/);
   assert.match(component,/targetLanguage:translationPreference\.customerLanguage/);
+  assert.match(component,/className="message-save-quick-reply"/);
+  assert.match(component,/aria-label="加入快捷回复"/);
+  assert.match(component,/function addMessageToQuickReplies/);
+  assert.match(component,/quickReplyStorageKey/);
+  assert.match(component,/savedReplies=\{savedQuickReplies\}/);
+  assert.match(component,/item\.sourceMessageId!==message\.id/);
   assert.match(css,/\.quick-reply-menu\{/);
   assert.match(css,/\.quick-reply-options\{/);
+  assert.match(css,/\.message-actions\{/);
+  assert.match(css,/\.message-save-quick-reply/);
 });
