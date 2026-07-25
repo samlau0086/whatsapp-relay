@@ -280,8 +280,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   useEffect(()=>{if(view!=="inbox"||!apiToken||!effectiveActiveId)return;const timer=window.setTimeout(()=>void loadTranslationSettings(apiToken,effectiveActiveId),0);return()=>window.clearTimeout(timer);},[view,apiToken,effectiveActiveId,loadTranslationSettings]);
   useEffect(()=>{const timer=window.setTimeout(()=>setMessageTranslations({}),0);return()=>window.clearTimeout(timer);},[translationPreference.agentLanguage]);
   useEffect(()=>{
-    if(!active?.accountId||!userId){setSavedQuickReplies([]);return;}
-    try{const stored=localStorage.getItem(quickReplyStorageKey(userId,active.accountId));setSavedQuickReplies(stored?JSON.parse(stored) as SavedQuickReply[]:[]);}catch{setSavedQuickReplies([]);}
+    const accountId=active?.accountId;
+    const timer=window.setTimeout(()=>{
+      if(!accountId||!userId){setSavedQuickReplies([]);return;}
+      try{const stored=localStorage.getItem(quickReplyStorageKey(userId,accountId));setSavedQuickReplies(stored?JSON.parse(stored) as SavedQuickReply[]:[]);}catch{setSavedQuickReplies([]);}
+    },0);
+    return()=>window.clearTimeout(timer);
   },[active?.accountId,userId]);
   useEffect(()=>{if(!apiToken||!translationPreference.enabled||!translationConfigured)return;const ids=currentMessages.filter(message=>message.direction==="in"&&((message.kind==="text"&&message.text.trim())||(message.kind==="audio"&&message.attachment))&&!messageTranslations[message.id]).map(message=>message.id);if(!ids.length)return;const timer=window.setTimeout(()=>void loadIncomingTranslations(apiToken,ids,translationPreference.agentLanguage),0);return()=>window.clearTimeout(timer);},[apiToken,currentMessages,translationPreference.enabled,translationPreference.agentLanguage,translationConfigured,messageTranslations,loadIncomingTranslations]);
   useEffect(()=>{if(!toast)return;const timer=window.setTimeout(()=>setToast(""),3200);return()=>window.clearTimeout(timer);},[toast]);
@@ -1885,7 +1889,7 @@ function TimezoneSearchDropdown({value,onChange,label="搜索并选择时区"}:{
   const [open,setOpen]=useState(false),[query,setQuery]=useState("");
   const zones=useMemo(()=>{try{return (Intl as typeof Intl&{supportedValuesOf?:(key:"timeZone")=>string[]}).supportedValuesOf?.("timeZone")??FALLBACK_TIMEZONES;}catch{return FALLBACK_TIMEZONES;}},[]);
   const visible=useMemo(()=>{const term=query.trim().toLowerCase();return (term?zones.filter(zone=>zone.toLowerCase().includes(term)):zones).slice(0,100);},[query,zones]);
-  return <div className="timezone-picker"><div className="timezone-search-field"><Search size={14}/><input type="search" value={open?query:value} onFocus={()=>{setOpen(true);setQuery("");}} onChange={event=>{setOpen(true);setQuery(event.target.value);}} onBlur={()=>window.setTimeout(()=>setOpen(false),120)} aria-label={label} role="combobox" aria-expanded={open} aria-autocomplete="list" autoComplete="off"/><ChevronDown size={14}/></div>{open&&<div className="timezone-options" role="listbox">{visible.length?visible.map(zone=><button type="button" role="option" aria-selected={zone===value} className={zone===value?"selected":""} key={zone} onMouseDown={event=>event.preventDefault()} onClick={()=>{onChange(zone);setOpen(false);setQuery("");}}>{zone}</button>):<span className="timezone-empty">没有匹配时区</span>}</div>}</div>;
+  return <div className="timezone-picker"><div className="timezone-search-field"><Search size={14}/><input type="search" value={open?query:value} onFocus={()=>{setOpen(true);setQuery("");}} onChange={event=>{setOpen(true);setQuery(event.target.value);}} onBlur={()=>window.setTimeout(()=>setOpen(false),120)} aria-label={label} role="combobox" aria-controls="timezone-search-options" aria-expanded={open} aria-autocomplete="list" autoComplete="off"/><ChevronDown size={14}/></div>{open&&<div id="timezone-search-options" className="timezone-options" role="listbox">{visible.length?visible.map(zone=><button type="button" role="option" aria-selected={zone===value} className={zone===value?"selected":""} key={zone} onMouseDown={event=>event.preventDefault()} onClick={()=>{onChange(zone);setOpen(false);setQuery("");}}>{zone}</button>):<span className="timezone-empty">没有匹配时区</span>}</div>}</div>;
 }
 
 function IncomingTranslation({value,language,onRetry}:{value?:MessageTranslation;language:string;onRetry:()=>void}){
