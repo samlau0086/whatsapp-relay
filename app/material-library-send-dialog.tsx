@@ -50,8 +50,8 @@ export function MaterialLibrarySendDialog({customerName,initialCaption,request,o
     finally{setDetailLoading(false);}
   },[request,onToken]);
 
-  useEffect(()=>{void loadBatches();},[loadBatches]);
-  useEffect(()=>{void loadDetail(selectedBatchId);},[selectedBatchId,loadDetail]);
+  useEffect(()=>{const timer=window.setTimeout(()=>void loadBatches(),0);return()=>window.clearTimeout(timer);},[loadBatches]);
+  useEffect(()=>{const timer=window.setTimeout(()=>void loadDetail(selectedBatchId),0);return()=>window.clearTimeout(timer);},[selectedBatchId,loadDetail]);
   useEffect(()=>{const key=(event:KeyboardEvent)=>{if(event.key==="Escape"&&!sending)onClose();};window.addEventListener("keydown",key);return()=>window.removeEventListener("keydown",key);},[sending,onClose]);
 
   const visible=useMemo(()=>{const keyword=query.trim().toLowerCase();return keyword?items.filter(item=>`${item.name} ${item.templateName}`.toLowerCase().includes(keyword)):items;},[items,query]);
@@ -79,8 +79,9 @@ export function MaterialLibrarySendDialog({customerName,initialCaption,request,o
 }
 
 function MaterialImage({mediaId,request,onToken}:{mediaId:string|null;request:Request;onToken:(token:string)=>void}){
-  const [url,setUrl]=useState("");
-  useEffect(()=>{if(!mediaId){setUrl("");return;}const controller=new AbortController();let objectUrl="";void request(`/api/v1/media/${mediaId}`,{signal:controller.signal}).then(async result=>{onToken(result.token);if(!result.response.ok)return;objectUrl=URL.createObjectURL(await result.response.blob());setUrl(objectUrl);}).catch(()=>{});return()=>{controller.abort();if(objectUrl)URL.revokeObjectURL(objectUrl);};},[mediaId,request,onToken]);
+  const [image,setImage]=useState<{mediaId:string;url:string}|null>(null);
+  const url=image?.mediaId===mediaId?image.url:"";
+  useEffect(()=>{if(!mediaId)return;const controller=new AbortController();let objectUrl="";void request(`/api/v1/media/${mediaId}`,{signal:controller.signal}).then(async result=>{onToken(result.token);if(!result.response.ok)return;objectUrl=URL.createObjectURL(await result.response.blob());if(!controller.signal.aborted)setImage({mediaId,url:objectUrl});}).catch(()=>{});return()=>{controller.abort();if(objectUrl)URL.revokeObjectURL(objectUrl);};},[mediaId,request,onToken]);
   return url?<img src={url} alt="素材预览"/>:<span className="material-image-placeholder"><ImageIcon size={20}/></span>;
 }
 
