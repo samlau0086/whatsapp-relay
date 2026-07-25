@@ -224,8 +224,8 @@ app.delete("/agent/accounts/:id", async(request,reply)=>{
 
 app.get("/api/v1/api-keys", {preHandler:authenticate}, async(request,reply)=>{
   if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
-  const result=await pool.query("SELECT id,name,key_prefix,scopes,last_used_at,expires_at,revoked_at,created_at FROM api_keys ORDER BY created_at DESC");
-  return{data:result.rows.map(row=>({id:String(row.id),name:String(row.name),keyPrefix:String(row.key_prefix),scopes:row.scopes,lastUsedAt:row.last_used_at,expiresAt:row.expires_at,revokedAt:row.revoked_at,createdAt:row.created_at}))};
+  const result=await pool.query("SELECT id,name,key_prefix,scopes,last_used_at,expires_at,revoked_at,created_at,(expires_at IS NOT NULL AND expires_at<=now()) expired FROM api_keys ORDER BY created_at DESC");
+  return{data:result.rows.map(row=>({id:String(row.id),name:String(row.name),keyPrefix:String(row.key_prefix),scopes:row.scopes,lastUsedAt:row.last_used_at,expiresAt:row.expires_at,revokedAt:row.revoked_at,createdAt:row.created_at,expired:Boolean(row.expired)}))};
 });
 
 app.post("/api/v1/api-keys", {preHandler:authenticate}, async(request,reply)=>{
