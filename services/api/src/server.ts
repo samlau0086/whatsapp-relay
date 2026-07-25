@@ -456,7 +456,7 @@ app.post("/api/v1/products",{preHandler:authenticate},async(request,reply)=>{
 
 app.post("/api/v1/products/bulk-import",{preHandler:authenticate},async(request,reply)=>{
   if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const principal=request.principal;const parsed=productBulkImportSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
-  const currencies=[...new Set(parsed.data.products.map(product=>product.currency))],configured=await pool.query("SELECT code FROM currency_settings WHERE code=ANY($1::text[])",[currencies]),configuredCodes=new Set(configured.rows.map(row=>String(row.code))),invalidCurrencies=currencies.filter(code=>!configuredCodes.has(code));
+  const currencies=[...new Set(parsed.data.products.flatMap(product=>product.currency?[product.currency]:[]))],configured=await pool.query("SELECT code FROM currency_settings WHERE code=ANY($1::text[])",[currencies]),configuredCodes=new Set(configured.rows.map(row=>String(row.code))),invalidCurrencies=currencies.filter(code=>!configuredCodes.has(code));
   if(invalidCurrencies.length)return reply.code(400).send({error:"currency_not_configured",currencies:invalidCurrencies,message:`以下币种未在货币管理中启用：${invalidCurrencies.join("、")}`});
   try{const result=await transaction(async client=>{
     const normalizedSkus=parsed.data.products.map(product=>product.sku.trim().toLocaleLowerCase()),existing=await client.query("SELECT id,lower(btrim(sku)) normalized_sku FROM products WHERE deleted_at IS NULL AND lower(btrim(sku))=ANY($1::text[]) FOR UPDATE",[normalizedSkus]),existingBySku=new Map(existing.rows.map(row=>[String(row.normalized_sku),String(row.id)])),products=[],counts={created:0,updated:0};
@@ -464,18 +464,19 @@ app.post("/api/v1/products/bulk-import",{preHandler:authenticate},async(request,
       const normalizedSku=product.sku.trim().toLocaleLowerCase(),existingId=existingBySku.get(normalizedSku);let productId:string,created=false;
       if(existingId){productId=existingId;await client.query("UPDATE products SET name=$2,updated_at=now() WHERE id=$1",[productId,product.name]);}
       else{
+        if(!product.currency||!product.priceTiers)throw Object.assign(new Error("new_product_fields_required"),{statusCode:400,sku:product.sku});
         if(product.imageMediaId){const image=await client.query("SELECT id FROM media WHERE id=$1 AND account_id IS NULL AND status='ready' AND mime_type IN ('image/png','image/jpeg')",[product.imageMediaId]);if(!image.rowCount)throw Object.assign(new Error("invalid_product_image"),{statusCode:400});}
         const upserted=await client.query(`INSERT INTO products(client_product_id,sku,name,description,default_unit_amount,currency,image_media_id,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
           ON CONFLICT (lower(btrim(sku))) WHERE deleted_at IS NULL DO UPDATE SET name=EXCLUDED.name,updated_at=now()
-          RETURNING id,(xmax=0) inserted`,[product.clientProductId,product.sku,product.name,product.description,product.priceTiers[0].unitAmount,product.currency,product.imageMediaId??null,principal.id]);
+          RETURNING id,(xmax=0) inserted`,[product.clientProductId,product.sku,product.name,product.description??"",product.priceTiers[0].unitAmount,product.currency,product.imageMediaId??null,principal.id]);
         productId=String(upserted.rows[0].id);created=Boolean(upserted.rows[0].inserted);
       }
-      if(created){await replaceProductLabels(client,productId,product.tags);await replaceProductPriceTiers(client,productId,product.priceTiers);counts.created++;await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'product.create','product',$2,$3)",[principal.id,productId,JSON.stringify({source:"csv_import",sku:product.sku,tagCount:product.tags.length,tierCount:product.priceTiers.length})]);}
+      if(created){await replaceProductLabels(client,productId,product.tags??[]);await replaceProductPriceTiers(client,productId,product.priceTiers!);counts.created++;await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'product.create','product',$2,$3)",[principal.id,productId,JSON.stringify({source:"csv_import",sku:product.sku,tagCount:product.tags?.length??0,tierCount:product.priceTiers?.length??0})]);}
       else{counts.updated++;await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'product.update','product',$2,$3)",[principal.id,productId,JSON.stringify({source:"csv_import",sku:product.sku,fields:["name"]})]);}
       products.push(await productById(client,productId));
     }
     return{...counts,products};
-  });return reply.code(result.updated?200:201).send(result);}catch(error){if((error as {code?:string}).code==="23505")return reply.code(409).send({error:"sku_exists"});throw error;}
+  });return reply.code(result.updated?200:201).send(result);}catch(error){if((error as Error).message==="new_product_fields_required")return reply.code(400).send({error:"new_product_fields_required",sku:(error as {sku?:string}).sku,message:`SKU ${(error as {sku?:string}).sku??""} 不存在，请填写币种和价格以创建新产品`});if((error as {code?:string}).code==="23505")return reply.code(409).send({error:"sku_exists"});throw error;}
 });
 
 app.patch("/api/v1/products/:id",{preHandler:authenticate},async(request,reply)=>{

@@ -33,17 +33,21 @@ test("product routes enforce shared media, snapshots, idempotency, and soft dele
 });
 
 test("bulk product import validates batches and is capped at 500 rows",async()=>{
-  const [schemas,server]=await Promise.all([
+  const [schemas,server,dialog]=await Promise.all([
     readFile(new URL("../src/schemas.ts",import.meta.url),"utf8"),
     readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/product-import-dialog.tsx",import.meta.url),"utf8"),
   ]);
   assert.match(schemas,/productBulkImportSchema/);
   assert.match(schemas,/\.min\(1\)\.max\(500\)/);
   assert.match(schemas,/duplicate sku in import/);
+  assert.match(schemas,/priceTiers:productPriceTiersSchema\.optional\(\)/);
   assert.match(server,/ON CONFLICT \(lower\(btrim\(sku\)\)\) WHERE deleted_at IS NULL DO UPDATE SET name=EXCLUDED\.name/);
+  assert.match(server,/new_product_fields_required/);
   assert.match(server,/fields:\["name"\]/);
   assert.match(server,/return\{\.\.\.counts,products\}/);
   assert.doesNotMatch(server,/if\(existing\.rowCount\)return reply\.code\(409\)/);
+  assert.match(dialog,/const updateOnly=!currency&&!price&&!tierText/);
 });
 
 test("product descriptions and CSV image references are supported",async()=>{
