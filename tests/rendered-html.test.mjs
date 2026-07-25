@@ -328,7 +328,7 @@ test("inbox quick replies support search, media types, and conversation translat
     readFile(new URL("../app/globals.css",import.meta.url),"utf8"),
   ]);
   assert.match(component,/function QuickReplyDropdown/);
-  assert.match(component,/placeholder="搜索标题、内容、标签或文件名"/);
+  assert.match(component,/placeholder="搜索标题、内容或标签"/);
   assert.match(component,/\["text","文本"\]/);
   assert.match(component,/\["image","图文"\]/);
   assert.match(component,/\["audio","语音"\]/);
@@ -343,6 +343,13 @@ test("inbox quick replies support search, media types, and conversation translat
   assert.match(component,/quickReplyStorageKey/);
   assert.match(component,/savedReplies=\{savedQuickReplies\}/);
   assert.match(component,/item\.sourceMessageId!==message\.id/);
+  assert.match(component,/function QuickReplyEditorDialog/);
+  assert.match(component,/aria-label="新增快捷回复"/);
+  assert.match(component,/编辑 \$\{item\.title\}/);
+  assert.match(component,/删除 \$\{item\.title\}/);
+  assert.match(component,/function saveQuickReply/);
+  assert.match(component,/function deleteQuickReply/);
+  assert.match(component,/loadQuickReplyStore/);
   assert.match(css,/\.quick-reply-menu\{/);
   assert.match(css,/\.quick-reply-options\{/);
   assert.match(css,/\.quick-reply-options\{flex:1 1 auto;min-height:0;/);
@@ -350,6 +357,8 @@ test("inbox quick replies support search, media types, and conversation translat
   assert.match(css,/\.quick-reply-filters\{min-height:42px;/);
   assert.match(css,/\.message-actions\{/);
   assert.match(css,/\.message-save-quick-reply/);
+  assert.match(css,/\.quick-reply-item-actions\{/);
+  assert.match(css,/\.quick-reply-editor-dialog\{/);
 });
 
 test("failed and uncertain messages expose a manual resend action", async () => {
