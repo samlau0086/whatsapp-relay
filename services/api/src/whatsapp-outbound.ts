@@ -19,6 +19,9 @@ export type OutboundPayload={
   mediaId?:string;
   template?:unknown;
   quotedMessageId?:string;
+  quotedWhatsappMessageId?:string;
+  quotedDirection?:"in"|"out";
+  quotedText?:string;
 };
 
 export async function queueWhatsAppCommand(

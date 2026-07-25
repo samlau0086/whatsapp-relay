@@ -66,16 +66,17 @@ async function connect(options:Init):Promise<void>{
       if(rawJid.endsWith("@lid")&&jid.endsWith("@s.whatsapp.net"))emitIdentity(options.accountId,rawJid,jid,item.pushName??undefined);
       const content=normalizeMessageContent(item.message);if(!content)continue;
       const text=content.conversation??content.extendedTextMessage?.text??content.imageMessage?.caption??content.videoMessage?.caption??content.buttonsResponseMessage?.selectedDisplayText??content.listResponseMessage?.title??undefined;
+      const quotedWhatsappMessageId=quotedMessageId(content);
       const sticker=Boolean(content.stickerMessage);
       const kind=content.imageMessage||sticker?"image":content.videoMessage?"video":content.audioMessage?"audio":content.documentMessage?"document":content.locationMessage?"location":content.contactMessage?"contact":"text";
       if(kind==="text"&&!text)continue;
-      if(item.key.fromMe)await auth.saveMessage(item.key.id,item.message);
+      await auth.saveMessage(item.key.id,item.message);
       let media:Record<string,unknown>|undefined;
       if(["image","video","audio","document"].includes(kind)){
         try{const mediaRequestOptions=mediaProxyAgent?({dispatcher:mediaProxyAgent} as unknown as RequestInit):undefined;const bytes=await downloadMediaMessage(item,"buffer",{options:mediaRequestOptions},{logger,reuploadRequest:async(message)=>activeSocket.updateMediaMessage(message)});const mime=content.stickerMessage?.mimetype??content.imageMessage?.mimetype??content.videoMessage?.mimetype??content.audioMessage?.mimetype??content.documentMessage?.mimetype??(sticker?"image/webp":"application/octet-stream");const fileName=sticker?`sticker-${item.key.id}.webp`:content.documentMessage?.fileName??`${item.key.id}.${kind}`;const uploaded=await uploadInboundMedia(options,bytes,mime,fileName);media={uploadId:uploaded.mediaId,mimeType:mime,fileName,size:uploaded.size,sha256:uploaded.sha256,isSticker:sticker};}
         catch(error){emit({type:"diagnostic",level:"warn",accountId:options.accountId,message:"media_upload_failed",detail:String(error)});}
       }
-      emit({type:"event",kind:"message",payload:{eventId:`message:${options.accountId}:${item.key.id}`,accountId:options.accountId,whatsappMessageId:item.key.id,chatJid:jid,rawChatJid:rawJid,senderJid:jidNormalizedUser(item.key.participant??jid),senderName:item.pushName??undefined,direction:item.key.fromMe?"out":"in",kind,text,occurredAt:messageTime(item.messageTimestamp),media}});
+      emit({type:"event",kind:"message",payload:{eventId:`message:${options.accountId}:${item.key.id}`,accountId:options.accountId,whatsappMessageId:item.key.id,chatJid:jid,rawChatJid:rawJid,senderJid:jidNormalizedUser(item.key.participant??jid),senderName:item.pushName??undefined,direction:item.key.fromMe?"out":"in",kind,text,quotedWhatsappMessageId,occurredAt:messageTime(item.messageTimestamp),media}});
     }
   })().catch(error=>emit({type:"diagnostic",level:"error",accountId:options.accountId,message:"message_normalize_failed",detail:String(error)}));});
   activeSocket.ev.on("messages.update",(updates)=>{if(generation!==connectionGeneration)return;for(const update of updates){if(!update.key.id||!update.update.status)continue;const mapped=update.update.status>=4?"read":update.update.status>=3?"delivered":"sent";emit({type:"event",kind:"message_status",payload:{eventId:`status:${options.accountId}:${update.key.id}:${mapped}`,accountId:options.accountId,whatsappMessageId:update.key.id,status:mapped,at:new Date().toISOString()}});}});
@@ -114,8 +115,25 @@ async function execute(command:Command):Promise<void>{
   try{
     const type=String(command.payload.type??"text");let content:AnyMessageContent;
     if(type==="text")content={text:String(command.payload.text??"")};else{const media=await downloadOutboundMedia(init,String(command.payload.mediaId??""));const caption=command.payload.text?String(command.payload.text):undefined;if(type==="image")content={image:media.bytes,mimetype:media.mime,caption};else if(type==="video")content={video:media.bytes,mimetype:media.mime,caption};else if(type==="audio")content={audio:media.bytes,mimetype:media.mime,ptt:true};else content={document:media.bytes,mimetype:media.mime,fileName:media.name,caption};}
-    const sent=await socket.sendMessage(toJid,content);if(sent?.key.id&&sent.message)await messageCache?.saveMessage(sent.key.id,sent.message);emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",whatsappMessageId:sent?.key.id,completedAt:new Date().toISOString()});
+    const quotedId=String(command.payload.quotedWhatsappMessageId??"");
+    const quotedMessage=quotedId?(await messageCache?.getMessage(quotedId))??{conversation:String(command.payload.quotedText??"[message]")}:undefined;
+    const quoted=quotedMessage?{key:{remoteJid:toJid,id:quotedId,fromMe:command.payload.quotedDirection==="out"},message:quotedMessage}:undefined;
+    const sent=await socket.sendMessage(toJid,content,quoted?{quoted}:undefined);if(sent?.key.id&&sent.message)await messageCache?.saveMessage(sent.key.id,sent.message);emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",whatsappMessageId:sent?.key.id,completedAt:new Date().toISOString()});
   }catch(error){const errorMessage=describeSendError(error);if(isTransientSendConnectionError(error)){emit({type:"diagnostic",level:"warn",accountId:init.accountId,message:"send_deferred_after_transient_error",detail:errorMessage});emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"deferred",errorCode:"transient_send_error",errorMessage:`Temporary send failure (${errorMessage}); command remains queued`,completedAt:new Date().toISOString()});return;}emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"failed",errorCode:"whatsapp_rejected",errorMessage,completedAt:new Date().toISOString()});}
+}
+
+function quotedMessageId(content:proto.IMessage):string|undefined{
+  const candidates=[
+    content.extendedTextMessage?.contextInfo,
+    content.imageMessage?.contextInfo,
+    content.videoMessage?.contextInfo,
+    content.audioMessage?.contextInfo,
+    content.documentMessage?.contextInfo,
+    content.stickerMessage?.contextInfo,
+    content.locationMessage?.contextInfo,
+    content.contactMessage?.contextInfo,
+  ];
+  return candidates.find(context=>context?.stanzaId)?.stanzaId??undefined;
 }
 
 async function downloadOutboundMedia(options:Init,mediaId:string):Promise<{bytes:Buffer;mime:string;name:string}>{

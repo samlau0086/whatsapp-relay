@@ -297,3 +297,16 @@ test("agent provider reload selects the enabled provider", async () => {
     /setProviderId\(value=>body\.data\.some\(item=>item\.provider===value\)\?value:\(body\.data\.find\(item=>item\.enabled\)\?\.provider\?\?"openai"\)\)/,
   );
 });
+
+test("inbox supports replying to a specific WhatsApp message", async () => {
+  const [component,css]=await Promise.all([
+    readFile(new URL("../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../app/globals.css",import.meta.url),"utf8"),
+  ]);
+  assert.match(component,/quotedMessageId:quoted\.id/);
+  assert.match(component,/className="message-reply-action"/);
+  assert.match(component,/className="composer-reply-preview"/);
+  assert.match(component,/function QuotedMessage/);
+  assert.match(css,/\.quoted-message\{/);
+  assert.match(css,/\.composer-reply-preview\{/);
+});

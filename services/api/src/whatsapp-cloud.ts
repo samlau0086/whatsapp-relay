@@ -227,7 +227,8 @@ async function processCloudPayload(accountId:string,payload:Record<string,unknow
 async function normalizeCloudMessage(accountId:string,message:Record<string,unknown>,senderName:unknown,token:string):Promise<Record<string,unknown>|null>{
   const type=String(message.type??""),from=String(message.from??"").replace(/\D/g,"");
   if(!/^\d{7,15}$/.test(from)||!message.id)return null;
-  const base={eventId:`cloud-message:${accountId}:${message.id}`,accountId,whatsappMessageId:String(message.id),chatJid:`${from}@s.whatsapp.net`,senderJid:`${from}@s.whatsapp.net`,senderName:String(senderName??`+${from}`),direction:"in",occurredAt:unixIso(message.timestamp)};
+  const context=(message.context??{}) as Record<string,unknown>;
+  const base={eventId:`cloud-message:${accountId}:${message.id}`,accountId,whatsappMessageId:String(message.id),chatJid:`${from}@s.whatsapp.net`,senderJid:`${from}@s.whatsapp.net`,senderName:String(senderName??`+${from}`),direction:"in",quotedWhatsappMessageId:context.id?String(context.id):undefined,occurredAt:unixIso(message.timestamp)};
   if(type==="text")return{...base,kind:"text",text:String(((message.text??{}) as Record<string,unknown>).body??"")};
   if(!["image","video","audio","document"].includes(type))return null;
   const mediaInfo=(message[type]??{}) as Record<string,unknown>,mediaId=String(mediaInfo.id??"");
@@ -292,6 +293,7 @@ export async function processOneCloudOutbound():Promise<boolean>{
 export async function cloudOutboundBody(payload:Record<string,unknown>,token:string,phoneNumberId:string):Promise<Record<string,unknown>>{
   const to=String(payload.toJid??"").split("@")[0].replace(/\D/g,""),type=String(payload.type??"text");
   if(!to)throw new MetaApiError(400,"destination_required","Missing destination phone number");
+  const context=payload.quotedWhatsappMessageId?{context:{message_id:String(payload.quotedWhatsappMessageId)}}:{};
   if(type==="template"){
     const template=payload.template as Record<string,unknown>|undefined;
     if(!template?.name||!template.language)throw new MetaApiError(400,"template_invalid","Template name and language are required");
@@ -308,15 +310,15 @@ export async function cloudOutboundBody(payload:Record<string,unknown>,token:str
       }
       components.push({type:component.type,...(component.sub_type?{sub_type:component.sub_type}:{}),...(component.index!==undefined?{index:String(component.index)}:{}),parameters});
     }
-    return{messaging_product:"whatsapp",recipient_type:"individual",to,type:"template",template:{name:template.name,language:{code:template.language},components}};
+    return{messaging_product:"whatsapp",recipient_type:"individual",to,...context,type:"template",template:{name:template.name,language:{code:template.language},components}};
   }
-  if(type==="text")return{messaging_product:"whatsapp",recipient_type:"individual",to,type:"text",text:{preview_url:true,body:String(payload.text??"")}};
+  if(type==="text")return{messaging_product:"whatsapp",recipient_type:"individual",to,...context,type:"text",text:{preview_url:true,body:String(payload.text??"")}};
   if(!["image","video","audio","document"].includes(type))throw new MetaApiError(400,"unsupported_message_type",`Unsupported Cloud message type: ${type}`);
   const mediaId=String(payload.mediaId??"");if(!mediaId)throw new MetaApiError(400,"media_required","Missing RelayDesk media ID");
   const providerMediaId=await uploadOutboundCloudMedia(mediaId,token,phoneNumberId);
   const media:Record<string,unknown>={id:providerMediaId};
   if(payload.text&&type!=="audio")media.caption=String(payload.text);
-  return{messaging_product:"whatsapp",recipient_type:"individual",to,type,[type]:media};
+  return{messaging_product:"whatsapp",recipient_type:"individual",to,...context,type,[type]:media};
 }
 
 async function uploadOutboundCloudMedia(mediaId:string,token:string,phoneNumberId:string):Promise<string>{

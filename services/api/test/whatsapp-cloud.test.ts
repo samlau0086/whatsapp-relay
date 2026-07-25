@@ -25,6 +25,24 @@ test("Cloud outbound text and template payloads use Graph API wire shapes",async
   assert.deepEqual(await cloudOutboundBody({toJid:"8613800138000@s.whatsapp.net",type:"template",template:{name:"welcome",language:"en_US",components:[{type:"body",parameters:[{type:"text",text:"Sam"}]}]}},"token","phone"),{
     messaging_product:"whatsapp",recipient_type:"individual",to:"8613800138000",type:"template",template:{name:"welcome",language:{code:"en_US"},components:[{type:"body",parameters:[{type:"text",text:"Sam"}]}]},
   });
+  assert.deepEqual(await cloudOutboundBody({toJid:"8613800138000@s.whatsapp.net",type:"text",text:"reply",quotedWhatsappMessageId:"wamid.quoted"},"token","phone"),{
+    messaging_product:"whatsapp",recipient_type:"individual",to:"8613800138000",context:{message_id:"wamid.quoted"},type:"text",text:{preview_url:true,body:"reply"},
+  });
+});
+
+test("reply context is normalized, persisted, and resolved before dispatch",async()=>{
+  const [cloud,hub,server,agent]=await Promise.all([
+    readFile(new URL("../src/whatsapp-cloud.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/agent-hub.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../apps/agent/src/account-worker.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(cloud,/quotedWhatsappMessageId:context\.id/);
+  assert.match(hub,/payload\.quotedWhatsappMessageId/);
+  assert.match(server,/conversation_id=\$3/);
+  assert.match(server,/quotedWhatsappMessageId:String\(row\.whatsapp_message_id\)/);
+  assert.match(agent,/context=>context\?\.stanzaId/);
+  assert.match(agent,/socket\.sendMessage\(toJid,content,quoted\?\{quoted\}:undefined\)/);
 });
 
 test("Cloud credentials are encrypted, redacted, and never returned by account reads",async()=>{
