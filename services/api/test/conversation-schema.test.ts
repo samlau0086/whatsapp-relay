@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, currencySettingsSchema, customerStageSchema, materialSendSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, orderUpdateSchema, productBulkEditSchema, productBulkImportSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
+import { contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, currencySettingsSchema, customerStageSchema, materialSendSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, orderUpdateSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productSkuQuerySchema, productUpdateSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
 
 const accountId="10000000-0000-4000-8000-000000000009";
 
@@ -137,6 +137,11 @@ test("product library schemas validate SKU, tiered prices, and editable labels",
   assert.equal(productCreateSchema.safeParse({...valid,tags:[{name:"VIP",color:"green"}]}).success,false);
   assert.equal(productUpdateSchema.safeParse({tags:[]}).success,true);
   assert.equal(productUpdateSchema.safeParse({}).success,false);
+  assert.equal(productSkuQuerySchema.safeParse({skus:["KF57","kf217"]}).success,true);
+  assert.equal(productSkuQuerySchema.safeParse({skus:["KF57","kf57"]}).success,false);
+  assert.equal(productBulkUpdateSchema.safeParse({products:[{sku:"KF57",description:"Updated",tags:[{name:"Brand",color:"#E8EEF7"}]}]}).success,true);
+  assert.equal(productBulkUpdateSchema.safeParse({products:[{sku:"KF57"}]}).success,false);
+  assert.equal(productBulkUpdateSchema.safeParse({products:[{sku:"KF57",description:"A"},{sku:"kf57",description:"B"}]}).success,false);
   assert.equal(productBulkImportSchema.safeParse({products:[valid]}).success,true);
   assert.equal(productBulkImportSchema.safeParse({products:[valid,{...valid,clientProductId:"10000000-0000-4000-8000-000000000010",sku:"bag-001"}]}).success,false);
   assert.equal(productBulkImportSchema.safeParse({products:[]}).success,false);

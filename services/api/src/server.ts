@@ -8,7 +8,7 @@ import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } fro
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount, type Principal } from "./auth.js";
-import { contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, materialSendBatchStatusSchema, materialSendSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderUpdateSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
+import { contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, materialSendBatchStatusSchema, materialSendSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderUpdateSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productSkuQuerySchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
 import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
 import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline } from "./agent-hub.js";
 import { generateSpeech, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
@@ -442,6 +442,18 @@ app.get("/api/v1/products",{preHandler:authenticate},async(request,reply)=>{
   return{data:result.rows.slice(0,limit).map(mapProductRow),total:Number(result.rows[0]?.total_count??0),hasMore:result.rows.length>limit,nextOffset:result.rows.length>limit?offset+limit:null,tags:tagOptions.rows.map(row=>String(row.name))};
 });
 
+app.post("/api/v1/products/query",{preHandler:authenticate},async(request,reply)=>{
+  const parsed=productSkuQuerySchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  const normalizedSkus=parsed.data.skus.map(sku=>sku.toLocaleLowerCase()),result=await pool.query(`SELECT p.id,p.sku,p.name,p.description,p.default_unit_amount,p.currency,p.image_media_id,m.file_name image_name,p.created_at,p.updated_at,COALESCE(label_list.tags,'[]'::json) tags,COALESCE(price_list.price_tiers,'[]'::json) price_tiers
+    FROM products p LEFT JOIN media m ON m.id=p.image_media_id
+    LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',label.id,'name',label.name,'color',label.color) ORDER BY lower(label.name)) tags FROM product_labels label WHERE label.product_id=p.id) label_list ON true
+    LEFT JOIN LATERAL (SELECT json_agg(json_build_object('minQuantity',tier.min_quantity,'unitAmount',tier.unit_amount) ORDER BY tier.min_quantity) price_tiers FROM product_price_tiers tier WHERE tier.product_id=p.id) price_list ON true
+    WHERE p.deleted_at IS NULL AND lower(btrim(p.sku))=ANY($1::text[])
+    ORDER BY array_position($1::text[],lower(btrim(p.sku)))`,[normalizedSkus]);
+  const found=new Set(result.rows.map(row=>String(row.sku).trim().toLocaleLowerCase()));
+  return{data:result.rows.map(mapProductRow),missingSkus:parsed.data.skus.filter(sku=>!found.has(sku.toLocaleLowerCase()))};
+});
+
 app.post("/api/v1/products/selection",{preHandler:authenticate},async(request,reply)=>{
   const body=request.body as {productIds?:unknown},ids=Array.isArray(body?.productIds)?body.productIds:[];if(ids.length<1||ids.length>MATERIAL_PRODUCT_LIMIT||ids.some(id=>typeof id!=="string"||!/^[0-9a-f-]{36}$/i.test(id))||new Set(ids).size!==ids.length)return reply.code(400).send({error:"invalid_request"});
   const result=await pool.query(`SELECT p.id,p.sku,p.name,p.description,p.default_unit_amount,p.currency,p.image_media_id,m.file_name image_name,p.created_at,p.updated_at,COALESCE(label_list.tags,'[]'::json) tags,COALESCE(price_list.price_tiers,'[]'::json) price_tiers FROM products p LEFT JOIN media m ON m.id=p.image_media_id LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',label.id,'name',label.name,'color',label.color) ORDER BY lower(label.name)) tags FROM product_labels label WHERE label.product_id=p.id) label_list ON true LEFT JOIN LATERAL (SELECT json_agg(json_build_object('minQuantity',tier.min_quantity,'unitAmount',tier.unit_amount) ORDER BY tier.min_quantity) price_tiers FROM product_price_tiers tier WHERE tier.product_id=p.id) price_list ON true WHERE p.deleted_at IS NULL AND p.id=ANY($1::uuid[]) ORDER BY array_position($1::uuid[],p.id)`,[ids]);
@@ -477,6 +489,17 @@ app.post("/api/v1/products/bulk-import",{preHandler:authenticate},async(request,
     }
     return{...counts,products};
   });return reply.code(result.updated?200:201).send(result);}catch(error){if((error as Error).message==="new_product_fields_required")return reply.code(400).send({error:"new_product_fields_required",sku:(error as {sku?:string}).sku,message:`SKU ${(error as {sku?:string}).sku??""} 不存在，请填写币种和价格以创建新产品`});if((error as {code?:string}).code==="23505")return reply.code(409).send({error:"sku_exists"});throw error;}
+});
+
+app.patch("/api/v1/products/bulk-update",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const principal=request.principal,parsed=productBulkUpdateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  try{const result=await transaction(async client=>{
+    const normalizedSkus=parsed.data.products.map(product=>product.sku.toLocaleLowerCase()),found=await client.query("SELECT id,sku,lower(btrim(sku)) normalized_sku FROM products WHERE deleted_at IS NULL AND lower(btrim(sku))=ANY($1::text[]) FOR UPDATE",[normalizedSkus]),bySku=new Map(found.rows.map(row=>[String(row.normalized_sku),{id:String(row.id),sku:String(row.sku)}]));
+    const missingSkus=parsed.data.products.filter(product=>!bySku.has(product.sku.toLocaleLowerCase())).map(product=>product.sku);if(missingSkus.length)throw Object.assign(new Error("product_unavailable"),{statusCode:409,missingSkus});
+    const products=[];
+    for(const update of parsed.data.products){const current=bySku.get(update.sku.toLocaleLowerCase())!,fields=Object.keys(update).filter(field=>field!=="sku");await client.query("UPDATE products SET name=CASE WHEN $2 THEN $3 ELSE name END,description=CASE WHEN $4 THEN $5 ELSE description END,updated_at=now() WHERE id=$1",[current.id,update.name!==undefined,update.name??null,update.description!==undefined,update.description??null]);if(update.tags!==undefined)await replaceProductLabels(client,current.id,update.tags);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'product.update','product',$2,$3)",[principal.id,current.id,JSON.stringify({source:"sku_bulk_update",sku:current.sku,fields})]);products.push(await productById(client,current.id));}
+    return products;
+  });return{updated:result.length,products:result};}catch(error){const status=(error as {statusCode?:number}).statusCode;if(status)return reply.code(status).send({error:(error as Error).message,missingSkus:(error as {missingSkus?:string[]}).missingSkus});throw error;}
 });
 
 app.patch("/api/v1/products/:id",{preHandler:authenticate},async(request,reply)=>{

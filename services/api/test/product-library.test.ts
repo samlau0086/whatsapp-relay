@@ -50,6 +50,21 @@ test("bulk product import validates batches and is capped at 500 rows",async()=>
   assert.match(dialog,/const updateOnly=!currency&&!price&&!tierText/);
 });
 
+test("product automation can query and atomically update products by SKU",async()=>{
+  const [schemas,server]=await Promise.all([
+    readFile(new URL("../src/schemas.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(schemas,/productSkuQuerySchema/);
+  assert.match(schemas,/productBulkUpdateSchema/);
+  assert.match(server,/app\.post\("\/api\/v1\/products\/query"/);
+  assert.match(server,/app\.patch\("\/api\/v1\/products\/bulk-update"/);
+  assert.match(server,/lower\(btrim\(p\.sku\)\)=ANY/);
+  assert.match(server,/source:"sku_bulk_update"/);
+  assert.match(server,/missingSkus/);
+  assert.match(server,/replaceProductLabels\(client,current\.id,update\.tags\)/);
+});
+
 test("product descriptions and CSV image references are supported",async()=>{
   const [migration,server,dialog]=await Promise.all([
     readFile(new URL("../../../infra/postgres/migrations/027_product_description.sql",import.meta.url),"utf8"),
