@@ -321,3 +321,22 @@ test("inbox supports replying to a specific WhatsApp message", async () => {
   assert.match(css,/\.quoted-message\{/);
   assert.match(css,/\.composer-reply-preview\{/);
 });
+
+test("inbox quick replies support search, media types, and conversation translation", async () => {
+  const [component,css]=await Promise.all([
+    readFile(new URL("../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../app/globals.css",import.meta.url),"utf8"),
+  ]);
+  assert.match(component,/function QuickReplyDropdown/);
+  assert.match(component,/placeholder="搜索标题、内容、标签或文件名"/);
+  assert.match(component,/\["text","文本"\]/);
+  assert.match(component,/\["image","图文"\]/);
+  assert.match(component,/\["audio","语音"\]/);
+  assert.match(component,/\["video","视频"\]/);
+  assert.match(component,/\["document","文件"\]/);
+  assert.match(component,/translationEnabled/);
+  assert.match(component,/sendQuickReplyMedia/);
+  assert.match(component,/targetLanguage:translationPreference\.customerLanguage/);
+  assert.match(css,/\.quick-reply-menu\{/);
+  assert.match(css,/\.quick-reply-options\{/);
+});

@@ -4,7 +4,7 @@ import {
   Archive, Bell, Bookmark, CalendarDays, Check, CheckCheck, ChevronDown, CircleHelp, Clock3, FileText,
   Inbox, Info, Languages, Mail, Menu, MessageCircle, Mic, MonitorSmartphone, Paperclip, Phone, Plus,
   Pencil, RefreshCw, Search, Send, Settings, ShieldCheck, ShoppingBag, Smile, Sparkles, Star, Trash2, UploadCloud, UserPlus,
-  Users, Wifi, WifiOff, X, ClipboardList, ExternalLink, Bot, Brain, BookOpen, MapPin, Copy, CreditCard, LayoutGrid, List, Eye, EyeOff, ReceiptText, Reply,
+  Users, Wifi, WifiOff, X, ClipboardList, ExternalLink, Bot, Brain, BookOpen, MapPin, Copy, CreditCard, LayoutGrid, List, Eye, EyeOff, ReceiptText, Reply, Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
@@ -132,6 +132,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [productCardsOpen,setProductCardsOpen]=useState(false);
   const [ttsOpen,setTtsOpen]=useState(false);
   const [emojiOpen,setEmojiOpen]=useState(false);
+  const [quickReplyOpen,setQuickReplyOpen]=useState(false);
   const [emojiCategory,setEmojiCategory]=useState("常用");
   const [translationPreferences,setTranslationPreferences]=useState<Record<string,TranslationPreference>>({});
   const [translationConfigured,setTranslationConfigured]=useState(false);
@@ -324,9 +325,27 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     setMediaOpen(false);setMaterialLibraryOpen(false);setToast(active.accountStatus==="online"?"附件已进入发送队列":"账号离线，附件已持久化排队");void loadMessages(queued.token,active.id);
   }
 
+  async function sendQuickReplyMedia(asset:MediaAsset){
+    let caption=asset.mimeType.startsWith("audio/")?"":draft.trim();
+    if(caption&&translationPreference.enabled){
+      if(!translationConfigured){setToast("AI 翻译暂不可用，请联系管理员配置 Provider");return;}
+      setTranslatingDraft(true);setTranslationError("");
+      try{
+        const result=await authorizedFetch("/api/v1/translations/preview",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:caption,targetLanguage:translationPreference.customerLanguage})});
+        if(result.token!==apiToken)setApiToken(result.token);
+        const body=await result.response.json().catch(()=>({})) as {translatedText?:string;message?:string};
+        if(!result.response.ok||!body.translatedText)throw new Error(body.message??"翻译失败");
+        caption=body.translatedText;
+      }catch(reason){setTranslationError(reason instanceof Error?reason.message:"翻译失败");setToast("AI 翻译失败，快捷回复未发送");return;}
+      finally{setTranslatingDraft(false);}
+    }
+    setQuickReplyOpen(false);await sendMediaAsset(asset,caption);
+  }
+
   async function retryEmail(emailId:string){if(!active)return;const result=await authorizedFetch(`/api/v1/email-sends/${emailId}/retry`,apiToken,{method:"POST"});if(result.token!==apiToken)setApiToken(result.token);setToast(result.response.ok?"失败邮件已重新进入队列":`邮件重试失败（HTTP ${result.response.status}）`);if(result.response.ok)await loadMessages(result.token,active.id);}
 
   function insertEmoji(emoji:string){const input=textareaRef.current,start=input?.selectionStart??draft.length,end=input?.selectionEnd??start;setDraft(`${draft.slice(0,start)}${emoji}${draft.slice(end)}`);requestAnimationFrame(()=>{input?.focus();input?.setSelectionRange(start+emoji.length,start+emoji.length);});}
+  const handleQuickReplyOpen=useCallback((value:boolean)=>{setQuickReplyOpen(value);if(value){setEmojiOpen(false);setTranslationMenuOpen(false);}},[]);
 
   const onlineCount=accounts.filter(item=>item.status==="online").length;
   const cloudWindowClosed=Boolean(active?.transport==="cloud"&&(!active.serviceWindowExpiresAt||new Date(active.serviceWindowExpiresAt).getTime()<=clock));
@@ -373,7 +392,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       {currentEmailActivities.length>0&&<div className="email-activity-stream" aria-label="邮件活动">{currentEmailActivities.map(item=><article key={item.id} className="email-activity-card"><header><span><Mail size={14}/><b>{item.subject}</b></span><em className={item.status}>{emailStatusText(item.status)}</em></header><p>{item.recipients.map(recipient=>recipient.email).join(", ")}</p><footer><span>{emailContentTypeText(item.contentType)} · {item.attachmentCount} 个附件 · {item.senderName||"已离职坐席"}</span><time>{formatDateTime(item.createdAt)}</time></footer>{item.lastError&&<small>{item.lastError}</small>}{item.status==="failed"&&<button onClick={()=>void retryEmail(item.id)}><RefreshCw size={11}/>重新发送</button>}</article>)}</div>}
       <div ref={messagesRef} className="messages" aria-live="polite"><div className="day-separator"><span>真实消息记录</span></div>{currentMessages.length?currentMessages.map(message=><article key={message.id} className={`message-row ${message.direction}`}>{message.direction==="in"&&<span className="avatar message-avatar" style={{background:active.color}}>{active.initials}</span>}<div className={`message-bubble ${message.attachment?.name.startsWith("sticker-")?"sticker-bubble":""}`}><button className="message-reply-action" disabled={cloudWindowClosed} onClick={()=>{setReplyTo({conversationId:active.id,message});requestAnimationFrame(()=>textareaRef.current?.focus());}} aria-label="回复这条消息" title="回复"><Reply size={14}/></button>{message.quoted&&<QuotedMessage quote={message.quoted} customerName={active.name}/>} {message.text&&<p>{message.text}</p>}{message.failureMessage&&<small className="message-failure"><Info size={11}/>{message.failureMessage}</small>}{message.direction==="out"&&message.translationSourceText&&<div className="outgoing-translation-source"><span><Languages size={12}/>原文（仅坐席可见）</span><p>{message.translationSourceText}</p></div>}{translationPreference.enabled&&message.direction==="in"&&message.kind==="text"&&message.text&&<IncomingTranslation value={messageTranslations[message.id]} language={translationPreference.agentLanguage} onRetry={()=>void loadIncomingTranslations(apiToken,[message.id],translationPreference.agentLanguage,true)}/>} {message.attachment&&<MessageMedia attachment={message.attachment} token={apiToken} onToken={setApiToken} onReady={scrollMessagesToEnd}/>} {translationPreference.enabled&&message.direction==="in"&&message.kind==="audio"&&<VoiceTranslation value={messageTranslations[message.id]} language={translationPreference.agentLanguage} configured={translationConfigured} onTranslate={()=>void loadIncomingTranslations(apiToken,[message.id],translationPreference.agentLanguage,true,true)}/>}<footer><time>{message.time}</time>{message.direction==="out"&&<MessageStatus status={message.status}/>}</footer></div></article>):<EmptyState title="暂无消息" text="收到或发送的消息将显示在这里"/>}</div>
       <div className="composer-wrap">
-        <div className="composer-tools"><div className="composer-tool-actions"><button onClick={()=>setMediaOpen(true)} aria-label="打开媒体与附件" title="媒体与附件"><Paperclip size={17}/></button><button className="material-library-trigger" onClick={()=>setMaterialLibraryOpen(true)} aria-label="打开素材库" title="从素材库发送图片"><LayoutGrid size={15}/><span>素材库</span></button><button onClick={()=>setProductCardsOpen(true)} aria-label="发送产品卡片" title="发送产品卡片"><ShoppingBag size={17}/></button><button className={`translation-trigger ${translationPreference.enabled?"active":""}`} onClick={()=>setTranslationMenuOpen(value=>!value)} aria-expanded={translationMenuOpen} aria-label="AI 翻译设置"><Languages size={15}/><span>{translationPreference.enabled?`${languageName(translationPreference.agentLanguage)} → ${languageName(translationPreference.customerLanguage)}`:"AI 翻译"}</span></button></div><span>回复给 {active.name}</span></div>
+        <div className="composer-tools"><div className="composer-tool-actions"><QuickReplyDropdown open={quickReplyOpen} accountId={active.accountId} token={apiToken} disabled={cloudWindowClosed||translatingDraft} draftCaption={draft} translationEnabled={translationPreference.enabled} onToken={setApiToken} onOpenChange={handleQuickReplyOpen} onText={text=>{setDraft(text);setQuickReplyOpen(false);requestAnimationFrame(()=>textareaRef.current?.focus());}} onMedia={asset=>void sendQuickReplyMedia(asset)}/><button onClick={()=>setMediaOpen(true)} aria-label="打开媒体与附件" title="媒体与附件"><Paperclip size={17}/></button><button className="material-library-trigger" onClick={()=>setMaterialLibraryOpen(true)} aria-label="打开素材库" title="从素材库发送图片"><LayoutGrid size={15}/><span>素材库</span></button><button onClick={()=>setProductCardsOpen(true)} aria-label="发送产品卡片" title="发送产品卡片"><ShoppingBag size={17}/></button><button className={`translation-trigger ${translationPreference.enabled?"active":""}`} onClick={()=>{setQuickReplyOpen(false);setTranslationMenuOpen(value=>!value)}} aria-expanded={translationMenuOpen} aria-label="AI 翻译设置"><Languages size={15}/><span>{translationPreference.enabled?`${languageName(translationPreference.agentLanguage)} → ${languageName(translationPreference.customerLanguage)}`:"AI 翻译"}</span></button></div><span>回复给 {active.name}</span></div>
         {translationMenuOpen&&<TranslationMenu preference={translationPreference} configured={translationConfigured} ready={translationReady} onChange={next=>void saveTranslationPreference(next)} onClose={()=>setTranslationMenuOpen(false)}/>}
         {emojiOpen&&<EmojiPicker category={emojiCategory} onCategory={setEmojiCategory} onSelect={insertEmoji} onClose={()=>setEmojiOpen(false)}/>}
         {selectedReply&&!cloudWindowClosed&&<div className="composer-reply-preview"><Reply size={14}/><QuotedMessage quote={messageQuote(selectedReply)} customerName={active.name}/><button onClick={()=>setReplyTo(null)} aria-label="取消回复"><X size={14}/></button></div>}
@@ -1867,6 +1886,32 @@ function VoiceTranslation({value,language,configured,onTranslate}:{value?:Messag
   if(value.status==="loading")return <div className="incoming-translation loading"><RefreshCw className="spin" size={12}/>正在转写并翻译语音…</div>;
   if(value.status==="failed")return <div className="incoming-translation failed"><span>{value.message??"语音翻译失败"}</span><button onClick={onTranslate}>重试</button></div>;
   return <div className="incoming-translation voice-translation">{value.sourceText&&<><span><Mic size={12}/>语音原文</span><p>{value.sourceText}</p></>}<span><Languages size={12}/>{languageName(language)}译文</span><p>{value.text}</p></div>;
+}
+
+const QUICK_REPLY_TEXTS=[
+  {id:"welcome",title:"欢迎与问候",text:"您好，感谢您的消息！请问有什么可以帮您？",tags:"问候 欢迎 hello"},
+  {id:"checking",title:"正在为您查询",text:"收到，我正在为您查询，请稍等片刻。",tags:"查询 稍等 进度"},
+  {id:"details",title:"请补充信息",text:"为了更快帮您处理，请提供订单号或相关图片，谢谢。",tags:"订单号 图片 信息"},
+  {id:"follow-up",title:"稍后跟进",text:"感谢您的耐心等待，我们确认后会尽快回复您。",tags:"跟进 回复 等待"},
+] as const;
+
+function QuickReplyDropdown({open,accountId,token,disabled,draftCaption,translationEnabled,onToken,onOpenChange,onText,onMedia}:{open:boolean;accountId:string;token:string;disabled:boolean;draftCaption:string;translationEnabled:boolean;onToken:(token:string)=>void;onOpenChange:(open:boolean)=>void;onText:(text:string)=>void;onMedia:(asset:MediaAsset)=>void}){
+  const [query,setQuery]=useState(""),[filter,setFilter]=useState("all"),[assets,setAssets]=useState<MediaAsset[]>([]),[loading,setLoading]=useState(false),[error,setError]=useState("");
+  const rootRef=useRef<HTMLDivElement>(null),inputRef=useRef<HTMLInputElement>(null);
+  useEffect(()=>{
+    if(!open)return;
+    const controller=new AbortController();setLoading(true);setError("");
+    void (async()=>{try{const result=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(accountId)}&limit=100`,token,{signal:controller.signal});if(result.token!==token)onToken(result.token);const body=await result.response.json().catch(()=>({data:[]})) as {data?:Array<Record<string,unknown>>};if(!result.response.ok)throw new Error(`HTTP ${result.response.status}`);setAssets((body.data??[]).map(mapMediaAsset));}catch(reason){if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:"快捷回复加载失败");}finally{if(!controller.signal.aborted)setLoading(false);}})();
+    const timer=window.setTimeout(()=>inputRef.current?.focus(),0);
+    const close=(event:MouseEvent)=>{if(!rootRef.current?.contains(event.target as Node))onOpenChange(false);};
+    const escape=(event:KeyboardEvent)=>{if(event.key==="Escape")onOpenChange(false);};
+    document.addEventListener("mousedown",close);document.addEventListener("keydown",escape);
+    return()=>{controller.abort();window.clearTimeout(timer);document.removeEventListener("mousedown",close);document.removeEventListener("keydown",escape);};
+  },[open,accountId,token,onToken,onOpenChange]);
+  const normalized=query.trim().toLocaleLowerCase();
+  const texts=QUICK_REPLY_TEXTS.filter(item=>(filter==="all"||filter==="text")&&`${item.title} ${item.text} ${item.tags}`.toLocaleLowerCase().includes(normalized));
+  const media=assets.filter(item=>{const kind=mediaKind(item.mimeType);return(filter==="all"||filter===kind)&&`${item.fileName} ${kindText(kind)}`.toLocaleLowerCase().includes(normalized);});
+  return <div className="quick-reply" ref={rootRef}><button type="button" className={`quick-reply-trigger ${open?"active":""}`} disabled={disabled} onClick={()=>onOpenChange(!open)} aria-haspopup="listbox" aria-expanded={open} aria-label="快捷回复"><Zap size={15}/><span>快捷回复</span><ChevronDown size={12}/></button>{open&&<section className="quick-reply-menu" aria-label="搜索快捷回复"><header><label><Search size={14}/><input ref={inputRef} role="combobox" aria-expanded="true" aria-controls="quick-reply-options" value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索标题、内容、标签或文件名"/></label><button type="button" onClick={()=>onOpenChange(false)} aria-label="关闭快捷回复"><X size={14}/></button></header><div className="quick-reply-filters" role="tablist">{[["all","全部"],["text","文本"],["image","图文"],["audio","语音"],["video","视频"],["document","文件"]].map(([value,label])=><button type="button" key={value} role="tab" aria-selected={filter===value} className={filter===value?"active":""} onClick={()=>setFilter(value)}>{label}</button>)}</div><div className="quick-reply-options" id="quick-reply-options" role="listbox">{texts.map(item=><button type="button" role="option" aria-selected="false" key={item.id} onClick={()=>onText(item.text)}><span className="quick-reply-kind text"><MessageCircle size={14}/></span><span><b>{item.title}</b><small>{item.text}</small></span>{translationEnabled&&<em><Languages size={10}/>自动翻译</em>}</button>)}{media.map(asset=>{const kind=mediaKind(asset.mimeType);return <button type="button" role="option" aria-selected="false" key={asset.id} onClick={()=>onMedia(asset)}><span className={`quick-reply-kind ${kind}`}>{kind==="audio"?<Mic size={14}/>:kind==="image"?<LayoutGrid size={14}/>:<FileText size={14}/>}</span><span><b>{asset.fileName}</b><small>{kindText(kind)} · {formatBytes(asset.size)}{kind==="image"&&draftCaption?` · 附带当前输入内容`:""}</small></span>{translationEnabled&&kind==="image"&&draftCaption&&<em><Languages size={10}/>说明自动翻译</em>}</button>})}{loading&&<p className="quick-reply-state"><RefreshCw className="spin" size={13}/>正在读取媒体快捷回复…</p>}{error&&<p className="quick-reply-state error">媒体快捷回复加载失败 · {error}</p>}{!loading&&!texts.length&&!media.length&&<p className="quick-reply-state">没有匹配的快捷回复</p>}</div><footer>文本会放入输入框供编辑；图文、语音等媒体将直接进入发送队列。</footer></section>}</div>;
 }
 
 function TranslationPreviewDialog({source,translated,targetLanguage,onClose,onConfirm}:{source:string;translated:string;targetLanguage:string;onClose:()=>void;onConfirm:(text:string)=>void}){
