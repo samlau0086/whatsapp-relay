@@ -1,6 +1,6 @@
 {
   "name": "@relaydesk/windows-agent",
-  "version": "0.1.26",
+  "version": "0.1.27",
   "description": "RelayDesk local Windows executor for reliable WhatsApp account synchronization",
   "author": "RelayDesk",
   "private": true,
@@ -8,7 +8,7 @@
   "main": "dist/main.js",
   "scripts": {
     "dev": "npm run build && electron .",
-    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "build": "node scripts/generate-icon.mjs && tsc -p tsconfig.json && node scripts/copy-assets.mjs",
     "test:store": "npm run build && node --test test/store.test.mjs",
     "test:preload": "npm run build && electron scripts/preload-smoke-main.mjs",
     "start": "electron .",
@@ -29,6 +29,7 @@
     "@types/ws": "8.18.1",
     "electron": "43.1.0",
     "electron-builder": "26.15.3",
+    "sharp": "0.35.3",
     "typescript": "5.8.3"
   },
   "build": {
@@ -47,6 +48,7 @@
       "package.json"
     ],
     "win": {
+      "icon": "src/assets/icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -57,6 +59,8 @@
       ]
     },
     "nsis": {
+      "installerIcon": "src/assets/icon.ico",
+      "uninstallerIcon": "src/assets/icon.ico",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,

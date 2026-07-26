@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, ShieldAlert, X } from "lucide-react";
+import { AlertTriangle, Pencil, ShieldAlert, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 export type ConfirmationOptions = {
@@ -13,7 +13,23 @@ export type ConfirmationOptions = {
 
 type PendingConfirmation = ConfirmationOptions & { resolve: (confirmed: boolean) => void };
 
+export type PromptOptions = {
+  title: string;
+  label: string;
+  defaultValue?: string;
+  description?: string;
+  placeholder?: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  multiline?: boolean;
+  maxLength?: number;
+  required?: boolean;
+};
+
+type PendingPrompt = PromptOptions & { resolve: (value: string | null) => void };
+
 let showConfirmation: ((request: PendingConfirmation) => void) | null = null;
+let showPrompt: ((request: PendingPrompt) => void) | null = null;
 
 export function confirmAction(
   description: string,
@@ -25,6 +41,16 @@ export function confirmAction(
       return;
     }
     showConfirmation({ description, tone: "danger", ...options, resolve });
+  });
+}
+
+export function promptAction(options: PromptOptions): Promise<string | null> {
+  return new Promise(resolve => {
+    if (!showPrompt) {
+      resolve(null);
+      return;
+    }
+    showPrompt({ required: true, ...options, resolve });
   });
 }
 
@@ -98,6 +124,104 @@ export function ConfirmationHost() {
           </button>
           <button ref={confirmButton} className="confirmation-submit" onClick={() => finish(true)}>
             {request.confirmLabel ?? "确认"}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+export function PromptHost() {
+  const [dialog, setDialog] = useState<{request: PendingPrompt; value: string; error: string} | null>(null);
+  const queue = useRef<PendingPrompt[]>([]);
+  const activeRequest = useRef<PendingPrompt | null>(null);
+  const input = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    showPrompt = next => {
+      setDialog(current => {
+        if (current) {
+          queue.current.push(next);
+          return current;
+        }
+        return {request: next, value: next.defaultValue ?? "", error: ""};
+      });
+    };
+    return () => {
+      showPrompt = null;
+      if (activeRequest.current) activeRequest.current.resolve(null);
+      for (const pending of queue.current) pending.resolve(null);
+      queue.current = [];
+    };
+  }, []);
+
+  useEffect(() => {
+    activeRequest.current = dialog?.request ?? null;
+    if (!dialog) return;
+    input.current?.focus();
+    input.current?.select();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") finish(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [dialog?.request]);
+
+  function finish(value: string | null) {
+    if (!dialog) return;
+    if (value !== null && dialog.request.required !== false && !value.trim()) {
+      setDialog(current => current ? {...current, error: "请输入内容后再继续"} : current);
+      input.current?.focus();
+      return;
+    }
+    dialog.request.resolve(value);
+    const next = queue.current.shift();
+    setDialog(next ? {request: next, value: next.defaultValue ?? "", error: ""} : null);
+  }
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) {
+    if (event.key === "Enter" && (!dialog?.request.multiline || event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      finish(dialog?.value.trim() ?? "");
+    }
+  }
+
+  if (!dialog) return null;
+  const {request, value, error} = dialog;
+  const updateValue = (next: string) =>
+    setDialog(current => current ? {...current, value: next, error: ""} : current);
+
+  return (
+    <div className="confirmation-backdrop" role="presentation" onMouseDown={event => {
+      if (event.target === event.currentTarget) finish(null);
+    }}>
+      <section
+        className="confirmation-dialog prompt-dialog warning"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="prompt-title"
+      >
+        <button className="confirmation-close" onClick={() => finish(null)} aria-label="关闭输入框">
+          <X size={17} />
+        </button>
+        <span className="confirmation-icon"><Pencil size={20} /></span>
+        <div className="confirmation-copy">
+          <h2 id="prompt-title">{request.title}</h2>
+          {request.description && <p>{request.description}</p>}
+        </div>
+        <label className="prompt-field">
+          <span>{request.label}</span>
+          {request.multiline
+            ? <textarea ref={input as React.Ref<HTMLTextAreaElement>} value={value} placeholder={request.placeholder} maxLength={request.maxLength} rows={5} onChange={event => updateValue(event.target.value)} onKeyDown={handleKeyDown}/>
+            : <input ref={input as React.Ref<HTMLInputElement>} value={value} placeholder={request.placeholder} maxLength={request.maxLength} onChange={event => updateValue(event.target.value)} onKeyDown={handleKeyDown}/>}
+          <small className={error ? "prompt-error" : ""}>{error || (request.multiline ? "Ctrl / Cmd + Enter 保存" : "按 Enter 保存")}</small>
+        </label>
+        <footer>
+          <button className="confirmation-cancel" onClick={() => finish(null)}>
+            {request.cancelLabel ?? "取消"}
+          </button>
+          <button className="confirmation-submit" onClick={() => finish(value.trim())}>
+            {request.confirmLabel ?? "保存"}
           </button>
         </footer>
       </section>

@@ -22,7 +22,7 @@ import { CollageGenerateDialog, ProductWorkspace } from "./collage-materials";
 import { MaterialLibrarySendDialog } from "./material-library-send-dialog";
 import { TaskCenter } from "./task-center";
 import { CONVERSATION_DATE_FILTERS, conversationListPath, type ConversationDateFilter } from "./conversation-date-filter";
-import { confirmAction, ConfirmationHost } from "./confirmation-ui";
+import { confirmAction, ConfirmationHost, promptAction, PromptHost } from "./confirmation-ui";
 
 const API_URL = (process.env.NEXT_PUBLIC_RELAY_API_URL ?? "").replace(/\/$/, "");
 const COLORS = ["#6b4f3a", "#305f72", "#9b5f72", "#477a62", "#705b86"];
@@ -595,6 +595,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
 
   return <main className="relay-shell">
     <ConfirmationHost/>
+    <PromptHost/>
     {toast&&<div className="toast"><Check size={15}/>{toast}</div>}
     <nav className="rail" aria-label="全局导航"><button className="brand-mark" onClick={()=>openInbox()} aria-label="RelayDesk 消息中心"><Sparkles size={19}/></button><div className="rail-nav">
       <button className={view==="inbox"&&filter==="全部会话"?"rail-button active":"rail-button"} onClick={()=>openInbox()} aria-label="消息中心" title="消息中心"><MessageCircle size={18}/></button>
@@ -893,7 +894,14 @@ function CrmDetailsPanel({
     if (ok) setTagName("");
   }
   async function renameTag(tag: TagItem) {
-    const name = window.prompt("新的标签名称", tag.name)?.trim();
+    const name = (await promptAction({
+      title: "重命名标签",
+      label: "标签名称",
+      defaultValue: tag.name,
+      placeholder: "输入新的标签名称",
+      confirmLabel: "保存名称",
+      maxLength: 40,
+    }))?.trim();
     if (!name || name === tag.name) return;
     await request(`/api/v1/tags/${tag.id}`, {
       method: "PATCH",
@@ -915,7 +923,16 @@ function CrmDetailsPanel({
     if (ok) setNoteDraft("");
   }
   async function editNote(note: NoteItem) {
-    const body = window.prompt("编辑备注", note.body)?.trim();
+    const body = (await promptAction({
+      title: "编辑备注",
+      label: "备注内容",
+      defaultValue: note.body,
+      description: "修改后团队成员会看到更新后的内容。",
+      placeholder: "输入备注内容",
+      confirmLabel: "保存备注",
+      multiline: true,
+      maxLength: 4000,
+    }))?.trim();
     if (!body || body === note.body) return;
     await request(`/api/v1/conversations/${active.id}/notes/${note.id}`, {
       method: "PATCH",
@@ -2322,7 +2339,7 @@ function AgentMemoryPanel({conversationId,token,onToken,onToast}:{conversationId
   const [memory,setMemory]=useState<{summary:string;updatedAt:string|null;facts:Array<{id:string;fact_key:string;fact_value:string;confidence:number;source_text?:string}>}|null>(null),[busy,setBusy]=useState(false);
   const load=useCallback(async()=>{const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory`,token);if(result.token!==token)onToken(result.token);if(result.response.ok)setMemory(await result.response.json());},[conversationId,token,onToken]);useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer);},[load]);
   async function remove(id:string){const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory/facts/${id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);if(result.response.ok)await load();}
-  async function edit(fact:{id:string;fact_key:string;fact_value:string}){const key=window.prompt("记忆字段",fact.fact_key),value=window.prompt("记忆内容",fact.fact_value);if(!key?.trim()||!value?.trim())return;const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory/facts/${fact.id}`,token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({key,value})});if(result.token!==token)onToken(result.token);if(result.response.ok)await load();}
+  async function edit(fact:{id:string;fact_key:string;fact_value:string}){const key=await promptAction({title:"编辑 AI 记忆",label:"记忆字段",defaultValue:fact.fact_key,placeholder:"例如：采购偏好",confirmLabel:"下一步",maxLength:120});if(!key?.trim())return;const value=await promptAction({title:"编辑 AI 记忆",label:"记忆内容",defaultValue:fact.fact_value,description:`字段：${key.trim()}`,placeholder:"输入需要记住的内容",confirmLabel:"保存记忆",multiline:true,maxLength:4000});if(!value?.trim())return;const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory/facts/${fact.id}`,token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({key:key.trim(),value:value.trim()})});if(result.token!==token)onToken(result.token);if(result.response.ok)await load();}
   async function rebuild(){setBusy(true);const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory/rebuild`,token,{method:"POST"});if(result.token!==token)onToken(result.token);setBusy(false);onToast(result.response.ok?"记忆更新任务已创建":"记忆更新失败");}
   return <div className="detail-section agent-memory"><div className="detail-title"><h4><Brain size={13}/>聊天记忆</h4><button disabled={busy} onClick={()=>void rebuild()}><RefreshCw size={11}/>重新整理</button></div><p className="memory-summary">{memory?.summary||"Agent 尚未生成会话摘要。"}</p><div className="memory-facts">{memory?.facts.map(fact=><span key={fact.id} title={fact.source_text||"来源消息已删除"}><b>{fact.fact_key}</b><em>{fact.fact_value}</em><i><button onClick={()=>void edit(fact)} aria-label={`编辑记忆 ${fact.fact_key}`}><Pencil size={10}/></button><button onClick={()=>void remove(fact.id)} aria-label={`删除记忆 ${fact.fact_key}`}><X size={10}/></button></i></span>)}</div></div>;
 }
@@ -2871,7 +2888,7 @@ function KnowledgeBaseSettingsPanel({token,onToken,onToast}:{token:string;onToke
   async function upload(file:File){setBusy(true);const form=new FormData();form.append("file",file);const result=await authorizedFetch(`/api/v1/knowledge-bases/${selected}/documents`,token,{method:"POST",body:form});if(result.token!==token)onToken(result.token);setBusy(false);onToast(result.response.ok?"文档已上传，正在建立索引":"文档上传失败");await loadDetail();}
   async function addFaq(){if(!question.trim()||!answer.trim())return;setBusy(true);const result=await authorizedFetch(`/api/v1/knowledge-bases/${selected}/faqs`,token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({question,answer})});if(result.token!==token)onToken(result.token);setBusy(false);if(result.response.ok){setQuestion("");setAnswer("");await loadDetail();}}
   async function removeDocument(id:string){if(!await confirmAction("该文档及其全部检索内容将被永久删除。",{title:"删除知识库文档？",confirmLabel:"删除"}))return;const result=await authorizedFetch(`/api/v1/knowledge-documents/${id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);if(result.response.ok)await loadDetail();}
-  async function editFaq(faq:{id:string;question:string;answer:string}){const nextQuestion=window.prompt("问题",faq.question),nextAnswer=window.prompt("答案",faq.answer);if(!nextQuestion?.trim()||!nextAnswer?.trim())return;const result=await authorizedFetch(`/api/v1/knowledge-bases/${selected}/faqs/${faq.id}`,token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({question:nextQuestion,answer:nextAnswer})});if(result.token!==token)onToken(result.token);if(result.response.ok)await loadDetail();}
+  async function editFaq(faq:{id:string;question:string;answer:string}){const nextQuestion=await promptAction({title:"编辑知识库问答",label:"问题",defaultValue:faq.question,placeholder:"输入客户可能提出的问题",confirmLabel:"下一步",multiline:true,maxLength:1000});if(!nextQuestion?.trim())return;const nextAnswer=await promptAction({title:"编辑知识库问答",label:"答案",defaultValue:faq.answer,description:`问题：${nextQuestion.trim()}`,placeholder:"输入标准答案",confirmLabel:"保存问答",multiline:true,maxLength:8000});if(!nextAnswer?.trim())return;const result=await authorizedFetch(`/api/v1/knowledge-bases/${selected}/faqs/${faq.id}`,token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({question:nextQuestion.trim(),answer:nextAnswer.trim()})});if(result.token!==token)onToken(result.token);if(result.response.ok)await loadDetail();}
   async function removeFaq(id:string){const result=await authorizedFetch(`/api/v1/knowledge-bases/${selected}/faqs/${id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);if(result.response.ok)await loadDetail();}
   return <div className="knowledge-layout"><aside className="knowledge-list"><div className="knowledge-create"><input value={name} onChange={event=>setName(event.target.value)} onKeyDown={event=>{if(event.key==="Enter")void create();}} placeholder="新知识库名称"/><button disabled={busy||!name.trim()} onClick={()=>void create()} aria-label="创建知识库"><Plus size={14}/></button></div>{items.map(item=><div className={`knowledge-list-item ${selected===item.id?"active":""}`} key={item.id}>{editingId===item.id?<form className="knowledge-name-editor" onSubmit={event=>{event.preventDefault();void saveEdit(item.id);}}><input value={editName} onChange={event=>setEditName(event.target.value)} maxLength={120} autoFocus aria-label="知识库名称"/><button type="submit" disabled={busy||!editName.trim()} aria-label={`保存 ${item.name}`}><Check size={13}/></button><button type="button" disabled={busy} onClick={()=>{setEditingId("");setEditName("");}} aria-label="取消编辑"><X size={13}/></button></form>:<><button className="knowledge-select" onClick={()=>setSelected(item.id)}><span><b>{item.name}</b><small>{item.document_count??0} 文档 · {item.faq_count??0} 问答</small></span></button><div className="knowledge-item-actions"><button disabled={busy} onClick={()=>startEdit(item)} aria-label={`编辑知识库 ${item.name}`} title="编辑知识库"><Pencil size={12}/></button><button disabled={busy} onClick={()=>void removeKnowledgeBase(item)} aria-label={`删除知识库 ${item.name}`} title="删除知识库"><Trash2 size={12}/></button></div></>}</div>)}</aside><section className="knowledge-detail">{selected?<><header><div><h2>{items.find(item=>item.id===selected)?.name}</h2><p>上传 PDF、DOCX、TXT 或 Markdown，索引完成后才会用于自动回复。</p></div><label className="secondary-action upload-action"><UploadCloud size={14}/>上传文档<input type="file" accept=".pdf,.docx,.txt,.md,text/plain,application/pdf" disabled={busy} onChange={event=>{const file=event.target.files?.[0];if(file)void upload(file);event.target.value="";}}/></label></header><div className="knowledge-documents">{detail?.documents.map(doc=><article key={doc.id}><FileText size={17}/><span><b>{doc.file_name}</b><small>{doc.error||({pending:"等待索引",indexing:"正在索引",ready:"可用于回答",failed:"索引失败"}[doc.status]??doc.status)}</small></span><em className={doc.status}>{doc.status}</em><button onClick={()=>void removeDocument(doc.id)} aria-label={`删除文档 ${doc.file_name}`}><Trash2 size={13}/></button></article>)}</div><div className="faq-editor"><h3>常见问答</h3><input value={question} onChange={event=>setQuestion(event.target.value)} placeholder="客户可能会问什么？"/><textarea value={answer} onChange={event=>setAnswer(event.target.value)} placeholder="可靠、可直接发送的标准答案"/><button className="primary-action" disabled={busy||!question.trim()||!answer.trim()} onClick={()=>void addFaq()}><Plus size={14}/>添加问答</button></div><div className="faq-list">{detail?.faqs.map(faq=><article key={faq.id}><b>{faq.question}</b><p>{faq.answer}</p><div><button onClick={()=>void editFaq(faq)}><Pencil size={11}/>编辑</button><button onClick={()=>void removeFaq(faq.id)}><Trash2 size={11}/>删除</button></div></article>)}</div></>:<EmptyState title="先创建知识库" text="知识库可分配给一个或多个 WhatsApp 账号。"/>}</section></div>;
 }
@@ -3491,8 +3508,8 @@ function AgentManagement({token,role,onToken,onToast}:{token:string;role:string;
   const [agents,setAgents]=useState<ManagedAgent[]>([]);const [loading,setLoading]=useState(true);const [error,setError]=useState("");const [enrollment,setEnrollment]=useState<{code:string;expiresAt:string}|null>(null);
   const load=useCallback(async(quiet=false)=>{if(!token)return;if(!quiet)setLoading(true);try{const result=await authorizedFetch("/api/v1/agents",token);if(result.token!==token)onToken(result.token);if(!result.response.ok)throw new Error(result.response.status===403?"当前账号无权查看 Agent":"Agent 列表加载失败");const body=await result.response.json() as {data:ManagedAgent[]};setAgents(body.data);setError("");}catch(reason){setError(reason instanceof Error?reason.message:"Agent 列表加载失败");}finally{if(!quiet)setLoading(false);}},[token,onToken]);
   useEffect(()=>{const initial=window.setTimeout(()=>void load(),0);const timer=window.setInterval(()=>void load(true),5000);return()=>{window.clearTimeout(initial);window.clearInterval(timer);};},[load]);
-  async function createAgent(){const name=window.prompt("输入 Agent 设备名称","Windows Agent");if(!name?.trim())return;const result=await authorizedFetch("/api/v1/agents/enrollment",token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name:name.trim()})});if(result.token!==token)onToken(result.token);if(!result.response.ok){onToast(`创建失败（HTTP ${result.response.status}）`);return;}const body=await result.response.json() as {enrollmentCode:string;expiresAt:string};setEnrollment({code:body.enrollmentCode,expiresAt:body.expiresAt});void load(true);}
-  async function renameAgent(agent:ManagedAgent){const name=window.prompt("修改 Agent 名称",agent.name);if(!name?.trim()||name.trim()===agent.name)return;await mutate(agent.id,{name:name.trim()},"Agent 名称已更新");}
+  async function createAgent(){const name=await promptAction({title:"注册新 Agent",label:"设备名称",defaultValue:"Windows Agent",description:"使用容易辨认的名称，方便团队管理设备连接。",placeholder:"例如：办公室 Windows Agent",confirmLabel:"生成注册码",maxLength:80});if(!name?.trim())return;const result=await authorizedFetch("/api/v1/agents/enrollment",token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name:name.trim()})});if(result.token!==token)onToken(result.token);if(!result.response.ok){onToast(`创建失败（HTTP ${result.response.status}）`);return;}const body=await result.response.json() as {enrollmentCode:string;expiresAt:string};setEnrollment({code:body.enrollmentCode,expiresAt:body.expiresAt});void load(true);}
+  async function renameAgent(agent:ManagedAgent){const name=await promptAction({title:"修改 Agent 名称",label:"设备名称",defaultValue:agent.name,placeholder:"输入新的设备名称",confirmLabel:"保存名称",maxLength:80});if(!name?.trim()||name.trim()===agent.name)return;await mutate(agent.id,{name:name.trim()},"Agent 名称已更新");}
   async function revokeAgent(agent:ManagedAgent){if(!await confirmAction(`撤销「${agent.name}」后，该设备必须重新注册才能连接。`,{title:"撤销 Agent？",confirmLabel:"确认撤销"}))return;await mutate(agent.id,{revoke:true},"Agent 已撤销");}
   async function deleteAgent(agent:ManagedAgent){if(!await confirmAction(`「${agent.name}」的中心登记将被永久删除，账号历史消息仍会保留。`,{title:"删除 Agent 登记？",confirmLabel:"永久删除"}))return;const result=await authorizedFetch(`/api/v1/agents/${agent.id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);if(!result.response.ok){onToast(`删除失败（HTTP ${result.response.status}）`);return;}onToast("Agent 登记已删除");void load(true);}
   async function mutate(id:string,body:Record<string,unknown>,success:string){const result=await authorizedFetch(`/api/v1/agents/${id}`,token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify(body)});if(result.token!==token)onToken(result.token);if(!result.response.ok){onToast(`操作失败（HTTP ${result.response.status}）`);return;}onToast(success);void load(true);}

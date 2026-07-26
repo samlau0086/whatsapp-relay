@@ -11,6 +11,7 @@ import { CentralClient } from "./central-client.js";
 const PROTOCOL_VERSION = 2;
 const DEFAULT_CENTRAL_URL = "https://wsdesk.geekmt.com";
 const STABLE_USER_DATA = join(app.getPath("appData"), "@relaydesk", "windows-agent");
+const APP_ICON_PATH = join(import.meta.dirname, "assets", "icon.ico");
 mkdirSync(STABLE_USER_DATA,{recursive:true});
 app.setPath("userData", STABLE_USER_DATA);
 let window: BrowserWindow | undefined;
@@ -49,6 +50,7 @@ function createWindow(): void {
     minHeight: 520,
     title: `RelayDesk Agent v${app.getVersion()}`,
     backgroundColor: "#f4f7f5",
+    icon: APP_ICON_PATH,
     webPreferences: {
       preload: join(import.meta.dirname, "preload.cjs"),
       contextIsolation: true,
@@ -66,8 +68,8 @@ function createWindow(): void {
 }
 
 function createTray(): void {
-  const traySvg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="#167b50"/><path d="M9 10h14v9H15l-5 4v-4H9z" fill="white"/><circle cx="13" cy="14.5" r="1" fill="#167b50"/><circle cx="16" cy="14.5" r="1" fill="#167b50"/><circle cx="19" cy="14.5" r="1" fill="#167b50"/></svg>`;
-  const icon = nativeImage.createFromDataURL(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(traySvg)}`).resize({ width: 16, height: 16 });
+  const icon = nativeImage.createFromPath(APP_ICON_PATH);
+  if (icon.isEmpty()) throw new Error(`Tray icon could not be loaded: ${APP_ICON_PATH}`);
   tray = new Tray(icon);
   tray.setToolTip(`RelayDesk WhatsApp Agent v${app.getVersion()}`);
   tray.setContextMenu(Menu.buildFromTemplate([
