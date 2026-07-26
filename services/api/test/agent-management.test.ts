@@ -28,8 +28,9 @@ test("agent management routes and legacy demo cleanup are shipped", async () => 
   assert.match(hub,/liveAgents\.get\(agent\.id\) !== socket/);
   assert.match(hub,/wa\.status='online'/);
   assert.match(hub,/outcome==="deferred"/);
-  assert.match(hub,/failure_code=CASE WHEN \$2 IN \('failed','uncertain'\) THEN \$4 ELSE NULL END/);
-  assert.match(hub,/failure_message=CASE WHEN \$2 IN \('failed','uncertain'\) THEN \$5 ELSE NULL END/);
+  assert.match(hub,/status=\$2::delivery_status/);
+  assert.match(hub,/failure_code=CASE WHEN \$2::delivery_status IN \('failed'::delivery_status,'uncertain'::delivery_status\) THEN \$4::text ELSE NULL END/);
+  assert.match(hub,/failure_message=CASE WHEN \$2::delivery_status IN \('failed'::delivery_status,'uncertain'::delivery_status\) THEN \$5::text ELSE NULL END/);
   assert.match(hub,/event\.cursor\?\?start\+index/);
   assert.match(hub,/failedCursor/);
   assert.match(hub,/unsupported_event_kind/);

@@ -221,7 +221,7 @@ async function processCommandResult(agentId: string, frame: AgentFrame): Promise
     const command = await client.query("UPDATE outbound_commands SET state=$3,completed_at=now(),last_error=$4 WHERE id=$1 AND agent_id=$2 RETURNING message_id", [frame.commandId,agentId,outcome === "succeeded" ? "completed" : outcome,frame.errorMessage ?? null]);
     if (!command.rowCount || !command.rows[0].message_id) return;
     const status = frame.outcome === "succeeded" ? "sent" : frame.outcome === "uncertain" ? "uncertain" : "failed";
-    await client.query("UPDATE messages SET status=$2,whatsapp_message_id=COALESCE($3,whatsapp_message_id),failure_code=CASE WHEN $2 IN ('failed','uncertain') THEN $4 ELSE NULL END,failure_message=CASE WHEN $2 IN ('failed','uncertain') THEN $5 ELSE NULL END WHERE id=$1", [command.rows[0].message_id,status,frame.whatsappMessageId ?? null,frame.errorCode ?? null,frame.errorMessage ?? null]);
+    await client.query("UPDATE messages SET status=$2::delivery_status,whatsapp_message_id=COALESCE($3::text,whatsapp_message_id),failure_code=CASE WHEN $2::delivery_status IN ('failed'::delivery_status,'uncertain'::delivery_status) THEN $4::text ELSE NULL END,failure_message=CASE WHEN $2::delivery_status IN ('failed'::delivery_status,'uncertain'::delivery_status) THEN $5::text ELSE NULL END WHERE id=$1", [command.rows[0].message_id,status,frame.whatsappMessageId ?? null,frame.errorCode ?? null,frame.errorMessage ?? null]);
     const updated = await client.query("SELECT id,conversation_id,account_id,status,whatsapp_message_id FROM messages WHERE id=$1", [command.rows[0].message_id]);
     await createWebhookEvent(client,"message.status_changed",updated.rows[0].id,updated.rows[0]);
   });
