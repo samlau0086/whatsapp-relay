@@ -75,6 +75,7 @@ app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"Rel
   "/api/v1/accounts/{id}/templates":{get:{summary:"读取账号的已审核模板"}},
   "/api/v1/meta/whatsapp/webhook":{get:{summary:"Meta Webhook challenge"},post:{summary:"接收 Meta Webhook 事件"}},
   "/api/v1/conversations":{get:{summary:"分页查询会话"},post:{summary:"创建或复用单个联系人会话并发送首条文本消息"}},
+  "/api/v1/conversations/counts":{get:{summary:"按账号和日期统计会话筛选数量"}},
   "/api/v1/conversations/{id}":{patch:{summary:"认领、收藏、更新客户阶段、关闭或标记已读"},delete:{summary:"永久删除会话及其关联数据"}},
   "/api/v1/conversations/{id}/contact":{patch:{summary:"编辑联系人别名"}},
   "/api/v1/conversations/{id}/details":{get:{summary:"读取会话标签、备注、个人提醒与订单"}},
@@ -275,17 +276,86 @@ app.get("/api/v1/accounts", { preHandler:authenticate }, async (request) => {
   return { data:result.rows };
 });
 
+type ConversationFilter="all"|"mine"|"unassigned"|"favorite"|"closed"|"archived"|"reminders";
+type ConversationQuery={accountId?:string;status?:string;q?:string;filter?:string;limit?:string;before?:string;cursor?:string;lastMessageFrom?:string;lastMessageBefore?:string;unreplied?:string};
+const CONVERSATION_FILTERS=new Set<ConversationFilter>(["all","mine","unassigned","favorite","closed","archived","reminders"]);
+const UUID_PATTERN=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function parseConversationRange(query:ConversationQuery){
+  const from=query.lastMessageFrom?new Date(query.lastMessageFrom):null,before=query.lastMessageBefore?new Date(query.lastMessageBefore):null;
+  if(from&&Number.isNaN(from.getTime())||before&&Number.isNaN(before.getTime())||from&&before&&from>=before)return null;
+  return{from:from?.toISOString()??null,before:before?.toISOString()??null};
+}
+
+function parseConversationCursor(value:string|undefined):{sortAt:string;id:string}|null|"invalid"{
+  if(!value)return null;
+  try{
+    const decoded=JSON.parse(Buffer.from(value,"base64url").toString("utf8")) as {sortAt?:string;id?:string};
+    if(!decoded.sortAt||Number.isNaN(Date.parse(decoded.sortAt))||!decoded.id||!UUID_PATTERN.test(decoded.id))return"invalid";
+    return{sortAt:new Date(decoded.sortAt).toISOString(),id:decoded.id};
+  }catch{return"invalid";}
+}
+
 app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,reply) => {
-  const query = request.query as { accountId?:string; status?:string; q?:string; limit?:string; before?:string; lastMessageFrom?:string; lastMessageBefore?:string; unreplied?:string };
-  const limit = Math.min(100,Math.max(1,Number(query.limit ?? 30)));
-  if (query.accountId && !canAccessAccount(request.principal,query.accountId)) return { data:[], nextCursor:null };
+  const query=request.query as ConversationQuery,limit=Math.min(100,Math.max(1,Number(query.limit)||40));
+  if(query.accountId&&!canAccessAccount(request.principal,query.accountId))return reply.code(403).send({error:"account_forbidden"});
   if(query.unreplied!==undefined&&query.unreplied!=="true"&&query.unreplied!=="false")return reply.code(400).send({error:"invalid_unreplied_filter"});
-  const lastMessageFrom=query.lastMessageFrom?new Date(query.lastMessageFrom):null,lastMessageBefore=query.lastMessageBefore?new Date(query.lastMessageBefore):null;
-  if(lastMessageFrom&&Number.isNaN(lastMessageFrom.getTime())||lastMessageBefore&&Number.isNaN(lastMessageBefore.getTime())||lastMessageFrom&&lastMessageBefore&&lastMessageFrom>=lastMessageBefore)return reply.code(400).send({error:"invalid_conversation_date_range"});
-  const principalUserId=request.principal?.kind==="user"?request.principal.id:null;
-  const result = await pool.query(`SELECT c.id,c.status,c.favorite,c.unread_count,c.last_message_at,c.service_window_expires_at,c.assigned_user_id,c.customer_stage,co.id contact_id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164) display_name,co.alias,co.display_name contact_name,co.phone_e164,co.avatar_url,(SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) primary_email,COALESCE((SELECT json_agg(json_build_object('id',method.id,'type',method.type,'label',method.label,'value',method.value) ORDER BY method.position,method.id) FROM contact_methods method WHERE method.contact_id=co.id),'[]'::json) contact_methods,a.id account_id,a.display_name account_name,a.status account_status,a.transport,m.text_content last_message,m.kind last_message_kind,m.direction last_message_direction,m.status last_message_status,COALESCE(tag_list.tags,'[]'::json) tags,r.remind_at FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN whatsapp_accounts a ON a.id=c.account_id LEFT JOIN LATERAL (SELECT text_content,kind,direction,status FROM messages WHERE conversation_id=c.id ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true LEFT JOIN reminders r ON r.conversation_id=c.id AND r.user_id=$8::uuid AND r.dismissed_at IS NULL WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::text IS NULL OR c.status::text=$2) AND ($3::text IS NULL OR co.alias ILIKE '%'||$3||'%' OR co.display_name ILIKE '%'||$3||'%' OR co.phone_e164 ILIKE '%'||$3||'%') AND ($4::timestamptz IS NULL OR c.last_message_at<$4) AND ($5::timestamptz IS NULL OR c.last_message_at>=$5) AND ($6::timestamptz IS NULL OR c.last_message_at<$6) AND ($7::boolean IS NOT TRUE OR m.direction='in') ORDER BY c.last_message_at DESC NULLS LAST LIMIT $9`, [query.accountId ?? null,query.status ?? null,query.q ?? null,query.before ?? null,lastMessageFrom?.toISOString()??null,lastMessageBefore?.toISOString()??null,query.unreplied==="true",principalUserId,limit+1]);
-  const hasMore = result.rows.length > limit; const data = result.rows.slice(0,limit);
-  return { data, nextCursor:hasMore ? data[data.length-1]?.last_message_at : null };
+  if(query.filter&&!CONVERSATION_FILTERS.has(query.filter as ConversationFilter))return reply.code(400).send({error:"invalid_conversation_filter"});
+  const range=parseConversationRange(query);if(!range)return reply.code(400).send({error:"invalid_conversation_date_range"});
+  const cursor=parseConversationCursor(query.cursor);if(cursor==="invalid")return reply.code(400).send({error:"invalid_cursor"});
+  const keyword=query.q?.trim()||null;if(keyword&&keyword.length>100)return reply.code(400).send({error:"conversation_query_too_long"});
+  const principalUserId=request.principal?.kind==="user"?request.principal.id:null,accountIds=request.principal?.accountIds??null,filter=query.filter??null;
+  const result=await pool.query(`WITH listed AS (
+    SELECT c.id,c.status,c.favorite,c.unread_count,c.last_message_at,c.created_at,c.service_window_expires_at,c.assigned_user_id,c.customer_stage,
+      co.id contact_id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164) display_name,co.alias,co.display_name contact_name,co.phone_e164,co.avatar_url,
+      (SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) primary_email,
+      COALESCE((SELECT json_agg(json_build_object('id',method.id,'type',method.type,'label',method.label,'value',method.value) ORDER BY method.position,method.id) FROM contact_methods method WHERE method.contact_id=co.id),'[]'::json) contact_methods,
+      a.id account_id,a.display_name account_name,a.status account_status,a.transport,m.text_content last_message,m.kind last_message_kind,m.direction last_message_direction,m.status last_message_status,
+      COALESCE(tag_list.tags,'[]'::json) tags,r.remind_at,
+      CASE WHEN $10::text='reminders' THEN r.remind_at ELSE COALESCE(c.last_message_at,c.created_at) END sort_at
+    FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN whatsapp_accounts a ON a.id=c.account_id
+    LEFT JOIN LATERAL (SELECT text_content,kind,direction,status FROM messages WHERE conversation_id=c.id ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
+    LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true
+    LEFT JOIN reminders r ON r.conversation_id=c.id AND r.user_id=$9::uuid AND r.dismissed_at IS NULL
+    WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
+      AND ($3::text IS NULL OR c.status::text=$3)
+      AND ($4::text IS NULL OR co.alias ILIKE '%'||$4||'%' OR co.display_name ILIKE '%'||$4||'%' OR co.phone_e164 ILIKE '%'||$4||'%' OR m.text_content ILIKE '%'||$4||'%')
+      AND ($5::timestamptz IS NULL OR c.last_message_at<$5) AND ($6::timestamptz IS NULL OR c.last_message_at>=$6) AND ($7::timestamptz IS NULL OR c.last_message_at<$7)
+      AND ($8::boolean IS NOT TRUE OR m.direction='in')
+      AND ($10::text IS NULL OR ($10='all' AND c.status<>'archived') OR ($10='mine' AND c.assigned_user_id=$9::uuid) OR ($10='unassigned' AND c.assigned_user_id IS NULL) OR ($10='favorite' AND c.favorite) OR ($10='closed' AND c.status='closed') OR ($10='archived' AND c.status='archived') OR ($10='reminders' AND r.remind_at IS NOT NULL))
+  ) SELECT *,COUNT(*) OVER()::int total_count FROM listed
+    WHERE ($11::timestamptz IS NULL OR ($10='reminders' AND (sort_at>$11 OR (sort_at=$11 AND id<$12::uuid))) OR (COALESCE($10,'')<>'reminders' AND (sort_at<$11 OR (sort_at=$11 AND id<$12::uuid))))
+    ORDER BY CASE WHEN $10='reminders' THEN sort_at END ASC,CASE WHEN COALESCE($10,'')<>'reminders' THEN sort_at END DESC,id DESC LIMIT $13`,
+    [query.accountId??null,accountIds,query.status??null,keyword,query.before??null,range.from,range.before,query.unreplied==="true",principalUserId,filter,cursor?.sortAt??null,cursor?.id??null,limit+1]);
+  const hasMore=result.rows.length>limit,data=result.rows.slice(0,limit),last=data[data.length-1];
+  return{data,nextCursor:hasMore&&last?Buffer.from(JSON.stringify({sortAt:last.sort_at,id:last.id}),"utf8").toString("base64url"):null,total:Number(data[0]?.total_count??0)};
+});
+
+app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,reply)=>{
+  const query=request.query as ConversationQuery;
+  if(query.accountId&&!canAccessAccount(request.principal,query.accountId))return reply.code(403).send({error:"account_forbidden"});
+  if(query.unreplied!==undefined&&query.unreplied!=="true"&&query.unreplied!=="false")return reply.code(400).send({error:"invalid_unreplied_filter"});
+  const range=parseConversationRange(query);if(!range)return reply.code(400).send({error:"invalid_conversation_date_range"});
+  const principalUserId=request.principal?.kind==="user"?request.principal.id:null,accountIds=request.principal?.accountIds??null;
+  const result=await pool.query(`WITH base AS (
+    SELECT c.status,c.favorite,c.assigned_user_id,m.direction,r.remind_at
+    FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id
+    LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id=c.id ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
+    LEFT JOIN reminders r ON r.conversation_id=c.id AND r.user_id=$7::uuid AND r.dismissed_at IS NULL
+    WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
+      AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
+      AND ($5::boolean IS NOT TRUE OR m.direction='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
+  ) SELECT COUNT(*) FILTER(WHERE status<>'archived')::int all_count,COUNT(*) FILTER(WHERE assigned_user_id=$7::uuid)::int mine,
+    COUNT(*) FILTER(WHERE assigned_user_id IS NULL)::int unassigned,COUNT(*) FILTER(WHERE favorite)::int favorite,
+    COUNT(*) FILTER(WHERE status='closed')::int closed,COUNT(*) FILTER(WHERE status='archived')::int archived,
+    COUNT(*) FILTER(WHERE remind_at IS NOT NULL)::int reminders FROM base`,
+    [query.accountId??null,accountIds,range.from,range.before,query.unreplied==="true",query.before??null,principalUserId]);
+  const row=result.rows[0]??{};
+  const dueReminders=request.principal?.kind==="user"?(await pool.query(`SELECT c.id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164) display_name,r.remind_at
+    FROM reminders r JOIN conversations c ON c.id=r.conversation_id JOIN contacts co ON co.id=c.contact_id
+    WHERE r.user_id=$1 AND r.dismissed_at IS NULL AND r.remind_at<=now() AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
+    ORDER BY r.remind_at,c.id LIMIT 20`,[request.principal.id,accountIds])).rows:[];
+  return{all:Number(row.all_count??0),mine:Number(row.mine??0),unassigned:Number(row.unassigned??0),favorite:Number(row.favorite??0),closed:Number(row.closed??0),archived:Number(row.archived??0),reminders:Number(row.reminders??0),dueReminders};
 });
 
 app.patch("/api/v1/conversations/:id", { preHandler:authenticate }, async (request,reply) => {

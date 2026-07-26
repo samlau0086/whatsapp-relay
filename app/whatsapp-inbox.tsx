@@ -8,6 +8,7 @@ import {
   ArrowDownLeft, ArrowUpRight,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -21,7 +22,7 @@ import { clipboardFiles } from "./clipboard-files";
 import { CollageGenerateDialog, ProductWorkspace } from "./collage-materials";
 import { MaterialLibrarySendDialog } from "./material-library-send-dialog";
 import { TaskCenter } from "./task-center";
-import { CONVERSATION_DATE_FILTERS, conversationListPath, type ConversationDateFilter } from "./conversation-date-filter";
+import { CONVERSATION_DATE_FILTERS, conversationCountsPath, conversationListPath, type ConversationDateFilter, type ConversationListFilter } from "./conversation-date-filter";
 import { confirmAction, ConfirmationHost, promptAction, PromptHost } from "./confirmation-ui";
 
 const API_URL = (process.env.NEXT_PUBLIC_RELAY_API_URL ?? "").replace(/\/$/, "");
@@ -91,12 +92,24 @@ type EmailProviderId="smtp"|"resend";
 type EmailProviderConfig={provider:EmailProviderId;enabled:boolean;configured:boolean;fromName:string;fromEmail:string;replyTo:string;host:string;port:number;tls:"tls"|"starttls";username:string;secret:string;updatedAt:string|null};
 type TranslationPreference={enabled:boolean;agentLanguage:string;customerLanguage:string;updatedAt:string|null};
 type ConversationContextState={conversation:Conversation;x:number;y:number;section:"root"|"stage"|"tags"};
+type ConversationCounts={all:number;mine:number;unassigned:number;favorite:number;closed:number;archived:number;reminders:number};
 type CurrencyItem={code:string;name:string;rate:number};
 type CurrencyConfig={baseCurrency:string;currencies:CurrencyItem[];rateSource?:string|null;rateDate?:string|null;rateUpdatedAt?:string|null};
 type MessageTranslation={status:"idle"|"loading"|"translated"|"failed";text?:string;sourceText?:string;message?:string};
 type KnowledgeBaseItem={id:string;name:string;description:string;document_count?:number;faq_count?:number};
 type AgentDraft={id:string;text_content:string;reply_zh:string|null;reason:string;citations:string[];created_at:string};
 const DEFAULT_TRANSLATION_PREFERENCE:TranslationPreference={enabled:false,agentLanguage:"zh-CN",customerLanguage:"en",updatedAt:null};
+const EMPTY_CONVERSATION_COUNTS:ConversationCounts={all:0,mine:0,unassigned:0,favorite:0,closed:0,archived:0,reminders:0};
+
+function conversationFilterKey(label:string):ConversationListFilter{
+  if(label==="分配给我")return"mine";
+  if(label==="未分配")return"unassigned";
+  if(label==="收藏")return"favorite";
+  if(label==="已关闭")return"closed";
+  if(label==="已归档")return"archived";
+  if(label==="我的提醒")return"reminders";
+  return"all";
+}
 const DEFAULT_CURRENCY_CONFIG:CurrencyConfig={baseCurrency:"USD",currencies:[{code:"USD",name:"美元",rate:1},{code:"CNY",name:"人民币",rate:7.2},{code:"EUR",name:"欧元",rate:.92},{code:"GBP",name:"英镑",rate:.78},{code:"JPY",name:"日元",rate:157},{code:"HKD",name:"港币",rate:7.8},{code:"SGD",name:"新加坡元",rate:1.35},{code:"AUD",name:"澳元",rate:1.5},{code:"CAD",name:"加元",rate:1.37},{code:"AED",name:"阿联酋迪拉姆",rate:3.6725}]};
 
 function convertCurrency(amount:number,from:string,to:string,config:CurrencyConfig):number{if(from===to)return amount;const source=config.currencies.find(item=>item.code===from)?.rate,target=config.currencies.find(item=>item.code===to)?.rate;if(!source||!target)return amount;return amount/source*target;}
@@ -124,6 +137,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [filter,setFilter]=useState("全部会话");
   const [dateFilter,setDateFilter]=useState<ConversationDateFilter>("all");
   const [query,setQuery]=useState("");
+  const [debouncedQuery,setDebouncedQuery]=useState("");
+  const [conversationTotal,setConversationTotal]=useState(0);
+  const [conversationCounts,setConversationCounts]=useState<ConversationCounts>(EMPTY_CONVERSATION_COUNTS);
+  const [nextConversationCursor,setNextConversationCursor]=useState<string|null>(null);
+  const [loadingMoreConversations,setLoadingMoreConversations]=useState(false);
+  const [loadMoreError,setLoadMoreError]=useState("");
   const [draft,setDraft]=useState("");
   const [replyTo,setReplyTo]=useState<{conversationId:string;message:ChatMessage}|null>(null);
   const [detailsOpen,setDetailsOpen]=useState(true);
@@ -168,6 +187,10 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const textareaRef=useRef<HTMLTextAreaElement>(null);
   const composerDragDepth=useRef(0);
   const messagesRef=useRef<HTMLDivElement>(null);
+  const conversationListRef=useRef<HTMLDivElement>(null);
+  const conversationLoadSentinelRef=useRef<HTMLDivElement>(null);
+  const conversationAbortRef=useRef<AbortController|null>(null);
+  const conversationCursorRef=useRef<string|null>(null);
   const translationLoadSequence=useRef(0);
   const workspaceLoadSequence=useRef(0);
   const dateFilterRef=useRef<ConversationDateFilter>("all");
@@ -177,26 +200,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const notificationAudio=useRef<AudioContext|null>(null);
 
   const userId=user?.id??tokenSubject(apiToken);
-  const counts=useMemo(()=>({
-    all:conversations.filter(item=>item.conversationStatus!=="archived").length,
-    mine:conversations.filter(item=>item.assignedUserId===userId).length,
-    unassigned:conversations.filter(item=>!item.assignedUserId).length,
-    favorite:conversations.filter(item=>item.favorite).length,
-    closed:conversations.filter(item=>item.conversationStatus==="closed").length,
-    archived:conversations.filter(item=>item.conversationStatus==="archived").length,
-    reminders:conversations.filter(item=>item.remindAt).length,
-  }),[conversations,userId]);
-  const visible=useMemo(()=>conversations.filter(item=>{
-    if(selectedAccount&&item.accountId!==selectedAccount)return false;
-    if(!`${item.name} ${item.phone} ${item.preview}`.toLowerCase().includes(query.toLowerCase()))return false;
-    if(filter==="分配给我")return item.assignedUserId===userId;
-    if(filter==="未分配")return !item.assignedUserId;
-    if(filter==="收藏")return item.favorite;
-    if(filter==="已关闭")return item.conversationStatus==="closed";
-    if(filter==="已归档")return item.conversationStatus==="archived";
-    if(filter==="我的提醒")return Boolean(item.remindAt);
-    return item.conversationStatus!=="archived";
-  }).sort((a,b)=>filter==="我的提醒"?new Date(a.remindAt??8640000000000000).getTime()-new Date(b.remindAt??8640000000000000).getTime():0),[conversations,selectedAccount,query,filter,userId]);
+  const counts=conversationCounts;
+  const visible=conversations;
   const effectiveActiveId=visible.some(item=>item.id===activeId)?activeId:(visible[0]?.id??"");
   const active=visible.find(item=>item.id===effectiveActiveId)??null;
   const translationPreference=active?translationPreferences[active.id]??DEFAULT_TRANSLATION_PREFERENCE:DEFAULT_TRANSLATION_PREFERENCE;
@@ -206,6 +211,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const selectedReply=replyTo?.conversationId===effectiveActiveId?replyTo.message:null;
   const currentEmailActivities=useMemo(()=>active?emailActivities[active.id]??[]:[],[active,emailActivities]);
   const latestMessageId=currentMessages.at(-1)?.id??"";
+  const conversationVirtualizer=useVirtualizer({count:visible.length,getScrollElement:()=>conversationListRef.current,estimateSize:()=>91,overscan:6,getItemKey:index=>visible[index]?.id??index});
   const taskRequest=useCallback((path:string,init?:RequestInit)=>authorizedFetch(path,apiToken,init),[apiToken]);
   const scrollMessagesToEnd=useCallback(()=>{
     window.requestAnimationFrame(()=>{
@@ -291,28 +297,50 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
 
   const logout=useCallback(()=>{
     sessionStorage.removeItem("relayAccessToken");sessionStorage.removeItem("relayUser");
+    conversationAbortRef.current?.abort();conversationCursorRef.current=null;
     notificationBaseline.current.clear();notificationBaselineReady.current=false;
-    dateFilterRef.current="all";setDateFilter("all");setApiToken("");setUser(null);setAccounts([]);setConversations([]);setMessages({});setFailedMessageCounts({});setEmailActivities({});setMessageTranslations({});setTranslationPreferences({});setTranslationReadyConversationId("");setActiveId("");setAuthOpen(false);setSessionReady(true);setLoading(false);
+    dateFilterRef.current="all";setDateFilter("all");setApiToken("");setUser(null);setAccounts([]);setConversations([]);setConversationTotal(0);setConversationCounts(EMPTY_CONVERSATION_COUNTS);setNextConversationCursor(null);setMessages({});setFailedMessageCounts({});setEmailActivities({});setMessageTranslations({});setTranslationPreferences({});setTranslationReadyConversationId("");setActiveId("");setAuthOpen(false);setSessionReady(true);setLoading(false);
   },[]);
 
-  const loadWorkspace=useCallback(async(token:string,quiet=false)=>{
+  const loadAccounts=useCallback(async(token:string)=>{
+    const result=await authorizedFetch("/api/v1/accounts",token);
+    if(result.token!==token)setApiToken(result.token);
+    if(result.response.status===401){logout();return;}
+    if(!result.response.ok)throw new Error(`账号 API 响应异常（${result.response.status}）`);
+    const body=await result.response.json() as {data:Array<Record<string,unknown>>};
+    setAccounts(body.data.map(item=>({id:String(item.id),name:String(item.display_name),phone:String(item.phone_e164??""),status:String(item.status),reason:String(item.status_reason??""),transport:String(item.transport??"web") as "web"|"cloud",webhookStatus:item.webhook_status?String(item.webhook_status):undefined,credentialsStatus:item.credentials_status?String(item.credentials_status):undefined,lastEvent:item.last_event_at?String(item.last_event_at):undefined})));
+  },[logout]);
+
+  const loadConversationCounts=useCallback(async(token:string)=>{
+    const result=await authorizedFetch(conversationCountsPath(dateFilter,new Date(),selectedAccount),token);
+    if(result.token!==token)setApiToken(result.token);
+    if(result.response.status===401){logout();return;}
+    if(result.response.ok){
+      const body=await result.response.json() as ConversationCounts&{dueReminders?:Array<{id:string;display_name:string;remind_at:string}>};
+      setConversationCounts(body);
+      const due=body.dueReminders?.find(item=>!notifiedReminders.current.has(item.id));
+      if(due){notifiedReminders.current.add(due.id);setToast(`${due.display_name} 的会话提醒已到期`);}
+    }
+  },[dateFilter,selectedAccount,logout]);
+
+  const loadConversations=useCallback(async(token:string,options:{append?:boolean;quiet?:boolean;notify?:boolean}={})=>{
+    const append=Boolean(options.append),quiet=Boolean(options.quiet);
+    if(append&&!conversationCursorRef.current)return;
+    const previousCursor=conversationCursorRef.current;
     const sequence=++workspaceLoadSequence.current;
-    if(!quiet)setLoading(true);setLoadError("");
+    if(!append){conversationAbortRef.current?.abort();conversationAbortRef.current=new AbortController();}
+    if(append){setLoadingMoreConversations(true);setLoadMoreError("");}else if(!quiet)setLoading(true);
+    if(!append)setLoadError("");
     try{
-      const [accountResult,conversationResult]=await Promise.all([
-        authorizedFetch("/api/v1/accounts",token),authorizedFetch(conversationListPath(dateFilterRef.current),token),
-      ]);
-      const accountResponse=accountResult.response,conversationResponse=conversationResult.response;
-      const refreshedToken=accountResult.token!==token?accountResult.token:conversationResult.token;
-      if(refreshedToken!==token)setApiToken(refreshedToken);
-      if(accountResponse.status===401||conversationResponse.status===401){logout();return;}
-      if(!accountResponse.ok||!conversationResponse.ok)throw new Error(`中心 API 响应异常（${accountResponse.status}/${conversationResponse.status}）`);
-      const accountBody=await accountResponse.json() as {data:Array<Record<string,unknown>>};
-      const conversationBody=await conversationResponse.json() as {data:Array<Record<string,unknown>>};
+      const path=conversationListPath(dateFilter,new Date(),{filter:conversationFilterKey(filter),accountId:selectedAccount,q:debouncedQuery,cursor:append?conversationCursorRef.current??undefined:undefined,limit:40});
+      const conversationResult=await authorizedFetch(path,token,{signal:!append?conversationAbortRef.current?.signal:undefined});
+      if(conversationResult.token!==token)setApiToken(conversationResult.token);
+      if(conversationResult.response.status===401){logout();return;}
+      if(!conversationResult.response.ok)throw new Error(`会话 API 响应异常（${conversationResult.response.status}）`);
+      const conversationBody=await conversationResult.response.json() as {data:Array<Record<string,unknown>>;nextCursor:string|null;total:number};
       if(sequence!==workspaceLoadSequence.current)return;
-      setAccounts(accountBody.data.map(item=>({id:String(item.id),name:String(item.display_name),phone:String(item.phone_e164??""),status:String(item.status),reason:String(item.status_reason??""),transport:String(item.transport??"web") as "web"|"cloud",webhookStatus:item.webhook_status?String(item.webhook_status):undefined,credentialsStatus:item.credentials_status?String(item.credentials_status):undefined,lastEvent:item.last_event_at?String(item.last_event_at):undefined})));
       const mapped=conversationBody.data.map((item,index)=>mapConversation(item,index));
-      if(notificationBaselineReady.current){
+      if(options.notify&&notificationBaselineReady.current){
         for(const conversation of mapped){
           const previous=notificationBaseline.current.get(conversation.id);
           if(previous&&conversation.lastDirection==="in"&&conversation.lastMessageAt&&conversation.lastMessageAt!==previous.lastMessageAt){
@@ -322,15 +350,29 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       }
       notificationBaseline.current=new Map(mapped.map(item=>[item.id,{lastMessageAt:item.lastMessageAt,unread:item.unread}]));
       notificationBaselineReady.current=true;
-      setConversations(mapped);setActiveId(previous=>mapped.some(item=>item.id===previous)?previous:(mapped[0]?.id??""));
-    }catch(error){if(sequence===workspaceLoadSequence.current)setLoadError(error instanceof Error?error.message:"中心数据加载失败");}
-    finally{if(sequence===workspaceLoadSequence.current)setLoading(false);}
-  },[logout,notifyIncomingConversation]);
+      if(!quiet||!previousCursor){conversationCursorRef.current=conversationBody.nextCursor;setNextConversationCursor(conversationBody.nextCursor);}
+      setConversationTotal(Number(conversationBody.total??0));
+      setConversations(current=>{
+        if(append){const ids=new Set(current.map(item=>item.id));return[...current,...mapped.filter(item=>!ids.has(item.id))];}
+        if(!quiet)return mapped;
+        const firstIds=new Set(mapped.map(item=>item.id)),merged=[...mapped,...current.filter(item=>!firstIds.has(item.id))];
+        return merged.sort((a,b)=>conversationFilterKey(filter)==="reminders"?new Date(a.remindAt??8640000000000000).getTime()-new Date(b.remindAt??8640000000000000).getTime():(new Date(b.lastMessageAt??0).getTime()-new Date(a.lastMessageAt??0).getTime())||b.id.localeCompare(a.id));
+      });
+      setActiveId(previous=>previous||mapped[0]?.id||"");
+    }catch(error){
+      if((error as {name?:string}).name==="AbortError")return;
+      if(sequence===workspaceLoadSequence.current){const message=error instanceof Error?error.message:"会话数据加载失败";if(append)setLoadMoreError(message);else setLoadError(message);}
+    }finally{if(append)setLoadingMoreConversations(false);if(sequence===workspaceLoadSequence.current)setLoading(false);}
+  },[dateFilter,filter,selectedAccount,debouncedQuery,logout,notifyIncomingConversation]);
+
+  const loadWorkspace=useCallback(async(token:string,quiet=false)=>{
+    if(!quiet)setLoading(true);
+    await Promise.allSettled([loadAccounts(token),loadConversations(token,{quiet,notify:quiet}),loadConversationCounts(token)]);
+  },[loadAccounts,loadConversations,loadConversationCounts]);
 
   const selectDateFilter=(next:ConversationDateFilter)=>{
     if(next===dateFilter)return;
     dateFilterRef.current=next;setDateFilter(next);
-    if(apiToken)void loadWorkspace(apiToken);
   };
 
   const handleDateFilterKeyDown=(event:React.KeyboardEvent<HTMLButtonElement>)=>{
@@ -390,13 +432,23 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       const storedUser=sessionStorage.getItem("relayUser");
       if(!token){setLoading(false);setSessionReady(true);return;}
       setApiToken(token);if(storedUser)try{setUser(JSON.parse(storedUser) as User);}catch{}
-      setAuthOpen(false);setSessionReady(true);void loadWorkspace(token);
+      setAuthOpen(false);setSessionReady(true);
     },0);
     return()=>window.clearTimeout(timer);
-  },[loadWorkspace]);
+  },[]);
+  useEffect(()=>{const timer=window.setTimeout(()=>setDebouncedQuery(query.trim()),300);return()=>window.clearTimeout(timer);},[query]);
+  useEffect(()=>{if(!apiToken)return;void loadAccounts(apiToken);},[apiToken,loadAccounts]);
+  useEffect(()=>{if(view!=="inbox"||!apiToken)return;conversationCursorRef.current=null;setNextConversationCursor(null);conversationListRef.current?.scrollTo({top:0});void Promise.all([loadConversations(apiToken),loadConversationCounts(apiToken)]);},[view,apiToken,loadConversations,loadConversationCounts]);
   useEffect(()=>{const timer=window.setTimeout(()=>{if(window.matchMedia("(max-width: 1280px)").matches)setDetailsOpen(false);},0);return()=>window.clearTimeout(timer);},[]);
 
-  useEffect(()=>{if(view!=="inbox"||!apiToken)return;const timer=window.setInterval(()=>void loadWorkspace(apiToken,true),5000);return()=>window.clearInterval(timer);},[view,apiToken,loadWorkspace]);
+  useEffect(()=>{if(view!=="inbox"||!apiToken)return;const timer=window.setInterval(()=>void loadConversations(apiToken,{quiet:true,notify:true}),5000);return()=>window.clearInterval(timer);},[view,apiToken,loadConversations]);
+  useEffect(()=>{if(view!=="inbox"||!apiToken)return;const timer=window.setInterval(()=>void loadConversationCounts(apiToken),30000);return()=>window.clearInterval(timer);},[view,apiToken,loadConversationCounts]);
+  useEffect(()=>{
+    const root=conversationListRef.current,target=conversationLoadSentinelRef.current;
+    if(!root||!target||!nextConversationCursor||loadingMoreConversations)return;
+    const observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting))void loadConversations(apiToken,{append:true});},{root,rootMargin:"240px"});
+    observer.observe(target);return()=>observer.disconnect();
+  },[apiToken,nextConversationCursor,loadingMoreConversations,loadConversations]);
   useEffect(()=>{if(view!=="inbox"||!apiToken||!effectiveActiveId)return;const initial=window.setTimeout(()=>void loadMessages(apiToken,effectiveActiveId,true),0);const timer=window.setInterval(()=>void loadMessages(apiToken,effectiveActiveId),3000);return()=>{window.clearTimeout(initial);window.clearInterval(timer);};},[view,apiToken,effectiveActiveId,loadMessages]);
   useEffect(()=>{if(view!=="inbox"||!apiToken||!effectiveActiveId)return;const timer=window.setTimeout(()=>void loadTranslationSettings(apiToken,effectiveActiveId),0);return()=>window.clearTimeout(timer);},[view,apiToken,effectiveActiveId,loadTranslationSettings]);
   useEffect(()=>{const timer=window.setTimeout(()=>setMessageTranslations({}),0);return()=>window.clearTimeout(timer);},[translationPreference.agentLanguage]);
@@ -414,12 +466,10 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   useEffect(()=>{if(!apiToken||!translationPreference.enabled||!translationConfigured)return;const ids=currentMessages.filter(message=>message.direction==="in"&&((message.kind==="text"&&message.text.trim())||(message.kind==="audio"&&message.attachment))&&!messageTranslations[message.id]).map(message=>message.id);if(!ids.length)return;const timer=window.setTimeout(()=>void loadIncomingTranslations(apiToken,ids,translationPreference.agentLanguage),0);return()=>window.clearTimeout(timer);},[apiToken,currentMessages,translationPreference.enabled,translationPreference.agentLanguage,translationConfigured,messageTranslations,loadIncomingTranslations]);
   useEffect(()=>{if(!toast)return;const timer=window.setTimeout(()=>setToast(""),3200);return()=>window.clearTimeout(timer);},[toast]);
   useEffect(()=>{const timer=window.setInterval(()=>setClock(Date.now()),30_000);return()=>window.clearInterval(timer);},[]);
-  useEffect(()=>{const due=conversations.find(item=>item.remindAt&&new Date(item.remindAt).getTime()<=Date.now()&&!notifiedReminders.current.has(item.id));if(due){notifiedReminders.current.add(due.id);setToast(`${due.name} 的会话提醒已到期`);}},[conversations]);
-
   async function updateConversation(change:Record<string,unknown>,conversationId=active?.id){
     if(!conversationId||!apiToken)return false;
     const result=await authorizedFetch(`/api/v1/conversations/${conversationId}`,apiToken,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify(change)});const response=result.response;if(result.token!==apiToken)setApiToken(result.token);
-    if(!response.ok){setToast(`操作失败（HTTP ${response.status}）`);return false;}await loadWorkspace(result.token,true);return true;
+    if(!response.ok){setToast(`操作失败（HTTP ${response.status}）`);return false;}await Promise.all([loadConversations(result.token),loadConversationCounts(result.token)]);return true;
   }
 
   function openConversationMenu(event:React.MouseEvent,item:Conversation){
@@ -510,52 +560,193 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     await queueTextMessage(source);
   }
 
-  async function queueTextMessage(text:string,translationSourceText?:string){
-    if(!active||!apiToken||!text.trim())return;
-    const clientMessageId=crypto.randomUUID(),quoted=selectedReply?messageQuote(selectedReply):undefined;setDraft("");setReplyTo(null);setTranslationPreview(null);setTranslationError("");
-    setMessages(all=>({...all,[active.id]:[...(all[active.id]??[]),{id:clientMessageId,direction:"out",kind:"text",text,translationSourceText,quoted,time:formatTime(new Date()),status:"queued"}]}));
-    const result=await authorizedFetch("/api/v1/messages",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId:active.accountId,conversationId:active.id,clientMessageId,type:"text",text,...(translationSourceText?{translationSourceText}:{}),...(quoted?{quotedMessageId:quoted.id}:{})})});const response=result.response;if(result.token!==apiToken)setApiToken(result.token);
-    if(!response.ok){const body=await response.json().catch(()=>({})) as {error?:string};setToast(body.error==="agent_upgrade_required"?"请先升级 Windows Agent 后再使用指定回复":`消息入队失败（HTTP ${response.status}）`);setMessages(all=>({...all,[active.id]:(all[active.id]??[]).map(item=>item.id===clientMessageId?{...item,status:"failed"}:item)}));return;}
-    setToast(active.accountStatus==="online"?"消息已进入发送队列":"账号离线，消息已持久化排队");void loadMessages(apiToken,active.id);
+  async function queueTextMessage(
+    text: string,
+    translationSourceText?: string,
+  ) {
+    if (!active || !apiToken || !text.trim()) return;
+    const clientMessageId = crypto.randomUUID(),
+      quoted = selectedReply ? messageQuote(selectedReply) : undefined;
+    setDraft("");
+    setReplyTo(null);
+    setTranslationPreview(null);
+    setTranslationError("");
+    setMessages((all) => ({
+      ...all,
+      [active.id]: [
+        ...(all[active.id] ?? []),
+        {
+          id: clientMessageId,
+          direction: "out",
+          kind: "text",
+          text,
+          translationSourceText,
+          quoted,
+          time: formatTime(new Date()),
+          status: "queued",
+        },
+      ],
+    }));
+    const result = await authorizedFetch("/api/v1/messages", apiToken, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        accountId: active.accountId,
+        conversationId: active.id,
+        clientMessageId,
+        type: "text",
+        text,
+        ...(translationSourceText ? { translationSourceText } : {}),
+        ...(quoted ? { quotedMessageId: quoted.id } : {}),
+      }),
+    });
+    const response = result.response;
+    if (result.token !== apiToken) setApiToken(result.token);
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      setToast(
+        body.error === "agent_upgrade_required"
+          ? "请先升级 Windows Agent 后再使用指定回复"
+          : `消息入队失败（HTTP ${response.status}）`,
+      );
+      setMessages((all) => ({
+        ...all,
+        [active.id]: (all[active.id] ?? []).map((item) =>
+          item.id === clientMessageId ? { ...item, status: "failed" } : item,
+        ),
+      }));
+      return;
+    }
+    setToast(
+      active.accountStatus === "online"
+        ? "消息已进入发送队列"
+        : "账号离线，消息已持久化排队",
+    );
+    void loadMessages(apiToken, active.id);
   }
 
-  async function retryMessage(message:ChatMessage){
-    if(!active||!apiToken||retryingMessageId)return;
-    if(message.status==="uncertain"&&!await confirmAction("这条消息可能已经送达。重新发送可能让客户收到重复消息。",{title:"仍要重新发送吗？",confirmLabel:"重新发送",tone:"warning"}))return;
+  async function retryMessage(message: ChatMessage) {
+    if (!active || !apiToken || retryingMessageId) return;
+    if (
+      message.status === "uncertain" &&
+      !(await confirmAction(
+        "这条消息可能已经送达。重新发送可能让客户收到重复消息。",
+        {
+          title: "仍要重新发送吗？",
+          confirmLabel: "重新发送",
+          tone: "warning",
+        },
+      ))
+    )
+      return;
     setRetryingMessageId(message.id);
-    try{
-      const clientMessageId=crypto.randomUUID();
-      let result=await authorizedFetch(`/api/v1/messages/${message.id}/retry`,apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({clientMessageId})});
-      if(result.token!==apiToken)setApiToken(result.token);
-      let body=await result.response.json().catch(()=>({})) as {error?:string;message?:string};
-      if(result.response.status===404&&message.kind!=="template"){
-        result=await authorizedFetch("/api/v1/messages",result.token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId:active.accountId,conversationId:active.id,clientMessageId,type:message.kind,text:message.text||undefined,translationSourceText:message.translationSourceText,mediaId:message.attachment?.id,quotedMessageId:message.quoted?.id})});
-        if(result.token!==apiToken)setApiToken(result.token);
-        body=await result.response.json().catch(()=>({})) as {error?:string;message?:string};
+    try {
+      const clientMessageId = crypto.randomUUID();
+      let result = await authorizedFetch(
+        `/api/v1/messages/${message.id}/retry`,
+        apiToken,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ clientMessageId }),
+        },
+      );
+      if (result.token !== apiToken) setApiToken(result.token);
+      let body = (await result.response.json().catch(() => ({}))) as {
+        error?: string;
+        message?: string;
+      };
+      if (result.response.status === 404 && message.kind !== "template") {
+        result = await authorizedFetch("/api/v1/messages", result.token, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            accountId: active.accountId,
+            conversationId: active.id,
+            clientMessageId,
+            type: message.kind,
+            text: message.text || undefined,
+            translationSourceText: message.translationSourceText,
+            mediaId: message.attachment?.id,
+            quotedMessageId: message.quoted?.id,
+          }),
+        });
+        if (result.token !== apiToken) setApiToken(result.token);
+        body = (await result.response.json().catch(() => ({}))) as {
+          error?: string;
+          message?: string;
+        };
       }
-      if(!result.response.ok)throw new Error(body.message??({message_not_retryable:"消息状态已更新，当前不能重新发送",original_command_not_found:"找不到原发送记录"} as Record<string,string>)[body.error??""]??`重新发送失败（HTTP ${result.response.status}）`);
+      if (!result.response.ok)
+        throw new Error(
+          body.message ??
+            (
+              {
+                message_not_retryable: "消息状态已更新，当前不能重新发送",
+                original_command_not_found: "找不到原发送记录",
+              } as Record<string, string>
+            )[body.error ?? ""] ??
+            `重新发送失败（HTTP ${result.response.status}）`,
+        );
       setToast("消息已重新进入发送队列");
-      await loadMessages(result.token,active.id);
-    }catch(reason){setToast(reason instanceof Error?reason.message:"重新发送失败");}
-    finally{setRetryingMessageId("");}
+      await loadMessages(result.token, active.id);
+    } catch (reason) {
+      setToast(reason instanceof Error ? reason.message : "重新发送失败");
+    } finally {
+      setRetryingMessageId("");
+    }
   }
 
-  async function clearFailedMessages(){
-    if(!active||!apiToken||!failedMessageCount||clearingFailedMessages)return;
-    if(!await confirmAction(`将清除与“${active.name}”会话中的 ${failedMessageCount} 条发送失败或待确认消息。\n\n这只会删除失败记录，不会撤回可能已经送达的 WhatsApp 消息。`,{title:"清除失败消息？",confirmLabel:"清除记录"}))return;
+  async function clearFailedMessages() {
+    if (!active || !apiToken || !failedMessageCount || clearingFailedMessages)
+      return;
+    if (
+      !(await confirmAction(
+        `将清除与“${active.name}”会话中的 ${failedMessageCount} 条发送失败或待确认消息。\n\n这只会删除失败记录，不会撤回可能已经送达的 WhatsApp 消息。`,
+        { title: "清除失败消息？", confirmLabel: "清除记录" },
+      ))
+    )
+      return;
     setClearingFailedMessages(true);
-    try{
-      const conversationId=active.id;
-      const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/messages/failed`,apiToken,{method:"DELETE"});
-      if(result.token!==apiToken)setApiToken(result.token);
-      const body=await result.response.json().catch(()=>({})) as {deletedCount?:number;message?:string};
-      if(!result.response.ok)throw new Error(body.message??`清除失败（HTTP ${result.response.status}）`);
-      setMessages(all=>({...all,[conversationId]:(all[conversationId]??[]).filter(message=>message.direction!=="out"||(message.status!=="failed"&&message.status!=="uncertain"))}));
-      setFailedMessageCounts(all=>({...all,[conversationId]:0}));
-      setToast(`已清除 ${Math.max(Number(body.deletedCount??0),failedMessageCount)} 条失败消息`);
-      await Promise.all([loadMessages(result.token,conversationId),loadWorkspace(result.token,true)]);
-    }catch(reason){setToast(reason instanceof Error?reason.message:"清除失败消息失败");}
-    finally{setClearingFailedMessages(false);}
+    try {
+      const conversationId = active.id;
+      const result = await authorizedFetch(
+        `/api/v1/conversations/${conversationId}/messages/failed`,
+        apiToken,
+        { method: "DELETE" },
+      );
+      if (result.token !== apiToken) setApiToken(result.token);
+      const body = (await result.response.json().catch(() => ({}))) as {
+        deletedCount?: number;
+        message?: string;
+      };
+      if (!result.response.ok)
+        throw new Error(
+          body.message ?? `清除失败（HTTP ${result.response.status}）`,
+        );
+      setMessages((all) => ({
+        ...all,
+        [conversationId]: (all[conversationId] ?? []).filter(
+          (message) =>
+            message.direction !== "out" ||
+            (message.status !== "failed" && message.status !== "uncertain"),
+        ),
+      }));
+      setFailedMessageCounts((all) => ({ ...all, [conversationId]: 0 }));
+      setToast(
+        `已清除 ${Math.max(Number(body.deletedCount ?? 0), failedMessageCount)} 条失败消息`,
+      );
+      await Promise.all([
+        loadMessages(result.token, conversationId),
+        loadWorkspace(result.token, true),
+      ]);
+    } catch (reason) {
+      setToast(reason instanceof Error ? reason.message : "清除失败消息失败");
+    } finally {
+      setClearingFailedMessages(false);
+    }
   }
 
   async function sendMediaAsset(asset:MediaAsset,caption:string,throwOnFailure=false,includeReply=true){
@@ -662,78 +853,1296 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   if(!sessionReady)return <AccessPortal loading onLogin={()=>{}}/>;
   if(!apiToken)return <><AccessPortal loading={false} onLogin={()=>setAuthOpen(true)}/>{authOpen&&<LoginDialog connected={false} token="" canClose onClose={()=>setAuthOpen(false)} onLogin={completeLogin} onLogout={logout}/>}</>;
 
-  return <main className="relay-shell">
-    <ConfirmationHost/>
-    <PromptHost/>
-    {toast&&<div className="toast"><Check size={15}/>{toast}</div>}
-    <nav className="rail" aria-label="全局导航"><button className="brand-mark" onClick={()=>openInbox()} aria-label="RelayDesk 消息中心"><Sparkles size={19}/></button><div className="rail-nav">
-      <button className={view==="inbox"&&filter==="全部会话"?"rail-button active":"rail-button"} onClick={()=>openInbox()} aria-label="消息中心" title="消息中心"><MessageCircle size={18}/></button>
-      <button className={view==="contacts"?"rail-button active":"rail-button"} onClick={()=>navigate("contacts")} aria-label="联系人管理" title="联系人管理"><Users size={18}/></button>
-      <button className={view==="tasks"?"rail-button active":"rail-button"} onClick={()=>navigate("tasks")} aria-label="任务中心" title="任务中心"><ClipboardList size={18}/></button>
-      <button className={view==="orders"?"rail-button active":"rail-button"} onClick={()=>navigate("orders")} aria-label="订单管理" title="订单管理"><ReceiptText size={18}/></button>
-      <button className={view==="products"?"rail-button active":"rail-button"} onClick={()=>navigate("products")} aria-label="产品库" title="产品库"><ShoppingBag size={18}/></button>
-      <button className={view==="agents"?"rail-button active":"rail-button"} onClick={()=>navigate("agents")} aria-label="Agent 管理" title="Agent 管理"><MonitorSmartphone size={18}/></button>
-      <button className="rail-button" onClick={()=>{openInbox();window.setTimeout(()=>{const composer=document.querySelector<HTMLTextAreaElement>(".composer textarea");if(composer)composer.focus();else setToast("请先选择一个真实会话");},0);}} aria-label="发送消息" title="发送消息"><Send size={18}/></button>
-      <button className={view==="inbox"&&filter==="收藏"?"rail-button active":"rail-button"} onClick={()=>openInbox("收藏")} aria-label="收藏会话" title="收藏会话"><Star size={18}/></button>
-      <button className={view==="inbox"&&filter==="已关闭"?"rail-button active":"rail-button"} onClick={()=>openInbox("已关闭")} aria-label="已关闭会话" title="已关闭会话"><Clock3 size={18}/></button>
-      <button className={view==="inbox"&&filter==="已归档"?"rail-button active":"rail-button"} onClick={()=>openInbox("已归档")} aria-label="已归档会话" title="已归档会话"><Archive size={18}/></button>
-    </div><div className="rail-bottom"><button className={view==="help"?"rail-button active":"rail-button"} onClick={()=>navigate("help")} aria-label="帮助" title="帮助"><CircleHelp size={18}/></button><button className={view==="settings"?"rail-button active":"rail-button"} onClick={()=>navigate("settings")} aria-label="系统设置" title="系统设置"><Settings size={18}/></button><button className="profile-button" onClick={()=>setAuthOpen(true)} aria-label="账户"><span className="avatar small coral">{profileText}</span></button></div></nav>
+  return (
+    <main className="relay-shell">
+      <ConfirmationHost />
+      <PromptHost />
+      {toast && (
+        <div className="toast">
+          <Check size={15} />
+          {toast}
+        </div>
+      )}
+      <nav className="rail" aria-label="全局导航">
+        <button
+          className="brand-mark"
+          onClick={() => openInbox()}
+          aria-label="RelayDesk 消息中心"
+        >
+          <Sparkles size={19} />
+        </button>
+        <div className="rail-nav">
+          <button
+            className={
+              view === "inbox" && filter === "全部会话"
+                ? "rail-button active"
+                : "rail-button"
+            }
+            onClick={() => openInbox()}
+            aria-label="消息中心"
+            title="消息中心"
+          >
+            <MessageCircle size={18} />
+          </button>
+          <button
+            className={
+              view === "contacts" ? "rail-button active" : "rail-button"
+            }
+            onClick={() => navigate("contacts")}
+            aria-label="联系人管理"
+            title="联系人管理"
+          >
+            <Users size={18} />
+          </button>
+          <button
+            className={view === "tasks" ? "rail-button active" : "rail-button"}
+            onClick={() => navigate("tasks")}
+            aria-label="任务中心"
+            title="任务中心"
+          >
+            <ClipboardList size={18} />
+          </button>
+          <button
+            className={view === "orders" ? "rail-button active" : "rail-button"}
+            onClick={() => navigate("orders")}
+            aria-label="订单管理"
+            title="订单管理"
+          >
+            <ReceiptText size={18} />
+          </button>
+          <button
+            className={
+              view === "products" ? "rail-button active" : "rail-button"
+            }
+            onClick={() => navigate("products")}
+            aria-label="产品库"
+            title="产品库"
+          >
+            <ShoppingBag size={18} />
+          </button>
+          <button
+            className={view === "agents" ? "rail-button active" : "rail-button"}
+            onClick={() => navigate("agents")}
+            aria-label="Agent 管理"
+            title="Agent 管理"
+          >
+            <MonitorSmartphone size={18} />
+          </button>
+          <button
+            className="rail-button"
+            onClick={() => {
+              openInbox();
+              window.setTimeout(() => {
+                const composer =
+                  document.querySelector<HTMLTextAreaElement>(
+                    ".composer textarea",
+                  );
+                if (composer) composer.focus();
+                else setToast("请先选择一个真实会话");
+              }, 0);
+            }}
+            aria-label="发送消息"
+            title="发送消息"
+          >
+            <Send size={18} />
+          </button>
+          <button
+            className={
+              view === "inbox" && filter === "收藏"
+                ? "rail-button active"
+                : "rail-button"
+            }
+            onClick={() => openInbox("收藏")}
+            aria-label="收藏会话"
+            title="收藏会话"
+          >
+            <Star size={18} />
+          </button>
+          <button
+            className={
+              view === "inbox" && filter === "已关闭"
+                ? "rail-button active"
+                : "rail-button"
+            }
+            onClick={() => openInbox("已关闭")}
+            aria-label="已关闭会话"
+            title="已关闭会话"
+          >
+            <Clock3 size={18} />
+          </button>
+          <button
+            className={
+              view === "inbox" && filter === "已归档"
+                ? "rail-button active"
+                : "rail-button"
+            }
+            onClick={() => openInbox("已归档")}
+            aria-label="已归档会话"
+            title="已归档会话"
+          >
+            <Archive size={18} />
+          </button>
+        </div>
+        <div className="rail-bottom">
+          <button
+            className={view === "help" ? "rail-button active" : "rail-button"}
+            onClick={() => navigate("help")}
+            aria-label="帮助"
+            title="帮助"
+          >
+            <CircleHelp size={18} />
+          </button>
+          <button
+            className={
+              view === "settings" ? "rail-button active" : "rail-button"
+            }
+            onClick={() => navigate("settings")}
+            aria-label="系统设置"
+            title="系统设置"
+          >
+            <Settings size={18} />
+          </button>
+          <button
+            className="profile-button"
+            onClick={() => setAuthOpen(true)}
+            aria-label="账户"
+          >
+            <span className="avatar small coral">{profileText}</span>
+          </button>
+        </div>
+      </nav>
 
-    {view==="inbox"?<><aside className={`filters ${sidebarOpen?"mobile-open":""}`}><div className="mobile-filter-head"><b>收件箱</b><button onClick={()=>setSidebarOpen(false)} aria-label="关闭筛选"><X size={18}/></button></div><div className="workspace-title"><div><span className="eyebrow">工作空间</span><h1>消息中心</h1></div><button onClick={()=>setNewConversationOpen(true)} aria-label="新建会话" title="新建会话"><Plus size={16}/></button></div>
-      <label className="account-switcher"><span className="wa-dot"><Phone size={13}/></span><span><b>WhatsApp 账号</b><small>{onlineCount} 在线 · {accounts.length-onlineCount} 离线</small></span><ChevronDown size={15}/><select aria-label="筛选 WhatsApp 账号" value={selectedAccount} onChange={event=>setSelectedAccount(event.target.value)}><option value="">全部账号</option>{accounts.map(account=><option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
-      <section><p className="section-label">收件箱</p>{[
-        {label:"全部会话",icon:Inbox,count:counts.all},{label:"分配给我",icon:Users,count:counts.mine},{label:"未分配",icon:UserPlus,count:counts.unassigned},{label:"我的提醒",icon:Bell,count:counts.reminders},{label:"收藏",icon:Star,count:counts.favorite},{label:"已关闭",icon:Check,count:counts.closed},{label:"已归档",icon:Archive,count:counts.archived},
-      ].map(({label,icon:Icon,count})=><button key={label} onClick={()=>{setFilter(label);setSidebarOpen(false)}} className={filter===label?"filter-row selected":"filter-row"}><span><Icon size={15}/>{label}</span><em>{count}</em></button>)}</section>
-      <section className="accounts-block"><p className="section-label">账号连接</p>{accounts.length?accounts.map((account,index)=><AccountStatus key={account.id} initials={account.name.slice(0,2).toUpperCase()} color={["green","blue","gray"][index%3]} name={`${account.name} · ${account.transport==="cloud"?"Cloud API":"Web"}`} detail={account.status==="online"?"已连接":account.reason||statusText(account.status)} online={account.status==="online"}/>):<p className="empty-note">暂无已绑定账号</p>}</section>
-    </aside>
+      {view === "inbox" ? (
+        <>
+          <aside className={`filters ${sidebarOpen ? "mobile-open" : ""}`}>
+            <div className="mobile-filter-head">
+              <b>收件箱</b>
+              <button
+                onClick={() => setSidebarOpen(false)}
+                aria-label="关闭筛选"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="workspace-title">
+              <div>
+                <span className="eyebrow">工作空间</span>
+                <h1>消息中心</h1>
+              </div>
+              <button
+                onClick={() => setNewConversationOpen(true)}
+                aria-label="新建会话"
+                title="新建会话"
+              >
+                <Plus size={16} />
+              </button>
+            </div>
+            <label className="account-switcher">
+              <span className="wa-dot">
+                <Phone size={13} />
+              </span>
+              <span>
+                <b>WhatsApp 账号</b>
+                <small>
+                  {onlineCount} 在线 · {accounts.length - onlineCount} 离线
+                </small>
+              </span>
+              <ChevronDown size={15} />
+              <select
+                aria-label="筛选 WhatsApp 账号"
+                value={selectedAccount}
+                onChange={(event) => setSelectedAccount(event.target.value)}
+              >
+                <option value="">全部账号</option>
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <section>
+              <p className="section-label">收件箱</p>
+              {[
+                { label: "全部会话", icon: Inbox, count: counts.all },
+                { label: "分配给我", icon: Users, count: counts.mine },
+                { label: "未分配", icon: UserPlus, count: counts.unassigned },
+                { label: "我的提醒", icon: Bell, count: counts.reminders },
+                { label: "收藏", icon: Star, count: counts.favorite },
+                { label: "已关闭", icon: Check, count: counts.closed },
+                { label: "已归档", icon: Archive, count: counts.archived },
+              ].map(({ label, icon: Icon, count }) => (
+                <button
+                  key={label}
+                  onClick={() => {
+                    setFilter(label);
+                    setSidebarOpen(false);
+                  }}
+                  className={
+                    filter === label ? "filter-row selected" : "filter-row"
+                  }
+                >
+                  <span>
+                    <Icon size={15} />
+                    {label}
+                  </span>
+                  <em>{count}</em>
+                </button>
+              ))}
+            </section>
+            <section className="accounts-block">
+              <p className="section-label">账号连接</p>
+              {accounts.length ? (
+                accounts.map((account, index) => (
+                  <AccountStatus
+                    key={account.id}
+                    initials={account.name.slice(0, 2).toUpperCase()}
+                    color={["green", "blue", "gray"][index % 3]}
+                    name={`${account.name} · ${account.transport === "cloud" ? "Cloud API" : "Web"}`}
+                    detail={
+                      account.status === "online"
+                        ? "已连接"
+                        : account.reason || statusText(account.status)
+                    }
+                    online={account.status === "online"}
+                  />
+                ))
+              ) : (
+                <p className="empty-note">暂无已绑定账号</p>
+              )}
+            </section>
+          </aside>
 
-    <section className="conversation-panel"><header className="conversation-head"><button className="mobile-menu" onClick={()=>setSidebarOpen(true)} aria-label="打开筛选"><Menu size={18}/></button><div><h2>{filter}</h2><span>{visible.length} 个真实会话</span></div><button className="icon-button" onClick={()=>void loadWorkspace(apiToken)} aria-label="刷新"><RefreshCw size={17}/></button></header><label className="search-box"><Search size={15}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索会话、联系人或号码"/></label><div className="conversation-date-tabs" role="tablist" aria-label="按最后联系时间筛选会话">{CONVERSATION_DATE_FILTERS.map(item=><button key={item.value} type="button" role="tab" aria-selected={dateFilter===item.value} tabIndex={dateFilter===item.value?0:-1} className={dateFilter===item.value?"active":""} onClick={()=>selectDateFilter(item.value)} onKeyDown={handleDateFilterKeyDown}>{item.label}</button>)}</div><div className="conversation-list">{loading?<EmptyState title="正在读取中心数据" text="请稍候…"/>:loadError?<EmptyState title="中心数据加载失败" text={loadError}/>:visible.length?visible.map(item=><div key={item.id} role="button" tabIndex={0} onClick={()=>setActiveId(item.id)} onContextMenu={event=>openConversationMenu(event,item)} onKeyDown={event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();setActiveId(item.id);}}} className={item.id===effectiveActiveId?"conversation active":"conversation"} title="右键打开客户快捷操作"><span className="avatar" style={{background:item.color}}>{item.initials}<i className={`presence ${item.accountStatus==="online"?"online":"offline"}`}/></span><span className="conversation-copy"><span className="conversation-line"><b>{item.name}</b><time>{item.time}</time></span><span className="conversation-line preview">{item.lastDirection&&<i className={`conversation-direction ${item.lastDirection}${item.lastDirection==="out"?` ${conversationPreviewStatusClass(item.lastMessageStatus)}`:""}`} role="img" aria-label={item.lastDirection==="in"?"最后一条消息为接收":`最后一条消息为发送，${conversationPreviewStatusText(item.lastMessageStatus)}`} title={item.lastDirection==="in"?"接收":conversationPreviewStatusText(item.lastMessageStatus)}>{item.lastDirection==="in"?<ArrowDownLeft size={13}/>:<ArrowUpRight size={13}/>}</i>}<span>{item.preview}</span>{item.unread>0&&<em>{item.unread}</em>}</span><small className="conversation-meta"><span className={`conversation-stage stage-${stageValue(item.customerStage)}`}>{stageName(item.customerStage)}</span>{item.tags.slice(0,1).map(tag=><i key={tag.id} style={{background:tag.color}}>{tag.name}</i>)}{item.remindAt&&<em className={new Date(item.remindAt).getTime()<=clock?"due":""}><Bell size={10}/>{formatDateTime(item.remindAt)}</em>}</small></span>{item.unread===0&&<button className="mark-unread-button" disabled={markingUnreadId===item.id} onClick={event=>{event.stopPropagation();void markConversationUnread(item.id);}} aria-label={`将 ${item.name} 标记为未读`} title="标记为未读"><Mail size={15}/></button>}</div>):<EmptyState title="暂无真实会话" text={accounts.length?"当前筛选条件下暂无会话":"请先在 Windows Agent 绑定 WhatsApp 账号"}/>}</div></section>
+          <section className="conversation-panel">
+            <header className="conversation-head">
+              <button
+                className="mobile-menu"
+                onClick={() => setSidebarOpen(true)}
+                aria-label="打开筛选"
+              >
+                <Menu size={18} />
+              </button>
+              <div>
+                <h2>{filter}</h2>
+                <span>{conversationTotal} 个真实会话</span>
+                <span>{visible.length} 个真实会话</span>
+              </div>
+              <button
+                className="icon-button"
+                onClick={() => void loadWorkspace(apiToken)}
+                aria-label="刷新"
+              >
+                <RefreshCw size={17} />
+              </button>
+            </header>
+            <label className="search-box">
+              <Search size={15} />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                maxLength={100}
+                placeholder="搜索会话、联系人或号码"
+              />
+            </label>
+            <div
+              className="conversation-date-tabs"
+              role="tablist"
+              aria-label="按最后联系时间筛选会话"
+            >
+              {CONVERSATION_DATE_FILTERS.map((item) => (
+                <button
+                  key={item.value}
+                  type="button"
+                  role="tab"
+                  aria-selected={dateFilter === item.value}
+                  tabIndex={dateFilter === item.value ? 0 : -1}
+                  className={dateFilter === item.value ? "active" : ""}
+                  onClick={() => selectDateFilter(item.value)}
+                  onKeyDown={handleDateFilterKeyDown}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            <div className="conversation-list" ref={conversationListRef}>
+              {loading ? (
+                <EmptyState title="正在读取中心数据" text="请稍候…" />
+              ) : loadError ? (
+                <EmptyState title="中心数据加载失败" text={loadError} />
+              ) : visible.length ? (
+                <>
+                  <div className="conversation-virtual-list" style={{height:conversationVirtualizer.getTotalSize()}}>
+                    {conversationVirtualizer.getVirtualItems().map(virtualRow=>{
+                      const item=visible[virtualRow.index];
+                      return <div key={item.id} data-index={virtualRow.index} ref={conversationVirtualizer.measureElement} className="conversation-virtual-row" style={{transform:`translateY(${virtualRow.start}px)`}}>
+                        <ConversationListRow item={item} active={item.id===effectiveActiveId} clock={clock} markingUnreadId={markingUnreadId} onSelect={()=>setActiveId(item.id)} onMenu={event=>openConversationMenu(event,item)} onMarkUnread={()=>void markConversationUnread(item.id)}/>
+                      </div>;
+                    })}
+                  </div>
+                  <div ref={conversationLoadSentinelRef} className="conversation-load-sentinel">
+                    {loadingMoreConversations&&<span>正在加载更多会话…</span>}
+                    {loadMoreError&&<button onClick={()=>void loadConversations(apiToken,{append:true})}>加载失败，点击重试</button>}
+                    {!nextConversationCursor&&!loadingMoreConversations&&<span>已加载全部会话</span>}
+                  </div>
+                </>
+              ):(
+                <EmptyState title="暂无真实会话" text={accounts.length?"当前筛选条件下暂无会话":"请先在 Windows Agent 绑定 WhatsApp 账号"}/>
+              )}
+            </div>
+            <div className="conversation-list conversation-list-legacy" aria-hidden="true">
+              {loading ? (
+                <EmptyState title="正在读取中心数据" text="请稍候…" />
+              ) : loadError ? (
+                <EmptyState title="中心数据加载失败" text={loadError} />
+              ) : false ? (
+                visible.map((item) => (
+                  <div
+                    key={item.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setActiveId(item.id)}
+                    onContextMenu={(event) => openConversationMenu(event, item)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setActiveId(item.id);
+                      }
+                    }}
+                    className={
+                      item.id === effectiveActiveId
+                        ? "conversation active"
+                        : "conversation"
+                    }
+                    title="右键打开客户快捷操作"
+                  >
+                    <span className="avatar" style={{ background: item.color }}>
+                      {item.initials}
+                      <i
+                        className={`presence ${item.accountStatus === "online" ? "online" : "offline"}`}
+                      />
+                    </span>
+                    <span className="conversation-copy">
+                      <span className="conversation-line">
+                        <b>{item.name}</b>
+                        <time>{item.time}</time>
+                      </span>
+                      <span className="conversation-line preview">
+                        {item.lastDirection && (
+                          <i
+                            className={`conversation-direction ${item.lastDirection}${item.lastDirection === "out" ? ` ${conversationPreviewStatusClass(item.lastMessageStatus)}` : ""}`}
+                            role="img"
+                            aria-label={
+                              item.lastDirection === "in"
+                                ? "最后一条消息为接收"
+                                : `最后一条消息为发送，${conversationPreviewStatusText(item.lastMessageStatus)}`
+                            }
+                            title={
+                              item.lastDirection === "in"
+                                ? "接收"
+                                : conversationPreviewStatusText(
+                                    item.lastMessageStatus,
+                                  )
+                            }
+                          >
+                            {item.lastDirection === "in" ? (
+                              <ArrowDownLeft size={13} />
+                            ) : (
+                              <ArrowUpRight size={13} />
+                            )}
+                          </i>
+                        )}
+                        <span>{item.preview}</span>
+                        {item.unread > 0 && <em>{item.unread}</em>}
+                      </span>
+                      <small className="conversation-meta">
+                        <span
+                          className={`conversation-stage stage-${stageValue(item.customerStage)}`}
+                        >
+                          {stageName(item.customerStage)}
+                        </span>
+                        {item.tags.slice(0, 1).map((tag) => (
+                          <i key={tag.id} style={{ background: tag.color }}>
+                            {tag.name}
+                          </i>
+                        ))}
+                        {item.remindAt && (
+                          <em
+                            className={
+                              new Date(item.remindAt).getTime() <= clock
+                                ? "due"
+                                : ""
+                            }
+                          >
+                            <Bell size={10} />
+                            {formatDateTime(item.remindAt)}
+                          </em>
+                        )}
+                      </small>
+                    </span>
+                    {item.unread === 0 && (
+                      <button
+                        className="mark-unread-button"
+                        disabled={markingUnreadId === item.id}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void markConversationUnread(item.id);
+                        }}
+                        aria-label={`将 ${item.name} 标记为未读`}
+                        title="标记为未读"
+                      >
+                        <Mail size={15} />
+                      </button>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <EmptyState
+                  title="暂无真实会话"
+                  text={
+                    accounts.length
+                      ? "当前筛选条件下暂无会话"
+                      : "请先在 Windows Agent 绑定 WhatsApp 账号"
+                  }
+                />
+              )}
+            </div>
+          </section>
 
-    <section className="chat-panel">{active?<>
-      <header className="chat-head"><div className="chat-person"><span className="avatar" style={{background:active.color}}>{active.initials}</span><span><b>{active.name}</b><small><i className={`status-dot ${active.accountStatus==="online"?"online":""}`}/>{active.account} · {active.transport==="cloud"?"Cloud API":"Web"} · {statusText(active.accountStatus)}</small></span></div><div className="chat-actions">{failedMessageCount>0&&<button onClick={()=>void clearFailedMessages()} className="clear-failed-messages-button" disabled={clearingFailedMessages||Boolean(retryingMessageId)} title="清除当前会话中的失败和待确认消息"><Trash2 size={14}/><span>{clearingFailedMessages?"清除中…":`清除失败消息 (${failedMessageCount})`}</span></button>}<button onClick={()=>void updateConversation({assignedToMe:active.assignedUserId!==userId})} className="assign-button"><UserPlus size={15}/>{active.assignedUserId===userId?"取消认领":active.assignedUserId?"转为我负责":"认领"}</button><button onClick={()=>void updateConversation({favorite:!active.favorite})} className="icon-button" aria-label="收藏"><Bookmark size={17} fill={active.favorite?"currentColor":"none"}/></button><button onClick={()=>setDetailsOpen(!detailsOpen)} className="icon-button" aria-label="联系人详情"><Info size={17}/></button></div></header>
-      <AgentConversationBar conversationId={active.id} token={apiToken} refreshKey={latestMessageId} onToken={setApiToken} onToast={setToast} onUseDraft={setDraft} onSent={()=>void loadMessages(apiToken,active.id)}/>
-      {active.accountStatus!=="online"&&<div className="offline-banner"><WifiOff size={15}/><span>该账号当前离线；发送请求仍会进入持久队列。</span></div>}
-      {currentEmailActivities.length>0&&<div className="email-activity-stream" aria-label="邮件活动">{currentEmailActivities.map(item=><article key={item.id} className="email-activity-card"><header><span><Mail size={14}/><b>{item.subject}</b></span><em className={item.status}>{emailStatusText(item.status)}</em></header><p>{item.recipients.map(recipient=>recipient.email).join(", ")}</p><footer><span>{emailContentTypeText(item.contentType)} · {item.attachmentCount} 个附件 · {item.senderName||"已离职坐席"}</span><time>{formatDateTime(item.createdAt)}</time></footer>{item.lastError&&<small>{item.lastError}</small>}{item.status==="failed"&&<button onClick={()=>void retryEmail(item.id)}><RefreshCw size={11}/>重新发送</button>}</article>)}</div>}
-      <div ref={messagesRef} className="messages" aria-live="polite"><div className="day-separator"><span>真实消息记录</span></div>{currentMessages.length?currentMessages.map(message=><article key={message.id} className={`message-row ${message.direction}`}>{message.direction==="in"&&<span className="avatar message-avatar" style={{background:active.color}}>{active.initials}</span>}<div className={`message-bubble ${message.attachment?.name.startsWith("sticker-")?"sticker-bubble":""}`}><div className="message-actions"><button className="message-reply-action" disabled={cloudWindowClosed} onClick={()=>{setReplyTo({conversationId:active.id,message});requestAnimationFrame(()=>textareaRef.current?.focus());}} aria-label="回复这条消息" title="回复"><Reply size={14}/></button><button className="message-save-quick-reply" onClick={()=>addMessageToQuickReplies(message)} aria-label="加入快捷回复" title="加入快捷回复"><Bookmark size={14}/><Plus size={9}/></button></div>{message.quoted&&<QuotedMessage quote={message.quoted} customerName={active.name}/>} {message.text&&<p>{message.text}</p>}{message.failureMessage&&<small className="message-failure"><Info size={11}/>{message.failureMessage}</small>}{message.direction==="out"&&(message.status==="queued"||message.status==="dispatching")&&<QueueDiagnostic message={message}/>} {message.direction==="out"&&message.translationSourceText&&<div className="outgoing-translation-source"><span><Languages size={12}/>原文（仅坐席可见）</span><p>{message.translationSourceText}</p></div>}{translationPreference.enabled&&message.direction==="in"&&message.kind==="text"&&message.text&&<IncomingTranslation value={messageTranslations[message.id]} language={translationPreference.agentLanguage} onRetry={()=>void loadIncomingTranslations(apiToken,[message.id],translationPreference.agentLanguage,true)}/>} {message.attachment&&<MessageMedia attachment={message.attachment} token={apiToken} onToken={setApiToken} onReady={scrollMessagesToEnd}/>} {translationPreference.enabled&&message.direction==="in"&&message.kind==="audio"&&<VoiceTranslation value={messageTranslations[message.id]} language={translationPreference.agentLanguage} configured={translationConfigured} onTranslate={()=>void loadIncomingTranslations(apiToken,[message.id],translationPreference.agentLanguage,true,true)}/>}<footer><time>{message.time}</time>{message.direction==="out"&&<MessageStatus status={message.status}/>}</footer>{message.direction==="out"&&(message.status==="failed"||message.status==="uncertain")&&<div className="message-retry-row"><button className="message-retry-action" disabled={Boolean(retryingMessageId)} onClick={()=>void retryMessage(message)} aria-label="重新发送这条消息" title={message.status==="uncertain"?"重新发送（消息可能已经送达）":"重新发送"}><RefreshCw className={retryingMessageId===message.id?"spin":""} size={13}/><span>{retryingMessageId===message.id?"重新发送中…":"重新发送"}</span></button></div>}</div></article>):<EmptyState title="暂无消息" text="收到或发送的消息将显示在这里"/>}</div>
-      <div className="composer-wrap">
-        <div className="composer-tools"><div className="composer-tool-actions"><QuickReplyDropdown open={quickReplyOpen} disabled={cloudWindowClosed||translatingDraft} translationEnabled={translationPreference.enabled} savedReplies={savedQuickReplies} onOpenChange={handleQuickReplyOpen} onAdd={()=>{setQuickReplyOpen(false);setQuickReplyEditor(null);}} onEdit={item=>{setQuickReplyOpen(false);setQuickReplyEditor(item);}} onDelete={deleteQuickReply} onText={text=>{setDraft(text);setQuickReplyOpen(false);requestAnimationFrame(()=>textareaRef.current?.focus());}} onMedia={(asset,caption)=>void sendQuickReplyMedia(asset,caption)}/><button onClick={()=>setMediaOpen(true)} aria-label="打开媒体与附件" title="媒体与附件"><Paperclip size={17}/></button><button className="material-library-trigger" onClick={()=>setMaterialLibraryOpen(true)} aria-label="打开素材库" title="从素材库发送图片"><LayoutGrid size={15}/><span>素材库</span></button><button onClick={()=>setProductCardsOpen(true)} aria-label="发送产品卡片" title="发送产品卡片"><ShoppingBag size={17}/></button><button className={`translation-trigger ${translationPreference.enabled?"active":""}`} onClick={()=>{setQuickReplyOpen(false);setTranslationMenuOpen(value=>!value)}} aria-expanded={translationMenuOpen} aria-label="AI 翻译设置"><Languages size={15}/><span>{translationPreference.enabled?`${languageName(translationPreference.agentLanguage)} → ${languageName(translationPreference.customerLanguage)}`:"AI 翻译"}</span></button></div><span>回复给 {active.name}</span></div>
-        {translationMenuOpen&&<TranslationMenu preference={translationPreference} configured={translationConfigured} ready={translationReady} onChange={next=>void saveTranslationPreference(next)} onClose={()=>setTranslationMenuOpen(false)}/>}
-        {emojiOpen&&<EmojiPicker category={emojiCategory} onCategory={setEmojiCategory} onSelect={insertEmoji} onClose={()=>setEmojiOpen(false)}/>}
-        {selectedReply&&!cloudWindowClosed&&<div className="composer-reply-preview"><Reply size={14}/><QuotedMessage quote={messageQuote(selectedReply)} customerName={active.name}/><button onClick={()=>setReplyTo(null)} aria-label="取消回复"><X size={14}/></button></div>}
-        {cloudWindowClosed?<TemplateComposer accountId={active.accountId} conversationId={active.id} token={apiToken} onToken={setApiToken} onSent={()=>{setToast("模板消息已进入发送队列");void loadMessages(apiToken,active.id);}}/>:<div className={`composer ${composerImageDragging?"image-dragging":""} ${composerImageBusy?"image-uploading":""}`} onDragEnter={handleComposerDragEnter} onDragOver={event=>{if(Array.from(event.dataTransfer.items).some(item=>item.kind==="file"))event.preventDefault();}} onDragLeave={handleComposerDragLeave} onDrop={handleComposerDrop}>{(composerImageDragging||composerImageBusy)&&<div className="composer-image-drop-hint"><UploadCloud size={18}/><span>{composerImageBusy?"正在上传并发送图片…":"松开即可发送图片"}</span></div>}<textarea ref={textareaRef} value={draft} onChange={event=>setDraft(event.target.value)} onPaste={event=>{const hasImage=Array.from(event.clipboardData.items).some(item=>item.kind==="file"&&item.type.startsWith("image/"));if(!hasImage)return;event.preventDefault();void clipboardFiles(event.nativeEvent,{imagesOnly:true}).then(files=>uploadComposerImages(files));}} onKeyDown={event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();void sendMessage();}if(event.key==="Escape"){if(selectedReply)setReplyTo(null);else{setEmojiOpen(false);setTranslationMenuOpen(false);}}}} placeholder="输入消息；可粘贴或拖入图片发送"/><div className="composer-icons"><button className={emojiOpen?"active":""} onClick={()=>setEmojiOpen(value=>!value)} aria-label="选择表情" title="选择表情"><Smile size={18}/></button><button onClick={()=>setTtsOpen(true)} aria-label="AI 文字转语音" title="AI 文字转语音"><Mic size={18}/></button><button onClick={()=>void sendMessage()} className="send-button" aria-label={translationPreference.enabled?"翻译并预览":"发送"} disabled={translatingDraft||composerImageBusy}>{translatingDraft||composerImageBusy?<RefreshCw className="spin" size={18}/>:<Send size={18}/>}</button></div></div>}
-        {translationError&&<p className="composer-error">{translationError}</p>}
-        <p className="delivery-hint">{cloudWindowClosed?<><Clock3 size={13}/>已超出 24 小时窗口，只能发送已审核模板</>:active.accountStatus==="online"?<><Wifi size={13}/>{active.transport==="cloud"?"Cloud API 在线":"Agent 在线"}</>:<><Clock3 size={13}/>离线队列已启用</>}</p>
-      </div>
-    </>:<div className="chat-empty"><MessageCircle size={31}/><h2>选择一个真实会话</h2><p>这里不会再显示演示联系人或模拟消息。</p></div>}</section>
+          <section className="chat-panel">
+            {active ? (
+              <>
+                <header className="chat-head">
+                  <div className="chat-person">
+                    <span
+                      className="avatar"
+                      style={{ background: active.color }}
+                    >
+                      {active.initials}
+                    </span>
+                    <span>
+                      <b>{active.name}</b>
+                      <small>
+                        <i
+                          className={`status-dot ${active.accountStatus === "online" ? "online" : ""}`}
+                        />
+                        {active.account} ·{" "}
+                        {active.transport === "cloud" ? "Cloud API" : "Web"} ·{" "}
+                        {statusText(active.accountStatus)}
+                      </small>
+                    </span>
+                  </div>
+                  <div className="chat-actions">
+                    {failedMessageCount > 0 && (
+                      <button
+                        onClick={() => void clearFailedMessages()}
+                        className="clear-failed-messages-button"
+                        disabled={
+                          clearingFailedMessages || Boolean(retryingMessageId)
+                        }
+                        title="清除当前会话中的失败和待确认消息"
+                      >
+                        <Trash2 size={14} />
+                        <span>
+                          {clearingFailedMessages
+                            ? "清除中…"
+                            : `清除失败消息 (${failedMessageCount})`}
+                        </span>
+                      </button>
+                    )}
+                    <button
+                      onClick={() =>
+                        void updateConversation({
+                          assignedToMe: active.assignedUserId !== userId,
+                        })
+                      }
+                      className="assign-button"
+                    >
+                      <UserPlus size={15} />
+                      {active.assignedUserId === userId
+                        ? "取消认领"
+                        : active.assignedUserId
+                          ? "转为我负责"
+                          : "认领"}
+                    </button>
+                    <button
+                      onClick={() =>
+                        void updateConversation({ favorite: !active.favorite })
+                      }
+                      className="icon-button"
+                      aria-label="收藏"
+                    >
+                      <Bookmark
+                        size={17}
+                        fill={active.favorite ? "currentColor" : "none"}
+                      />
+                    </button>
+                    <button
+                      onClick={() => setDetailsOpen(!detailsOpen)}
+                      className="icon-button"
+                      aria-label="联系人详情"
+                    >
+                      <Info size={17} />
+                    </button>
+                  </div>
+                </header>
+                <AgentConversationBar
+                  conversationId={active.id}
+                  token={apiToken}
+                  refreshKey={latestMessageId}
+                  onToken={setApiToken}
+                  onToast={setToast}
+                  onUseDraft={setDraft}
+                  onSent={() => void loadMessages(apiToken, active.id)}
+                />
+                {active.accountStatus !== "online" && (
+                  <div className="offline-banner">
+                    <WifiOff size={15} />
+                    <span>该账号当前离线；发送请求仍会进入持久队列。</span>
+                  </div>
+                )}
+                {currentEmailActivities.length > 0 && (
+                  <div className="email-activity-stream" aria-label="邮件活动">
+                    {currentEmailActivities.map((item) => (
+                      <article key={item.id} className="email-activity-card">
+                        <header>
+                          <span>
+                            <Mail size={14} />
+                            <b>{item.subject}</b>
+                          </span>
+                          <em className={item.status}>
+                            {emailStatusText(item.status)}
+                          </em>
+                        </header>
+                        <p>
+                          {item.recipients
+                            .map((recipient) => recipient.email)
+                            .join(", ")}
+                        </p>
+                        <footer>
+                          <span>
+                            {emailContentTypeText(item.contentType)} ·{" "}
+                            {item.attachmentCount} 个附件 ·{" "}
+                            {item.senderName || "已离职坐席"}
+                          </span>
+                          <time>{formatDateTime(item.createdAt)}</time>
+                        </footer>
+                        {item.lastError && <small>{item.lastError}</small>}
+                        {item.status === "failed" && (
+                          <button onClick={() => void retryEmail(item.id)}>
+                            <RefreshCw size={11} />
+                            重新发送
+                          </button>
+                        )}
+                      </article>
+                    ))}
+                  </div>
+                )}
+                <div ref={messagesRef} className="messages" aria-live="polite">
+                  <div className="day-separator">
+                    <span>真实消息记录</span>
+                  </div>
+                  {currentMessages.length ? (
+                    currentMessages.map((message) => (
+                      <article
+                        key={message.id}
+                        className={`message-row ${message.direction}`}
+                      >
+                        {message.direction === "in" && (
+                          <span
+                            className="avatar message-avatar"
+                            style={{ background: active.color }}
+                          >
+                            {active.initials}
+                          </span>
+                        )}
+                        <div
+                          className={`message-bubble ${message.attachment?.name.startsWith("sticker-") ? "sticker-bubble" : ""}`}
+                        >
+                          <div className="message-actions">
+                            <button
+                              className="message-reply-action"
+                              disabled={cloudWindowClosed}
+                              onClick={() => {
+                                setReplyTo({
+                                  conversationId: active.id,
+                                  message,
+                                });
+                                requestAnimationFrame(() =>
+                                  textareaRef.current?.focus(),
+                                );
+                              }}
+                              aria-label="回复这条消息"
+                              title="回复"
+                            >
+                              <Reply size={14} />
+                            </button>
+                            <button
+                              className="message-save-quick-reply"
+                              onClick={() => addMessageToQuickReplies(message)}
+                              aria-label="加入快捷回复"
+                              title="加入快捷回复"
+                            >
+                              <Bookmark size={14} />
+                              <Plus size={9} />
+                            </button>
+                          </div>
+                          {message.quoted && (
+                            <QuotedMessage
+                              quote={message.quoted}
+                              customerName={active.name}
+                            />
+                          )}{" "}
+                          {message.text && <p>{message.text}</p>}
+                          {message.failureMessage && (
+                            <small className="message-failure">
+                              <Info size={11} />
+                              {message.failureMessage}
+                            </small>
+                          )}
+                          {message.direction === "out" &&
+                            (message.status === "queued" ||
+                              message.status === "dispatching") && (
+                              <QueueDiagnostic message={message} />
+                            )}{" "}
+                          {message.direction === "out" &&
+                            message.translationSourceText && (
+                              <div className="outgoing-translation-source">
+                                <span>
+                                  <Languages size={12} />
+                                  原文（仅坐席可见）
+                                </span>
+                                <p>{message.translationSourceText}</p>
+                              </div>
+                            )}
+                          {translationPreference.enabled &&
+                            message.direction === "in" &&
+                            message.kind === "text" &&
+                            message.text && (
+                              <IncomingTranslation
+                                value={messageTranslations[message.id]}
+                                language={translationPreference.agentLanguage}
+                                onRetry={() =>
+                                  void loadIncomingTranslations(
+                                    apiToken,
+                                    [message.id],
+                                    translationPreference.agentLanguage,
+                                    true,
+                                  )
+                                }
+                              />
+                            )}{" "}
+                          {message.attachment && (
+                            <MessageMedia
+                              attachment={message.attachment}
+                              token={apiToken}
+                              onToken={setApiToken}
+                              onReady={scrollMessagesToEnd}
+                            />
+                          )}{" "}
+                          {translationPreference.enabled &&
+                            message.direction === "in" &&
+                            message.kind === "audio" && (
+                              <VoiceTranslation
+                                value={messageTranslations[message.id]}
+                                language={translationPreference.agentLanguage}
+                                configured={translationConfigured}
+                                onTranslate={() =>
+                                  void loadIncomingTranslations(
+                                    apiToken,
+                                    [message.id],
+                                    translationPreference.agentLanguage,
+                                    true,
+                                    true,
+                                  )
+                                }
+                              />
+                            )}
+                          <footer>
+                            <time>{message.time}</time>
+                            {message.direction === "out" && (
+                              <MessageStatus status={message.status} />
+                            )}
+                          </footer>
+                          {message.direction === "out" &&
+                            (message.status === "failed" ||
+                              message.status === "uncertain") && (
+                              <div className="message-retry-row">
+                                <button
+                                  className="message-retry-action"
+                                  disabled={Boolean(retryingMessageId)}
+                                  onClick={() => void retryMessage(message)}
+                                  aria-label="重新发送这条消息"
+                                  title={
+                                    message.status === "uncertain"
+                                      ? "重新发送（消息可能已经送达）"
+                                      : "重新发送"
+                                  }
+                                >
+                                  <RefreshCw
+                                    className={
+                                      retryingMessageId === message.id
+                                        ? "spin"
+                                        : ""
+                                    }
+                                    size={13}
+                                  />
+                                  <span>
+                                    {retryingMessageId === message.id
+                                      ? "重新发送中…"
+                                      : "重新发送"}
+                                  </span>
+                                </button>
+                              </div>
+                            )}
+                        </div>
+                      </article>
+                    ))
+                  ) : (
+                    <EmptyState
+                      title="暂无消息"
+                      text="收到或发送的消息将显示在这里"
+                    />
+                  )}
+                </div>
+                <div className="composer-wrap">
+                  <div className="composer-tools">
+                    <div className="composer-tool-actions">
+                      <QuickReplyDropdown
+                        open={quickReplyOpen}
+                        disabled={cloudWindowClosed || translatingDraft}
+                        translationEnabled={translationPreference.enabled}
+                        savedReplies={savedQuickReplies}
+                        onOpenChange={handleQuickReplyOpen}
+                        onAdd={() => {
+                          setQuickReplyOpen(false);
+                          setQuickReplyEditor(null);
+                        }}
+                        onEdit={(item) => {
+                          setQuickReplyOpen(false);
+                          setQuickReplyEditor(item);
+                        }}
+                        onDelete={deleteQuickReply}
+                        onText={(text) => {
+                          setDraft(text);
+                          setQuickReplyOpen(false);
+                          requestAnimationFrame(() =>
+                            textareaRef.current?.focus(),
+                          );
+                        }}
+                        onMedia={(asset, caption) =>
+                          void sendQuickReplyMedia(asset, caption)
+                        }
+                      />
+                      <button
+                        onClick={() => setMediaOpen(true)}
+                        aria-label="打开媒体与附件"
+                        title="媒体与附件"
+                      >
+                        <Paperclip size={17} />
+                      </button>
+                      <button
+                        className="material-library-trigger"
+                        onClick={() => setMaterialLibraryOpen(true)}
+                        aria-label="打开素材库"
+                        title="从素材库发送图片"
+                      >
+                        <LayoutGrid size={15} />
+                        <span>素材库</span>
+                      </button>
+                      <button
+                        onClick={() => setProductCardsOpen(true)}
+                        aria-label="发送产品卡片"
+                        title="发送产品卡片"
+                      >
+                        <ShoppingBag size={17} />
+                      </button>
+                      <button
+                        className={`translation-trigger ${translationPreference.enabled ? "active" : ""}`}
+                        onClick={() => {
+                          setQuickReplyOpen(false);
+                          setTranslationMenuOpen((value) => !value);
+                        }}
+                        aria-expanded={translationMenuOpen}
+                        aria-label="AI 翻译设置"
+                      >
+                        <Languages size={15} />
+                        <span>
+                          {translationPreference.enabled
+                            ? `${languageName(translationPreference.agentLanguage)} → ${languageName(translationPreference.customerLanguage)}`
+                            : "AI 翻译"}
+                        </span>
+                      </button>
+                    </div>
+                    <span>回复给 {active.name}</span>
+                  </div>
+                  {translationMenuOpen && (
+                    <TranslationMenu
+                      preference={translationPreference}
+                      configured={translationConfigured}
+                      ready={translationReady}
+                      onChange={(next) => void saveTranslationPreference(next)}
+                      onClose={() => setTranslationMenuOpen(false)}
+                    />
+                  )}
+                  {emojiOpen && (
+                    <EmojiPicker
+                      category={emojiCategory}
+                      onCategory={setEmojiCategory}
+                      onSelect={insertEmoji}
+                      onClose={() => setEmojiOpen(false)}
+                    />
+                  )}
+                  {selectedReply && !cloudWindowClosed && (
+                    <div className="composer-reply-preview">
+                      <Reply size={14} />
+                      <QuotedMessage
+                        quote={messageQuote(selectedReply)}
+                        customerName={active.name}
+                      />
+                      <button
+                        onClick={() => setReplyTo(null)}
+                        aria-label="取消回复"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  )}
+                  {cloudWindowClosed ? (
+                    <TemplateComposer
+                      accountId={active.accountId}
+                      conversationId={active.id}
+                      token={apiToken}
+                      onToken={setApiToken}
+                      onSent={() => {
+                        setToast("模板消息已进入发送队列");
+                        void loadMessages(apiToken, active.id);
+                      }}
+                    />
+                  ) : (
+                    <div
+                      className={`composer ${composerImageDragging ? "image-dragging" : ""} ${composerImageBusy ? "image-uploading" : ""}`}
+                      onDragEnter={handleComposerDragEnter}
+                      onDragOver={(event) => {
+                        if (
+                          Array.from(event.dataTransfer.items).some(
+                            (item) => item.kind === "file",
+                          )
+                        )
+                          event.preventDefault();
+                      }}
+                      onDragLeave={handleComposerDragLeave}
+                      onDrop={handleComposerDrop}
+                    >
+                      {(composerImageDragging || composerImageBusy) && (
+                        <div className="composer-image-drop-hint">
+                          <UploadCloud size={18} />
+                          <span>
+                            {composerImageBusy
+                              ? "正在上传并发送图片…"
+                              : "松开即可发送图片"}
+                          </span>
+                        </div>
+                      )}
+                      <textarea
+                        ref={textareaRef}
+                        value={draft}
+                        onChange={(event) => setDraft(event.target.value)}
+                        onPaste={(event) => {
+                          const hasImage = Array.from(
+                            event.clipboardData.items,
+                          ).some(
+                            (item) =>
+                              item.kind === "file" &&
+                              item.type.startsWith("image/"),
+                          );
+                          if (!hasImage) return;
+                          event.preventDefault();
+                          void clipboardFiles(event.nativeEvent, {
+                            imagesOnly: true,
+                          }).then((files) => uploadComposerImages(files));
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && !event.shiftKey) {
+                            event.preventDefault();
+                            void sendMessage();
+                          }
+                          if (event.key === "Escape") {
+                            if (selectedReply) setReplyTo(null);
+                            else {
+                              setEmojiOpen(false);
+                              setTranslationMenuOpen(false);
+                            }
+                          }
+                        }}
+                        placeholder="输入消息；可粘贴或拖入图片发送"
+                      />
+                      <div className="composer-icons">
+                        <button
+                          className={emojiOpen ? "active" : ""}
+                          onClick={() => setEmojiOpen((value) => !value)}
+                          aria-label="选择表情"
+                          title="选择表情"
+                        >
+                          <Smile size={18} />
+                        </button>
+                        <button
+                          onClick={() => setTtsOpen(true)}
+                          aria-label="AI 文字转语音"
+                          title="AI 文字转语音"
+                        >
+                          <Mic size={18} />
+                        </button>
+                        <button
+                          onClick={() => void sendMessage()}
+                          className="send-button"
+                          aria-label={
+                            translationPreference.enabled
+                              ? "翻译并预览"
+                              : "发送"
+                          }
+                          disabled={translatingDraft || composerImageBusy}
+                        >
+                          {translatingDraft || composerImageBusy ? (
+                            <RefreshCw className="spin" size={18} />
+                          ) : (
+                            <Send size={18} />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {translationError && (
+                    <p className="composer-error">{translationError}</p>
+                  )}
+                  <p className="delivery-hint">
+                    {cloudWindowClosed ? (
+                      <>
+                        <Clock3 size={13} />
+                        已超出 24 小时窗口，只能发送已审核模板
+                      </>
+                    ) : active.accountStatus === "online" ? (
+                      <>
+                        <Wifi size={13} />
+                        {active.transport === "cloud"
+                          ? "Cloud API 在线"
+                          : "Agent 在线"}
+                      </>
+                    ) : (
+                      <>
+                        <Clock3 size={13} />
+                        离线队列已启用
+                      </>
+                    )}
+                  </p>
+                </div>
+              </>
+            ) : (
+              <div className="chat-empty">
+                <MessageCircle size={31} />
+                <h2>选择一个真实会话</h2>
+                <p>这里不会再显示演示联系人或模拟消息。</p>
+              </div>
+            )}
+          </section>
 
-    {detailsOpen&&active&&<CrmDetailsPanel key={active.id} active={active} token={apiToken} user={user} role={userRole} translationPreference={translationPreference} onToken={setApiToken} onClose={()=>setDetailsOpen(false)} onToast={setToast} onConversationChange={async change=>{await updateConversation(change);}} onChanged={async()=>{await Promise.all([loadWorkspace(apiToken,true),loadMessages(apiToken,active.id)]);}} onDeleted={async()=>{setDetailsOpen(false);setActiveId("");setMessages(all=>{const next={...all};delete next[active.id];return next;});await loadWorkspace(apiToken,true);}}/>}</>
-      :view==="contacts"?<ContactManagement token={apiToken} role={userRole} accounts={accounts} onToken={setApiToken} onToast={setToast} onConversation={conversationId=>{const found=conversations.find(item=>item.id===conversationId);if(!found){setToast("该会话不在当前列表，请在消息中心搜索联系人");openInbox();return;}setActiveId(conversationId);setDetailsOpen(true);openInbox();}}/>
-      :view==="tasks"?<TaskCenter token={apiToken} accounts={accounts} request={taskRequest} onToken={setApiToken} onToast={setToast}/>
-      :view==="orders"?<OrderManagement token={apiToken} accounts={accounts} onToken={setApiToken} onToast={setToast} onConversation={conversationId=>{const found=conversations.find(item=>item.id===conversationId);if(!found){setToast("该会话不在当前列表，请在消息中心搜索客户");openInbox();return;}setActiveId(conversationId);setDetailsOpen(true);openInbox();}}/>
-      :view==="products"?<ProductWorkspace token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast} products={()=><ProductManagement token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>}/>
-      :view==="agents"?<AgentManagement token={apiToken} role={userRole} onToken={setApiToken} onToast={setToast}/>
-      :view==="settings"?<SettingsPanel token={apiToken} role={userRole} accounts={accounts} onToken={setApiToken} onToast={setToast}/>
-      :<HelpPanel onInbox={()=>openInbox()} onAgents={()=>navigate("agents")}/>
-    }
+          {detailsOpen && active && (
+            <CrmDetailsPanel
+              key={active.id}
+              active={active}
+              token={apiToken}
+              user={user}
+              role={userRole}
+              translationPreference={translationPreference}
+              onToken={setApiToken}
+              onClose={() => setDetailsOpen(false)}
+              onToast={setToast}
+              onConversationChange={async (change) => {
+                await updateConversation(change);
+              }}
+              onChanged={async () => {
+                await Promise.all([
+                  loadWorkspace(apiToken, true),
+                  loadMessages(apiToken, active.id),
+                ]);
+              }}
+              onDeleted={async () => {
+                setDetailsOpen(false);
+                setActiveId("");
+                setMessages((all) => {
+                  const next = { ...all };
+                  delete next[active.id];
+                  return next;
+                });
+                await loadWorkspace(apiToken, true);
+              }}
+            />
+          )}
+        </>
+      ) : view === "contacts" ? (
+        <ContactManagement
+          token={apiToken}
+          role={userRole}
+          accounts={accounts}
+          onToken={setApiToken}
+          onToast={setToast}
+          onConversation={(conversationId) => {
+            const found = conversations.find(
+              (item) => item.id === conversationId,
+            );
+            if (!found) {
+              setToast("该会话不在当前列表，请在消息中心搜索联系人");
+              openInbox();
+              return;
+            }
+            setActiveId(conversationId);
+            setDetailsOpen(true);
+            openInbox();
+          }}
+        />
+      ) : view === "tasks" ? (
+        <TaskCenter
+          token={apiToken}
+          accounts={accounts}
+          request={taskRequest}
+          onToken={setApiToken}
+          onToast={setToast}
+        />
+      ) : view === "orders" ? (
+        <OrderManagement
+          token={apiToken}
+          accounts={accounts}
+          onToken={setApiToken}
+          onToast={setToast}
+          onConversation={(conversationId) => {
+            const found = conversations.find(
+              (item) => item.id === conversationId,
+            );
+            if (!found) {
+              setToast("该会话不在当前列表，请在消息中心搜索客户");
+              openInbox();
+              return;
+            }
+            setActiveId(conversationId);
+            setDetailsOpen(true);
+            openInbox();
+          }}
+        />
+      ) : view === "products" ? (
+        <ProductWorkspace
+          token={apiToken}
+          role={userRole}
+          onToken={setApiToken}
+          onToast={setToast}
+          products={() => (
+            <ProductManagement
+              token={apiToken}
+              role={userRole}
+              onToken={setApiToken}
+              onToast={setToast}
+            />
+          )}
+        />
+      ) : view === "agents" ? (
+        <AgentManagement
+          token={apiToken}
+          role={userRole}
+          onToken={setApiToken}
+          onToast={setToast}
+        />
+      ) : view === "settings" ? (
+        <SettingsPanel
+          token={apiToken}
+          role={userRole}
+          accounts={accounts}
+          onToken={setApiToken}
+          onToast={setToast}
+        />
+      ) : (
+        <HelpPanel
+          onInbox={() => openInbox()}
+          onAgents={() => navigate("agents")}
+        />
+      )}
 
-    {authOpen&&<LoginDialog
-      connected={Boolean(apiToken)} token={apiToken} canClose={Boolean(apiToken)}
-      onClose={()=>setAuthOpen(false)}
-      onLogin={completeLogin}
-      onLogout={logout}
-    />}
-    {newConversationOpen&&<NewConversationDialog accounts={accounts} token={apiToken} onToken={setApiToken} onClose={()=>setNewConversationOpen(false)} onCreated={async(conversationId,accountId,accessToken)=>{setNewConversationOpen(false);navigate("inbox");setFilter("全部会话");dateFilterRef.current="all";setDateFilter("all");setSelectedAccount(accountId);await loadWorkspace(accessToken,true);setActiveId(conversationId);setToast("新会话已创建，首条消息已进入发送队列");}}/>}
-    {mediaOpen&&active&&<MediaDialog accountId={active.accountId} token={apiToken} initialCaption={draft} onToken={setApiToken} onToast={setToast} onClose={()=>setMediaOpen(false)} onSend={sendMediaAsset}/>}
-    {materialLibraryOpen&&active&&<MaterialLibrarySendDialog accountId={active.accountId} conversationId={active.id} customerName={active.name} initialCaption={draft} translationEnabled={translationPreference.enabled} translationConfigured={translationConfigured} targetLanguage={translationPreference.customerLanguage} targetLanguageName={languageName(translationPreference.customerLanguage)} request={taskRequest} onToken={setApiToken} onClose={()=>setMaterialLibraryOpen(false)} onSent={message=>{setDraft("");setToast(message);void loadMessages(apiToken,active.id);}}/>}
-    {productCardsOpen&&active&&<ProductCardSendDialog accountId={active.accountId} conversationId={active.id} contactId={active.contactId} request={(path,init)=>authorizedFetch(path,apiToken,init)} onToken={setApiToken} onClose={()=>setProductCardsOpen(false)} onSent={text=>{setToast(text);void loadMessages(apiToken,active.id);}}/>}
-    {ttsOpen&&active&&<TextToSpeechDialog accountId={active.accountId} token={apiToken} initialText={draft} onToken={setApiToken} onClose={()=>setTtsOpen(false)} onSend={async asset=>{setTtsOpen(false);await sendMediaAsset(asset,"");}}/>}
-    {quickReplyEditor!==undefined&&active&&<QuickReplyEditorDialog accountId={active.accountId} token={apiToken} item={quickReplyEditor} onToken={setApiToken} onClose={()=>setQuickReplyEditor(undefined)} onSave={saveQuickReply}/>}
-    {translationPreview&&<TranslationPreviewDialog source={translationPreview.source} translated={translationPreview.translated} targetLanguage={translationPreference.customerLanguage} onClose={()=>setTranslationPreview(null)} onConfirm={text=>void queueTextMessage(text,translationPreview.source)}/>}
-    {conversationMenu&&<ConversationContextMenu state={conversationMenu} tags={contextTags} busy={contextBusy} onSection={section=>setConversationMenu(value=>value?{...value,section}:value)} onTags={()=>void openContextTags()} onStage={value=>void setContextStage(value)} onToggleTag={tag=>void toggleContextTag(tag)} onNote={()=>{setContextNoteConversation(conversationMenu.conversation);setConversationMenu(null);}} onStatus={()=>void setContextConversationStatus()} onEdit={()=>{setContextContactId(conversationMenu.conversation.contactId);setConversationMenu(null);}} onTask={()=>{setContextTaskConversation(conversationMenu.conversation);setConversationMenu(null);}}/>}
-    {contextContactId&&<ContactEditDialog contactId={contextContactId} token={apiToken} onToken={setApiToken} onClose={()=>setContextContactId("")} onSaved={async()=>{setContextContactId("");setToast("联系人资料已更新");await loadWorkspace(apiToken,true);}}/>}
-    {contextNoteConversation&&<ConversationNoteDialog conversation={contextNoteConversation} token={apiToken} onToken={setApiToken} onClose={()=>setContextNoteConversation(null)} onSaved={async()=>{setContextNoteConversation(null);setToast("共享备注已添加");await loadWorkspace(apiToken,true);}}/>}
-    {contextTaskConversation&&<ConversationQuickTaskDialog conversation={contextTaskConversation} token={apiToken} assignedUserId={user?.id??null} onToken={setApiToken} onClose={()=>setContextTaskConversation(null)} onSaved={()=>{setContextTaskConversation(null);setToast("任务已创建并关联到该客户");}}/>}
-  </main>;
+      {authOpen && (
+        <LoginDialog
+          connected={Boolean(apiToken)}
+          token={apiToken}
+          canClose={Boolean(apiToken)}
+          onClose={() => setAuthOpen(false)}
+          onLogin={completeLogin}
+          onLogout={logout}
+        />
+      )}
+      {newConversationOpen && (
+        <NewConversationDialog
+          accounts={accounts}
+          token={apiToken}
+          onToken={setApiToken}
+          onClose={() => setNewConversationOpen(false)}
+          onCreated={async (conversationId, accountId, accessToken) => {
+            setNewConversationOpen(false);
+            navigate("inbox");
+            setFilter("全部会话");
+            dateFilterRef.current = "all";
+            setDateFilter("all");
+            setSelectedAccount(accountId);
+            await loadWorkspace(accessToken, true);
+            setActiveId(conversationId);
+            setToast("新会话已创建，首条消息已进入发送队列");
+          }}
+        />
+      )}
+      {mediaOpen && active && (
+        <MediaDialog
+          accountId={active.accountId}
+          token={apiToken}
+          initialCaption={draft}
+          onToken={setApiToken}
+          onToast={setToast}
+          onClose={() => setMediaOpen(false)}
+          onSend={sendMediaAsset}
+        />
+      )}
+      {materialLibraryOpen && active && (
+        <MaterialLibrarySendDialog
+          accountId={active.accountId}
+          conversationId={active.id}
+          customerName={active.name}
+          initialCaption={draft}
+          translationEnabled={translationPreference.enabled}
+          translationConfigured={translationConfigured}
+          targetLanguage={translationPreference.customerLanguage}
+          targetLanguageName={languageName(
+            translationPreference.customerLanguage,
+          )}
+          request={taskRequest}
+          onToken={setApiToken}
+          onClose={() => setMaterialLibraryOpen(false)}
+          onSent={(message) => {
+            setDraft("");
+            setToast(message);
+            void loadMessages(apiToken, active.id);
+          }}
+        />
+      )}
+      {productCardsOpen && active && (
+        <ProductCardSendDialog
+          accountId={active.accountId}
+          conversationId={active.id}
+          contactId={active.contactId}
+          request={(path, init) => authorizedFetch(path, apiToken, init)}
+          onToken={setApiToken}
+          onClose={() => setProductCardsOpen(false)}
+          onSent={(text) => {
+            setToast(text);
+            void loadMessages(apiToken, active.id);
+          }}
+        />
+      )}
+      {ttsOpen && active && (
+        <TextToSpeechDialog
+          accountId={active.accountId}
+          token={apiToken}
+          initialText={draft}
+          onToken={setApiToken}
+          onClose={() => setTtsOpen(false)}
+          onSend={async (asset) => {
+            setTtsOpen(false);
+            await sendMediaAsset(asset, "");
+          }}
+        />
+      )}
+      {quickReplyEditor !== undefined && active && (
+        <QuickReplyEditorDialog
+          accountId={active.accountId}
+          token={apiToken}
+          item={quickReplyEditor}
+          onToken={setApiToken}
+          onClose={() => setQuickReplyEditor(undefined)}
+          onSave={saveQuickReply}
+        />
+      )}
+      {translationPreview && (
+        <TranslationPreviewDialog
+          source={translationPreview.source}
+          translated={translationPreview.translated}
+          targetLanguage={translationPreference.customerLanguage}
+          onClose={() => setTranslationPreview(null)}
+          onConfirm={(text) =>
+            void queueTextMessage(text, translationPreview.source)
+          }
+        />
+      )}
+      {conversationMenu && (
+        <ConversationContextMenu
+          state={conversationMenu}
+          tags={contextTags}
+          busy={contextBusy}
+          onSection={(section) =>
+            setConversationMenu((value) =>
+              value ? { ...value, section } : value,
+            )
+          }
+          onTags={() => void openContextTags()}
+          onStage={(value) => void setContextStage(value)}
+          onToggleTag={(tag) => void toggleContextTag(tag)}
+          onNote={() => {
+            setContextNoteConversation(conversationMenu.conversation);
+            setConversationMenu(null);
+          }}
+          onStatus={() => void setContextConversationStatus()}
+          onEdit={() => {
+            setContextContactId(conversationMenu.conversation.contactId);
+            setConversationMenu(null);
+          }}
+          onTask={() => {
+            setContextTaskConversation(conversationMenu.conversation);
+            setConversationMenu(null);
+          }}
+        />
+      )}
+      {contextContactId && (
+        <ContactEditDialog
+          contactId={contextContactId}
+          token={apiToken}
+          onToken={setApiToken}
+          onClose={() => setContextContactId("")}
+          onSaved={async () => {
+            setContextContactId("");
+            setToast("联系人资料已更新");
+            await loadWorkspace(apiToken, true);
+          }}
+        />
+      )}
+      {contextNoteConversation && (
+        <ConversationNoteDialog
+          conversation={contextNoteConversation}
+          token={apiToken}
+          onToken={setApiToken}
+          onClose={() => setContextNoteConversation(null)}
+          onSaved={async () => {
+            setContextNoteConversation(null);
+            setToast("共享备注已添加");
+            await loadWorkspace(apiToken, true);
+          }}
+        />
+      )}
+      {contextTaskConversation && (
+        <ConversationQuickTaskDialog
+          conversation={contextTaskConversation}
+          token={apiToken}
+          assignedUserId={user?.id ?? null}
+          onToken={setApiToken}
+          onClose={() => setContextTaskConversation(null)}
+          onSaved={() => {
+            setContextTaskConversation(null);
+            setToast("任务已创建并关联到该客户");
+          }}
+        />
+      )}
+    </main>
+  );
 }
 
 const CUSTOMER_STAGES=[
@@ -2335,6 +3744,16 @@ function mapMediaAsset(item:Record<string,unknown>):MediaAsset{return{id:String(
 function mediaKind(mime:string){return mime.startsWith("image/")?"image":mime.startsWith("video/")?"video":mime.startsWith("audio/")?"audio":"document";}
 
 function mapConversation(item:Record<string,unknown>,index:number):Conversation {const name=String(item.display_name??item.phone_e164??"未知联系人"),methods=Array.isArray(item.contact_methods)?item.contact_methods.map(mapContactMethod):[],lastDirection=item.last_message_direction==="in"||item.last_message_direction==="out"?item.last_message_direction:null,lastMessageStatus=["received","queued","dispatching","sent","delivered","read","failed","uncertain"].includes(String(item.last_message_status))?item.last_message_status as ChatMessage["status"]:null,lastMessageAt=item.last_message_at?String(item.last_message_at):null;return{id:String(item.id),name,initials:name.slice(0,2).toUpperCase(),color:COLORS[index%COLORS.length],account:String(item.account_name??"未知账号"),accountId:String(item.account_id),phone:String(item.phone_e164??""),contactId:String(item.contact_id??""),alias:String(item.alias??""),contactName:String(item.contact_name??item.phone_e164??""),primaryEmail:String(item.primary_email??""),contactMethods:methods,preview:String(item.last_message??kindText(String(item.last_message_kind??""))),lastDirection,lastMessageStatus,lastMessageAt,time:lastMessageAt?formatTime(new Date(lastMessageAt)):"",unread:Number(item.unread_count??0),accountStatus:String(item.account_status??"offline"),assignedUserId:item.assigned_user_id?String(item.assigned_user_id):null,favorite:Boolean(item.favorite),conversationStatus:String(item.status??"open"),customerStage:String(item.customer_stage??"new"),tags:Array.isArray(item.tags)?item.tags.map(mapTag):[],remindAt:item.remind_at?String(item.remind_at):null,transport:String(item.transport??"web") as "web"|"cloud",serviceWindowExpiresAt:item.service_window_expires_at?String(item.service_window_expires_at):null};}
+function ConversationListRow({item,active,clock,markingUnreadId,onSelect,onMenu,onMarkUnread}:{item:Conversation;active:boolean;clock:number;markingUnreadId:string;onSelect:()=>void;onMenu:(event:React.MouseEvent)=>void;onMarkUnread:()=>void}){
+  return <div role="button" tabIndex={0} onClick={onSelect} onContextMenu={onMenu} onKeyDown={event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();onSelect();}}} className={active?"conversation active":"conversation"} title="右键打开客户快捷操作">
+    <span className="avatar" style={{background:item.color}}>{item.initials}<i className={`presence ${item.accountStatus==="online"?"online":"offline"}`}/></span>
+    <span className="conversation-copy"><span className="conversation-line"><b>{item.name}</b><time>{item.time}</time></span>
+      <span className="conversation-line preview">{item.lastDirection&&<i className={`conversation-direction ${item.lastDirection}${item.lastDirection==="out"?` ${conversationPreviewStatusClass(item.lastMessageStatus)}`:""}`} role="img" aria-label={item.lastDirection==="in"?"最后一条消息为接收":`最后一条消息为发送，${conversationPreviewStatusText(item.lastMessageStatus)}`} title={item.lastDirection==="in"?"接收":conversationPreviewStatusText(item.lastMessageStatus)}>{item.lastDirection==="in"?<ArrowDownLeft size={13}/>:<ArrowUpRight size={13}/>}</i>}<span>{item.preview}</span>{item.unread>0&&<em>{item.unread}</em>}</span>
+      <small className="conversation-meta"><span className={`conversation-stage stage-${stageValue(item.customerStage)}`}>{stageName(item.customerStage)}</span>{item.tags.slice(0,1).map(tag=><i key={tag.id} style={{background:tag.color}}>{tag.name}</i>)}{item.remindAt&&<em className={new Date(item.remindAt).getTime()<=clock?"due":""}><Bell size={10}/>{formatDateTime(item.remindAt)}</em>}</small>
+    </span>
+    {item.unread===0&&<button className="mark-unread-button" disabled={markingUnreadId===item.id} onClick={event=>{event.stopPropagation();onMarkUnread();}} aria-label={`将 ${item.name} 标记为未读`} title="标记为未读"><Mail size={15}/></button>}
+  </div>;
+}
 function mapContactMethod(item:Record<string,unknown>):ContactMethod{return{id:item.id?String(item.id):undefined,type:String(item.type??"other") as ContactMethodType,label:String(item.label??""),value:String(item.value??"")};}
 function mapContactProfile(item:Record<string,unknown>):ContactProfile{const emails=Array.isArray(item.emails)?item.emails.map(email=>{const value=email as Record<string,unknown>;return{id:value.id?String(value.id):undefined,label:String(value.label??""),email:String(value.email??""),isPrimary:Boolean(value.isPrimary??value.is_primary)};}):[],methods=Array.isArray(item.methods)?item.methods.map(method=>mapContactMethod(method as Record<string,unknown>)):[],addresses=Array.isArray(item.addresses)?item.addresses.map(address=>mapCustomerAddress(address as Record<string,unknown>)):[],birthday=item.birthday&&typeof item.birthday==="object"?item.birthday as ContactDate:null,specialDates=Array.isArray(item.specialDates)?item.specialDates as ContactSpecialDate[]:[],conversationId=item.conversationId?String(item.conversationId):item.conversation_id?String(item.conversation_id):null;return{id:String(item.id),accountId:String(item.accountId??item.account_id??""),accountName:String(item.accountName??item.account_name??""),alias:String(item.alias??""),contactName:String(item.contactName??item.contact_name??""),name:String(item.name??item.alias??item.contactName??item.phone??"未知联系人"),phone:String(item.phone??item.phone_e164??""),avatarUrl:item.avatarUrl?String(item.avatarUrl):item.avatar_url?String(item.avatar_url):null,note:String(item.note??""),timezone:item.timezone?String(item.timezone):null,effectiveTimezone:String(item.effectiveTimezone??item.effective_timezone??"UTC"),timezoneSource:(item.timezoneSource??item.timezone_source??"fallback") as ContactProfile["timezoneSource"],inferredCountry:item.inferredCountry?String(item.inferredCountry):item.inferred_country?String(item.inferred_country):null,birthday,specialDates,emails,primaryEmail:item.primaryEmail?String(item.primaryEmail):emails.find(email=>email.isPrimary)?.email??null,methods,addresses,conversationId,hasConversation:Boolean(item.hasConversation??conversationId),lastMessageAt:item.lastMessageAt?String(item.lastMessageAt):item.last_message_at?String(item.last_message_at):null,updatedAt:String(item.updatedAt??item.updated_at??"")};}
 
@@ -3462,7 +4881,7 @@ function OrderManagement({token,accounts,onToken,onToast,onConversation}:{token:
     <div className="order-management-filters"><label><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索订单号、客户名称或手机号"/></label><select value={accountId} onChange={event=>setAccountId(event.target.value)} aria-label="按账号筛选"><option value="">全部账号</option>{accounts.map(account=><option key={account.id} value={account.id}>{account.name}</option>)}</select><select value={status} onChange={event=>setStatus(event.target.value)} aria-label="按状态筛选"><option value="">全部状态</option><option value="draft">草稿</option><option value="queued">已发送</option></select><input type="date" value={dateFrom} onChange={event=>setDateFrom(event.target.value)} aria-label="开始日期"/><input type="date" value={dateTo} min={dateFrom||undefined} onChange={event=>setDateTo(event.target.value)} aria-label="结束日期"/></div>
     {loading?<EmptyState title="正在读取订单" text="请稍候…"/>:error?<EmptyState title="订单加载失败" text={error}/>:orders.length?<><div className="order-table-wrap"><table className="order-table"><thead><tr><th>订单号</th><th>客户 / 账号</th><th>商品</th><th>金额</th><th>状态</th><th>创建时间</th><th aria-label="操作"/></tr></thead><tbody>{orders.map(order=><tr key={order.id} onClick={()=>setViewing(order)}><td><b>#{order.orderNumber}</b><small>{order.createdByName}</small></td><td><b>{order.customerName||order.customerPhone||"未知客户"}</b><small>{order.accountName}{order.customerPhone?` · ${order.customerPhone}`:""}</small></td><td>{order.items.length} 件<small>{order.items.slice(0,2).map(item=>item.name).join("、")}{order.items.length>2?"…":""}</small></td><td><b>{order.currency} {order.amount.toFixed(2)}</b></td><td><em className={`delivery-state ${order.messageStatus}`}>{order.status==="draft"?"草稿":deliveryText(order.messageStatus)}</em>{order.paymentRequest&&<small className={`payment-state ${order.paymentRequest.status.toLowerCase()}`}>{paymentStatusText(order.paymentRequest.status)}</small>}</td><td>{formatDateTime(order.createdAt)}</td><td><span className="order-row-actions"><button onClick={event=>{event.stopPropagation();setEditing(order);}} aria-label={`编辑订单 ${order.orderNumber}`}><Pencil size={13}/></button><button className="danger" onClick={event=>{event.stopPropagation();void remove(order);}} aria-label={`删除订单 ${order.orderNumber}`}><Trash2 size={13}/></button></span></td></tr>)}</tbody></table></div>{nextCursor&&<button className="order-load-more" onClick={()=>void load(false)}>加载更多订单</button>}</>:<EmptyState title="暂无匹配订单" text="订单需先在客户会话中创建，或调整当前筛选条件"/>}
     {viewing&&<OrderDetailsDialog order={viewing} token={token} onToken={onToken} onToast={onToast} onPaymentChange={paymentRequest=>{setViewing(current=>current?{...current,paymentRequest}:current);setOrders(items=>items.map(item=>item.id===viewing.id?{...item,paymentRequest}:item));}} onClose={()=>setViewing(null)} onEdit={()=>{setViewing(null);setEditing(viewing);}} onConversation={()=>onConversation(viewing.conversationId)}/>}
-    {editing&&<OrderDialog order={editing} active={{id:editing.conversationId,name:editing.customerName,initials:"",color:"#477a62",account:editing.accountName,accountId:editing.accountId,phone:editing.customerPhone,contactId:"",alias:"",contactName:editing.customerName,primaryEmail:"",contactMethods:[],preview:"",lastDirection:null,lastMessageStatus:null,time:"",unread:0,accountStatus:"online",assignedUserId:null,favorite:false,conversationStatus:"open",customerStage:"new",tags:[],remindAt:null,transport:"web",serviceWindowExpiresAt:null}} token={token} onToken={onToken} onClose={()=>setEditing(null)} onCreated={async orderNumber=>{setEditing(null);onToast(`订单 #${orderNumber} 已更新`);cursorRef.current=null;await load(true);}}/>}
+    {editing&&<OrderDialog order={editing} active={{id:editing.conversationId,name:editing.customerName,initials:"",color:"#477a62",account:editing.accountName,accountId:editing.accountId,phone:editing.customerPhone,contactId:"",alias:"",contactName:editing.customerName,primaryEmail:"",contactMethods:[],preview:"",lastDirection:null,lastMessageStatus:null,lastMessageAt:null,time:"",unread:0,accountStatus:"online",assignedUserId:null,favorite:false,conversationStatus:"open",customerStage:"new",tags:[],remindAt:null,transport:"web",serviceWindowExpiresAt:null}} token={token} onToken={onToken} onClose={()=>setEditing(null)} onCreated={async orderNumber=>{setEditing(null);onToast(`订单 #${orderNumber} 已更新`);cursorRef.current=null;await load(true);}}/>}
   </section>;
 }
 
