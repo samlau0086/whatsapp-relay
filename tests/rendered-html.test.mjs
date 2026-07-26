@@ -72,6 +72,12 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /window\.addEventListener\("paste"/);
   assert.match(component, /拖拽文件到这里/);
   assert.match(component, /发送所选附件/);
+  assert.match(component, /uploadComposerImages/);
+  assert.match(component, /onPaste=\{event=>/);
+  assert.match(component, /松开即可发送图片/);
+  assert.match(component, /可粘贴或拖入图片发送/);
+  assert.match(css, /\.composer\.image-dragging/);
+  assert.match(css, /\.composer-image-drop-hint/);
   assert.doesNotMatch(
     component,
     /aria-label="添加附件" disabled|Pharah House|Penny Valeria|Richard Hammon/,

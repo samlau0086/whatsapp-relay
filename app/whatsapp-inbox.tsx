@@ -6,7 +6,7 @@ import {
   Pencil, RefreshCw, Search, Send, Settings, ShieldCheck, ShoppingBag, Smile, Sparkles, Star, Trash2, UploadCloud, UserPlus,
   Users, Wifi, WifiOff, X, ClipboardList, ExternalLink, Bot, Brain, BookOpen, MapPin, Copy, CreditCard, LayoutGrid, List, Eye, EyeOff, ReceiptText, Reply, Zap, Tag,
 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -134,6 +134,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [loadError,setLoadError]=useState("");
   const [newConversationOpen,setNewConversationOpen]=useState(false);
   const [mediaOpen,setMediaOpen]=useState(false);
+  const [composerImageBusy,setComposerImageBusy]=useState(false);
+  const [composerImageDragging,setComposerImageDragging]=useState(false);
   const [materialLibraryOpen,setMaterialLibraryOpen]=useState(false);
   const [productCardsOpen,setProductCardsOpen]=useState(false);
   const [ttsOpen,setTtsOpen]=useState(false);
@@ -158,6 +160,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [contextTaskConversation,setContextTaskConversation]=useState<Conversation|null>(null);
   const [clock,setClock]=useState(()=>Date.now());
   const textareaRef=useRef<HTMLTextAreaElement>(null);
+  const composerDragDepth=useRef(0);
   const messagesRef=useRef<HTMLDivElement>(null);
   const translationLoadSequence=useRef(0);
   const workspaceLoadSequence=useRef(0);
@@ -421,7 +424,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   }
 
   async function sendMessage(){
-    if(!active||!apiToken||!draft.trim()||translatingDraft)return;
+    if(!active||!apiToken||!draft.trim()||translatingDraft||composerImageBusy)return;
     const source=draft.trim();
     if(translationPreference.enabled){
       if(!translationConfigured){setToast("AI 翻译暂不可用，请联系管理员配置 Provider");return;}
@@ -461,13 +464,52 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     finally{setRetryingMessageId("");}
   }
 
-  async function sendMediaAsset(asset:MediaAsset,caption:string){
+  async function sendMediaAsset(asset:MediaAsset,caption:string,throwOnFailure=false,includeReply=true){
     if(!active||!apiToken)return;
-    const kind=mediaKind(asset.mimeType),clientMessageId=crypto.randomUUID(),quoted=selectedReply?messageQuote(selectedReply):undefined;setDraft("");setReplyTo(null);
+    const kind=mediaKind(asset.mimeType),clientMessageId=crypto.randomUUID(),quoted=includeReply&&selectedReply?messageQuote(selectedReply):undefined;setDraft("");setReplyTo(null);
     setMessages(all=>({...all,[active.id]:[...(all[active.id]??[]),{id:clientMessageId,direction:"out",kind,text:caption,quoted,time:formatTime(new Date()),status:"queued",attachment:{id:asset.id,name:asset.fileName,mime:asset.mimeType,size:formatBytes(asset.size)}}]}));
     const queued=await authorizedFetch("/api/v1/messages",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId:active.accountId,conversationId:active.id,clientMessageId,type:kind,text:caption||undefined,mediaId:asset.id,...(quoted?{quotedMessageId:quoted.id}:{})})});if(queued.token!==apiToken)setApiToken(queued.token);
-    if(!queued.response.ok){const body=await queued.response.json().catch(()=>({})) as {error?:string};setToast(body.error==="agent_upgrade_required"?"请先升级 Windows Agent 后再使用指定回复":`附件消息入队失败（HTTP ${queued.response.status}）`);setMessages(all=>({...all,[active.id]:(all[active.id]??[]).map(item=>item.id===clientMessageId?{...item,status:"failed"}:item)}));return;}
+    if(!queued.response.ok){const body=await queued.response.json().catch(()=>({})) as {error?:string};const message=body.error==="agent_upgrade_required"?"请先升级 Windows Agent 后再使用指定回复":`附件消息入队失败（HTTP ${queued.response.status}）`;setToast(message);setMessages(all=>({...all,[active.id]:(all[active.id]??[]).map(item=>item.id===clientMessageId?{...item,status:"failed"}:item)}));if(throwOnFailure)throw new Error(message);return;}
     setMediaOpen(false);setMaterialLibraryOpen(false);setToast(active.accountStatus==="online"?"附件已进入发送队列":"账号离线，附件已持久化排队");void loadMessages(queued.token,active.id);
+  }
+
+  async function uploadComposerImages(files:FileList|File[]){
+    if(!active||!apiToken||composerImageBusy)return;
+    const images=Array.from(files).filter(file=>file.type.startsWith("image/"));
+    if(!images.length){setToast("消息框仅支持粘贴或拖拽图片");return;}
+    const unsupported=images.find(file=>!["image/jpeg","image/png","image/webp"].includes(file.type));
+    if(unsupported){setToast(`${unsupported.name} 格式不受支持，请使用 JPG、PNG 或 WebP`);return;}
+    const oversized=images.find(file=>file.size>64*1024*1024);
+    if(oversized){setToast(`${oversized.name} 超过 64 MB，无法发送`);return;}
+    const caption=draft.trim();
+    setComposerImageBusy(true);setComposerImageDragging(false);
+    try{
+      for(const [index,file] of images.entries()){
+        const form=new FormData();form.append("file",file);
+        const result=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(active.accountId)}`,apiToken,{method:"POST",body:form});
+        if(result.token!==apiToken)setApiToken(result.token);
+        const body=await result.response.json().catch(()=>({})) as {mediaId?:string;fileName?:string;mimeType?:string;size?:number;sha256?:string;message?:string};
+        if(!result.response.ok||!body.mediaId)throw new Error(body.message??`${file.name} 上传失败（HTTP ${result.response.status}）`);
+        await sendMediaAsset({id:body.mediaId,fileName:body.fileName??file.name,mimeType:body.mimeType??file.type,size:body.size??file.size,sha256:body.sha256??"",createdAt:new Date().toISOString(),usageCount:0},index===0?caption:"",true,index===0);
+      }
+      setToast(images.length>1?`${images.length} 张图片已进入发送队列`:"图片已进入发送队列");
+    }catch(reason){setToast(reason instanceof Error?reason.message:"图片上传失败");}
+    finally{setComposerImageBusy(false);}
+  }
+
+  function handleComposerDragEnter(event:DragEvent<HTMLDivElement>){
+    if(!Array.from(event.dataTransfer.items).some(item=>item.kind==="file"))return;
+    event.preventDefault();composerDragDepth.current+=1;setComposerImageDragging(true);
+  }
+
+  function handleComposerDragLeave(event:DragEvent<HTMLDivElement>){
+    event.preventDefault();composerDragDepth.current=Math.max(0,composerDragDepth.current-1);
+    if(composerDragDepth.current===0)setComposerImageDragging(false);
+  }
+
+  function handleComposerDrop(event:DragEvent<HTMLDivElement>){
+    event.preventDefault();composerDragDepth.current=0;setComposerImageDragging(false);
+    void uploadComposerImages(event.dataTransfer.files);
   }
 
   async function sendQuickReplyMedia(asset:MediaAsset,captionOverride?:string){
@@ -562,7 +604,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
         {translationMenuOpen&&<TranslationMenu preference={translationPreference} configured={translationConfigured} ready={translationReady} onChange={next=>void saveTranslationPreference(next)} onClose={()=>setTranslationMenuOpen(false)}/>}
         {emojiOpen&&<EmojiPicker category={emojiCategory} onCategory={setEmojiCategory} onSelect={insertEmoji} onClose={()=>setEmojiOpen(false)}/>}
         {selectedReply&&!cloudWindowClosed&&<div className="composer-reply-preview"><Reply size={14}/><QuotedMessage quote={messageQuote(selectedReply)} customerName={active.name}/><button onClick={()=>setReplyTo(null)} aria-label="取消回复"><X size={14}/></button></div>}
-        {cloudWindowClosed?<TemplateComposer accountId={active.accountId} conversationId={active.id} token={apiToken} onToken={setApiToken} onSent={()=>{setToast("模板消息已进入发送队列");void loadMessages(apiToken,active.id);}}/>:<div className="composer"><textarea ref={textareaRef} value={draft} onChange={event=>setDraft(event.target.value)} onKeyDown={event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();void sendMessage();}if(event.key==="Escape"){if(selectedReply)setReplyTo(null);else{setEmojiOpen(false);setTranslationMenuOpen(false);}}}} placeholder="输入消息，Enter 发送，Shift + Enter 换行"/><div className="composer-icons"><button className={emojiOpen?"active":""} onClick={()=>setEmojiOpen(value=>!value)} aria-label="选择表情" title="选择表情"><Smile size={18}/></button><button onClick={()=>setTtsOpen(true)} aria-label="AI 文字转语音" title="AI 文字转语音"><Mic size={18}/></button><button onClick={()=>void sendMessage()} className="send-button" aria-label={translationPreference.enabled?"翻译并预览":"发送"} disabled={translatingDraft}>{translatingDraft?<RefreshCw className="spin" size={18}/>:<Send size={18}/>}</button></div></div>}
+        {cloudWindowClosed?<TemplateComposer accountId={active.accountId} conversationId={active.id} token={apiToken} onToken={setApiToken} onSent={()=>{setToast("模板消息已进入发送队列");void loadMessages(apiToken,active.id);}}/>:<div className={`composer ${composerImageDragging?"image-dragging":""} ${composerImageBusy?"image-uploading":""}`} onDragEnter={handleComposerDragEnter} onDragOver={event=>{if(Array.from(event.dataTransfer.items).some(item=>item.kind==="file"))event.preventDefault();}} onDragLeave={handleComposerDragLeave} onDrop={handleComposerDrop}>{(composerImageDragging||composerImageBusy)&&<div className="composer-image-drop-hint"><UploadCloud size={18}/><span>{composerImageBusy?"正在上传并发送图片…":"松开即可发送图片"}</span></div>}<textarea ref={textareaRef} value={draft} onChange={event=>setDraft(event.target.value)} onPaste={event=>{const hasImage=Array.from(event.clipboardData.items).some(item=>item.kind==="file"&&item.type.startsWith("image/"));if(!hasImage)return;event.preventDefault();void clipboardFiles(event.nativeEvent,{imagesOnly:true}).then(files=>uploadComposerImages(files));}} onKeyDown={event=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();void sendMessage();}if(event.key==="Escape"){if(selectedReply)setReplyTo(null);else{setEmojiOpen(false);setTranslationMenuOpen(false);}}}} placeholder="输入消息；可粘贴或拖入图片发送"/><div className="composer-icons"><button className={emojiOpen?"active":""} onClick={()=>setEmojiOpen(value=>!value)} aria-label="选择表情" title="选择表情"><Smile size={18}/></button><button onClick={()=>setTtsOpen(true)} aria-label="AI 文字转语音" title="AI 文字转语音"><Mic size={18}/></button><button onClick={()=>void sendMessage()} className="send-button" aria-label={translationPreference.enabled?"翻译并预览":"发送"} disabled={translatingDraft||composerImageBusy}>{translatingDraft||composerImageBusy?<RefreshCw className="spin" size={18}/>:<Send size={18}/>}</button></div></div>}
         {translationError&&<p className="composer-error">{translationError}</p>}
         <p className="delivery-hint">{cloudWindowClosed?<><Clock3 size={13}/>已超出 24 小时窗口，只能发送已审核模板</>:active.accountStatus==="online"?<><Wifi size={13}/>{active.transport==="cloud"?"Cloud API 在线":"Agent 在线"}</>:<><Clock3 size={13}/>离线队列已启用</>}</p>
       </div>
