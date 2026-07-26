@@ -4,7 +4,7 @@ import {
   Archive, Bell, Bookmark, CalendarDays, Check, CheckCheck, ChevronDown, CircleHelp, Clock3, FileText,
   Inbox, Info, Languages, Mail, Menu, MessageCircle, Mic, MonitorSmartphone, Paperclip, Phone, Plus,
   Pencil, RefreshCw, Search, Send, Settings, ShieldCheck, ShoppingBag, Smile, Sparkles, Star, Trash2, UploadCloud, UserPlus,
-  Users, Wifi, WifiOff, X, ClipboardList, ExternalLink, Bot, Brain, BookOpen, MapPin, Copy, CreditCard, LayoutGrid, List, Eye, EyeOff, ReceiptText, Reply, Zap,
+  Users, Wifi, WifiOff, X, ClipboardList, ExternalLink, Bot, Brain, BookOpen, MapPin, Copy, CreditCard, LayoutGrid, List, Eye, EyeOff, ReceiptText, Reply, Zap, Tag,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
@@ -85,6 +85,7 @@ type TranslationProviderConfig={provider:TranslationProviderId;enabled:boolean;k
 type EmailProviderId="smtp"|"resend";
 type EmailProviderConfig={provider:EmailProviderId;enabled:boolean;configured:boolean;fromName:string;fromEmail:string;replyTo:string;host:string;port:number;tls:"tls"|"starttls";username:string;secret:string;updatedAt:string|null};
 type TranslationPreference={enabled:boolean;agentLanguage:string;customerLanguage:string;updatedAt:string|null};
+type ConversationContextState={conversation:Conversation;x:number;y:number;section:"root"|"stage"|"tags"};
 type CurrencyItem={code:string;name:string;rate:number};
 type CurrencyConfig={baseCurrency:string;currencies:CurrencyItem[];rateSource?:string|null;rateDate?:string|null;rateUpdatedAt?:string|null};
 type MessageTranslation={status:"idle"|"loading"|"translated"|"failed";text?:string;sourceText?:string;message?:string};
@@ -147,6 +148,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [translationPreview,setTranslationPreview]=useState<{source:string;translated:string}|null>(null);
   const [translatingDraft,setTranslatingDraft]=useState(false);
   const [translationError,setTranslationError]=useState("");
+  const [conversationMenu,setConversationMenu]=useState<ConversationContextState|null>(null);
+  const [contextTags,setContextTags]=useState<TagItem[]>([]);
+  const [contextBusy,setContextBusy]=useState(false);
+  const [contextContactId,setContextContactId]=useState("");
+  const [contextNoteConversation,setContextNoteConversation]=useState<Conversation|null>(null);
+  const [contextTaskConversation,setContextTaskConversation]=useState<Conversation|null>(null);
   const [clock,setClock]=useState(()=>Date.now());
   const textareaRef=useRef<HTMLTextAreaElement>(null);
   const messagesRef=useRef<HTMLDivElement>(null);
@@ -199,6 +206,17 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   useEffect(()=>{
     if(latestMessageId)scrollMessagesToEnd();
   },[latestMessageId,scrollMessagesToEnd]);
+
+  useEffect(()=>{
+    if(!conversationMenu)return;
+    const close=()=>setConversationMenu(null);
+    const key=(event:KeyboardEvent)=>{if(event.key==="Escape")close();};
+    window.addEventListener("click",close);
+    window.addEventListener("resize",close);
+    window.addEventListener("scroll",close,true);
+    window.addEventListener("keydown",key);
+    return()=>{window.removeEventListener("click",close);window.removeEventListener("resize",close);window.removeEventListener("scroll",close,true);window.removeEventListener("keydown",key);};
+  },[conversationMenu]);
 
   const logout=useCallback(()=>{
     sessionStorage.removeItem("relayAccessToken");sessionStorage.removeItem("relayUser");
@@ -298,10 +316,62 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   useEffect(()=>{const timer=window.setInterval(()=>setClock(Date.now()),30_000);return()=>window.clearInterval(timer);},[]);
   useEffect(()=>{const due=conversations.find(item=>item.remindAt&&new Date(item.remindAt).getTime()<=Date.now()&&!notifiedReminders.current.has(item.id));if(due){notifiedReminders.current.add(due.id);setToast(`${due.name} 的会话提醒已到期`);}},[conversations]);
 
-  async function updateConversation(change:Record<string,unknown>){
-    if(!active||!apiToken)return;
-    const result=await authorizedFetch(`/api/v1/conversations/${active.id}`,apiToken,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify(change)});const response=result.response;if(result.token!==apiToken)setApiToken(result.token);
-    if(!response.ok){setToast(`操作失败（HTTP ${response.status}）`);return;}await loadWorkspace(apiToken,true);
+  async function updateConversation(change:Record<string,unknown>,conversationId=active?.id){
+    if(!conversationId||!apiToken)return false;
+    const result=await authorizedFetch(`/api/v1/conversations/${conversationId}`,apiToken,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify(change)});const response=result.response;if(result.token!==apiToken)setApiToken(result.token);
+    if(!response.ok){setToast(`操作失败（HTTP ${response.status}）`);return false;}await loadWorkspace(result.token,true);return true;
+  }
+
+  function openConversationMenu(event:React.MouseEvent,item:Conversation){
+    event.preventDefault();event.stopPropagation();setActiveId(item.id);
+    const width=244,height=390,padding=10;
+    setConversationMenu({conversation:item,x:Math.max(padding,Math.min(event.clientX,window.innerWidth-width-padding)),y:Math.max(padding,Math.min(event.clientY,window.innerHeight-height-padding)),section:"root"});
+  }
+
+  async function openContextTags(){
+    if(!conversationMenu)return;
+    setConversationMenu(value=>value?{...value,section:"tags"}:value);
+    if(contextTags.length)return;
+    setContextBusy(true);
+    try{
+      const result=await authorizedFetch("/api/v1/tags",apiToken);if(result.token!==apiToken)setApiToken(result.token);
+      if(!result.response.ok)throw new Error();
+      const body=await result.response.json() as {data:Array<Record<string,unknown>>};setContextTags(body.data.map(mapTag));
+    }catch{setToast("标签加载失败，请重试");}
+    finally{setContextBusy(false);}
+  }
+
+  async function setContextStage(customerStage:string){
+    if(!conversationMenu||contextBusy)return;setContextBusy(true);
+    const item=conversationMenu.conversation,ok=await updateConversation({customerStage},item.id);
+    if(ok){setToast(`已将 ${item.name} 的客户阶段改为“${stageName(customerStage)}”`);setConversationMenu(null);}
+    setContextBusy(false);
+  }
+
+  async function toggleContextTag(tag:TagItem){
+    if(!conversationMenu||contextBusy)return;
+    const item=conversationMenu.conversation,hasTag=item.tags.some(value=>value.id===tag.id);
+    const tagIds=hasTag?item.tags.filter(value=>value.id!==tag.id).map(value=>value.id):[...item.tags.map(value=>value.id),tag.id];
+    setContextBusy(true);
+    try{
+      const result=await authorizedFetch(`/api/v1/conversations/${item.id}/tags`,apiToken,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({tagIds})});if(result.token!==apiToken)setApiToken(result.token);
+      if(!result.response.ok)throw new Error();
+      const body=await result.response.json() as {data:Array<Record<string,unknown>>},tags=body.data.map(mapTag);
+      setConversations(all=>all.map(value=>value.id===item.id?{...value,tags}:value));
+      setConversationMenu(value=>value?{...value,conversation:{...value.conversation,tags}}:value);
+      setToast(hasTag?`已移除标签“${tag.name}”`:`已添加标签“${tag.name}”`);
+    }catch{setToast("标签修改失败，请重试");}
+    finally{setContextBusy(false);}
+  }
+
+  async function setContextConversationStatus(){
+    if(!conversationMenu||contextBusy)return;
+    const item=conversationMenu.conversation,next=item.conversationStatus==="closed"?"open":"closed";
+    if(next==="closed"&&!window.confirm(`关闭与“${item.name}”的会话？之后仍可从“已关闭”中重新打开。`))return;
+    setContextBusy(true);
+    const ok=await updateConversation({status:next},item.id);
+    if(ok){setToast(next==="closed"?"会话已关闭":"会话已重新打开");setConversationMenu(null);}
+    setContextBusy(false);
   }
 
   async function markConversationUnread(conversationId:string){
@@ -458,7 +528,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       <section className="accounts-block"><p className="section-label">账号连接</p>{accounts.length?accounts.map((account,index)=><AccountStatus key={account.id} initials={account.name.slice(0,2).toUpperCase()} color={["green","blue","gray"][index%3]} name={`${account.name} · ${account.transport==="cloud"?"Cloud API":"Web"}`} detail={account.status==="online"?"已连接":account.reason||statusText(account.status)} online={account.status==="online"}/>):<p className="empty-note">暂无已绑定账号</p>}</section>
     </aside>
 
-    <section className="conversation-panel"><header className="conversation-head"><button className="mobile-menu" onClick={()=>setSidebarOpen(true)} aria-label="打开筛选"><Menu size={18}/></button><div><h2>{filter}</h2><span>{visible.length} 个真实会话</span></div><button className="icon-button" onClick={()=>void loadWorkspace(apiToken)} aria-label="刷新"><RefreshCw size={17}/></button></header><label className="search-box"><Search size={15}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索会话、联系人或号码"/></label><div className="conversation-list">{loading?<EmptyState title="正在读取中心数据" text="请稍候…"/>:loadError?<EmptyState title="中心数据加载失败" text={loadError}/>:visible.length?visible.map(item=><div key={item.id} role="button" tabIndex={0} onClick={()=>setActiveId(item.id)} onKeyDown={event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();setActiveId(item.id);}}} className={item.id===effectiveActiveId?"conversation active":"conversation"}><span className="avatar" style={{background:item.color}}>{item.initials}<i className={`presence ${item.accountStatus==="online"?"online":"offline"}`}/></span><span className="conversation-copy"><span className="conversation-line"><b>{item.name}</b><time>{item.time}</time></span><span className="conversation-line preview"><span>{item.preview}</span>{item.unread>0&&<em>{item.unread}</em>}</span><small className="conversation-meta"><span>{stageName(item.customerStage)}</span>{item.tags.slice(0,1).map(tag=><i key={tag.id} style={{background:tag.color}}>{tag.name}</i>)}{item.remindAt&&<em className={new Date(item.remindAt).getTime()<=clock?"due":""}><Bell size={10}/>{formatDateTime(item.remindAt)}</em>}</small></span>{item.unread===0&&<button className="mark-unread-button" disabled={markingUnreadId===item.id} onClick={event=>{event.stopPropagation();void markConversationUnread(item.id);}} aria-label={`将 ${item.name} 标记为未读`} title="标记为未读"><Mail size={15}/></button>}</div>):<EmptyState title="暂无真实会话" text={accounts.length?"该账号尚未收到一对一消息":"请先在 Windows Agent 绑定 WhatsApp 账号"}/>}</div></section>
+    <section className="conversation-panel"><header className="conversation-head"><button className="mobile-menu" onClick={()=>setSidebarOpen(true)} aria-label="打开筛选"><Menu size={18}/></button><div><h2>{filter}</h2><span>{visible.length} 个真实会话</span></div><button className="icon-button" onClick={()=>void loadWorkspace(apiToken)} aria-label="刷新"><RefreshCw size={17}/></button></header><label className="search-box"><Search size={15}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索会话、联系人或号码"/></label><div className="conversation-list">{loading?<EmptyState title="正在读取中心数据" text="请稍候…"/>:loadError?<EmptyState title="中心数据加载失败" text={loadError}/>:visible.length?visible.map(item=><div key={item.id} role="button" tabIndex={0} onClick={()=>setActiveId(item.id)} onContextMenu={event=>openConversationMenu(event,item)} onKeyDown={event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();setActiveId(item.id);}}} className={item.id===effectiveActiveId?"conversation active":"conversation"} title="右键打开客户快捷操作"><span className="avatar" style={{background:item.color}}>{item.initials}<i className={`presence ${item.accountStatus==="online"?"online":"offline"}`}/></span><span className="conversation-copy"><span className="conversation-line"><b>{item.name}</b><time>{item.time}</time></span><span className="conversation-line preview"><span>{item.preview}</span>{item.unread>0&&<em>{item.unread}</em>}</span><small className="conversation-meta"><span>{stageName(item.customerStage)}</span>{item.tags.slice(0,1).map(tag=><i key={tag.id} style={{background:tag.color}}>{tag.name}</i>)}{item.remindAt&&<em className={new Date(item.remindAt).getTime()<=clock?"due":""}><Bell size={10}/>{formatDateTime(item.remindAt)}</em>}</small></span>{item.unread===0&&<button className="mark-unread-button" disabled={markingUnreadId===item.id} onClick={event=>{event.stopPropagation();void markConversationUnread(item.id);}} aria-label={`将 ${item.name} 标记为未读`} title="标记为未读"><Mail size={15}/></button>}</div>):<EmptyState title="暂无真实会话" text={accounts.length?"该账号尚未收到一对一消息":"请先在 Windows Agent 绑定 WhatsApp 账号"}/>}</div></section>
 
     <section className="chat-panel">{active?<>
       <header className="chat-head"><div className="chat-person"><span className="avatar" style={{background:active.color}}>{active.initials}</span><span><b>{active.name}</b><small><i className={`status-dot ${active.accountStatus==="online"?"online":""}`}/>{active.account} · {active.transport==="cloud"?"Cloud API":"Web"} · {statusText(active.accountStatus)}</small></span></div><div className="chat-actions"><button onClick={()=>void updateConversation({assignedToMe:active.assignedUserId!==userId})} className="assign-button"><UserPlus size={15}/>{active.assignedUserId===userId?"取消认领":active.assignedUserId?"转为我负责":"认领"}</button><button onClick={()=>void updateConversation({favorite:!active.favorite})} className="icon-button" aria-label="收藏"><Bookmark size={17} fill={active.favorite?"currentColor":"none"}/></button><button onClick={()=>setDetailsOpen(!detailsOpen)} className="icon-button" aria-label="联系人详情"><Info size={17}/></button></div></header>
@@ -500,6 +570,10 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     {ttsOpen&&active&&<TextToSpeechDialog accountId={active.accountId} token={apiToken} initialText={draft} onToken={setApiToken} onClose={()=>setTtsOpen(false)} onSend={async asset=>{setTtsOpen(false);await sendMediaAsset(asset,"");}}/>}
     {quickReplyEditor!==undefined&&active&&<QuickReplyEditorDialog accountId={active.accountId} token={apiToken} item={quickReplyEditor} onToken={setApiToken} onClose={()=>setQuickReplyEditor(undefined)} onSave={saveQuickReply}/>}
     {translationPreview&&<TranslationPreviewDialog source={translationPreview.source} translated={translationPreview.translated} targetLanguage={translationPreference.customerLanguage} onClose={()=>setTranslationPreview(null)} onConfirm={text=>void queueTextMessage(text,translationPreview.source)}/>}
+    {conversationMenu&&<ConversationContextMenu state={conversationMenu} tags={contextTags} busy={contextBusy} onSection={section=>setConversationMenu(value=>value?{...value,section}:value)} onTags={()=>void openContextTags()} onStage={value=>void setContextStage(value)} onToggleTag={tag=>void toggleContextTag(tag)} onNote={()=>{setContextNoteConversation(conversationMenu.conversation);setConversationMenu(null);}} onStatus={()=>void setContextConversationStatus()} onEdit={()=>{setContextContactId(conversationMenu.conversation.contactId);setConversationMenu(null);}} onTask={()=>{setContextTaskConversation(conversationMenu.conversation);setConversationMenu(null);}}/>}
+    {contextContactId&&<ContactEditDialog contactId={contextContactId} token={apiToken} onToken={setApiToken} onClose={()=>setContextContactId("")} onSaved={async()=>{setContextContactId("");setToast("联系人资料已更新");await loadWorkspace(apiToken,true);}}/>}
+    {contextNoteConversation&&<ConversationNoteDialog conversation={contextNoteConversation} token={apiToken} onToken={setApiToken} onClose={()=>setContextNoteConversation(null)} onSaved={async()=>{setContextNoteConversation(null);setToast("共享备注已添加");await loadWorkspace(apiToken,true);}}/>}
+    {contextTaskConversation&&<ConversationQuickTaskDialog conversation={contextTaskConversation} token={apiToken} assignedUserId={user?.id??null} onToken={setApiToken} onClose={()=>setContextTaskConversation(null)} onSaved={()=>{setContextTaskConversation(null);setToast("任务已创建并关联到该客户");}}/>}
   </main>;
 }
 
@@ -508,6 +582,34 @@ const CUSTOMER_STAGES=[
 ] as const;
 
 function stageName(value:string){return CUSTOMER_STAGES.find(item=>item[0]===value)?.[1]??"新线索";}
+
+function ConversationContextMenu({state,tags,busy,onSection,onTags,onStage,onToggleTag,onNote,onStatus,onEdit,onTask}:{state:ConversationContextState;tags:TagItem[];busy:boolean;onSection:(section:ConversationContextState["section"])=>void;onTags:()=>void;onStage:(value:string)=>void;onToggleTag:(tag:TagItem)=>void;onNote:()=>void;onStatus:()=>void;onEdit:()=>void;onTask:()=>void}){
+  const item=state.conversation;
+  return <div className="conversation-context-menu" style={{left:state.x,top:state.y}} role="menu" aria-label={`${item.name} 的快捷操作`} onClick={event=>event.stopPropagation()}>
+    <header><span className="avatar small" style={{background:item.color}}>{item.initials}</span><span><b>{item.name}</b><small>{item.phone||item.account}</small></span></header>
+    {state.section==="root"?<div className="conversation-context-actions">
+      <button role="menuitem" onClick={()=>onSection("stage")}><Zap size={15}/><span><b>修改客户阶段</b><small>{stageName(item.customerStage)}</small></span><em>›</em></button>
+      <button role="menuitem" onClick={onTags}><Tag size={15}/><span><b>修改标签</b><small>{item.tags.length?item.tags.map(tag=>tag.name).join("、"):"暂无标签"}</small></span><em>›</em></button>
+      <button role="menuitem" onClick={onNote}><FileText size={15}/><span><b>添加备注</b><small>团队共享备注</small></span></button>
+      <button role="menuitem" onClick={onEdit}><Pencil size={15}/><span><b>编辑资料</b><small>名称、邮箱及联系方式</small></span></button>
+      <button role="menuitem" onClick={onTask}><ClipboardList size={15}/><span><b>添加任务</b><small>关联当前客户和会话</small></span></button>
+      <i/>
+      <button role="menuitem" className={item.conversationStatus==="closed"?"reopen":""} disabled={busy} onClick={onStatus}><CheckCheck size={15}/><span><b>{item.conversationStatus==="closed"?"重新打开会话":"关闭会话"}</b><small>{item.conversationStatus==="closed"?"恢复到全部会话":"移入已关闭会话"}</small></span></button>
+    </div>:state.section==="stage"?<div className="conversation-context-submenu"><button className="context-back" onClick={()=>onSection("root")}>‹ 返回快捷操作</button><h4>客户阶段</h4>{CUSTOMER_STAGES.map(([value,label])=><button key={value} disabled={busy} className={item.customerStage===value?"selected":""} onClick={()=>onStage(value)}><span>{label}</span>{item.customerStage===value&&<Check size={14}/>}</button>)}</div>:<div className="conversation-context-submenu tags"><button className="context-back" onClick={()=>onSection("root")}>‹ 返回快捷操作</button><h4>标签 <small>{item.tags.length}/20</small></h4>{busy&&!tags.length?<p>正在读取标签…</p>:tags.length?tags.map(tag=><button key={tag.id} disabled={busy||!item.tags.some(value=>value.id===tag.id)&&item.tags.length>=20} className={item.tags.some(value=>value.id===tag.id)?"selected":""} onClick={()=>onToggleTag(tag)}><i style={{background:tag.color}}/><span>{tag.name}</span>{item.tags.some(value=>value.id===tag.id)&&<Check size={14}/>}</button>):<p>暂时没有可用标签</p>}</div>}
+  </div>;
+}
+
+function ConversationNoteDialog({conversation,token,onToken,onClose,onSaved}:{conversation:Conversation;token:string;onToken:(token:string)=>void;onClose:()=>void;onSaved:()=>Promise<void>}){
+  const [body,setBody]=useState(""),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  async function save(){if(!body.trim()||busy)return;setBusy(true);setError("");const result=await authorizedFetch(`/api/v1/conversations/${conversation.id}/notes`,token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({body:body.trim()})});if(result.token!==token)onToken(result.token);if(!result.response.ok){setError(`备注保存失败（HTTP ${result.response.status}）`);setBusy(false);return;}await onSaved();}
+  return <div className="modal-backdrop context-action-backdrop" role="presentation"><section className="login-dialog context-action-dialog" role="dialog" aria-modal="true" aria-labelledby="context-note-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><FileText size={19}/></span><h2 id="context-note-title">给 {conversation.name} 添加备注</h2><p>备注将对团队成员共享，并显示在联系人详情中。</p><label>备注内容<textarea autoFocus value={body} onChange={event=>setBody(event.target.value)} maxLength={5000} placeholder="记录客户需求、跟进情况或注意事项"/><small>{body.length}/5000</small></label>{error&&<span className="login-error">{error}</span>}<footer><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void save()} disabled={busy||!body.trim()}>{busy?"正在保存…":"添加备注"}</button></footer></section></div>;
+}
+
+function ConversationQuickTaskDialog({conversation,token,assignedUserId,onToken,onClose,onSaved}:{conversation:Conversation;token:string;assignedUserId:string|null;onToken:(token:string)=>void;onClose:()=>void;onSaved:()=>void}){
+  const [title,setTitle]=useState(""),[kind,setKind]=useState<"general"|"message">("general"),[dueAt,setDueAt]=useState(()=>toDateTimeLocal(new Date(Date.now()+86400000).toISOString())),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  async function save(){const due=new Date(dueAt),now=new Date();if(!title.trim()||Number.isNaN(due.getTime())||due<=now){setError("请填写任务标题，并选择未来的截止时间");return;}setBusy(true);setError("");const result=await authorizedFetch("/api/v1/tasks",token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId:conversation.accountId,contactId:conversation.contactId,conversationId:conversation.id,assignedUserId,kind,title:title.trim(),description:"",status:"planned",progress:0,startAt:now.toISOString(),dueAt:due.toISOString(),sendAt:kind==="message"?due.toISOString():null,sendMode:"approval",recurrence:null,personaOverride:null,toolOverrides:null,dependencyIds:[]})});if(result.token!==token)onToken(result.token);if(!result.response.ok){const response=await result.response.json().catch(()=>({})) as {message?:string};setError(response.message??`任务创建失败（HTTP ${result.response.status}）`);setBusy(false);return;}onSaved();}
+  return <div className="modal-backdrop context-action-backdrop" role="presentation"><section className="login-dialog context-action-dialog" role="dialog" aria-modal="true" aria-labelledby="context-task-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><ClipboardList size={19}/></span><h2 id="context-task-title">给 {conversation.name} 添加任务</h2><p>任务会自动关联当前客户与会话，并默认分配给你。</p><label>任务标题<input autoFocus value={title} onChange={event=>setTitle(event.target.value)} maxLength={200} placeholder="例如：跟进报价反馈"/></label><div className="context-task-grid"><label>任务类型<select value={kind} onChange={event=>setKind(event.target.value as "general"|"message")}><option value="general">普通待办</option><option value="message">定时消息</option></select></label><label>{kind==="message"?"计划发送时间":"截止时间"}<input type="datetime-local" value={dueAt} min={toDateTimeLocal(new Date().toISOString())} onChange={event=>setDueAt(event.target.value)}/></label></div>{kind==="message"&&<small className="context-task-hint">定时消息将进入审批模式，可在任务中心补充内容并生成草稿。</small>}{error&&<span className="login-error">{error}</span>}<footer><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void save()} disabled={busy||!title.trim()}>{busy?"正在创建…":"创建任务"}</button></footer></section></div>;
+}
 
 function CrmDetailsPanel({
   active,
