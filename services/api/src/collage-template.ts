@@ -30,7 +30,8 @@ export const collageTemplateSchema=z.object({
 export const collageTemplateCreateSchema=z.object({name:z.string().trim().min(1).max(120),template:collageTemplateSchema,isDefault:z.boolean().default(false)});
 export const collageTemplateUpdateSchema=z.object({name:z.string().trim().min(1).max(120).optional(),template:collageTemplateSchema.optional(),isDefault:z.boolean().optional()}).refine(value=>Object.keys(value).length>0,"at least one field is required");
 export const MATERIAL_PRODUCT_LIMIT=128;
-export const materialGenerateSchema=z.object({clientGenerationId:z.string().uuid(),name:z.string().trim().min(1).max(160),templateId:z.string().uuid(),productIds:z.array(z.string().uuid()).min(1).max(MATERIAL_PRODUCT_LIMIT)}).superRefine((value,ctx)=>{if(new Set(value.productIds).size!==value.productIds.length)ctx.addIssue({code:"custom",path:["productIds"],message:"product ids must be unique"});});
+export const MATERIAL_GENERATION_PRODUCT_LIMIT=1000;
+export const materialGenerateSchema=z.object({clientGenerationId:z.string().uuid(),name:z.string().trim().min(1).max(160),templateId:z.string().uuid(),productIds:z.array(z.string().uuid()).min(1).max(MATERIAL_GENERATION_PRODUCT_LIMIT)}).superRefine((value,ctx)=>{if(new Set(value.productIds).size!==value.productIds.length)ctx.addIssue({code:"custom",path:["productIds"],message:"product ids must be unique"});});
 
 export type CollageTemplate=z.infer<typeof collageTemplateSchema>;
 export type CollageLayer=z.infer<typeof collageLayerSchema>;

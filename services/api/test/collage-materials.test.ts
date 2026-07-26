@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import sharp from "sharp";
-import { COLLAGE_TEMPLATE_PRODUCT_LIMIT, collageTemplateSchema, DEFAULT_COLLAGE_TEMPLATE, materialGenerateSchema, productSlotIds } from "../src/collage-template.js";
+import { COLLAGE_TEMPLATE_PRODUCT_LIMIT, MATERIAL_GENERATION_PRODUCT_LIMIT, collageTemplateSchema, DEFAULT_COLLAGE_TEMPLATE, materialGenerateSchema, productSlotIds } from "../src/collage-template.js";
 import { renderCollagePage } from "../src/collage-image.js";
 
 test("collage migration creates template, batch, and material asset records",async()=>{
@@ -22,10 +22,12 @@ test("collage generation dialog loads selections larger than one 64-item product
   assert.match(dialog,/productBodies\.flatMap\(body=>body\.data\)/);
 });
 
-test("collage generation accepts up to 128 products",()=>{
-  const productIds=Array.from({length:129},(_,index)=>`00000000-0000-4000-8000-${String(index).padStart(12,"0")}`);
-  const payload={clientGenerationId:"00000000-0000-4000-8000-000000000999",name:"128 products",templateId:"00000000-0000-4000-8000-000000000998"};
-  assert.equal(materialGenerateSchema.safeParse({...payload,productIds:productIds.slice(0,128)}).success,true);
+test("collage generation accepts multi-page batches independently of template slot limits",()=>{
+  const productIds=Array.from({length:MATERIAL_GENERATION_PRODUCT_LIMIT+1},(_,index)=>`00000000-0000-4000-8000-${String(index).padStart(12,"0")}`);
+  const payload={clientGenerationId:"00000000-0000-4000-8000-000000000999",name:"multi-page products",templateId:"00000000-0000-4000-8000-000000000998"};
+  assert.equal(materialGenerateSchema.safeParse({...payload,productIds:productIds.slice(0,187)}).success,true);
+  assert.equal(Math.ceil(187/64),3);
+  assert.equal(materialGenerateSchema.safeParse({...payload,productIds:productIds.slice(0,MATERIAL_GENERATION_PRODUCT_LIMIT)}).success,true);
   assert.equal(materialGenerateSchema.safeParse({...payload,productIds}).success,false);
 });
 
