@@ -73,7 +73,7 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /拖拽文件到这里/);
   assert.match(component, /发送所选附件/);
   assert.match(component, /uploadComposerImages/);
-  assert.match(component, /onPaste=\{event=>/);
+  assert.match(component, /onPaste=\{\s*\(?event\)?\s*=>/);
   assert.match(component, /松开即可发送图片/);
   assert.match(component, /可粘贴或拖入图片发送/);
   assert.match(css, /\.composer\.image-dragging/);
@@ -317,9 +317,9 @@ test("workspace navigation is URL based", async () => {
 test("task requests stay stable and inbox polling stops on other views", async () => {
   const component = await readFile(new URL("../app/whatsapp-inbox.tsx", import.meta.url), "utf8");
   assert.match(component, /const taskRequest=useCallback\(\(path:string,init\?:RequestInit\)=>authorizedFetch\(path,apiToken,init\),\[apiToken\]\)/);
-  assert.match(component, /<TaskCenter token=\{apiToken\} accounts=\{accounts\} request=\{taskRequest\}/);
+  assert.match(component, /<TaskCenter\s+token=\{apiToken\}\s+accounts=\{accounts\}\s+request=\{taskRequest\}/);
   assert.doesNotMatch(component, /<TaskCenter[^>]+request=\{\(path,init\)=>authorizedFetch/);
-  assert.match(component, /if\(view!=="inbox"\|\|!apiToken\)return;const timer=window\.setInterval\(\(\)=>void loadWorkspace/);
+  assert.match(component, /if\(view!=="inbox"\|\|!apiToken\)return;const timer=window\.setInterval\(\(\)=>void loadConversations/);
   assert.match(component, /if\(view!=="inbox"\|\|!apiToken\|\|!effectiveActiveId\)return;const initial=/);
 });
 
