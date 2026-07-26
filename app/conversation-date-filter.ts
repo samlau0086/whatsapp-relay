@@ -1,4 +1,4 @@
-export type ConversationDateFilter="all"|"today"|"yesterday"|"last7"|"last15";
+export type ConversationDateFilter="all"|"today"|"yesterday"|"last7"|"last15"|"unreplied";
 
 export const CONVERSATION_DATE_FILTERS:Array<{value:ConversationDateFilter;label:string}>=[
   {value:"all",label:"全部"},
@@ -6,10 +6,11 @@ export const CONVERSATION_DATE_FILTERS:Array<{value:ConversationDateFilter;label
   {value:"yesterday",label:"昨天"},
   {value:"last7",label:"最近7天"},
   {value:"last15",label:"最近15天"},
+  {value:"unreplied",label:"未回复"},
 ];
 
 export function conversationDateRange(filter:ConversationDateFilter,now=new Date()):{from?:string;before?:string}{
-  if(filter==="all")return{};
+  if(filter==="all"||filter==="unreplied")return{};
   const today=new Date(now.getFullYear(),now.getMonth(),now.getDate());
   const tomorrow=new Date(today);tomorrow.setDate(today.getDate()+1);
   const from=new Date(today);
@@ -21,6 +22,7 @@ export function conversationDateRange(filter:ConversationDateFilter,now=new Date
 
 export function conversationListPath(filter:ConversationDateFilter,now=new Date()):string{
   const params=new URLSearchParams({limit:"100"});
+  if(filter==="unreplied")params.set("unreplied","true");
   const range=conversationDateRange(filter,now);
   if(range.from)params.set("lastMessageFrom",range.from);
   if(range.before)params.set("lastMessageBefore",range.before);

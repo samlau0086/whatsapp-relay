@@ -161,6 +161,12 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /重新发送/);
   assert.match(component, /英文原文/);
   assert.match(component, /order-send-mode/);
+  assert.match(component, /conversation-stage stage-\$\{stageValue\(item\.customerStage\)\}/);
+  assert.match(css, /\.conversation-meta>\.stage-new/);
+  assert.match(css, /\.conversation-meta>\.stage-considering/);
+  assert.match(css, /\.conversation-meta>\.stage-qualified/);
+  assert.match(css, /\.conversation-meta>\.stage-won/);
+  assert.match(css, /\.conversation-meta>\.stage-lost/);
   assert.doesNotMatch(component, /order-send-english/);
   assert.match(component, /目标翻译语言/);
   assert.match(component, /LanguagePicker value=\{targetLanguage\}/);
