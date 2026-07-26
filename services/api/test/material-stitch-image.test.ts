@@ -32,14 +32,22 @@ test("stitching reports an explicit error when even minimum output cannot fit",a
   await assert.rejects(()=>stitchMaterialImages([image,image],"vertical",10),/material_stitch_too_large/);
 });
 
-test("material send routes keep cross-library ordering, first-caption behavior, and idempotent batch status",async()=>{
-  const server=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
+test("material send routes keep cross-library ordering, translated caption sources, and idempotent batch status",async()=>{
+  const [server,dialog]=await Promise.all([
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/material-library-send-dialog.tsx",import.meta.url),"utf8"),
+  ]);
   assert.match(server,/\/api\/v1\/conversations\/:id\/materials\/send/);
   assert.match(server,/a\.batch_id=ANY\(\$1::uuid\[\]\)/);
   assert.match(server,/ORDER BY array_position\(\$1::uuid\[\],a\.batch_id\),a\.page_index/);
   assert.match(server,/selectedBatchIds\.length!==input\.materialBatchIds\.length/);
   assert.match(server,/caption=index===0/);
+  assert.match(server,/translationSourceText=index===0/);
+  assert.match(server,/text_content,translation_source_text,media_id/);
   assert.match(server,/material_send_batch_conflict/);
   assert.match(server,/\/api\/v1\/conversations\/:id\/materials\/batches\/:batchId/);
   assert.match(server,/source:"material-stitch"/);
+  assert.match(dialog,/\/api\/v1\/translations\/preview/);
+  assert.match(dialog,/确认图片说明翻译/);
+  assert.match(dialog,/translationSourceText/);
 });

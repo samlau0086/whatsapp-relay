@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ImageIcon, LayoutGrid, LoaderCircle, Rows3, Search, Send, X } from "lucide-react";
+import { Check, ImageIcon, Languages, LayoutGrid, LoaderCircle, Rows3, Search, Send, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type RequestResult={response:Response;token:string};
@@ -11,7 +11,7 @@ type SelectedMaterialAsset=MaterialAsset&{batchId:string};
 type SendMode="stitched"|"individual";
 type StitchOrientation="vertical"|"horizontal";
 
-export function MaterialLibrarySendDialog({accountId,conversationId,customerName,initialCaption,request,onToken,onClose,onSent}:{accountId:string;conversationId:string;customerName:string;initialCaption:string;request:Request;onToken:(token:string)=>void;onClose:()=>void;onSent:(message:string)=>void}){
+export function MaterialLibrarySendDialog({accountId,conversationId,customerName,initialCaption,translationEnabled,translationConfigured,targetLanguage,targetLanguageName,request,onToken,onClose,onSent}:{accountId:string;conversationId:string;customerName:string;initialCaption:string;translationEnabled:boolean;translationConfigured:boolean;targetLanguage:string;targetLanguageName:string;request:Request;onToken:(token:string)=>void;onClose:()=>void;onSent:(message:string)=>void}){
   const [items,setItems]=useState<MaterialSummary[]>([]);
   const [selectedBatchId,setSelectedBatchId]=useState("");
   const [assets,setAssets]=useState<MaterialAsset[]>([]);
@@ -25,6 +25,8 @@ export function MaterialLibrarySendDialog({accountId,conversationId,customerName
   const [detailLoading,setDetailLoading]=useState(false);
   const [sending,setSending]=useState(false);
   const [confirming,setConfirming]=useState(false);
+  const [translating,setTranslating]=useState(false);
+  const [translationPreview,setTranslationPreview]=useState<{source:string;translated:string}|null>(null);
   const [error,setError]=useState("");
   const requestRef=useRef(request),onTokenRef=useRef(onToken);
   const pendingBatchRef=useRef<{id:string;fingerprint:string}|null>(null);
@@ -66,7 +68,7 @@ export function MaterialLibrarySendDialog({accountId,conversationId,customerName
 
   useEffect(()=>{const timer=window.setTimeout(()=>void loadBatches(),0);return()=>window.clearTimeout(timer);},[loadBatches]);
   useEffect(()=>{const timer=window.setTimeout(()=>void loadDetail(selectedBatchId),0);return()=>window.clearTimeout(timer);},[selectedBatchId,loadDetail]);
-  useEffect(()=>{const key=(event:KeyboardEvent)=>{if(event.key==="Escape"&&!sending&&!confirming)onClose();};window.addEventListener("keydown",key);return()=>window.removeEventListener("keydown",key);},[sending,confirming,onClose]);
+  useEffect(()=>{const key=(event:KeyboardEvent)=>{if(event.key!=="Escape"||sending||confirming||translating)return;if(translationPreview)setTranslationPreview(null);else onClose();};window.addEventListener("keydown",key);return()=>window.removeEventListener("keydown",key);},[sending,confirming,translating,translationPreview,onClose]);
 
   const visible=useMemo(()=>{const keyword=query.trim().toLowerCase();return keyword?items.filter(item=>`${item.name} ${item.templateName}`.toLowerCase().includes(keyword)):items;},[items,query]);
   const selectedBatch=items.find(item=>item.id===selectedBatchId);
@@ -75,7 +77,7 @@ export function MaterialLibrarySendDialog({accountId,conversationId,customerName
     return selectedMediaIds.flatMap(mediaId=>assetCache[mediaId]?[assetCache[mediaId]]:[]).sort((left,right)=>(batchOrder.get(left.batchId)??Number.MAX_SAFE_INTEGER)-(batchOrder.get(right.batchId)??Number.MAX_SAFE_INTEGER)||left.pageIndex-right.pageIndex);
   },[assetCache,items,selectedMediaIds]);
   const selectionOrder=useMemo(()=>new Map(selectedAssets.map((asset,index)=>[asset.mediaId,index+1])),[selectedAssets]);
-  const busy=sending||confirming;
+  const busy=sending||confirming||translating;
 
   function toggle(mediaId:string){
     setError("");
@@ -105,13 +107,26 @@ export function MaterialLibrarySendDialog({accountId,conversationId,customerName
     onClose();
   }
 
-  async function send(){
+  async function send(translatedCaption?:string,translationSourceText?:string){
     if(!selectedAssets.length||busy)return;
-    const mediaIds=selectedAssets.map(item=>item.mediaId),materialBatchIds=[...new Set(selectedAssets.map(item=>item.batchId))],fingerprint=JSON.stringify({materialBatchIds,mediaIds,mode,orientation,caption:caption.trim()});
+    const sourceCaption=caption.trim();
+    if(translatedCaption===undefined&&sourceCaption&&translationEnabled){
+      if(!translationConfigured){setError("AI 翻译暂不可用，请联系管理员配置 Provider");return;}
+      setTranslating(true);setError("");
+      try{
+        const {result,body}=await requestJsonWithTimeout("/api/v1/translations/preview",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:sourceCaption,targetLanguage})},15_000);
+        if(!result.response.ok||!body.translatedText)throw new Error(String(body.message??"翻译失败"));
+        setTranslationPreview({source:sourceCaption,translated:String(body.translatedText)});
+      }catch(reason){setError(reason instanceof Error?reason.message:"AI 翻译失败，图片未发送");}
+      finally{setTranslating(false);}
+      return;
+    }
+    const outgoingCaption=(translatedCaption??sourceCaption).trim();
+    const mediaIds=selectedAssets.map(item=>item.mediaId),materialBatchIds=[...new Set(selectedAssets.map(item=>item.batchId))],fingerprint=JSON.stringify({materialBatchIds,mediaIds,mode,orientation,caption:outgoingCaption,translationSourceText});
     const pending=pendingBatchRef.current?.fingerprint===fingerprint?pendingBatchRef.current:{id:`material-${crypto.randomUUID()}`,fingerprint};
     pendingBatchRef.current=pending;setSending(true);setConfirming(false);setError("");
     try{
-      const {result,body}=await requestJsonWithTimeout(`/api/v1/conversations/${conversationId}/materials/send`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId,clientBatchId:pending.id,materialBatchIds,mediaIds,mode,orientation,caption:caption.trim()||undefined})},15_000);
+      const {result,body}=await requestJsonWithTimeout(`/api/v1/conversations/${conversationId}/materials/send`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId,clientBatchId:pending.id,materialBatchIds,mediaIds,mode,orientation,caption:outgoingCaption||undefined,translationSourceText})},15_000);
       if(!result.response.ok)throw Object.assign(new Error(materialSendError(body,result.response.status)),{definitive:true});
       completeSend();
     }catch(reason){
@@ -135,7 +150,18 @@ export function MaterialLibrarySendDialog({accountId,conversationId,customerName
       </main>
     </div>
     {error&&<p className="material-send-error">{error}</p>}
-    <footer><label>图片说明（可选）<input value={caption} onChange={event=>{setCaption(event.target.value);pendingBatchRef.current=null}} maxLength={65536} placeholder="随图片一起发送的文字"/></label><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" disabled={!selectedAssets.length||busy} onClick={()=>void send()}>{busy?<><LoaderCircle className="spin" size={15}/>{confirming?"正在确认发送状态…":"正在处理…"}</>:<><Send size={15}/>{mode==="stitched"?`拼接并发送 ${selectedAssets.length} 张`:`逐个发送 ${selectedAssets.length} 张`}</>}</button></footer>
+    <footer><label>图片说明（可选）{translationEnabled&&<span className="material-caption-translation"><Languages size={11}/>发送前自动翻译为 {targetLanguageName}</span>}<input value={caption} onChange={event=>{setCaption(event.target.value);setTranslationPreview(null);pendingBatchRef.current=null}} maxLength={65536} placeholder="随图片一起发送的文字"/></label><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" disabled={!selectedAssets.length||busy} onClick={()=>void send()}>{busy?<><LoaderCircle className="spin" size={15}/>{translating?"正在翻译…":confirming?"正在确认发送状态…":"正在处理…"}</>:translationEnabled&&caption.trim()?<><Languages size={15}/>翻译并预览</>:<><Send size={15}/>{mode==="stitched"?`拼接并发送 ${selectedAssets.length} 张`:`逐个发送 ${selectedAssets.length} 张`}</>}</button></footer>
+    {translationPreview&&<MaterialTranslationConfirm source={translationPreview.source} translated={translationPreview.translated} targetLanguageName={targetLanguageName} busy={busy} onClose={()=>setTranslationPreview(null)} onConfirm={text=>{setTranslationPreview(null);void send(text,translationPreview.source);}}/>}
+  </section></div>;
+}
+
+function MaterialTranslationConfirm({source,translated,targetLanguageName,busy,onClose,onConfirm}:{source:string;translated:string;targetLanguageName:string;busy:boolean;onClose:()=>void;onConfirm:(text:string)=>void}){
+  const [text,setText]=useState(translated);
+  return <div className="material-translation-confirm-backdrop" role="presentation"><section className="login-dialog translation-preview-dialog material-translation-confirm" role="dialog" aria-modal="true" aria-labelledby="material-translation-title">
+    <button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭翻译确认"><X size={17}/></button><span className="login-logo"><Languages size={21}/></span>
+    <h2 id="material-translation-title">确认图片说明翻译</h2><p>已根据当前会话设置翻译为 {targetLanguageName}。请确认或修改译文后再发送素材图片。</p>
+    <label>原文<textarea value={source} readOnly/></label><label>将发送的图片说明 <span className="tts-count">{text.length}/65536</span><textarea value={text} onChange={event=>setText(event.target.value)} maxLength={65536} autoFocus/></label>
+    <div className="translation-preview-actions"><button className="secondary-action" onClick={onClose} disabled={busy}>返回修改</button><button className="primary-action" disabled={busy||!text.trim()} onClick={()=>onConfirm(text.trim())}><Send size={14}/>确认并发送图片</button></div>
   </section></div>;
 }
 

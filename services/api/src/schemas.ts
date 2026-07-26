@@ -180,7 +180,8 @@ export const materialSendSchema=z.object({
   mode:z.enum(["stitched","individual"]),
   orientation:z.enum(["vertical","horizontal"]).default("vertical"),
   caption:z.string().max(65536).optional(),
-}).superRefine((value,ctx)=>{if(new Set(value.materialBatchIds).size!==value.materialBatchIds.length)ctx.addIssue({code:"custom",path:["materialBatchIds"],message:"material batch ids must be unique"});if(new Set(value.mediaIds).size!==value.mediaIds.length)ctx.addIssue({code:"custom",path:["mediaIds"],message:"media ids must be unique"});});
+  translationSourceText:z.string().trim().min(1).max(65536).optional(),
+}).superRefine((value,ctx)=>{if(new Set(value.materialBatchIds).size!==value.materialBatchIds.length)ctx.addIssue({code:"custom",path:["materialBatchIds"],message:"material batch ids must be unique"});if(new Set(value.mediaIds).size!==value.mediaIds.length)ctx.addIssue({code:"custom",path:["mediaIds"],message:"media ids must be unique"});if(value.translationSourceText&&!value.caption?.trim())ctx.addIssue({code:"custom",path:["translationSourceText"],message:"translated material captions require a caption"});});
 const orderItemSchema=z.object({name:z.string().trim().min(1).max(120),sku:z.string().trim().min(1).max(80).optional(),quantity:z.coerce.number().int().min(1).max(9999),unitAmount:moneySchema,imageMediaId:z.string().uuid().optional(),productId:z.string().uuid().optional(),clientProductId:z.string().uuid().optional()}).superRefine((value,ctx)=>{if(value.productId&&value.clientProductId)ctx.addIssue({code:"custom",path:["productId"],message:"productId and clientProductId are mutually exclusive"});if(value.clientProductId&&!value.sku)ctx.addIssue({code:"custom",path:["sku"],message:"new products require a sku"});});
 const orderFeeSchema=z.object({name:z.string().trim().min(1).max(80),amount:moneySchema.refine(value=>value>0,"fee must be positive")});
 export const customerAddressSchema=z.object({

@@ -452,7 +452,7 @@ app.get("/api/v1/products",{preHandler:authenticate},async(request,reply)=>{
     FROM products p LEFT JOIN media m ON m.id=p.image_media_id
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',label.id,'name',label.name,'color',label.color) ORDER BY lower(label.name)) tags FROM product_labels label WHERE label.product_id=p.id) label_list ON true
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('minQuantity',tier.min_quantity,'unitAmount',tier.unit_amount) ORDER BY tier.min_quantity) price_tiers FROM product_price_tiers tier WHERE tier.product_id=p.id) price_list ON true
-    WHERE p.deleted_at IS NULL AND ($1::text IS NULL OR p.name ILIKE '%'||$1||'%' OR p.sku ILIKE '%'||$1||'%' OR p.description ILIKE '%'||$1||'%') AND ($2::text IS NULL OR p.currency=$2) AND ($3::text IS NULL OR EXISTS(SELECT 1 FROM product_labels filter_label WHERE filter_label.product_id=p.id AND lower(filter_label.name)=lower($3)))
+    WHERE p.deleted_at IS NULL AND ($1::text IS NULL OR p.name ILIKE '%'||$1||'%' OR p.sku ILIKE '%'||$1||'%' OR p.description ILIKE '%'||$1||'%' OR EXISTS(SELECT 1 FROM product_labels search_label WHERE search_label.product_id=p.id AND search_label.name ILIKE '%'||$1||'%')) AND ($2::text IS NULL OR p.currency=$2) AND ($3::text IS NULL OR EXISTS(SELECT 1 FROM product_labels filter_label WHERE filter_label.product_id=p.id AND lower(filter_label.name)=lower($3)))
     ORDER BY p.updated_at DESC,p.id LIMIT $4 OFFSET $5`,[query.q?.trim()||null,parsedCurrency?.data??null,query.tag?.trim()||null,limit+1,offset]),pool.query("SELECT DISTINCT label.name FROM product_labels label JOIN products p ON p.id=label.product_id WHERE p.deleted_at IS NULL ORDER BY label.name")]);
   return{data:result.rows.slice(0,limit).map(mapProductRow),total:Number(result.rows[0]?.total_count??0),hasMore:result.rows.length>limit,nextOffset:result.rows.length>limit?offset+limit:null,tags:tagOptions.rows.map(row=>String(row.name))};
 });
@@ -631,14 +631,14 @@ app.post("/api/v1/conversations/:id/materials/send",{preHandler:authenticate},as
       const outgoing=input.mode==="stitched"?[{mediaId:stitchedMediaId!,fileName:uploaded!.fileName}]:selected.rows.map(row=>({mediaId:String(row.media_id),fileName:String(row.file_name)}));
       const baseTime=Date.now();
       for(const [index,item] of outgoing.entries()){
-        const clientMessageId=clientMessageIds[index],caption=index===0?(input.caption?.trim()||null):null,occurredAt=new Date(baseTime+index).toISOString();
-        const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,media_id,status,occurred_at) VALUES($1,$2,$3,$4,'out','image',$5,$6,'queued',$7) RETURNING id",[id,input.accountId,principal.id,clientMessageId,caption,item.mediaId,occurredAt]);
+        const clientMessageId=clientMessageIds[index],caption=index===0?(input.caption?.trim()||null):null,translationSourceText=index===0?(input.translationSourceText?.trim()||null):null,occurredAt=new Date(baseTime+index).toISOString();
+        const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,translation_source_text,media_id,status,occurred_at) VALUES($1,$2,$3,$4,'out','image',$5,$6,$7,'queued',$8) RETURNING id",[id,input.accountId,principal.id,clientMessageId,caption,translationSourceText,item.mediaId,occurredAt]);
         await queueWhatsAppCommand(client,{accountId:input.accountId,conversationId:id,messageId:message.rows[0].id,payload:{accountId:input.accountId,conversationId:id,clientMessageId,type:"image",...(caption?{text:caption}:{}),mediaId:item.mediaId,messageId:message.rows[0].id,toJid:context.wa_jid}});
         messageIds.push(String(message.rows[0].id));
       }
       await client.query("UPDATE conversations SET status='open',closed_at=NULL,last_message_at=now() WHERE id=$1",[id]);
       await pauseAgentForHuman(client,id);
-      await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'material.send','conversation',$2,$3)",[principal.id,id,JSON.stringify({clientBatchId:input.clientBatchId,materialBatchIds:input.materialBatchIds,mediaIds:selected.rows.map(row=>String(row.media_id)),mode:input.mode,orientation:input.orientation,captioned:Boolean(input.caption?.trim()),messageIds})]);
+      await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'material.send','conversation',$2,$3)",[principal.id,id,JSON.stringify({clientBatchId:input.clientBatchId,materialBatchIds:input.materialBatchIds,mediaIds:selected.rows.map(row=>String(row.media_id)),mode:input.mode,orientation:input.orientation,captioned:Boolean(input.caption?.trim()),translatedCaption:Boolean(input.translationSourceText),messageIds})]);
       return{deduplicated:false,messageIds};
     });
     committed=true;if(context.agent_id)void dispatchPending(context.agent_id);return reply.code(202).send(result);

@@ -167,6 +167,8 @@ test("product library schemas validate SKU, tiered prices, and editable labels",
   assert.equal(materialSendSchema.safeParse({...materialBase,mediaIds:[...materialMediaIds,"20000000-0000-4000-8000-000000000011"]}).success,false);
   assert.equal(materialSendSchema.safeParse({...materialBase,mediaIds:[materialMediaIds[0],materialMediaIds[0]]}).success,false);
   assert.equal(materialSendSchema.safeParse({...materialBase,materialBatchIds:[materialBatchIds[0],materialBatchIds[0]],mediaIds:[materialMediaIds[0]]}).success,false);
+  assert.equal(materialSendSchema.safeParse({...materialBase,mediaIds:[materialMediaIds[0]],caption:"Hello",translationSourceText:"你好"}).success,true);
+  assert.equal(materialSendSchema.safeParse({...materialBase,mediaIds:[materialMediaIds[0]],translationSourceText:"你好"}).success,false);
 });
 
 test("currency settings require one included base currency with rate one",()=>{

@@ -131,6 +131,17 @@ test("product card sending recovers from a lost response without duplicating the
   assert.match(server,/left\(client_message_id,length\(\$3\)\+1\)=\$3\|\|':'/);
 });
 
+test("product card search queries the complete product library and preserves selected products",async()=>{
+  const [dialog,server]=await Promise.all([
+    readFile(new URL("../../../app/product-card-send-dialog.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(dialog,/q=\$\{encodeURIComponent\(needle\)\}/);
+  assert.match(dialog,/setProductCache/);
+  assert.match(dialog,/productCache\.get\(id\)/);
+  assert.match(server,/search_label\.name ILIKE/);
+});
+
 test("product management offers compact card and list views",async()=>{
   const [component,css]=await Promise.all([readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),readFile(new URL("../../../app/globals.css",import.meta.url),"utf8")]);
   assert.match(component,/aria-label="卡片视图"/);
