@@ -121,6 +121,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [detailsOpen,setDetailsOpen]=useState(true);
   const [sidebarOpen,setSidebarOpen]=useState(false);
   const [toast,setToast]=useState("");
+  const [markingUnreadId,setMarkingUnreadId]=useState("");
   const [retryingMessageId,setRetryingMessageId]=useState("");
   const [apiToken,setApiToken]=useState("");
   const [user,setUser]=useState<User|null>(null);
@@ -303,6 +304,23 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     if(!response.ok){setToast(`操作失败（HTTP ${response.status}）`);return;}await loadWorkspace(apiToken,true);
   }
 
+  async function markConversationUnread(conversationId:string){
+    if(!apiToken||markingUnreadId)return;
+    setMarkingUnreadId(conversationId);
+    setConversations(all=>all.map(item=>item.id===conversationId?{...item,unread:Math.max(item.unread,1)}:item));
+    try{
+      const result=await authorizedFetch(`/api/v1/conversations/${conversationId}`,apiToken,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({unread:true})});
+      if(result.token!==apiToken)setApiToken(result.token);
+      if(!result.response.ok)throw new Error(`HTTP ${result.response.status}`);
+      const updated=await result.response.json() as {unread_count?:number};
+      setConversations(all=>all.map(item=>item.id===conversationId?{...item,unread:Number(updated.unread_count??1)}:item));
+      setToast("已标记为未读");
+    }catch{
+      setConversations(all=>all.map(item=>item.id===conversationId?{...item,unread:0}:item));
+      setToast("标记未读失败，请重试");
+    }finally{setMarkingUnreadId("");}
+  }
+
   async function saveTranslationPreference(next:TranslationPreference){
     if(!apiToken||!active)return;if(next.enabled&&!translationConfigured){setToast("管理员尚未启用 AI 翻译 Provider");return;}
     const conversationId=active.id,previous=translationPreferences[conversationId]??DEFAULT_TRANSLATION_PREFERENCE;setTranslationPreferences(all=>({...all,[conversationId]:next}));
@@ -440,7 +458,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       <section className="accounts-block"><p className="section-label">账号连接</p>{accounts.length?accounts.map((account,index)=><AccountStatus key={account.id} initials={account.name.slice(0,2).toUpperCase()} color={["green","blue","gray"][index%3]} name={`${account.name} · ${account.transport==="cloud"?"Cloud API":"Web"}`} detail={account.status==="online"?"已连接":account.reason||statusText(account.status)} online={account.status==="online"}/>):<p className="empty-note">暂无已绑定账号</p>}</section>
     </aside>
 
-    <section className="conversation-panel"><header className="conversation-head"><button className="mobile-menu" onClick={()=>setSidebarOpen(true)} aria-label="打开筛选"><Menu size={18}/></button><div><h2>{filter}</h2><span>{visible.length} 个真实会话</span></div><button className="icon-button" onClick={()=>void loadWorkspace(apiToken)} aria-label="刷新"><RefreshCw size={17}/></button></header><label className="search-box"><Search size={15}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索会话、联系人或号码"/></label><div className="conversation-list">{loading?<EmptyState title="正在读取中心数据" text="请稍候…"/>:loadError?<EmptyState title="中心数据加载失败" text={loadError}/>:visible.length?visible.map(item=><button key={item.id} onClick={()=>setActiveId(item.id)} className={item.id===effectiveActiveId?"conversation active":"conversation"}><span className="avatar" style={{background:item.color}}>{item.initials}<i className={`presence ${item.accountStatus==="online"?"online":"offline"}`}/></span><span className="conversation-copy"><span className="conversation-line"><b>{item.name}</b><time>{item.time}</time></span><span className="conversation-line preview"><span>{item.preview}</span>{item.unread>0&&<em>{item.unread}</em>}</span><small className="conversation-meta"><span>{stageName(item.customerStage)}</span>{item.tags.slice(0,1).map(tag=><i key={tag.id} style={{background:tag.color}}>{tag.name}</i>)}{item.remindAt&&<em className={new Date(item.remindAt).getTime()<=clock?"due":""}><Bell size={10}/>{formatDateTime(item.remindAt)}</em>}</small></span></button>):<EmptyState title="暂无真实会话" text={accounts.length?"该账号尚未收到一对一消息":"请先在 Windows Agent 绑定 WhatsApp 账号"}/>}</div></section>
+    <section className="conversation-panel"><header className="conversation-head"><button className="mobile-menu" onClick={()=>setSidebarOpen(true)} aria-label="打开筛选"><Menu size={18}/></button><div><h2>{filter}</h2><span>{visible.length} 个真实会话</span></div><button className="icon-button" onClick={()=>void loadWorkspace(apiToken)} aria-label="刷新"><RefreshCw size={17}/></button></header><label className="search-box"><Search size={15}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索会话、联系人或号码"/></label><div className="conversation-list">{loading?<EmptyState title="正在读取中心数据" text="请稍候…"/>:loadError?<EmptyState title="中心数据加载失败" text={loadError}/>:visible.length?visible.map(item=><div key={item.id} role="button" tabIndex={0} onClick={()=>setActiveId(item.id)} onKeyDown={event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();setActiveId(item.id);}}} className={item.id===effectiveActiveId?"conversation active":"conversation"}><span className="avatar" style={{background:item.color}}>{item.initials}<i className={`presence ${item.accountStatus==="online"?"online":"offline"}`}/></span><span className="conversation-copy"><span className="conversation-line"><b>{item.name}</b><time>{item.time}</time></span><span className="conversation-line preview"><span>{item.preview}</span>{item.unread>0&&<em>{item.unread}</em>}</span><small className="conversation-meta"><span>{stageName(item.customerStage)}</span>{item.tags.slice(0,1).map(tag=><i key={tag.id} style={{background:tag.color}}>{tag.name}</i>)}{item.remindAt&&<em className={new Date(item.remindAt).getTime()<=clock?"due":""}><Bell size={10}/>{formatDateTime(item.remindAt)}</em>}</small></span>{item.unread===0&&<button className="mark-unread-button" disabled={markingUnreadId===item.id} onClick={event=>{event.stopPropagation();void markConversationUnread(item.id);}} aria-label={`将 ${item.name} 标记为未读`} title="标记为未读"><Mail size={15}/></button>}</div>):<EmptyState title="暂无真实会话" text={accounts.length?"该账号尚未收到一对一消息":"请先在 Windows Agent 绑定 WhatsApp 账号"}/>}</div></section>
 
     <section className="chat-panel">{active?<>
       <header className="chat-head"><div className="chat-person"><span className="avatar" style={{background:active.color}}>{active.initials}</span><span><b>{active.name}</b><small><i className={`status-dot ${active.accountStatus==="online"?"online":""}`}/>{active.account} · {active.transport==="cloud"?"Cloud API":"Web"} · {statusText(active.accountStatus)}</small></span></div><div className="chat-actions"><button onClick={()=>void updateConversation({assignedToMe:active.assignedUserId!==userId})} className="assign-button"><UserPlus size={15}/>{active.assignedUserId===userId?"取消认领":active.assignedUserId?"转为我负责":"认领"}</button><button onClick={()=>void updateConversation({favorite:!active.favorite})} className="icon-button" aria-label="收藏"><Bookmark size={17} fill={active.favorite?"currentColor":"none"}/></button><button onClick={()=>setDetailsOpen(!detailsOpen)} className="icon-button" aria-label="联系人详情"><Info size={17}/></button></div></header>
