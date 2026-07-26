@@ -56,6 +56,7 @@ button { color:inherit; }
 .icon-button,.mobile-menu { width:32px; height:32px; border:1px solid var(--line); background:white; border-radius:9px; place-items:center; cursor:pointer; }
 .search-box { margin:13px 14px; height:35px; border-radius:9px; background:#f4f6f4; display:flex; align-items:center; gap:8px; padding:0 11px; color:#94a09a; }
 .search-box input { border:0; outline:0; background:transparent; width:100%; font-size:11px; }
+.conversation-date-tabs{display:flex;flex:0 0 auto;gap:5px;overflow-x:auto;padding:0 14px 12px;scrollbar-width:none}.conversation-date-tabs::-webkit-scrollbar{display:none}.conversation-date-tabs button{height:29px;flex:0 0 auto;border:1px solid #e0e7e3;border-radius:7px;background:#fff;color:#75827c;padding:0 9px;font-size:10px;white-space:nowrap;cursor:pointer}.conversation-date-tabs button:hover{border-color:#a9d6bf;color:#16754e}.conversation-date-tabs button.active{border-color:#9fd3b8;background:#eaf8f1;color:#08764a;font-weight:700}.conversation-date-tabs button:focus-visible{outline:2px solid #28aa6d;outline-offset:1px}
 .conversation-list { min-height:0; overflow:auto; flex:1; }
 .empty-state { min-height:150px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; padding:24px; text-align:center; color:#8a9690; }
 .empty-state b { color:#51605a; font-size:12px; }.empty-state span,.empty-note { color:#95a09b; font-size:9px; line-height:1.6; }
@@ -309,7 +310,7 @@ button { color:inherit; }
 .workspace-title .eyebrow,.filters .section-label{font-size:12px}.workspace-title h1{font-size:21px}
 .account-switcher b,.account-status b{font-size:14px}.account-switcher small,.account-status small{font-size:12px}
 .filter-row{height:40px;font-size:14px}.filter-row em{font-size:12px}
-.conversation-head h2{font-size:18px}.conversation-head span{font-size:12px}.search-box{height:41px}.search-box input{font-size:13px}
+.conversation-head h2{font-size:18px}.conversation-head span{font-size:12px}.search-box{height:41px}.search-box input{font-size:13px}.conversation-date-tabs button{height:32px;font-size:12px}
 .empty-state b{font-size:14px}.empty-state span,.empty-note{font-size:12px}
 .conversation{padding-top:15px;padding-bottom:15px}.conversation-line b{font-size:14px}.conversation-line time{font-size:12px}
 .conversation-line.preview{font-size:13px}.conversation-line.preview em{font-size:11px}.conversation-copy>small{font-size:11px}

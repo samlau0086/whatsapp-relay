@@ -20,6 +20,7 @@ import { clipboardFiles } from "./clipboard-files";
 import { CollageGenerateDialog, ProductWorkspace } from "./collage-materials";
 import { MaterialLibrarySendDialog } from "./material-library-send-dialog";
 import { TaskCenter } from "./task-center";
+import { CONVERSATION_DATE_FILTERS, conversationListPath, type ConversationDateFilter } from "./conversation-date-filter";
 
 const API_URL = (process.env.NEXT_PUBLIC_RELAY_API_URL ?? "").replace(/\/$/, "");
 const COLORS = ["#6b4f3a", "#305f72", "#9b5f72", "#477a62", "#705b86"];
@@ -116,6 +117,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [activeId,setActiveId]=useState("");
   const [selectedAccount,setSelectedAccount]=useState("");
   const [filter,setFilter]=useState("全部会话");
+  const [dateFilter,setDateFilter]=useState<ConversationDateFilter>("all");
   const [query,setQuery]=useState("");
   const [draft,setDraft]=useState("");
   const [replyTo,setReplyTo]=useState<{conversationId:string;message:ChatMessage}|null>(null);
@@ -158,6 +160,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const textareaRef=useRef<HTMLTextAreaElement>(null);
   const messagesRef=useRef<HTMLDivElement>(null);
   const translationLoadSequence=useRef(0);
+  const workspaceLoadSequence=useRef(0);
+  const dateFilterRef=useRef<ConversationDateFilter>("all");
   const notifiedReminders=useRef(new Set<string>());
 
   const userId=user?.id??tokenSubject(apiToken);
@@ -220,14 +224,15 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
 
   const logout=useCallback(()=>{
     sessionStorage.removeItem("relayAccessToken");sessionStorage.removeItem("relayUser");
-    setApiToken("");setUser(null);setAccounts([]);setConversations([]);setMessages({});setEmailActivities({});setMessageTranslations({});setTranslationPreferences({});setTranslationReadyConversationId("");setActiveId("");setAuthOpen(false);setSessionReady(true);setLoading(false);
+    dateFilterRef.current="all";setDateFilter("all");setApiToken("");setUser(null);setAccounts([]);setConversations([]);setMessages({});setEmailActivities({});setMessageTranslations({});setTranslationPreferences({});setTranslationReadyConversationId("");setActiveId("");setAuthOpen(false);setSessionReady(true);setLoading(false);
   },[]);
 
   const loadWorkspace=useCallback(async(token:string,quiet=false)=>{
+    const sequence=++workspaceLoadSequence.current;
     if(!quiet)setLoading(true);setLoadError("");
     try{
       const [accountResult,conversationResult]=await Promise.all([
-        authorizedFetch("/api/v1/accounts",token),authorizedFetch("/api/v1/conversations?limit=100",token),
+        authorizedFetch("/api/v1/accounts",token),authorizedFetch(conversationListPath(dateFilterRef.current),token),
       ]);
       const accountResponse=accountResult.response,conversationResponse=conversationResult.response;
       const refreshedToken=accountResult.token!==token?accountResult.token:conversationResult.token;
@@ -236,12 +241,28 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       if(!accountResponse.ok||!conversationResponse.ok)throw new Error(`中心 API 响应异常（${accountResponse.status}/${conversationResponse.status}）`);
       const accountBody=await accountResponse.json() as {data:Array<Record<string,unknown>>};
       const conversationBody=await conversationResponse.json() as {data:Array<Record<string,unknown>>};
+      if(sequence!==workspaceLoadSequence.current)return;
       setAccounts(accountBody.data.map(item=>({id:String(item.id),name:String(item.display_name),phone:String(item.phone_e164??""),status:String(item.status),reason:String(item.status_reason??""),transport:String(item.transport??"web") as "web"|"cloud",webhookStatus:item.webhook_status?String(item.webhook_status):undefined,credentialsStatus:item.credentials_status?String(item.credentials_status):undefined,lastEvent:item.last_event_at?String(item.last_event_at):undefined})));
       const mapped=conversationBody.data.map((item,index)=>mapConversation(item,index));
       setConversations(mapped);setActiveId(previous=>mapped.some(item=>item.id===previous)?previous:(mapped[0]?.id??""));
-    }catch(error){setLoadError(error instanceof Error?error.message:"中心数据加载失败");}
-    finally{if(!quiet)setLoading(false);}
+    }catch(error){if(sequence===workspaceLoadSequence.current)setLoadError(error instanceof Error?error.message:"中心数据加载失败");}
+    finally{if(sequence===workspaceLoadSequence.current)setLoading(false);}
   },[logout]);
+
+  const selectDateFilter=(next:ConversationDateFilter)=>{
+    if(next===dateFilter)return;
+    dateFilterRef.current=next;setDateFilter(next);
+    if(apiToken)void loadWorkspace(apiToken);
+  };
+
+  const handleDateFilterKeyDown=(event:React.KeyboardEvent<HTMLButtonElement>)=>{
+    if(!["ArrowLeft","ArrowRight","Home","End"].includes(event.key))return;
+    event.preventDefault();
+    const tabs=Array.from(event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')??[]);
+    const current=tabs.indexOf(event.currentTarget);
+    const target=event.key==="Home"?0:event.key==="End"?tabs.length-1:(current+(event.key==="ArrowRight"?1:-1)+tabs.length)%tabs.length;
+    tabs[target]?.focus();tabs[target]?.click();
+  };
 
   const loadMessages=useCallback(async(token:string,conversationId:string,markRead=false)=>{
     try{
@@ -528,7 +549,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       <section className="accounts-block"><p className="section-label">账号连接</p>{accounts.length?accounts.map((account,index)=><AccountStatus key={account.id} initials={account.name.slice(0,2).toUpperCase()} color={["green","blue","gray"][index%3]} name={`${account.name} · ${account.transport==="cloud"?"Cloud API":"Web"}`} detail={account.status==="online"?"已连接":account.reason||statusText(account.status)} online={account.status==="online"}/>):<p className="empty-note">暂无已绑定账号</p>}</section>
     </aside>
 
-    <section className="conversation-panel"><header className="conversation-head"><button className="mobile-menu" onClick={()=>setSidebarOpen(true)} aria-label="打开筛选"><Menu size={18}/></button><div><h2>{filter}</h2><span>{visible.length} 个真实会话</span></div><button className="icon-button" onClick={()=>void loadWorkspace(apiToken)} aria-label="刷新"><RefreshCw size={17}/></button></header><label className="search-box"><Search size={15}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索会话、联系人或号码"/></label><div className="conversation-list">{loading?<EmptyState title="正在读取中心数据" text="请稍候…"/>:loadError?<EmptyState title="中心数据加载失败" text={loadError}/>:visible.length?visible.map(item=><div key={item.id} role="button" tabIndex={0} onClick={()=>setActiveId(item.id)} onContextMenu={event=>openConversationMenu(event,item)} onKeyDown={event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();setActiveId(item.id);}}} className={item.id===effectiveActiveId?"conversation active":"conversation"} title="右键打开客户快捷操作"><span className="avatar" style={{background:item.color}}>{item.initials}<i className={`presence ${item.accountStatus==="online"?"online":"offline"}`}/></span><span className="conversation-copy"><span className="conversation-line"><b>{item.name}</b><time>{item.time}</time></span><span className="conversation-line preview"><span>{item.preview}</span>{item.unread>0&&<em>{item.unread}</em>}</span><small className="conversation-meta"><span>{stageName(item.customerStage)}</span>{item.tags.slice(0,1).map(tag=><i key={tag.id} style={{background:tag.color}}>{tag.name}</i>)}{item.remindAt&&<em className={new Date(item.remindAt).getTime()<=clock?"due":""}><Bell size={10}/>{formatDateTime(item.remindAt)}</em>}</small></span>{item.unread===0&&<button className="mark-unread-button" disabled={markingUnreadId===item.id} onClick={event=>{event.stopPropagation();void markConversationUnread(item.id);}} aria-label={`将 ${item.name} 标记为未读`} title="标记为未读"><Mail size={15}/></button>}</div>):<EmptyState title="暂无真实会话" text={accounts.length?"该账号尚未收到一对一消息":"请先在 Windows Agent 绑定 WhatsApp 账号"}/>}</div></section>
+    <section className="conversation-panel"><header className="conversation-head"><button className="mobile-menu" onClick={()=>setSidebarOpen(true)} aria-label="打开筛选"><Menu size={18}/></button><div><h2>{filter}</h2><span>{visible.length} 个真实会话</span></div><button className="icon-button" onClick={()=>void loadWorkspace(apiToken)} aria-label="刷新"><RefreshCw size={17}/></button></header><label className="search-box"><Search size={15}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索会话、联系人或号码"/></label><div className="conversation-date-tabs" role="tablist" aria-label="按最后联系时间筛选会话">{CONVERSATION_DATE_FILTERS.map(item=><button key={item.value} type="button" role="tab" aria-selected={dateFilter===item.value} tabIndex={dateFilter===item.value?0:-1} className={dateFilter===item.value?"active":""} onClick={()=>selectDateFilter(item.value)} onKeyDown={handleDateFilterKeyDown}>{item.label}</button>)}</div><div className="conversation-list">{loading?<EmptyState title="正在读取中心数据" text="请稍候…"/>:loadError?<EmptyState title="中心数据加载失败" text={loadError}/>:visible.length?visible.map(item=><div key={item.id} role="button" tabIndex={0} onClick={()=>setActiveId(item.id)} onContextMenu={event=>openConversationMenu(event,item)} onKeyDown={event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();setActiveId(item.id);}}} className={item.id===effectiveActiveId?"conversation active":"conversation"} title="右键打开客户快捷操作"><span className="avatar" style={{background:item.color}}>{item.initials}<i className={`presence ${item.accountStatus==="online"?"online":"offline"}`}/></span><span className="conversation-copy"><span className="conversation-line"><b>{item.name}</b><time>{item.time}</time></span><span className="conversation-line preview"><span>{item.preview}</span>{item.unread>0&&<em>{item.unread}</em>}</span><small className="conversation-meta"><span>{stageName(item.customerStage)}</span>{item.tags.slice(0,1).map(tag=><i key={tag.id} style={{background:tag.color}}>{tag.name}</i>)}{item.remindAt&&<em className={new Date(item.remindAt).getTime()<=clock?"due":""}><Bell size={10}/>{formatDateTime(item.remindAt)}</em>}</small></span>{item.unread===0&&<button className="mark-unread-button" disabled={markingUnreadId===item.id} onClick={event=>{event.stopPropagation();void markConversationUnread(item.id);}} aria-label={`将 ${item.name} 标记为未读`} title="标记为未读"><Mail size={15}/></button>}</div>):<EmptyState title="暂无真实会话" text={accounts.length?"当前筛选条件下暂无会话":"请先在 Windows Agent 绑定 WhatsApp 账号"}/>}</div></section>
 
     <section className="chat-panel">{active?<>
       <header className="chat-head"><div className="chat-person"><span className="avatar" style={{background:active.color}}>{active.initials}</span><span><b>{active.name}</b><small><i className={`status-dot ${active.accountStatus==="online"?"online":""}`}/>{active.account} · {active.transport==="cloud"?"Cloud API":"Web"} · {statusText(active.accountStatus)}</small></span></div><div className="chat-actions"><button onClick={()=>void updateConversation({assignedToMe:active.assignedUserId!==userId})} className="assign-button"><UserPlus size={15}/>{active.assignedUserId===userId?"取消认领":active.assignedUserId?"转为我负责":"认领"}</button><button onClick={()=>void updateConversation({favorite:!active.favorite})} className="icon-button" aria-label="收藏"><Bookmark size={17} fill={active.favorite?"currentColor":"none"}/></button><button onClick={()=>setDetailsOpen(!detailsOpen)} className="icon-button" aria-label="联系人详情"><Info size={17}/></button></div></header>
@@ -563,7 +584,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       onLogin={completeLogin}
       onLogout={logout}
     />}
-    {newConversationOpen&&<NewConversationDialog accounts={accounts} token={apiToken} onToken={setApiToken} onClose={()=>setNewConversationOpen(false)} onCreated={async(conversationId,accountId,accessToken)=>{setNewConversationOpen(false);navigate("inbox");setFilter("全部会话");setSelectedAccount(accountId);await loadWorkspace(accessToken,true);setActiveId(conversationId);setToast("新会话已创建，首条消息已进入发送队列");}}/>}
+    {newConversationOpen&&<NewConversationDialog accounts={accounts} token={apiToken} onToken={setApiToken} onClose={()=>setNewConversationOpen(false)} onCreated={async(conversationId,accountId,accessToken)=>{setNewConversationOpen(false);navigate("inbox");setFilter("全部会话");dateFilterRef.current="all";setDateFilter("all");setSelectedAccount(accountId);await loadWorkspace(accessToken,true);setActiveId(conversationId);setToast("新会话已创建，首条消息已进入发送队列");}}/>}
     {mediaOpen&&active&&<MediaDialog accountId={active.accountId} token={apiToken} initialCaption={draft} onToken={setApiToken} onToast={setToast} onClose={()=>setMediaOpen(false)} onSend={sendMediaAsset}/>}
     {materialLibraryOpen&&active&&<MaterialLibrarySendDialog accountId={active.accountId} conversationId={active.id} customerName={active.name} initialCaption={draft} translationEnabled={translationPreference.enabled} translationConfigured={translationConfigured} targetLanguage={translationPreference.customerLanguage} targetLanguageName={languageName(translationPreference.customerLanguage)} request={taskRequest} onToken={setApiToken} onClose={()=>setMaterialLibraryOpen(false)} onSent={message=>{setDraft("");setToast(message);void loadMessages(apiToken,active.id);}}/>}
     {productCardsOpen&&active&&<ProductCardSendDialog accountId={active.accountId} conversationId={active.id} contactId={active.contactId} request={(path,init)=>authorizedFetch(path,apiToken,init)} onToken={setApiToken} onClose={()=>setProductCardsOpen(false)} onSent={text=>{setToast(text);void loadMessages(apiToken,active.id);}}/>}
