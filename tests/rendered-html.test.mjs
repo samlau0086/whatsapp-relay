@@ -162,6 +162,11 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /英文原文/);
   assert.match(component, /order-send-mode/);
   assert.match(component, /conversation-stage stage-\$\{stageValue\(item\.customerStage\)\}/);
+  assert.match(component, /last_message_direction/);
+  assert.match(component, /ArrowDownLeft/);
+  assert.match(component, /ArrowUpRight/);
+  assert.match(css, /\.conversation-direction\.in/);
+  assert.match(css, /\.conversation-direction\.out/);
   assert.match(css, /\.conversation-meta>\.stage-new/);
   assert.match(css, /\.conversation-meta>\.stage-considering/);
   assert.match(css, /\.conversation-meta>\.stage-qualified/);
