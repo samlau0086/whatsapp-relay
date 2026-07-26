@@ -311,23 +311,30 @@ button { color:inherit; }
 .order-payment{height:29px;border:1px solid #b9dcc9;border-radius:7px;background:#edf9f2;color:#08764a;padding:0 8px;display:flex;align-items:center;gap:4px;font-size:8px;white-space:nowrap;cursor:pointer}.order-payment:hover{border-color:#15945f;background:#e3f6eb}.order-payment:disabled{opacity:.5;cursor:wait}
 .order-summary-open{min-width:0;flex:1;border:0;border-radius:7px;background:transparent;padding:5px;text-align:left;color:inherit;cursor:pointer}.order-summary-open:hover{background:#edf8f2}.order-summary-open:focus-visible{outline:2px solid #28aa6d;outline-offset:1px}.order-summary-open b,.order-summary-open small{display:block}.order-summary-open b{font-size:8px}.order-summary-open small{font-size:7px;color:#89958f;margin-top:3px}.order-summary-open .payment-state{display:inline-flex}
 
-/* Inbox, conversations and customer details. */
-.workspace-title .eyebrow,.filters .section-label{font-size:12px}.workspace-title h1{font-size:21px}
-.account-switcher b,.account-status b{font-size:14px}.account-switcher small,.account-status small{font-size:12px}
-.filter-row{height:40px;font-size:14px}.filter-row em{font-size:12px}
-.conversation-head h2{font-size:18px}.conversation-head span{font-size:12px}.search-box{height:41px}.search-box input{font-size:13px}.conversation-date-tabs button{height:32px;font-size:12px}
-.empty-state b{font-size:14px}.empty-state span,.empty-note{font-size:12px}
-.conversation{padding-top:15px;padding-bottom:15px}.conversation-line b{font-size:14px}.conversation-line time{font-size:12px}
-.conversation-line.preview{font-size:13px}.conversation-line.preview em{font-size:11px}.conversation-copy>small{font-size:11px}
-.chat-person b{font-size:14px}.chat-person small{font-size:12px}.assign-button,.offline-banner{font-size:13px}
-.day-separator span{font-size:12px}.message-bubble p{font-size:14px}.message-bubble footer{font-size:11px}
-.outgoing-translation-source>span,.incoming-translation>span,.incoming-translation.loading,.incoming-translation.failed,.voice-translate-action{font-size:12px}
-.outgoing-translation-source>p{font-size:13px!important}.attachment-card b{font-size:13px}.attachment-card small{font-size:12px}
-.message-media-loading,.message-media-error{font-size:12px}.composer-tools{font-size:12px}.composer textarea{font-size:14px}.delivery-hint,.composer-error{font-size:11px}
-.details-panel h3{font-size:16px}.contact-card h2{font-size:18px}.contact-card p,.contact-online{font-size:12px}
-.contact-buttons button{font-size:12px}.detail-section h4{font-size:14px}.detail-section dl div{font-size:13px}
-.detail-title button,.tags span{font-size:12px}.shared-file b{font-size:13px}.shared-file small,.security-note b,.security-note small{font-size:12px}
-.conversation-state-button,.conversation-delete-button{height:40px;font-size:13px}.chat-empty h2{font-size:18px}.chat-empty p{font-size:13px}
+/* Comfortable reading sizes for the inbox, conversations and customer details. */
+@media(min-width:1281px){.relay-shell{grid-template-columns:68px clamp(250px,14vw,285px) clamp(370px,19vw,410px) minmax(420px,1fr) clamp(330px,17vw,370px)}}
+.workspace-title .eyebrow,.filters .section-label{font-size:13px}.workspace-title h1{font-size:23px}
+.account-switcher b,.account-status b{font-size:15px}.account-switcher small,.account-status small{font-size:13px}
+.filter-row{height:43px;font-size:15px}.filter-row em{font-size:13px}
+.conversation-head h2{font-size:20px}.conversation-head span{font-size:13px}.search-box{height:44px}.search-box input{font-size:15px}.conversation-date-tabs button{height:35px;font-size:13px}
+.empty-state b{font-size:16px}.empty-state span,.empty-note{font-size:13px}
+.conversation{padding-top:17px;padding-bottom:17px}.conversation-line b{font-size:16px}.conversation-line time{font-size:13px}
+.conversation-line.preview{font-size:14px;line-height:1.45}.conversation-line.preview em{font-size:12px}.conversation-copy>small{font-size:12px}
+.chat-person b{font-size:16px}.chat-person small{font-size:13px}.assign-button,.offline-banner{font-size:14px}
+.day-separator span{font-size:13px}.message-bubble p{font-size:16px;line-height:1.7}.message-bubble footer{font-size:13px}
+.outgoing-translation-source>span,.incoming-translation>span,.incoming-translation.loading,.incoming-translation.failed,.voice-translate-action{font-size:13px}
+.outgoing-translation-source>p{font-size:15px!important}.attachment-card b{font-size:15px}.attachment-card small{font-size:13px}
+.message-media-loading,.message-media-error{font-size:13px}.composer-tools{font-size:13px}.composer textarea{font-size:16px;line-height:1.55}.delivery-hint,.composer-error{font-size:12px}
+.details-panel h3{font-size:18px}.contact-card h2{font-size:20px}.contact-card p,.contact-online{font-size:14px}
+.contact-buttons button{font-size:13px}.detail-section{padding:19px}.detail-section h4{font-size:16px}.detail-section dl div{font-size:14px}
+.detail-title button,.tags span{font-size:13px}.shared-file b{font-size:14px}.shared-file small,.security-note b,.security-note small{font-size:13px}
+.conversation-state-button,.conversation-delete-button{height:43px;font-size:14px}.chat-empty h2{font-size:20px}.chat-empty p{font-size:14px}
+.crm-loading,.crm-empty,.crm-section .detail-title>span{font-size:13px}
+.crm-select,.crm-search,.tag-manager>input:first-child{height:41px;font-size:14px}.crm-search input{font-size:14px}
+.order-list b{font-size:14px}.order-list small,.delivery-state{font-size:12px}
+.selected-tags button,.tag-options button{font-size:13px}.tag-manager>span b{font-size:13px}
+.note-input{min-height:82px;font-size:14px}.crm-primary{min-height:38px;font-size:13px}
+.note-list p{font-size:13px}.note-list footer{font-size:12px}.reminder-due,.reminder-actions button,.crm-error{font-size:13px}
 
 /* Common dialogs and pickers. */
 .login-dialog>p{font-size:14px;line-height:1.55}.login-dialog label{font-size:13px}.login-dialog input,.login-dialog select,.login-dialog textarea{font-size:14px}
