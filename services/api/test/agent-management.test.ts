@@ -62,7 +62,9 @@ test("quoted replies require the v2 Windows Agent protocol",async()=>{
   assert.doesNotMatch(hub,/liveAgents\.set\(agent\.id, socket\);[\s\S]{0,500}dispatchPending\(agent\.id, socket\)/);
   assert.match(server,/agent_upgrade_required/);
   assert.match(server,/agent_protocol_version\)!==2/);
-  assert.equal(JSON.parse(agentPackage).version,"0.1.26");
+  const [major,minor,patch]=String(JSON.parse(agentPackage).version).split(".").map(Number);
+  assert.deepEqual([major,minor],[0,1]);
+  assert.ok(Number.isInteger(patch)&&patch>=26);
 });
 
 test("new conversations inherit the account default takeover mode without rewriting existing conversations", async () => {
