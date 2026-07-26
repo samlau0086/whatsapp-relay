@@ -66,7 +66,8 @@ app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"Rel
   "/api/v1/tasks/{id}/generate":{post:{summary:"Generate a personalized message draft"}},
   "/api/v1/tasks/{id}/approve":{post:{summary:"Approve and schedule a task draft"}},
   "/api/v1/messages":{post:{summary:"发送单条消息",responses:{"202":{description:"已进入持久队列"}}}},
-  "/api/v1/messages/{id}/retry":{post:{summary:"人工重新发送失败或待确认的消息",responses:{"202":{description:"新消息已进入持久队列"}}}},
+  "/api/v1/messages/{id}/retry":{post:{summary:"人工重新发送失败或待确认的消息",responses:{"202":{description:"原消息已重新进入持久队列"}}}},
+  "/api/v1/conversations/{id}/messages/failed":{delete:{summary:"清除当前会话中失败或待确认的发出消息"}},
   "/api/v1/admin/whatsapp-cloud/accounts":{get:{summary:"读取 Cloud API 账号"},post:{summary:"验证并添加 Cloud API 账号"}},
   "/api/v1/admin/whatsapp-cloud/accounts/{id}":{patch:{summary:"更新或停用 Cloud API 账号"}},
   "/api/v1/admin/whatsapp-cloud/accounts/{id}/test":{post:{summary:"验证 Cloud API 凭据"}},
@@ -282,7 +283,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
   const lastMessageFrom=query.lastMessageFrom?new Date(query.lastMessageFrom):null,lastMessageBefore=query.lastMessageBefore?new Date(query.lastMessageBefore):null;
   if(lastMessageFrom&&Number.isNaN(lastMessageFrom.getTime())||lastMessageBefore&&Number.isNaN(lastMessageBefore.getTime())||lastMessageFrom&&lastMessageBefore&&lastMessageFrom>=lastMessageBefore)return reply.code(400).send({error:"invalid_conversation_date_range"});
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null;
-  const result = await pool.query(`SELECT c.id,c.status,c.favorite,c.unread_count,c.last_message_at,c.service_window_expires_at,c.assigned_user_id,c.customer_stage,co.id contact_id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164) display_name,co.alias,co.display_name contact_name,co.phone_e164,co.avatar_url,(SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) primary_email,COALESCE((SELECT json_agg(json_build_object('id',method.id,'type',method.type,'label',method.label,'value',method.value) ORDER BY method.position,method.id) FROM contact_methods method WHERE method.contact_id=co.id),'[]'::json) contact_methods,a.id account_id,a.display_name account_name,a.status account_status,a.transport,m.text_content last_message,m.kind last_message_kind,m.direction last_message_direction,COALESCE(tag_list.tags,'[]'::json) tags,r.remind_at FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN whatsapp_accounts a ON a.id=c.account_id LEFT JOIN LATERAL (SELECT text_content,kind,direction FROM messages WHERE conversation_id=c.id ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true LEFT JOIN reminders r ON r.conversation_id=c.id AND r.user_id=$8::uuid AND r.dismissed_at IS NULL WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::text IS NULL OR c.status::text=$2) AND ($3::text IS NULL OR co.alias ILIKE '%'||$3||'%' OR co.display_name ILIKE '%'||$3||'%' OR co.phone_e164 ILIKE '%'||$3||'%') AND ($4::timestamptz IS NULL OR c.last_message_at<$4) AND ($5::timestamptz IS NULL OR c.last_message_at>=$5) AND ($6::timestamptz IS NULL OR c.last_message_at<$6) AND ($7::boolean IS NOT TRUE OR m.direction='in') ORDER BY c.last_message_at DESC NULLS LAST LIMIT $9`, [query.accountId ?? null,query.status ?? null,query.q ?? null,query.before ?? null,lastMessageFrom?.toISOString()??null,lastMessageBefore?.toISOString()??null,query.unreplied==="true",principalUserId,limit+1]);
+  const result = await pool.query(`SELECT c.id,c.status,c.favorite,c.unread_count,c.last_message_at,c.service_window_expires_at,c.assigned_user_id,c.customer_stage,co.id contact_id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164) display_name,co.alias,co.display_name contact_name,co.phone_e164,co.avatar_url,(SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) primary_email,COALESCE((SELECT json_agg(json_build_object('id',method.id,'type',method.type,'label',method.label,'value',method.value) ORDER BY method.position,method.id) FROM contact_methods method WHERE method.contact_id=co.id),'[]'::json) contact_methods,a.id account_id,a.display_name account_name,a.status account_status,a.transport,m.text_content last_message,m.kind last_message_kind,m.direction last_message_direction,m.status last_message_status,COALESCE(tag_list.tags,'[]'::json) tags,r.remind_at FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN whatsapp_accounts a ON a.id=c.account_id LEFT JOIN LATERAL (SELECT text_content,kind,direction,status FROM messages WHERE conversation_id=c.id ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true LEFT JOIN reminders r ON r.conversation_id=c.id AND r.user_id=$8::uuid AND r.dismissed_at IS NULL WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::text IS NULL OR c.status::text=$2) AND ($3::text IS NULL OR co.alias ILIKE '%'||$3||'%' OR co.display_name ILIKE '%'||$3||'%' OR co.phone_e164 ILIKE '%'||$3||'%') AND ($4::timestamptz IS NULL OR c.last_message_at<$4) AND ($5::timestamptz IS NULL OR c.last_message_at>=$5) AND ($6::timestamptz IS NULL OR c.last_message_at<$6) AND ($7::boolean IS NOT TRUE OR m.direction='in') ORDER BY c.last_message_at DESC NULLS LAST LIMIT $9`, [query.accountId ?? null,query.status ?? null,query.q ?? null,query.before ?? null,lastMessageFrom?.toISOString()??null,lastMessageBefore?.toISOString()??null,query.unreplied==="true",principalUserId,limit+1]);
   const hasMore = result.rows.length > limit; const data = result.rows.slice(0,limit);
   return { data, nextCursor:hasMore ? data[data.length-1]?.last_message_at : null };
 });
@@ -1007,8 +1008,11 @@ app.get("/api/v1/conversations/:id/messages", { preHandler:authenticate }, async
   if (!conversation.rowCount || !canAccessAccount(request.principal,conversation.rows[0].account_id)) return reply.code(404).send({error:"not_found"});
   const limit=Math.min(100,Math.max(1,Number(query.limit??50)));
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null;
-  const result=await pool.query("SELECT msg.id,msg.direction,msg.kind,msg.text_content,msg.translation_source_text,msg.status,msg.failure_code,msg.failure_message,msg.whatsapp_message_id,msg.media_id,msg.quoted_message_id,msg.occurred_at,media.file_name,media.mime_type,media.byte_size,quoted.direction quoted_direction,quoted.kind quoted_kind,quoted.text_content quoted_text_content,quoted_media.file_name quoted_file_name,preference.agent_language cached_translation_language,translation.translated_text cached_translation_text,transcription.transcript_text cached_transcription_text FROM messages msg LEFT JOIN media ON media.id=msg.media_id LEFT JOIN messages quoted ON quoted.id=msg.quoted_message_id LEFT JOIN media quoted_media ON quoted_media.id=quoted.media_id LEFT JOIN conversation_translation_preferences preference ON preference.conversation_id=msg.conversation_id AND preference.user_id=$4::uuid LEFT JOIN message_translations translation ON translation.message_id=msg.id AND translation.target_language=preference.agent_language LEFT JOIN message_transcriptions transcription ON transcription.message_id=msg.id WHERE msg.conversation_id=$1 AND ($2::timestamptz IS NULL OR msg.occurred_at<$2) ORDER BY msg.occurred_at DESC,msg.id DESC LIMIT $3",[id,query.before??null,limit,principalUserId]);
-  return {data:result.rows.reverse(),nextCursor:result.rows.length===limit?result.rows[result.rows.length-1]?.occurred_at:null};
+  const [result,failed]=await Promise.all([
+    pool.query("SELECT msg.id,msg.direction,msg.kind,msg.text_content,msg.translation_source_text,msg.status,msg.failure_code,msg.failure_message,msg.whatsapp_message_id,msg.media_id,msg.quoted_message_id,msg.occurred_at,media.file_name,media.mime_type,media.byte_size,quoted.direction quoted_direction,quoted.kind quoted_kind,quoted.text_content quoted_text_content,quoted_media.file_name quoted_file_name,preference.agent_language cached_translation_language,translation.translated_text cached_translation_text,transcription.transcript_text cached_transcription_text FROM messages msg LEFT JOIN media ON media.id=msg.media_id LEFT JOIN messages quoted ON quoted.id=msg.quoted_message_id LEFT JOIN media quoted_media ON quoted_media.id=quoted.media_id LEFT JOIN conversation_translation_preferences preference ON preference.conversation_id=msg.conversation_id AND preference.user_id=$4::uuid LEFT JOIN message_translations translation ON translation.message_id=msg.id AND translation.target_language=preference.agent_language LEFT JOIN message_transcriptions transcription ON transcription.message_id=msg.id WHERE msg.conversation_id=$1 AND ($2::timestamptz IS NULL OR msg.occurred_at<$2) ORDER BY msg.occurred_at DESC,msg.id DESC LIMIT $3",[id,query.before??null,limit,principalUserId]),
+    pool.query("SELECT count(*)::int count FROM messages WHERE conversation_id=$1 AND direction='out' AND status IN ('failed','uncertain')",[id]),
+  ]);
+  return {data:result.rows.reverse(),nextCursor:result.rows.length===limit?result.rows[result.rows.length-1]?.occurred_at:null,failedCount:Number(failed.rows[0]?.count??0)};
 });
 
 app.post("/api/v1/messages", { preHandler:authenticate }, async (request, reply) => {
@@ -1055,29 +1059,39 @@ app.post("/api/v1/messages/:id/retry", { preHandler:authenticate }, async (reque
     );
     if(!original.rowCount||!canAccessAccount(request.principal,original.rows[0].account_id))return null;
     const row=original.rows[0];
+    const commandPayload=row.command_payload as Record<string,unknown>|null;
+    if(commandPayload?.retryRequestId===parsed.data.clientMessageId)return{messageId:id,status:String(row.status),deduplicated:true,agentId:row.agent_id};
     if(row.direction!=="out"||!["failed","uncertain"].includes(String(row.status)))throw Object.assign(new Error("message_not_retryable"),{statusCode:409});
-    if(!row.command_payload)throw Object.assign(new Error("original_command_not_found"),{statusCode:409});
-    const existing=await client.query("SELECT id,status,provider_payload FROM messages WHERE account_id=$1 AND client_message_id=$2",[row.account_id,parsed.data.clientMessageId]);
-    if(existing.rowCount){
-      const retryOf=(existing.rows[0].provider_payload as Record<string,unknown>|null)?.retryOfMessageId;
-      if(retryOf!==id)throw Object.assign(new Error("client_message_id_conflict"),{statusCode:409});
-      return{messageId:String(existing.rows[0].id),status:String(existing.rows[0].status),deduplicated:true,agentId:row.agent_id};
-    }
-    const providerPayload={...(row.provider_payload&&typeof row.provider_payload==="object"?row.provider_payload:{}),retryOfMessageId:id};
-    const message=await client.query(
-      "INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,translation_source_text,media_id,quoted_message_id,status,occurred_at,provider_payload) VALUES($1,$2,$3,$4,'out',$5,$6,$7,$8,$9,'queued',now(),$10) RETURNING id",
-      [row.conversation_id,row.account_id,request.principal?.kind==="user"?request.principal.id:null,parsed.data.clientMessageId,row.kind,row.text_content,row.translation_source_text,row.media_id,row.quoted_message_id,JSON.stringify(providerPayload)],
-    );
-    const payload={...(row.command_payload as Record<string,unknown>),clientMessageId:parsed.data.clientMessageId,messageId:String(message.rows[0].id),conversationId:String(row.conversation_id),accountId:String(row.account_id),toJid:String(row.wa_jid)};
-    const queued=await queueWhatsAppCommand(client,{accountId:String(row.account_id),conversationId:String(row.conversation_id),messageId:String(message.rows[0].id),payload:payload as Parameters<typeof queueWhatsAppCommand>[1]["payload"]});
+    if(!commandPayload)throw Object.assign(new Error("original_command_not_found"),{statusCode:409});
+    const payload={...commandPayload,retryRequestId:parsed.data.clientMessageId,messageId:id,conversationId:String(row.conversation_id),accountId:String(row.account_id),toJid:String(row.wa_jid)};
+    const queued=await queueWhatsAppCommand(client,{accountId:String(row.account_id),conversationId:String(row.conversation_id),messageId:id,payload:payload as unknown as Parameters<typeof queueWhatsAppCommand>[1]["payload"]});
+    await client.query("UPDATE messages SET status='queued',failure_code=NULL,failure_message=NULL,whatsapp_message_id=NULL WHERE id=$1",[id]);
     await client.query("UPDATE conversations SET status='open',closed_at=NULL,last_message_at=now() WHERE id=$1",[row.conversation_id]);
     if(request.principal?.kind==="user")await pauseAgentForHuman(client,row.conversation_id);
-    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'message.retry','message',$3,$4)",[request.principal?.kind,request.principal?.id,message.rows[0].id,JSON.stringify({originalMessageId:id,commandId:queued.commandId,originalStatus:row.status})]);
-    return{messageId:String(message.rows[0].id),status:"queued",deduplicated:false,agentId:queued.agentId};
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'message.retry','message',$3,$4)",[request.principal?.kind,request.principal?.id,id,JSON.stringify({commandId:queued.commandId,originalStatus:row.status,reusedMessage:true})]);
+    return{messageId:id,status:"queued",deduplicated:false,agentId:queued.agentId};
   });
   if(!result)return reply.code(404).send({error:"not_found"});
   if(result.agentId)void dispatchPending(result.agentId);
   return reply.code(202).send(result);
+});
+
+app.delete("/api/v1/conversations/:id/messages/failed", {preHandler:authenticate}, async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const principal=request.principal;
+  const {id}=request.params as {id:string};
+  const result=await transaction(async client=>{
+    const conversation=await client.query("SELECT id,account_id FROM conversations WHERE id=$1 FOR UPDATE",[id]);
+    if(!conversation.rowCount||!canAccessAccount(principal,conversation.rows[0].account_id))return null;
+    const deleted=await client.query("DELETE FROM messages WHERE conversation_id=$1 AND direction='out' AND status IN ('failed','uncertain') RETURNING id",[id]);
+    const messageIds=deleted.rows.map(row=>String(row.id));
+    if(messageIds.length){
+      await client.query("UPDATE conversations SET last_message_at=(SELECT max(occurred_at) FROM messages WHERE conversation_id=$1) WHERE id=$1",[id]);
+      await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'message.clear_failed','conversation',$2,$3)",[principal.id,id,JSON.stringify({deletedCount:messageIds.length,messageIds})]);
+    }
+    return{deletedCount:messageIds.length};
+  });
+  return result?reply.send(result):reply.code(404).send({error:"not_found"});
 });
 
 app.get("/api/v1/me/translation-preferences", {preHandler:authenticate}, async(request,reply)=>{
