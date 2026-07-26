@@ -91,6 +91,8 @@ test("inbound WhatsApp replies are normalized before entering the durable outbox
   assert.match(worker,/AbortSignal\.timeout\(120_000\)/);
   assert.match(worker,/downloadOutboundMedia/);
   assert.match(worker,/AbortSignal\.timeout\(12_000\)/);
+  assert.match(worker,/fetch\(new URL\(`\/agent\/media\/\$\{encodeURIComponent\(mediaId\)\}`/);
+  assert.doesNotMatch(worker,/downloadOutboundMedia[\s\S]*?dispatcher: mediaProxyAgent[\s\S]*?function messageTime/);
   assert.match(worker,/UndiciProxyAgent/);
   assert.match(worker,/dispatcher: mediaProxyAgent/);
   assert.match(client,/cursor: event\.cursor/);

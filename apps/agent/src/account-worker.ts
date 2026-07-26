@@ -140,8 +140,7 @@ async function downloadOutboundMedia(options:Init,mediaId:string):Promise<{bytes
   if(!mediaId)throw new Error("Missing media ID");let lastError:unknown;
   for(let attempt=0;attempt<5;attempt++){
     try{
-      const requestOptions=mediaProxyAgent?({dispatcher:mediaProxyAgent} as unknown as RequestInit):undefined;
-      const response=await fetch(new URL(`/agent/media/${encodeURIComponent(mediaId)}`,options.baseUrl),{...requestOptions,headers:{authorization:`Bearer ${options.credential}`},signal:AbortSignal.timeout(12_000)});
+      const response=await fetch(new URL(`/agent/media/${encodeURIComponent(mediaId)}`,options.baseUrl),{headers:{authorization:`Bearer ${options.credential}`},signal:AbortSignal.timeout(12_000)});
       if(!response.ok){if(response.status===401||response.status===403)throw centralMediaAuthorizationError(response.status);const error=Object.assign(new Error(`Media download failed: HTTP ${response.status}`),{statusCode:response.status});if(![408,425,429,502,503,504].includes(response.status))throw error;lastError=error;}else return{bytes:Buffer.from(await response.arrayBuffer()),mime:response.headers.get("content-type")??"application/octet-stream",name:decodeURIComponent(response.headers.get("x-file-name")??"attachment")};
     }catch(error){lastError=error;if(!isTransientSendConnectionError(error))throw error;}
     if(attempt<4)await new Promise(resolve=>setTimeout(resolve,Math.min(15_000,1_000*(2**attempt))+Math.floor(Math.random()*500)));
