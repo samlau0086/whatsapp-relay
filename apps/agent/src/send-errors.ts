@@ -1,4 +1,16 @@
 const TRANSIENT_CODES=new Set([1006,1011,408,425,428,429,502,503,504]);
+const SEND_CONFIRMATION_TIMEOUT="SEND_CONFIRMATION_TIMEOUT";
+
+export function waitForSendConfirmation<T>(operation:Promise<T>,timeoutMs:number):Promise<T>{
+  return new Promise<T>((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(Object.assign(new Error(`WhatsApp send confirmation timed out after ${Math.round(timeoutMs/1000)} seconds`),{code:SEND_CONFIRMATION_TIMEOUT})),timeoutMs);
+    operation.then(value=>{clearTimeout(timer);resolve(value);},error=>{clearTimeout(timer);reject(error);});
+  });
+}
+
+export function isSendConfirmationTimeout(error:unknown):boolean{
+  return (error as {code?:unknown}|null)?.code===SEND_CONFIRMATION_TIMEOUT;
+}
 
 export function isTransientSendConnectionError(error:unknown):boolean {
   const value=error as {message?:unknown;code?:unknown;statusCode?:unknown;output?:{statusCode?:unknown};cause?:{code?:unknown;message?:unknown}}|undefined;

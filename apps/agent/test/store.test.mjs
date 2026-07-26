@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { AgentStore } from "../dist/store.js";
-import { describeSendError, isTransientSendConnectionError } from "../dist/send-errors.js";
+import { describeSendError, isSendConfirmationTimeout, isTransientSendConnectionError, waitForSendConfirmation } from "../dist/send-errors.js";
 
 test("temporary WhatsApp disconnects remain queued instead of becoming permanent failures",()=>{
   assert.equal(isTransientSendConnectionError(new Error("1006")),true);
@@ -13,6 +13,16 @@ test("temporary WhatsApp disconnects remain queued instead of becoming permanent
   assert.equal(isTransientSendConnectionError(Object.assign(new TypeError("fetch failed"),{cause:{code:"UND_ERR_CONNECT_TIMEOUT"}})),true);
   assert.equal(describeSendError(Object.assign(new TypeError("fetch failed"),{cause:{code:"UND_ERR_CONNECT_TIMEOUT"}})),"fetch failed; UND_ERR_CONNECT_TIMEOUT");
   assert.equal(isTransientSendConnectionError(new Error("not-authorized")),false);
+});
+
+test("a hung WhatsApp send becomes uncertain before the parent executor timeout",async()=>{
+  const never=new Promise(()=>{});
+  await assert.rejects(waitForSendConfirmation(never,5),error=>isSendConfirmationTimeout(error));
+  const worker=readFileSync(new URL("../dist/account-worker.js",import.meta.url),"utf8");
+  assert.match(worker,/waitForSendConfirmation\(socket\.sendMessage/);
+  assert.match(worker,/send_confirmation_timeout_reconnecting/);
+  assert.match(worker,/outcome:\s*"uncertain"/);
+  assert.match(worker,/void connect\(options\)/);
 });
 
 test("removed-account status cleanup never skips a message event", () => {

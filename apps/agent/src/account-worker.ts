@@ -5,7 +5,7 @@ import makeWASocket, { Browsers, BufferJSON, DisconnectReason, downloadMediaMess
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { pino } from "pino";
 import { ProxyAgent as UndiciProxyAgent } from "undici";
-import { describeSendError, isTransientSendConnectionError } from "./send-errors.js";
+import { describeSendError, isSendConfirmationTimeout, isTransientSendConnectionError, waitForSendConfirmation } from "./send-errors.js";
 
 type Init = {type:"init";accountId:string;dataDir:string;masterKey:string;baseUrl:string;credential:string;proxyUrl?:string};
 type Command = {type:"command";sequence:number;commandId:string;payload:Record<string,unknown>};
@@ -118,8 +118,8 @@ async function execute(command:Command):Promise<void>{
     const quotedId=String(command.payload.quotedWhatsappMessageId??"");
     const quotedMessage=quotedId?(await messageCache?.getMessage(quotedId))??{conversation:String(command.payload.quotedText??"[message]")}:undefined;
     const quoted=quotedMessage?{key:{remoteJid:toJid,id:quotedId,fromMe:command.payload.quotedDirection==="out"},message:quotedMessage}:undefined;
-    const sent=await socket.sendMessage(toJid,content,quoted?{quoted}:undefined);if(sent?.key.id&&sent.message)await messageCache?.saveMessage(sent.key.id,sent.message);emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",whatsappMessageId:sent?.key.id,completedAt:new Date().toISOString()});
-  }catch(error){const errorMessage=describeSendError(error);if(isTransientSendConnectionError(error)){emit({type:"diagnostic",level:"warn",accountId:init.accountId,message:"send_deferred_after_transient_error",detail:errorMessage});emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"deferred",errorCode:"transient_send_error",errorMessage:`Temporary send failure (${errorMessage}); command remains queued`,completedAt:new Date().toISOString()});return;}emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"failed",errorCode:"whatsapp_rejected",errorMessage,completedAt:new Date().toISOString()});}
+    const sent=await waitForSendConfirmation(socket.sendMessage(toJid,content,quoted?{quoted}:undefined),60_000);if(sent?.key.id&&sent.message)await messageCache?.saveMessage(sent.key.id,sent.message);emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",whatsappMessageId:sent?.key.id,completedAt:new Date().toISOString()});
+  }catch(error){const errorMessage=describeSendError(error);if(isSendConfirmationTimeout(error)){const options=init;connectionOpen=false;emit({type:"diagnostic",level:"error",accountId:options.accountId,message:"send_confirmation_timeout_reconnecting",detail:errorMessage});emit({type:"status",accountId:options.accountId,status:"offline",reason:errorMessage});emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"uncertain",errorCode:"send_confirmation_timeout",errorMessage:`${errorMessage}; connection is being rebuilt`,completedAt:new Date().toISOString()});void connect(options);return;}if(isTransientSendConnectionError(error)){emit({type:"diagnostic",level:"warn",accountId:init.accountId,message:"send_deferred_after_transient_error",detail:errorMessage});emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"deferred",errorCode:"transient_send_error",errorMessage:`Temporary send failure (${errorMessage}); command remains queued`,completedAt:new Date().toISOString()});return;}emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"failed",errorCode:"whatsapp_rejected",errorMessage,completedAt:new Date().toISOString()});}
 }
 
 function quotedMessageId(content:proto.IMessage):string|undefined{
