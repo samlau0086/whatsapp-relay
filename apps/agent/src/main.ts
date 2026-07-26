@@ -3,7 +3,7 @@ import { fork, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, safeStorage, session, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, safeStorage, session, Tray } from "electron";
 import QRCode from "qrcode";
 import { AgentStore } from "./store.js";
 import { CentralClient } from "./central-client.js";
@@ -12,10 +12,13 @@ const PROTOCOL_VERSION = 2;
 const DEFAULT_CENTRAL_URL = "https://wsdesk.geekmt.com";
 const STABLE_USER_DATA = join(app.getPath("appData"), "@relaydesk", "windows-agent");
 const APP_ICON_PATH = join(import.meta.dirname, "assets", "icon.ico");
+if(process.platform==="win32")app.setAppUserModelId("com.relaydesk.agent");
 mkdirSync(STABLE_USER_DATA,{recursive:true});
 app.setPath("userData", STABLE_USER_DATA);
 let window: BrowserWindow | undefined;
 let tray: Tray | undefined;
+let trayIcon: Electron.NativeImage | undefined;
+let trayFlashTimer: NodeJS.Timeout | undefined;
 let store: AgentStore;
 let client: CentralClient | undefined;
 let masterKey = "";
@@ -59,6 +62,8 @@ function createWindow(): void {
     },
   });
   void window.loadFile(join(import.meta.dirname, "renderer", "index.html"));
+  window.on("focus", stopAttention);
+  window.on("show", stopAttention);
   window.on("close", (event) => {
     if (!quitting) {
       event.preventDefault();
@@ -70,14 +75,38 @@ function createWindow(): void {
 function createTray(): void {
   const icon = nativeImage.createFromPath(APP_ICON_PATH);
   if (icon.isEmpty()) throw new Error(`Tray icon could not be loaded: ${APP_ICON_PATH}`);
+  trayIcon=icon;
   tray = new Tray(icon);
   tray.setToolTip(`RelayDesk WhatsApp Agent v${app.getVersion()}`);
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "打开 RelayDesk Agent", click: () => window?.show() },
+    { label: "打开 RelayDesk Agent", click: showWindow },
     { type: "separator" },
     { label: "退出", click: () => { quitting = true; app.quit(); } },
   ]));
-  tray.on("double-click", () => window?.show());
+  tray.on("double-click", showWindow);
+}
+
+function showWindow():void{
+  stopAttention();
+  window?.show();
+  window?.focus();
+}
+
+function startAttention():void{
+  if(!window||window.isFocused())return;
+  window.flashFrame(true);
+  if(trayFlashTimer||!tray||!trayIcon)return;
+  let visible=true;
+  trayFlashTimer=setInterval(()=>{
+    visible=!visible;
+    tray?.setImage(visible?trayIcon!:nativeImage.createEmpty());
+  },500);
+}
+
+function stopAttention():void{
+  window?.flashFrame(false);
+  if(trayFlashTimer){clearInterval(trayFlashTimer);trayFlashTimer=undefined;}
+  if(tray&&trayIcon)tray.setImage(trayIcon);
 }
 
 ipcMain.handle("agent:state", async () => ({
@@ -265,8 +294,10 @@ async function startAccount(accountId: string, name: string, dataDir: string): P
   worker.on("message", (message: Record<string, unknown>) => {
     if (message.type === "event") {
       const payload = message.payload as Record<string, unknown>;
-      store.enqueueEvent(String(payload.eventId), String(message.kind), payload);
+      const eventId=String(payload.eventId),isNew=!store.hasEvent(eventId);
+      store.enqueueEvent(eventId, String(message.kind), payload);
       client?.flush();
+      if(isNew&&message.kind==="message"&&message.live===true&&payload.direction==="in")notifyIncomingMessage(accountId,payload);
     }
     if (message.type === "status") {
       const status = String(message.status);
@@ -315,6 +346,27 @@ async function startAccount(accountId: string, name: string, dataDir: string): P
     credential: store.get("credential") ?? "",
     proxyUrl,
   });
+}
+
+function notifyIncomingMessage(accountId:string,payload:Record<string,unknown>):void{
+  const accountName=store.accounts().find(account=>account.id===accountId)?.name??"WhatsApp";
+  const sender=typeof payload.senderName==="string"&&payload.senderName.trim()?payload.senderName.trim():accountName;
+  const text=typeof payload.text==="string"?payload.text.trim():"";
+  const kind=String(payload.kind??"message");
+  const body=(text||({image:"[图片]",video:"[视频]",audio:"[语音]",document:"[文件]",sticker:"[贴纸]"} as Record<string,string>)[kind]||"收到一条新消息").slice(0,180);
+  startAttention();
+  if(!Notification.isSupported())return;
+  const notification=new Notification({
+    title:`RelayDesk · ${sender}`,
+    subtitle:accountName,
+    body,
+    icon:APP_ICON_PATH,
+    silent:false,
+  });
+  notification.on("click",()=>{
+    showWindow();
+  });
+  notification.show();
 }
 
 async function resetAccountAuthAndStart(accountId:string,name:string,dataDir:string):Promise<void>{

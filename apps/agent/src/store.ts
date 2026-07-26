@@ -52,6 +52,7 @@ export class AgentStore {
   }
   accounts():Array<{id:string;name:string;status:string;last_error:string|null;created_at:string}> { return this.db.prepare("SELECT * FROM accounts ORDER BY created_at").all() as Array<{id:string;name:string;status:string;last_error:string|null;created_at:string}>; }
   setAccountStatus(id:string,status:string,error?:string):void { this.db.prepare("UPDATE accounts SET status=?,last_error=? WHERE id=?").run(status,error??null,id); }
+  hasEvent(eventId:string):boolean { return Boolean(this.db.prepare("SELECT 1 FROM event_outbox WHERE event_id=?").get(eventId)); }
   enqueueEvent(eventId:string,kind:string,payload:unknown):number { const result=this.db.prepare("INSERT OR IGNORE INTO event_outbox(event_id,event_kind,payload,created_at) VALUES(?,?,?,?)").run(eventId,kind,JSON.stringify(payload),new Date().toISOString()); if(result.changes===0){const row=this.db.prepare("SELECT cursor FROM event_outbox WHERE event_id=?").get(eventId) as {cursor:number};return row.cursor;} return Number(result.lastInsertRowid); }
   pendingEvents(limit=100):Array<{cursor:number;event_id:string;event_kind:string;payload:string}> { return this.db.prepare("SELECT cursor,event_id,event_kind,payload FROM event_outbox WHERE acked=0 ORDER BY cursor LIMIT ?").all(limit) as Array<{cursor:number;event_id:string;event_kind:string;payload:string}>; }
   ack(cursor:number):void { this.db.prepare("UPDATE event_outbox SET acked=1 WHERE cursor<=?").run(cursor); this.set("lastAckedCursor",String(cursor)); }

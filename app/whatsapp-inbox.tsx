@@ -34,6 +34,7 @@ type Conversation = {
   id:string; name:string; initials:string; color:string; account:string; accountId:string; phone:string;
   contactId:string; alias:string; contactName:string; primaryEmail:string; contactMethods:ContactMethod[];
   preview:string; lastDirection:"in"|"out"|null; lastMessageStatus:ChatMessage["status"]|null; time:string; unread:number; accountStatus:string; assignedUserId:string|null;
+  lastMessageAt:string|null;
   favorite:boolean; conversationStatus:string; customerStage:string; tags:TagItem[]; remindAt:string|null;
   transport:"web"|"cloud";serviceWindowExpiresAt:string|null;
 };
@@ -171,6 +172,9 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const workspaceLoadSequence=useRef(0);
   const dateFilterRef=useRef<ConversationDateFilter>("all");
   const notifiedReminders=useRef(new Set<string>());
+  const notificationBaseline=useRef<Map<string,{lastMessageAt:string|null;unread:number}>>(new Map());
+  const notificationBaselineReady=useRef(false);
+  const notificationAudio=useRef<AudioContext|null>(null);
 
   const userId=user?.id??tokenSubject(apiToken);
   const counts=useMemo(()=>({
@@ -210,6 +214,40 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     });
   },[]);
 
+  const playNotificationSound=useCallback(()=>{
+    try{
+      const AudioContextClass=window.AudioContext;
+      const context=notificationAudio.current??new AudioContextClass();
+      notificationAudio.current=context;
+      if(context.state==="suspended")void context.resume();
+      const start=context.currentTime+.01;
+      for(const [offset,frequency] of [[0,660],[.13,880]] as const){
+        const oscillator=context.createOscillator(),gain=context.createGain();
+        oscillator.type="sine";oscillator.frequency.value=frequency;
+        gain.gain.setValueAtTime(.0001,start+offset);
+        gain.gain.exponentialRampToValueAtTime(.16,start+offset+.015);
+        gain.gain.exponentialRampToValueAtTime(.0001,start+offset+.11);
+        oscillator.connect(gain).connect(context.destination);
+        oscillator.start(start+offset);oscillator.stop(start+offset+.12);
+      }
+    }catch{/* Browsers may block sound until the first user interaction. */}
+  },[]);
+
+  const notifyIncomingConversation=useCallback((conversation:Conversation)=>{
+    playNotificationSound();
+    if(!("Notification" in window)||Notification.permission!=="granted")return;
+    const notification=new Notification(`RelayDesk · ${conversation.name}`,{
+      body:conversation.preview||"收到一条新消息",
+      icon:"/favicon.svg",
+      tag:`relaydesk-conversation-${conversation.id}`,
+    });
+    notification.onclick=()=>{
+      window.focus();setActiveId(conversation.id);
+      if(pathname!==WORKSPACE_PATHS.inbox)router.push(WORKSPACE_PATHS.inbox);
+      notification.close();
+    };
+  },[pathname,playNotificationSound,router]);
+
   useLayoutEffect(()=>{
     if(!effectiveActiveId)return;
     const container=messagesRef.current;
@@ -219,6 +257,26 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   useEffect(()=>{
     if(latestMessageId)scrollMessagesToEnd();
   },[latestMessageId,scrollMessagesToEnd]);
+
+  useEffect(()=>{
+    const enableNotifications=()=>{
+      try{
+        const AudioContextClass=window.AudioContext;
+        const context=notificationAudio.current??new AudioContextClass();
+        notificationAudio.current=context;
+        if(context.state==="suspended")void context.resume();
+      }catch{/* Audio notifications remain unavailable in this browser. */}
+      if("Notification" in window&&Notification.permission==="default")void Notification.requestPermission();
+    };
+    window.addEventListener("pointerdown",enableNotifications,{once:true});
+    window.addEventListener("keydown",enableNotifications,{once:true});
+    return()=>{
+      window.removeEventListener("pointerdown",enableNotifications);
+      window.removeEventListener("keydown",enableNotifications);
+      void notificationAudio.current?.close();
+      notificationAudio.current=null;
+    };
+  },[]);
 
   useEffect(()=>{
     if(!conversationMenu)return;
@@ -233,6 +291,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
 
   const logout=useCallback(()=>{
     sessionStorage.removeItem("relayAccessToken");sessionStorage.removeItem("relayUser");
+    notificationBaseline.current.clear();notificationBaselineReady.current=false;
     dateFilterRef.current="all";setDateFilter("all");setApiToken("");setUser(null);setAccounts([]);setConversations([]);setMessages({});setFailedMessageCounts({});setEmailActivities({});setMessageTranslations({});setTranslationPreferences({});setTranslationReadyConversationId("");setActiveId("");setAuthOpen(false);setSessionReady(true);setLoading(false);
   },[]);
 
@@ -253,10 +312,20 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       if(sequence!==workspaceLoadSequence.current)return;
       setAccounts(accountBody.data.map(item=>({id:String(item.id),name:String(item.display_name),phone:String(item.phone_e164??""),status:String(item.status),reason:String(item.status_reason??""),transport:String(item.transport??"web") as "web"|"cloud",webhookStatus:item.webhook_status?String(item.webhook_status):undefined,credentialsStatus:item.credentials_status?String(item.credentials_status):undefined,lastEvent:item.last_event_at?String(item.last_event_at):undefined})));
       const mapped=conversationBody.data.map((item,index)=>mapConversation(item,index));
+      if(notificationBaselineReady.current){
+        for(const conversation of mapped){
+          const previous=notificationBaseline.current.get(conversation.id);
+          if(previous&&conversation.lastDirection==="in"&&conversation.lastMessageAt&&conversation.lastMessageAt!==previous.lastMessageAt){
+            notifyIncomingConversation(conversation);
+          }
+        }
+      }
+      notificationBaseline.current=new Map(mapped.map(item=>[item.id,{lastMessageAt:item.lastMessageAt,unread:item.unread}]));
+      notificationBaselineReady.current=true;
       setConversations(mapped);setActiveId(previous=>mapped.some(item=>item.id===previous)?previous:(mapped[0]?.id??""));
     }catch(error){if(sequence===workspaceLoadSequence.current)setLoadError(error instanceof Error?error.message:"中心数据加载失败");}
     finally{if(sequence===workspaceLoadSequence.current)setLoading(false);}
-  },[logout]);
+  },[logout,notifyIncomingConversation]);
 
   const selectDateFilter=(next:ConversationDateFilter)=>{
     if(next===dateFilter)return;
@@ -2265,7 +2334,7 @@ function MediaDialog({accountId,token,initialCaption,onToken,onToast,onClose,onS
 function mapMediaAsset(item:Record<string,unknown>):MediaAsset{return{id:String(item.id),fileName:String(item.file_name??"未命名文件"),mimeType:String(item.mime_type??"application/octet-stream"),size:Number(item.byte_size??0),sha256:String(item.sha256??""),createdAt:String(item.created_at??""),usageCount:Number(item.usage_count??0)};}
 function mediaKind(mime:string){return mime.startsWith("image/")?"image":mime.startsWith("video/")?"video":mime.startsWith("audio/")?"audio":"document";}
 
-function mapConversation(item:Record<string,unknown>,index:number):Conversation {const name=String(item.display_name??item.phone_e164??"未知联系人"),methods=Array.isArray(item.contact_methods)?item.contact_methods.map(mapContactMethod):[],lastDirection=item.last_message_direction==="in"||item.last_message_direction==="out"?item.last_message_direction:null,lastMessageStatus=["received","queued","dispatching","sent","delivered","read","failed","uncertain"].includes(String(item.last_message_status))?item.last_message_status as ChatMessage["status"]:null;return{id:String(item.id),name,initials:name.slice(0,2).toUpperCase(),color:COLORS[index%COLORS.length],account:String(item.account_name??"未知账号"),accountId:String(item.account_id),phone:String(item.phone_e164??""),contactId:String(item.contact_id??""),alias:String(item.alias??""),contactName:String(item.contact_name??item.phone_e164??""),primaryEmail:String(item.primary_email??""),contactMethods:methods,preview:String(item.last_message??kindText(String(item.last_message_kind??""))),lastDirection,lastMessageStatus,time:item.last_message_at?formatTime(new Date(String(item.last_message_at))):"",unread:Number(item.unread_count??0),accountStatus:String(item.account_status??"offline"),assignedUserId:item.assigned_user_id?String(item.assigned_user_id):null,favorite:Boolean(item.favorite),conversationStatus:String(item.status??"open"),customerStage:String(item.customer_stage??"new"),tags:Array.isArray(item.tags)?item.tags.map(mapTag):[],remindAt:item.remind_at?String(item.remind_at):null,transport:String(item.transport??"web") as "web"|"cloud",serviceWindowExpiresAt:item.service_window_expires_at?String(item.service_window_expires_at):null};}
+function mapConversation(item:Record<string,unknown>,index:number):Conversation {const name=String(item.display_name??item.phone_e164??"未知联系人"),methods=Array.isArray(item.contact_methods)?item.contact_methods.map(mapContactMethod):[],lastDirection=item.last_message_direction==="in"||item.last_message_direction==="out"?item.last_message_direction:null,lastMessageStatus=["received","queued","dispatching","sent","delivered","read","failed","uncertain"].includes(String(item.last_message_status))?item.last_message_status as ChatMessage["status"]:null,lastMessageAt=item.last_message_at?String(item.last_message_at):null;return{id:String(item.id),name,initials:name.slice(0,2).toUpperCase(),color:COLORS[index%COLORS.length],account:String(item.account_name??"未知账号"),accountId:String(item.account_id),phone:String(item.phone_e164??""),contactId:String(item.contact_id??""),alias:String(item.alias??""),contactName:String(item.contact_name??item.phone_e164??""),primaryEmail:String(item.primary_email??""),contactMethods:methods,preview:String(item.last_message??kindText(String(item.last_message_kind??""))),lastDirection,lastMessageStatus,lastMessageAt,time:lastMessageAt?formatTime(new Date(lastMessageAt)):"",unread:Number(item.unread_count??0),accountStatus:String(item.account_status??"offline"),assignedUserId:item.assigned_user_id?String(item.assigned_user_id):null,favorite:Boolean(item.favorite),conversationStatus:String(item.status??"open"),customerStage:String(item.customer_stage??"new"),tags:Array.isArray(item.tags)?item.tags.map(mapTag):[],remindAt:item.remind_at?String(item.remind_at):null,transport:String(item.transport??"web") as "web"|"cloud",serviceWindowExpiresAt:item.service_window_expires_at?String(item.service_window_expires_at):null};}
 function mapContactMethod(item:Record<string,unknown>):ContactMethod{return{id:item.id?String(item.id):undefined,type:String(item.type??"other") as ContactMethodType,label:String(item.label??""),value:String(item.value??"")};}
 function mapContactProfile(item:Record<string,unknown>):ContactProfile{const emails=Array.isArray(item.emails)?item.emails.map(email=>{const value=email as Record<string,unknown>;return{id:value.id?String(value.id):undefined,label:String(value.label??""),email:String(value.email??""),isPrimary:Boolean(value.isPrimary??value.is_primary)};}):[],methods=Array.isArray(item.methods)?item.methods.map(method=>mapContactMethod(method as Record<string,unknown>)):[],addresses=Array.isArray(item.addresses)?item.addresses.map(address=>mapCustomerAddress(address as Record<string,unknown>)):[],birthday=item.birthday&&typeof item.birthday==="object"?item.birthday as ContactDate:null,specialDates=Array.isArray(item.specialDates)?item.specialDates as ContactSpecialDate[]:[],conversationId=item.conversationId?String(item.conversationId):item.conversation_id?String(item.conversation_id):null;return{id:String(item.id),accountId:String(item.accountId??item.account_id??""),accountName:String(item.accountName??item.account_name??""),alias:String(item.alias??""),contactName:String(item.contactName??item.contact_name??""),name:String(item.name??item.alias??item.contactName??item.phone??"未知联系人"),phone:String(item.phone??item.phone_e164??""),avatarUrl:item.avatarUrl?String(item.avatarUrl):item.avatar_url?String(item.avatar_url):null,note:String(item.note??""),timezone:item.timezone?String(item.timezone):null,effectiveTimezone:String(item.effectiveTimezone??item.effective_timezone??"UTC"),timezoneSource:(item.timezoneSource??item.timezone_source??"fallback") as ContactProfile["timezoneSource"],inferredCountry:item.inferredCountry?String(item.inferredCountry):item.inferred_country?String(item.inferred_country):null,birthday,specialDates,emails,primaryEmail:item.primaryEmail?String(item.primaryEmail):emails.find(email=>email.isPrimary)?.email??null,methods,addresses,conversationId,hasConversation:Boolean(item.hasConversation??conversationId),lastMessageAt:item.lastMessageAt?String(item.lastMessageAt):item.last_message_at?String(item.last_message_at):null,updatedAt:String(item.updatedAt??item.updated_at??"")};}
 
