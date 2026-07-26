@@ -256,8 +256,9 @@ test("modal backdrops do not dismiss dialogs", async () => {
 });
 
 test("product workspace stays inside one root grid item", async () => {
-  const [component,css]=await Promise.all([
+  const [component,inbox,css]=await Promise.all([
     readFile(new URL("../app/collage-materials.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
     readFile(new URL("../app/globals.css",import.meta.url),"utf8"),
   ]);
   assert.match(component,/return <div className="product-workspace"><nav className="product-workspace-tabs">/);
@@ -269,6 +270,8 @@ test("product workspace stays inside one root grid item", async () => {
   assert.match(component,/applyGridPreset\(customRows,customColumns\)/);
   assert.match(component,/sourceProductTexts=sourceImage\?draft\.layers\.filter/);
   assert.match(component,/\{\.\.\.sourceText,id:`product-text-\$\{index\}-\$\{textIndex\+1\}`,slotId/);
+  assert.doesNotMatch(inbox,/onOpenMaterials/);
+  assert.match(inbox,/onGenerated=\{\(\)=>\{setGenerating\(false\);setSelected\(\[\]\);onToast\("拼图素材已生成"\);\}\}/);
   assert.match(component,/>Padding<input/);
   assert.match(component,/className="canvas-padding-guide"/);
   assert.match(css,/\.collage-grid-presets\{/);
