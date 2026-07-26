@@ -8,6 +8,7 @@ const PROTOCOL_VERSION = 2;
 const HEARTBEAT_TIMEOUT_SECONDS = 45;
 const liveAgents = new Map<string, WebSocket>();
 let watchdog:NodeJS.Timeout|undefined;
+let dispatchWatchdog:NodeJS.Timeout|undefined;
 
 type AgentFrame = { type: string; [key: string]: unknown };
 
@@ -29,7 +30,10 @@ export async function registerAgentHub(app: FastifyInstance): Promise<void> {
     });
   });
   watchdog??=setInterval(()=>void markStaleAgentsOffline().catch(error=>app.log.error({error},"agent heartbeat watchdog failed")),15_000);
-  app.addHook("onClose",async()=>{if(watchdog){clearInterval(watchdog);watchdog=undefined;}});
+  dispatchWatchdog??=setInterval(()=>{
+    for(const [agentId,socket] of liveAgents)void dispatchPending(agentId,socket).catch(error=>app.log.error({error,agentId},"agent queue dispatch watchdog failed"));
+  },3_000);
+  app.addHook("onClose",async()=>{if(watchdog){clearInterval(watchdog);watchdog=undefined;}if(dispatchWatchdog){clearInterval(dispatchWatchdog);dispatchWatchdog=undefined;}});
 }
 
 export function disconnectAgent(agentId:string,reason="revoked"):void {

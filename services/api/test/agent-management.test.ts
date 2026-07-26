@@ -21,6 +21,8 @@ test("agent management routes and legacy demo cleanup are shipped", async () => 
   assert.match(server,/markStaleAgentsOffline/);
   assert.match(server,/COALESCE\(m\.status::text,o\.status\) message_status/);
   assert.match(hub,/HEARTBEAT_TIMEOUT_SECONDS = 45/);
+  assert.match(hub,/agent queue dispatch watchdog failed/);
+  assert.match(hub,/dispatchWatchdog\?\?=setInterval/);
   assert.match(hub,/agent_heartbeat_timeout/);
   assert.match(hub,/status IN \('offline','revoked'\)/);
   assert.match(hub,/liveAgents\.get\(agent\.id\) !== socket/);
