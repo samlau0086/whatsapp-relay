@@ -23,7 +23,7 @@ import { TaskCenter } from "./task-center";
 
 const API_URL = (process.env.NEXT_PUBLIC_RELAY_API_URL ?? "").replace(/\/$/, "");
 const COLORS = ["#6b4f3a", "#305f72", "#9b5f72", "#477a62", "#705b86"];
-const PRODUCT_PAGE_SIZES = [24,32,48,64] as const;
+const PRODUCT_PAGE_SIZES = [24,32,36,48,64] as const;
 let refreshPromise:Promise<string>|null=null;
 
 type Account = { id:string; name:string; phone:string; status:string; reason:string; transport:"web"|"cloud"; webhookStatus?:string; credentialsStatus?:string; lastEvent?:string };

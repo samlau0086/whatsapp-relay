@@ -11,6 +11,11 @@ test("product library migration is idempotent and does not backfill historical o
   assert.doesNotMatch(migration,/INSERT INTO products[\s\S]*SELECT[\s\S]*order_items/i);
 });
 
+test("product library offers a 36-item page size",async()=>{
+  const component=await readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8");
+  assert.match(component,/PRODUCT_PAGE_SIZES = \[24,32,36,48,64\]/);
+});
+
 test("product routes enforce shared media, snapshots, idempotency, and soft deletion",async()=>{
   const server=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
   assert.match(server,/app\.get\("\/api\/v1\/products"/);
@@ -142,7 +147,7 @@ test("product pagination includes nearby pages, boundary shortcuts, and direct j
   assert.match(component,/product-pagination-ellipsis/);
   assert.match(component,/跳转页码/);
   assert.match(component,/jumpToPage/);
-  assert.match(component,/PRODUCT_PAGE_SIZES = \[24,32,48,64\]/);
+  assert.match(component,/PRODUCT_PAGE_SIZES = \[24,32,36,48,64\]/);
   assert.match(component,/aria-label="每页产品数"/);
   assert.match(component,/Math\.ceil\(total\/pageSize\)/);
 });

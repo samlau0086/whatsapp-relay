@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import sharp from "sharp";
-import { collageTemplateSchema, DEFAULT_COLLAGE_TEMPLATE, materialGenerateSchema, productSlotIds } from "../src/collage-template.js";
+import { COLLAGE_TEMPLATE_PRODUCT_LIMIT, collageTemplateSchema, DEFAULT_COLLAGE_TEMPLATE, materialGenerateSchema, productSlotIds } from "../src/collage-template.js";
 import { renderCollagePage } from "../src/collage-image.js";
 
 test("collage migration creates template, batch, and material asset records",async()=>{
@@ -16,6 +16,8 @@ test("collage migration creates template, batch, and material asset records",asy
 test("collage generation dialog loads selections larger than one 64-item product page in batches",async()=>{
   const dialog=await readFile(new URL("../../../app/collage-materials.tsx",import.meta.url),"utf8");
   assert.match(dialog,/PRODUCT_SELECTION_BATCH_SIZE=50/);
+  assert.match(dialog,/MAX_TEMPLATE_PRODUCT_SLOTS=128/);
+  assert.match(dialog,/rows\*columns>MAX_TEMPLATE_PRODUCT_SLOTS/);
   assert.match(dialog,/productIds\.slice\(start,start\+PRODUCT_SELECTION_BATCH_SIZE\)/);
   assert.match(dialog,/productBodies\.flatMap\(body=>body\.data\)/);
 });
@@ -38,6 +40,19 @@ test("collage template validation protects canvas, slots, and bindings",()=>{
   assert.equal(collageTemplateSchema.safeParse({...DEFAULT_COLLAGE_TEMPLATE,layers:[...DEFAULT_COLLAGE_TEMPLATE.layers,{...DEFAULT_COLLAGE_TEMPLATE.layers[0],id:DEFAULT_COLLAGE_TEMPLATE.layers[0].id}]}).success,false);
   const brokenBinding=structuredClone(DEFAULT_COLLAGE_TEMPLATE);const text=brokenBinding.layers.find(layer=>layer.type==="productText");if(text&&text.type==="productText")text.slotId="missing";
   assert.equal(collageTemplateSchema.safeParse(brokenBinding).success,false);
+});
+
+test("collage templates support up to 128 product slots",()=>{
+  const makeLayers=(count:number)=>Array.from({length:count},(_,index)=>{
+    const slotId=`slot-${index+1}`,x=(index%16)*20,y=Math.floor(index/16)*40;
+    return [
+      {id:`image-${index+1}`,type:"productImage" as const,slotId,x,y,width:16,height:16,rotation:0,opacity:1,fit:"cover" as const,radius:0,backgroundColor:"#FFFFFF"},
+      {id:`name-${index+1}`,type:"productText" as const,slotId,binding:"name" as const,x,y:y+16,width:16,height:16,rotation:0,opacity:1,prefix:"",suffix:"",fontSize:8,fontWeight:"normal" as const,color:"#111111",align:"left" as const},
+    ];
+  }).flat();
+  const template={version:1 as const,canvas:{width:320,height:320,padding:0,backgroundColor:"#FFFFFF",backgroundMediaId:null},layers:makeLayers(COLLAGE_TEMPLATE_PRODUCT_LIMIT)};
+  assert.equal(collageTemplateSchema.safeParse(template).success,true);
+  assert.equal(collageTemplateSchema.safeParse({...template,layers:makeLayers(COLLAGE_TEMPLATE_PRODUCT_LIMIT+1)}).success,false);
 });
 
 test("collage renderer produces fixed-size PNG and hides empty product slots",async()=>{

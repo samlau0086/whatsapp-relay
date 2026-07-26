@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 const color=z.string().regex(/^#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?$/);
+export const COLLAGE_TEMPLATE_PRODUCT_LIMIT=128;
+const COLLAGE_TEMPLATE_LAYER_LIMIT=512;
 const geometry={id:z.string().min(1).max(80).regex(/^[A-Za-z0-9_-]+$/),x:z.number().int().min(0).max(4096),y:z.number().int().min(0).max(4096),width:z.number().int().min(16).max(4096),height:z.number().int().min(16).max(4096),rotation:z.number().min(-180).max(180).default(0),opacity:z.number().min(0).max(1).default(1)};
 const productImageLayer=z.object({...geometry,type:z.literal("productImage"),slotId:z.string().min(1).max(40),fit:z.enum(["cover","contain"]).default("cover"),radius:z.number().int().min(0).max(1000).default(0),backgroundColor:color.default("#FFFFFF")}).strict();
 const productTextLayer=z.object({...geometry,type:z.literal("productText"),slotId:z.string().min(1).max(40),binding:z.enum(["name","sku","currency","defaultPrice","priceRange","tags"]),prefix:z.string().max(120).default(""),suffix:z.string().max(120).default(""),fontSize:z.number().int().min(8).max(300).default(40),fontWeight:z.enum(["normal","bold"]).default("normal"),color:color.default("#111111"),align:z.enum(["left","center","right"]).default("left")}).strict();
@@ -10,7 +12,7 @@ export const collageLayerSchema=z.discriminatedUnion("type",[productImageLayer,p
 export const collageTemplateSchema=z.object({
   version:z.literal(1),
   canvas:z.object({width:z.number().int().min(320).max(4096),height:z.number().int().min(320).max(4096),padding:z.number().int().min(0).max(1000).default(48),backgroundColor:color.nullable().default("#FFFFFF"),backgroundMediaId:z.string().uuid().nullable().default(null)}).strict(),
-  layers:z.array(collageLayerSchema).min(1).max(100),
+  layers:z.array(collageLayerSchema).min(1).max(COLLAGE_TEMPLATE_LAYER_LIMIT),
 }).strict().superRefine((value,ctx)=>{
   if(value.canvas.width*value.canvas.height>16_000_000)ctx.addIssue({code:"custom",path:["canvas"],message:"canvas exceeds 16 megapixels"});
   if(value.canvas.padding*2>=Math.min(value.canvas.width,value.canvas.height))ctx.addIssue({code:"custom",path:["canvas","padding"],message:"canvas padding leaves no usable content area"});
@@ -21,7 +23,7 @@ export const collageTemplateSchema=z.object({
     if(layer.type==="productImage"){if(slots.has(layer.slotId))ctx.addIssue({code:"custom",path:["layers",index,"slotId"],message:"product slot ids must be unique"});slots.add(layer.slotId);}
   }
   if(slots.size<1)ctx.addIssue({code:"custom",path:["layers"],message:"at least one product image slot is required"});
-  if(slots.size>50)ctx.addIssue({code:"custom",path:["layers"],message:"at most 50 product slots are allowed"});
+  if(slots.size>COLLAGE_TEMPLATE_PRODUCT_LIMIT)ctx.addIssue({code:"custom",path:["layers"],message:`at most ${COLLAGE_TEMPLATE_PRODUCT_LIMIT} product slots are allowed`});
   for(const [index,layer] of value.layers.entries())if(layer.type==="productText"&&!slots.has(layer.slotId))ctx.addIssue({code:"custom",path:["layers",index,"slotId"],message:"bound product slot does not exist"});
 });
 
