@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { AgentStore } from "../dist/store.js";
-import { describeSendError, isSendConfirmationTimeout, isTransientSendConnectionError, waitForSendConfirmation } from "../dist/send-errors.js";
+import { centralMediaAuthorizationError, describeSendError, isCentralMediaAuthorizationError, isSendConfirmationTimeout, isTransientSendConnectionError, waitForSendConfirmation } from "../dist/send-errors.js";
 
 test("temporary WhatsApp disconnects remain queued instead of becoming permanent failures",()=>{
   assert.equal(isTransientSendConnectionError(new Error("1006")),true);
@@ -13,6 +13,15 @@ test("temporary WhatsApp disconnects remain queued instead of becoming permanent
   assert.equal(isTransientSendConnectionError(Object.assign(new TypeError("fetch failed"),{cause:{code:"UND_ERR_CONNECT_TIMEOUT"}})),true);
   assert.equal(describeSendError(Object.assign(new TypeError("fetch failed"),{cause:{code:"UND_ERR_CONNECT_TIMEOUT"}})),"fetch failed; UND_ERR_CONNECT_TIMEOUT");
   assert.equal(isTransientSendConnectionError(new Error("not-authorized")),false);
+});
+
+test("temporary central media authorization failures remain queued",()=>{
+  const error=centralMediaAuthorizationError(403);
+  assert.equal(isCentralMediaAuthorizationError(error),true);
+  assert.equal(isCentralMediaAuthorizationError(new Error("Media download failed: HTTP 403")),false);
+  const worker=readFileSync(new URL("../dist/account-worker.js",import.meta.url),"utf8");
+  assert.match(worker,/central_media_authorization_pending/);
+  assert.match(worker,/outcome:\s*"deferred"/);
 });
 
 test("a hung WhatsApp send becomes uncertain before the parent executor timeout",async()=>{

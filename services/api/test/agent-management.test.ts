@@ -26,6 +26,8 @@ test("agent management routes and legacy demo cleanup are shipped", async () => 
   assert.match(hub,/liveAgents\.get\(agent\.id\) !== socket/);
   assert.match(hub,/wa\.status='online'/);
   assert.match(hub,/outcome==="deferred"/);
+  assert.match(hub,/failure_code=CASE WHEN \$2 IN \('failed','uncertain'\) THEN \$4 ELSE NULL END/);
+  assert.match(hub,/failure_message=CASE WHEN \$2 IN \('failed','uncertain'\) THEN \$5 ELSE NULL END/);
   assert.match(hub,/event\.cursor\?\?start\+index/);
   assert.match(hub,/failedCursor/);
   assert.match(hub,/unsupported_event_kind/);
@@ -57,7 +59,7 @@ test("quoted replies require the v2 Windows Agent protocol",async()=>{
   assert.doesNotMatch(hub,/liveAgents\.set\(agent\.id, socket\);[\s\S]{0,500}dispatchPending\(agent\.id, socket\)/);
   assert.match(server,/agent_upgrade_required/);
   assert.match(server,/agent_protocol_version\)!==2/);
-  assert.equal(JSON.parse(agentPackage).version,"0.1.24");
+  assert.equal(JSON.parse(agentPackage).version,"0.1.25");
 });
 
 test("new conversations inherit the account default takeover mode without rewriting existing conversations", async () => {

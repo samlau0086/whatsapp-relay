@@ -1,5 +1,6 @@
 const TRANSIENT_CODES=new Set([1006,1011,408,425,428,429,502,503,504]);
 const SEND_CONFIRMATION_TIMEOUT="SEND_CONFIRMATION_TIMEOUT";
+const CENTRAL_MEDIA_AUTHORIZATION_ERROR="CENTRAL_MEDIA_AUTHORIZATION_ERROR";
 
 export function waitForSendConfirmation<T>(operation:Promise<T>,timeoutMs:number):Promise<T>{
   return new Promise<T>((resolve,reject)=>{
@@ -10,6 +11,14 @@ export function waitForSendConfirmation<T>(operation:Promise<T>,timeoutMs:number
 
 export function isSendConfirmationTimeout(error:unknown):boolean{
   return (error as {code?:unknown}|null)?.code===SEND_CONFIRMATION_TIMEOUT;
+}
+
+export function centralMediaAuthorizationError(statusCode:number):Error {
+  return Object.assign(new Error(`Media download authorization is temporarily unavailable: HTTP ${statusCode}`),{code:CENTRAL_MEDIA_AUTHORIZATION_ERROR,statusCode});
+}
+
+export function isCentralMediaAuthorizationError(error:unknown):boolean {
+  return (error as {code?:unknown}|null)?.code===CENTRAL_MEDIA_AUTHORIZATION_ERROR;
 }
 
 export function isTransientSendConnectionError(error:unknown):boolean {
