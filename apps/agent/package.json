@@ -1,6 +1,6 @@
 {
   "name": "@relaydesk/windows-agent",
-  "version": "0.1.27",
+  "version": "0.1.28",
   "description": "RelayDesk local Windows executor for reliable WhatsApp account synchronization",
   "author": "RelayDesk",
   "private": true,

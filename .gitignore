@@ -39,6 +39,7 @@ yarn-error.log*
 next-env.d.ts
 **/dist/
 **/release/
+apps/agent/release-*/
 /.wrangler/
 /outputs/
 /work/

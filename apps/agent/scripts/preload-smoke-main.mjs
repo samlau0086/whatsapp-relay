@@ -39,12 +39,14 @@ app.whenReady().then(async () => {
   const editFormOpened = await window.webContents.executeJavaScript(`(async()=>{document.querySelector('[data-action="edit"]').click();await new Promise(resolve=>setTimeout(resolve,50));return !document.getElementById('edit-account-form').classList.contains('hidden')&&document.getElementById('edit-account-name').value==='测试账号'&&document.getElementById('add-account-form').classList.contains('hidden')})()`);
   const proxyControlsReady = await window.webContents.executeJavaScript("document.getElementById('proxy-mode').value === 'auto' && document.getElementById('proxy-effective').textContent.includes('系统代理')");
   const staleQrHidden = await window.webContents.executeJavaScript("document.getElementById('qr-wrap').classList.contains('hidden') && document.getElementById('qr').getAttribute('src') === ''");
+  const confirmationHidden = await window.webContents.executeJavaScript("getComputedStyle(document.getElementById('ui-confirm-backdrop')).display === 'none'");
   clearTimeout(timeout);
-  if (missing.length || !addFormOpened || !editFormOpened || !proxyControlsReady || !staleQrHidden) {
+  if (missing.length || !addFormOpened || !editFormOpened || !proxyControlsReady || !staleQrHidden || !confirmationHidden) {
     if (!addFormOpened) console.error("Add-account form did not open");
     if (!editFormOpened) console.error("Edit-account form did not open with the existing account name");
     if (!proxyControlsReady) console.error("Proxy controls did not initialize");
     if (!staleQrHidden) console.error("Stale QR was not cleared");
+    if (!confirmationHidden) console.error("Confirmation backdrop is visible without a pending action");
     console.error(`Preload bridge is missing: ${missing.join(", ")}`);
     app.exit(1);
   } else {

@@ -142,6 +142,21 @@ test("product card search queries the complete product library and preserves sel
   assert.match(server,/search_label\.name ILIKE/);
 });
 
+test("product card search can exactly match a complete SKU or product title",async()=>{
+  const [dialog,server,css]=await Promise.all([
+    readFile(new URL("../../../app/product-card-send-dialog.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/globals.css",import.meta.url),"utf8"),
+  ]);
+  assert.match(dialog,/精准匹配/);
+  assert.match(dialog,/role="switch"/);
+  assert.match(dialog,/exactMatch\?"&exact=true"/);
+  assert.match(server,/lower\(btrim\(p\.name\)\)=lower\(\$1\)/);
+  assert.match(server,/lower\(btrim\(p\.sku\)\)=lower\(\$1\)/);
+  assert.match(server,/invalid_exact_match/);
+  assert.match(css,/\.product-card-exact-toggle/);
+});
+
 test("product management offers compact card and list views",async()=>{
   const [component,css]=await Promise.all([readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),readFile(new URL("../../../app/globals.css",import.meta.url),"utf8")]);
   assert.match(component,/aria-label="卡片视图"/);
