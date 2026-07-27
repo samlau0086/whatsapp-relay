@@ -60,7 +60,17 @@ test("conversation API applies a closed-open last-message range",async()=>{
   const conversationRoute=server.slice(server.indexOf('app.get("/api/v1/conversations"'),server.indexOf('app.get("/api/v1/conversations/counts"'));
   assert.doesNotMatch(conversationRoute,/COUNT\(\*\) OVER/);
   assert.match(conversationRoute,/total:null/);
+  assert.match(conversationRoute,/search_ids AS MATERIALIZED/);
+  assert.match(conversationRoute,/candidates AS MATERIALIZED/);
+  assert.ok(conversationRoute.indexOf("LIMIT $13")<conversationRoute.indexOf("FROM candidates JOIN conversations"),"candidate pagination must happen before detail hydration");
   assert.match(server,/request\.principal\?\.accountIds/);
+});
+
+test("performance reports retain representative HTTP failure details",async()=>{
+  const runner=await readFile(new URL("../../../performance/conversations/run.mjs",import.meta.url),"utf8");
+  assert.match(runner,/failureSamples/);
+  assert.match(runner,/failureSamples\.length<5/);
+  assert.match(runner,/\{status:result\.status,body:result\.body\}/);
 });
 
 test("conversation summaries, events, and startup runner are wired",async()=>{

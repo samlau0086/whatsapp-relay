@@ -10,12 +10,12 @@ const headers={authorization:`Bearer ${accessToken}`};
 const timed=async path=>{const started=performance.now();const response=await fetch(`${base}${path}`,{headers});const body=await response.json().catch(()=>({}));return{ms:performance.now()-started,status:response.status,body};};
 const percentile=(values,p)=>values.toSorted((a,b)=>a-b)[Math.max(0,Math.ceil(values.length*p)-1)]??0;
 const benchmark=async(name,path,samples=40)=>{
-  const values=[];let errors=0;
+  const values=[];let errors=0;const failureSamples=[];
   for(let offset=0;offset<samples;offset+=10){
     const batch=await Promise.all(Array.from({length:Math.min(10,samples-offset)},()=>timed(path)));
-    for(const result of batch){values.push(result.ms);if(result.status!==200)errors++;}
+    for(const result of batch){values.push(result.ms);if(result.status!==200){errors++;if(failureSamples.length<5)failureSamples.push({status:result.status,body:result.body});}}
   }
-  return{name,path,samples,p50:percentile(values,.5),p95:percentile(values,.95),max:Math.max(...values),errors,errorRate:errors/samples,latenciesMs:values};
+  return{name,path,samples,p50:percentile(values,.5),p95:percentile(values,.95),max:Math.max(...values),errors,errorRate:errors/samples,failureSamples,latenciesMs:values};
 };
 
 let cursorPath="/api/v1/conversations?limit=40";

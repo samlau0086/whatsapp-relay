@@ -310,32 +310,43 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
   const cursor=parseConversationCursor(query.cursor);if(cursor==="invalid")return reply.code(400).send({error:"invalid_cursor"});
   const keyword=query.q?.trim()||null;if(keyword&&keyword.length>100)return reply.code(400).send({error:"conversation_query_too_long"});
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null,accountIds=request.principal?.accountIds??null,filter=query.filter??null;
-  const result=await pool.query(`WITH listed AS (
+  const result=await pool.query(`WITH search_ids AS MATERIALIZED (
+    SELECT search_conversation.id FROM conversations search_conversation
+    WHERE $4::text IS NOT NULL AND search_conversation.last_message_text ILIKE '%'||$4||'%'
+    UNION
+    SELECT contact_conversation.id FROM contacts search_contact
+    JOIN conversations contact_conversation ON contact_conversation.contact_id=search_contact.id
+    WHERE $4::text IS NOT NULL AND (search_contact.alias ILIKE '%'||$4||'%' OR search_contact.display_name ILIKE '%'||$4||'%' OR search_contact.phone_e164 ILIKE '%'||$4||'%')
+    UNION
+    SELECT legacy_conversation.id FROM conversations legacy_conversation
+    JOIN LATERAL (SELECT text_content FROM messages WHERE conversation_id=legacy_conversation.id ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
+    WHERE $4::text IS NOT NULL AND legacy_conversation.summary_updated_at IS NULL AND m.text_content ILIKE '%'||$4||'%'
+  ), candidates AS MATERIALIZED (
+    SELECT c.id,CASE WHEN $10::text='reminders' THEN r.remind_at ELSE COALESCE(CASE WHEN c.summary_updated_at IS NOT NULL THEN c.last_message_at ELSE m.occurred_at END,c.created_at) END sort_at
+    FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id
+    LEFT JOIN LATERAL (SELECT direction,occurred_at FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
+    LEFT JOIN reminders r ON r.conversation_id=c.id AND r.user_id=$9::uuid AND r.dismissed_at IS NULL
+    WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
+      AND ($3::text IS NULL OR c.status::text=$3)
+      AND ($4::text IS NULL OR c.id IN (SELECT id FROM search_ids))
+      AND ($5::timestamptz IS NULL OR c.last_message_at<$5) AND ($6::timestamptz IS NULL OR c.last_message_at>=$6) AND ($7::timestamptz IS NULL OR c.last_message_at<$7)
+      AND ($8::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in')
+      AND ($10::text IS NULL OR ($10='all' AND c.status<>'archived') OR ($10='mine' AND c.assigned_user_id=$9::uuid) OR ($10='unassigned' AND c.assigned_user_id IS NULL) OR ($10='favorite' AND c.favorite) OR ($10='closed' AND c.status='closed') OR ($10='archived' AND c.status='archived') OR ($10='reminders' AND r.remind_at IS NOT NULL))
+      AND ($11::timestamptz IS NULL OR ($10='reminders' AND (r.remind_at>$11 OR (r.remind_at=$11 AND c.id<$12::uuid))) OR (COALESCE($10,'')<>'reminders' AND (COALESCE(CASE WHEN c.summary_updated_at IS NOT NULL THEN c.last_message_at ELSE m.occurred_at END,c.created_at)<$11 OR (COALESCE(CASE WHEN c.summary_updated_at IS NOT NULL THEN c.last_message_at ELSE m.occurred_at END,c.created_at)=$11 AND c.id<$12::uuid))))
+    ORDER BY CASE WHEN $10='reminders' THEN r.remind_at END ASC,CASE WHEN COALESCE($10,'')<>'reminders' THEN COALESCE(CASE WHEN c.summary_updated_at IS NOT NULL THEN c.last_message_at ELSE m.occurred_at END,c.created_at) END DESC,c.id DESC
+    LIMIT $13
+  )
     SELECT c.id,c.status,c.favorite,c.unread_count,CASE WHEN c.summary_updated_at IS NOT NULL THEN c.last_message_at ELSE m.occurred_at END last_message_at,c.created_at,c.service_window_expires_at,c.assigned_user_id,c.customer_stage,
       co.id contact_id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164) display_name,co.alias,co.display_name contact_name,co.phone_e164,co.avatar_url,
       (SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) primary_email,
       COALESCE((SELECT json_agg(json_build_object('id',method.id,'type',method.type,'label',method.label,'value',method.value) ORDER BY method.position,method.id) FROM contact_methods method WHERE method.contact_id=co.id),'[]'::json) contact_methods,
       a.id account_id,a.display_name account_name,a.status account_status,a.transport,COALESCE(c.last_message_text,m.text_content) last_message,COALESCE(c.last_message_kind,m.kind) last_message_kind,COALESCE(c.last_message_direction,m.direction) last_message_direction,COALESCE(c.last_message_status,m.status) last_message_status,
-      COALESCE(tag_list.tags,'[]'::json) tags,r.remind_at,
-      CASE WHEN $10::text='reminders' THEN r.remind_at ELSE COALESCE(CASE WHEN c.summary_updated_at IS NOT NULL THEN c.last_message_at ELSE m.occurred_at END,c.created_at) END sort_at
-    FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN whatsapp_accounts a ON a.id=c.account_id
+      COALESCE(tag_list.tags,'[]'::json) tags,r.remind_at,candidates.sort_at
+    FROM candidates JOIN conversations c ON c.id=candidates.id JOIN contacts co ON co.id=c.contact_id JOIN whatsapp_accounts a ON a.id=c.account_id
     LEFT JOIN LATERAL (SELECT text_content,kind,direction,status,occurred_at FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true
     LEFT JOIN reminders r ON r.conversation_id=c.id AND r.user_id=$9::uuid AND r.dismissed_at IS NULL
-    WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
-      AND ($3::text IS NULL OR c.status::text=$3)
-      AND ($4::text IS NULL OR c.id IN (
-        SELECT search_conversation.id FROM conversations search_conversation WHERE search_conversation.last_message_text ILIKE '%'||$4||'%'
-        UNION
-        SELECT contact_conversation.id FROM conversations contact_conversation JOIN contacts search_contact ON search_contact.id=contact_conversation.contact_id
-        WHERE search_contact.alias ILIKE '%'||$4||'%' OR search_contact.display_name ILIKE '%'||$4||'%' OR search_contact.phone_e164 ILIKE '%'||$4||'%'
-      ) OR (c.summary_updated_at IS NULL AND m.text_content ILIKE '%'||$4||'%'))
-      AND ($5::timestamptz IS NULL OR c.last_message_at<$5) AND ($6::timestamptz IS NULL OR c.last_message_at>=$6) AND ($7::timestamptz IS NULL OR c.last_message_at<$7)
-      AND ($8::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in')
-      AND ($10::text IS NULL OR ($10='all' AND c.status<>'archived') OR ($10='mine' AND c.assigned_user_id=$9::uuid) OR ($10='unassigned' AND c.assigned_user_id IS NULL) OR ($10='favorite' AND c.favorite) OR ($10='closed' AND c.status='closed') OR ($10='archived' AND c.status='archived') OR ($10='reminders' AND r.remind_at IS NOT NULL))
-  ) SELECT * FROM listed
-    WHERE ($11::timestamptz IS NULL OR ($10='reminders' AND (sort_at>$11 OR (sort_at=$11 AND id<$12::uuid))) OR (COALESCE($10,'')<>'reminders' AND (sort_at<$11 OR (sort_at=$11 AND id<$12::uuid))))
-    ORDER BY CASE WHEN $10='reminders' THEN sort_at END ASC,CASE WHEN COALESCE($10,'')<>'reminders' THEN sort_at END DESC,id DESC LIMIT $13`,
+    ORDER BY CASE WHEN $10='reminders' THEN candidates.sort_at END ASC,CASE WHEN COALESCE($10,'')<>'reminders' THEN candidates.sort_at END DESC,c.id DESC`,
     [query.accountId??null,accountIds,query.status??null,keyword,query.before??null,range.from,range.before,query.unreplied==="true",principalUserId,filter,cursor?.sortAt??null,cursor?.id??null,limit+1]);
   const hasMore=result.rows.length>limit,data=result.rows.slice(0,limit),last=data[data.length-1];
   return{data,nextCursor:hasMore&&last?Buffer.from(JSON.stringify({sortAt:last.sort_at,id:last.id}),"utf8").toString("base64url"):null,total:null};
