@@ -473,3 +473,45 @@ button { color:inherit; }
   :is(.modal-backdrop,.confirmation-backdrop,.task-dialog-backdrop,.contact-dates-popover)
     :is(p,label,legend,dt,dd,span,b,strong,button,input,textarea,select){font-size:13px!important}
 }
+
+/* Readable task cards in contact details and every task-center view. */
+.crm-section .detail-title>a{font-size:13px}
+.contact-task-list{gap:9px}
+.contact-task-list article{
+  grid-template-columns:36px minmax(0,1fr) auto;
+  gap:10px;
+  min-height:62px;
+  padding:10px;
+  border-radius:10px;
+}
+.contact-task-icon{width:36px;height:36px;border-radius:9px}
+.contact-task-list b{font-size:14px;line-height:1.45}
+.contact-task-list small{gap:5px;margin-top:5px;font-size:12px;line-height:1.45}
+.contact-task-list em{padding:5px 8px;font-size:11px;line-height:1.3}
+.contact-quick-task{gap:8px;margin-top:12px;padding-top:12px}
+.contact-quick-task>div{grid-template-columns:110px minmax(0,1fr);gap:8px}
+.contact-quick-task .crm-primary{min-height:42px;font-size:14px}
+
+.task-center{font-size:15px}
+.task-center-head p{font-size:14px}
+.task-summary-card span{font-size:13px}
+.task-head-actions>button,
+.task-view-tabs button,
+.calendar-mode button,
+.task-toolbar label,
+.task-toolbar>select,
+.task-bulk button{font-size:14px}
+.task-bulk b{font-size:14px}
+.task-list th{font-size:13px}
+.task-list td{padding-top:15px;padding-bottom:15px;font-size:14px}
+.task-title-button small{font-size:12px}
+.task-status{font-size:12px}
+.task-progress span{font-size:12px}
+.board-nav button{font-size:13px}
+.board-nav b{font-size:14px}
+.gantt-head>span,.gantt-head>b{font-size:12px}
+.gantt-row>button{font-size:13px}
+.gantt-row>button small{font-size:12px}
+.gantt-bar>b{font-size:12px}
+.task-calendar section header{font-size:13px}
+.task-calendar section>button{font-size:12px;line-height:1.4}
