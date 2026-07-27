@@ -201,6 +201,7 @@ export const customerAddressSchema=z.object({
 const orderContentSchema=z.object({
   currency:currencySchema,
   weightUnit:z.enum(WEIGHT_UNITS).default("kg"),
+  paymentProfileId:z.string().uuid().nullable().optional(),
   description:z.string().trim().max(2000).optional().transform(value=>value||undefined),
   translateOnSend:z.boolean().default(false),
   targetLanguage:languageCodeSchema.optional(),
@@ -237,5 +238,31 @@ export const paypalSettingsSchema=z.object({
   noteTemplate:z.string().trim().max(4000).default("{{orderNotes}}"),
   itemNameTemplate:z.string().trim().min(1).max(500).default("{{productName}}"),
 });
+
+export const paymentMethodTypeSchema=z.enum(["paypal","bank_transfer","western_union","wise","moneygram","stripe_payment_link","custom"]);
+const paymentPublicFieldSchema=z.object({label:z.string().trim().min(1).max(80),value:z.string().trim().min(1).max(500)});
+export const paymentMethodCreateSchema=z.object({
+  type:paymentMethodTypeSchema,
+  name:z.string().trim().min(1).max(80),
+  enabled:z.boolean().default(true),
+  sortOrder:z.coerce.number().int().min(-10000).max(10000).default(0),
+});
+export const paymentMethodUpdateSchema=paymentMethodCreateSchema.partial().refine(value=>Object.keys(value).length>0,"at least one field is required");
+export const paymentProfileCreateSchema=z.object({
+  name:z.string().trim().min(1).max(80),
+  enabled:z.boolean().default(true),
+  publicFields:z.array(paymentPublicFieldSchema).max(30).default([]),
+  instructions:z.string().trim().max(8000).default(""),
+  environment:z.enum(["sandbox","live"]).optional(),
+  sandboxClientId:z.string().trim().min(1).max(500).optional(),
+  sandboxClientSecret:z.string().trim().min(1).max(2000).optional(),
+  liveClientId:z.string().trim().min(1).max(500).optional(),
+  liveClientSecret:z.string().trim().min(1).max(2000).optional(),
+  referenceTemplate:z.string().trim().min(1).max(500).default("Order #{{orderNumber}}"),
+  noteTemplate:z.string().trim().max(4000).default("{{orderNotes}}"),
+  itemNameTemplate:z.string().trim().min(1).max(500).default("{{productName}}"),
+});
+export const paymentProfileUpdateSchema=paymentProfileCreateSchema.partial().refine(value=>Object.keys(value).length>0,"at least one field is required");
+export const paymentSendSchema=z.object({clientSendId:z.string().uuid()});
 
 export const enrollmentSchema = z.object({ code: z.string().min(16), name: z.string().min(2).max(80), version: z.string(), platform: z.string() });

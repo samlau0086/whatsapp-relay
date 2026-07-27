@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { calculateOrderTotal, type OrderSummaryFee, type OrderSummaryItem } from "./crm.js";
 
-export const ORDER_BLOCK_TYPES=["orderHeader","itemList","feeList","total","shippingAddress","notes","divider","customText"] as const;
+export const ORDER_BLOCK_TYPES=["orderHeader","itemList","feeList","total","paymentSummary","shippingAddress","notes","divider","customText"] as const;
 export type OrderBlockType=typeof ORDER_BLOCK_TYPES[number];
 export type OrderTemplateFormat="text"|"image";
 export type OrderTemplateBlock={
@@ -15,6 +15,7 @@ export type OrderTemplateContext={
   orderNumber:string;currency:string;customerName:string;customerPhone:string;description:string;
   items:OrderSummaryItem[];fees:OrderSummaryFee[];
   address?:{label?:string;recipientName?:string;phone?:string;address?:string}|null;
+  paymentProfile?:{summary?:string}|null;
 };
 export type SemanticOrderBlock={id:string;type:OrderBlockType;lines:string[]};
 
@@ -35,9 +36,9 @@ const blockSchema=z.object({
 });
 
 export const orderTemplateSchema=z.object({version:z.literal(1),blocks:z.array(blockSchema).min(2).max(30)}).strict().superRefine((template,ctx)=>{
-  const singleton:OrderBlockType[]=["orderHeader","itemList","feeList","total","shippingAddress","notes"];
+  const singleton:OrderBlockType[]=["orderHeader","itemList","feeList","total","paymentSummary","shippingAddress","notes"];
   for(const type of singleton){const count=template.blocks.filter(block=>block.type===type).length;if(count>1)ctx.addIssue({code:"custom",path:["blocks"],message:`${type} may only appear once`});}
-  for(const type of ["itemList","total"] as const)if(!template.blocks.some(block=>block.type===type))ctx.addIssue({code:"custom",path:["blocks"],message:`${type} is required`});
+  for(const type of ["itemList","total","paymentSummary"] as const)if(!template.blocks.some(block=>block.type===type))ctx.addIssue({code:"custom",path:["blocks"],message:`${type} is required`});
   if(new Set(template.blocks.map(block=>block.id)).size!==template.blocks.length)ctx.addIssue({code:"custom",path:["blocks"],message:"block ids must be unique"});
 });
 
@@ -48,6 +49,7 @@ export const DEFAULT_TEXT_ORDER_TEMPLATE:OrderTemplate={version:1,blocks:[
   {id:"items",type:"itemList",label:"Items:",blankAfter:true},
   {id:"fees",type:"feeList",label:"Additional fees:",blankAfter:true},
   {id:"total",type:"total",label:"Total:",bold:true},
+  {id:"payment-summary",type:"paymentSummary",label:"Payment:",blankAfter:true},
   {id:"notes",type:"notes",label:"Notes:",blankAfter:false},
 ]};
 
@@ -56,12 +58,24 @@ export const DEFAULT_IMAGE_ORDER_TEMPLATE:OrderTemplate={version:1,blocks:[
   {id:"items",type:"itemList",label:"Items:",fontSize:"medium",textColor:"#20372D",backgroundColor:"#F6F9F7",align:"left",showProductImages:true,imageSize:"medium"},
   {id:"fees",type:"feeList",label:"Additional fees:",fontSize:"small",textColor:"#20372D",backgroundColor:"#FAFCFB",align:"left"},
   {id:"total",type:"total",label:"Total:",fontSize:"large",textColor:"#FFFFFF",backgroundColor:"#153F2F",align:"left"},
+  {id:"payment-summary",type:"paymentSummary",label:"Payment:",fontSize:"medium",textColor:"#20372D",backgroundColor:"#EEF6F2",align:"left"},
   {id:"notes",type:"notes",label:"Notes:",fontSize:"small",textColor:"#20372D",backgroundColor:"#FFFAF0",align:"left"},
 ]};
 
 export function parseOrderTemplate(value:unknown,format:OrderTemplateFormat):OrderTemplate{
-  const parsed=orderTemplateSchema.safeParse(value);
+  const normalized=normalizePaymentSummary(value,format),parsed=orderTemplateSchema.safeParse(normalized);
   return parsed.success?parsed.data:(format==="text"?DEFAULT_TEXT_ORDER_TEMPLATE:DEFAULT_IMAGE_ORDER_TEMPLATE);
+}
+
+function normalizePaymentSummary(value:unknown,format:OrderTemplateFormat):unknown{
+  if(!value||typeof value!=="object"||!Array.isArray((value as {blocks?:unknown}).blocks))return value;
+  const template=value as {version?:unknown;blocks:Array<Record<string,unknown>>};
+  if(template.blocks.some(block=>block.type==="paymentSummary"))return value;
+  const block=format==="text"
+    ?{id:"payment-summary",type:"paymentSummary",label:"Payment:",blankAfter:true}
+    :{id:"payment-summary",type:"paymentSummary",label:"Payment:",fontSize:"medium",textColor:"#20372D",backgroundColor:"#EEF6F2",align:"left"};
+  const blocks=[...template.blocks],totalIndex=blocks.findIndex(item=>item.type==="total");blocks.splice(totalIndex<0?blocks.length:totalIndex+1,0,block);
+  return{...template,blocks};
 }
 
 export function renderSemanticOrder(template:OrderTemplate,context:OrderTemplateContext):SemanticOrderBlock[]{
@@ -75,6 +89,7 @@ export function renderSemanticOrder(template:OrderTemplate,context:OrderTemplate
     else if(block.type==="itemList")lines=[...(label?[label]:[]),...context.items.map((item,index)=>`${index+1}. ${item.name} x ${item.quantity} - ${context.currency} ${item.unitAmount.toFixed(2)} each - ${context.currency} ${(item.quantity*item.unitAmount).toFixed(2)}`)];
     else if(block.type==="feeList"){if(!context.fees.length)return[];lines=[...(label?[label]:[]),...context.fees.map(fee=>`${fee.name} - ${context.currency} ${fee.amount.toFixed(2)}`)];}
     else if(block.type==="total")lines=[`${label}${label?" ":""}${total}`];
+    else if(block.type==="paymentSummary"){if(!context.paymentProfile?.summary)return[];lines=[`${label}${label?" ":""}${context.paymentProfile.summary}`];}
     else if(block.type==="shippingAddress"){if(!address)return[];lines=[...(label?[label]:[]),address];}
     else if(block.type==="notes"){if(!context.description)return[];lines=[`${label}${label?" ":""}${context.description}`];}
     else if(block.type==="divider")lines=["────────────────"];
@@ -103,4 +118,4 @@ export function renderTextOrder(template:OrderTemplate,blocks:SemanticOrderBlock
 }
 
 function escapeWhatsApp(value:string):string{return value.replace(/([*_~`])/g,"$1\u200b");}
-function defaultLabel(type:OrderBlockType):string{return({orderHeader:"Order",itemList:"Items:",feeList:"Additional fees:",total:"Total:",shippingAddress:"Shipping address:",notes:"Notes:",divider:"",customText:""})[type];}
+function defaultLabel(type:OrderBlockType):string{return({orderHeader:"Order",itemList:"Items:",feeList:"Additional fees:",total:"Total:",paymentSummary:"Payment:",shippingAddress:"Shipping address:",notes:"Notes:",divider:"",customText:""})[type];}
