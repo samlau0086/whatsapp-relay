@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { orderSchema, paymentMethodCreateSchema, paymentProfileCreateSchema, paymentSendSchema } from "../src/schemas.js";
+import { orderSchema, paymentMethodCreateSchema, paymentProfileCreateSchema, paymentProfileUpdateSchema, paymentSendSchema } from "../src/schemas.js";
 import { parseOrderTemplate, renderSemanticOrder } from "../src/order-template.js";
 
 test("accepts the built-in payment method catalog and custom methods",()=>{
@@ -16,6 +16,12 @@ test("validates order profile selection and idempotent payment sends",()=>{
   assert.equal(order.success,true);
   assert.equal(paymentSendSchema.safeParse({clientSendId:"1dd88bbf-94dd-4470-8914-89ae9434e183"}).success,true);
   assert.equal(paymentProfileCreateSchema.safeParse({name:"HSBC USD",publicFields:[{label:"SWIFT",value:"HSBCHKHH"}],instructions:"Use {{orderNumber}}"}).success,true);
+});
+
+test("accepts explicit PayPal profile environment switches",()=>{
+  assert.equal(paymentProfileUpdateSchema.safeParse({environment:"sandbox"}).success,true);
+  assert.equal(paymentProfileUpdateSchema.safeParse({environment:"live"}).success,true);
+  assert.equal(paymentProfileUpdateSchema.safeParse({environment:"production"}).success,false);
 });
 
 test("normalizes legacy order templates and conditionally renders payment summaries",()=>{
@@ -42,5 +48,7 @@ test("migration and routes preserve snapshots and isolate PayPal profiles",async
   assert.match(server,/resolvePaymentProfile\(client,parsed\.data\.paymentProfileId\)/);
   assert.match(module,/sandbox_client_id_encrypted/);
   assert.match(module,/live_client_id_encrypted/);
+  assert.match(module,/requiredEnvironment\?\?row\.environment/);
+  assert.match(module,/environment==="sandbox"\?row\.sandbox_client_id_encrypted:row\.live_client_id_encrypted/);
   assert.doesNotMatch(module,/clientSecret:String/);
 });
