@@ -326,7 +326,9 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
   ),`:"";
   const candidateFilter=filter==="all"?"AND c.status<>'archived'":filter==="mine"?"AND c.assigned_user_id=$9::uuid":filter==="unassigned"?"AND c.assigned_user_id IS NULL":filter==="favorite"?"AND c.favorite":filter==="closed"?"AND c.status='closed'":filter==="archived"?"AND c.status='archived'":reminderMode?"AND r.remind_at IS NOT NULL":"";
   const candidateCursor=!cursor?"":reminderMode?"AND (r.remind_at>$11 OR (r.remind_at=$11 AND c.id<$12::uuid))":`AND (${latestSort}<$11 OR (${latestSort}=$11 AND c.id<$12::uuid))`;
-  const result=await pool.query(`WITH ${searchCte} candidates AS MATERIALIZED (
+  const result=await pool.query(`WITH parameter_types AS NOT MATERIALIZED (
+    SELECT $4::text keyword,$10::text filter,$11::timestamptz cursor_at,$12::uuid cursor_id
+  ), ${searchCte} candidates AS MATERIALIZED (
     SELECT c.id,${reminderMode?"r.remind_at":latestSort} sort_at
     FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id
     LEFT JOIN LATERAL (SELECT direction,occurred_at FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
