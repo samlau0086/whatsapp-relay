@@ -515,3 +515,16 @@ button { color:inherit; }
 .gantt-bar>b{font-size:12px}
 .task-calendar section header{font-size:13px}
 .task-calendar section>button{font-size:12px;line-height:1.4}
+
+/* Contact local time needs to remain readable at a glance. */
+.contact-local-time{
+  width:min(280px,100%);
+  min-height:58px;
+  margin-top:12px;
+  padding:11px 14px;
+  gap:10px;
+  border-radius:11px;
+}
+.contact-local-time>svg{width:18px;height:18px;flex:0 0 auto}
+.contact-local-time b{font-size:15px;line-height:1.4}
+.contact-local-time small{margin-top:4px;font-size:12px;line-height:1.45}
