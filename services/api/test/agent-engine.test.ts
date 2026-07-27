@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { captionOrderDetailsImage, chunkText, detectOrderDetailsLanguage, groundOrderDetailsImageReply, groundOrderNumberReply, isConversationAgentActive, isConversationJobEligible, isReplySourceCurrent, isWithinBusinessHours, passesAutoReplyGate, resolveOrderDetailsImage, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
+import { captionOrderDetailsImage, chunkText, compactMemoryMessages, detectOrderDetailsLanguage, groundOrderDetailsImageReply, groundOrderNumberReply, isConversationAgentActive, isConversationJobEligible, isReplySourceCurrent, isWithinBusinessHours, passesAutoReplyGate, resolveOrderDetailsImage, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
 
 test("chunkText creates bounded overlapping chunks",()=>{
   const input=("A paragraph with useful knowledge. ").repeat(120);
   const chunks=chunkText(input,300,40);
   assert.ok(chunks.length>2);
   assert.ok(chunks.every(chunk=>chunk.length<=300));
+});
+
+test("memory prompts keep recent messages within a bounded character budget",()=>{
+  const messages=Array.from({length:80},(_,index)=>({id:String(index),direction:index%2?"in":"out",kind:"text",text_content:String(index).padStart(2,"0")+": "+"x".repeat(1000),occurred_at:new Date(index*1000).toISOString()}));
+  const compacted=compactMemoryMessages(messages,40,10_000);
+  assert.ok(compacted.length<=40);
+  assert.ok(compacted.reduce((total,item)=>total+String(item.text_content).length,0)<=10_000);
+  assert.equal(compacted.at(-1)?.id,"79");
 });
 
 test("automatic replies require confidence and valid citations",()=>{

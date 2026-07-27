@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { transcribeAudio, translateText, translationProviderDefaults } from "../src/translation-providers.js";
+import { transcribeAudio, translateText, translateTextWithDetection, translationProviderDefaults } from "../src/translation-providers.js";
 
 test("OpenAI translation provider sends a constrained chat-completions request",async()=>{
   const original=globalThis.fetch;let request:Request|undefined;
@@ -18,6 +18,18 @@ test("custom provider uses its configured endpoint and model",async()=>{
   const original=globalThis.fetch;let request:Request|undefined;
   globalThis.fetch=async(input,init)=>{request=new Request(input,init);return Response.json({choices:[{message:{content:"Bonjour"}}]});};
   try{await translateText({provider:"openai_compatible",apiKey:"custom",baseUrl:"https://llm.example/v1/",model:"translator-1",transcriptionModel:"speech-1"},{text:"Hello",targetLanguage:"fr"});const body=JSON.parse(await request!.text());assert.equal(request?.url,"https://llm.example/v1/chat/completions");assert.equal(body.model,"translator-1");}finally{globalThis.fetch=original;}
+});
+
+test("translation with detection returns a normalized BCP 47 source language",async()=>{
+  const original=globalThis.fetch;let request:Request|undefined;
+  globalThis.fetch=async(input,init)=>{request=new Request(input,init);return Response.json({choices:[{message:{content:'{"translatedText":"你好！","sourceLanguage":"ES_mx"}'}}]});};
+  try{
+    const result=await translateTextWithDetection({provider:"openai",apiKey:"secret",...translationProviderDefaults("openai")},{text:"¡Hola!",targetLanguage:"zh-CN"});
+    assert.deepEqual(result,{translatedText:"你好！",sourceLanguage:"es-MX"});
+    const body=JSON.parse(await request!.text());
+    assert.match(body.messages[0].content,/sourceLanguage/);
+    assert.match(body.messages[0].content,/BCP 47/);
+  }finally{globalThis.fetch=original;}
 });
 
 test("audio transcription uses the configured OpenAI-compatible endpoint and model",async()=>{

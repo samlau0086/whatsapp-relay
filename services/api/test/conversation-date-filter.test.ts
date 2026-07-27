@@ -38,13 +38,13 @@ test("cursor IDs accept every PostgreSQL UUID, not only RFC-versioned UUIDs",()=
 });
 
 test("conversation list and counts paths carry server-side filters without leaking search into counts",()=>{
-  const now=new Date(2026,6,26,12),path=conversationListPath("today",now,{filter:"mine",accountId:"account-id",q:" Alice ",cursor:"cursor",limit:40});
-  assert.match(path,/filter=mine/);assert.match(path,/accountId=account-id/);assert.match(path,/q=Alice/);assert.match(path,/cursor=cursor/);
+  const now=new Date(2026,6,26,12),path=conversationListPath("today",now,{filter:"mine",accountId:"account-id",q:" Alice ",tagId:"tag-id",cursor:"cursor",limit:40});
+  assert.match(path,/filter=mine/);assert.match(path,/accountId=account-id/);assert.match(path,/q=Alice/);assert.match(path,/tagId=tag-id/);assert.match(path,/cursor=cursor/);
   const counts=conversationCountsPath("today",now,"account-id");
   assert.match(counts,/accountId=account-id/);assert.doesNotMatch(counts,/[?&]q=/);
-  const summary=conversationSummaryPath("conversation-id","today",now,{filter:"mine",accountId:"account-id",q:" Alice "});
+  const summary=conversationSummaryPath("conversation-id","today",now,{filter:"mine",accountId:"account-id",q:" Alice ",tagId:"tag-id"});
   assert.match(summary,/\/api\/v1\/conversations\/conversation-id\/summary\?/);
-  assert.match(summary,/filter=mine/);assert.doesNotMatch(summary,/[?&]limit=/);
+  assert.match(summary,/filter=mine/);assert.match(summary,/tagId=tag-id/);assert.doesNotMatch(summary,/[?&]limit=/);
 });
 
 test("conversation API applies a closed-open last-message range",async()=>{
@@ -56,6 +56,8 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.match(server,/invalid_unreplied_filter/);
   assert.match(server,/invalid_conversation_filter/);
   assert.match(server,/invalid_cursor/);
+  assert.match(server,/invalid_tag_filter/);
+  assert.match(server,/selected_tag\.tag_id=\$14/);
   assert.match(server,/m\.text_content ILIKE/);
   const conversationRoute=server.slice(server.indexOf('app.get("/api/v1/conversations"'),server.indexOf('app.get("/api/v1/conversations/counts"'));
   assert.doesNotMatch(conversationRoute,/COUNT\(\*\) OVER/);
@@ -97,8 +99,9 @@ test("conversation summaries, events, and startup runner are wired",async()=>{
 });
 
 test("inbox uses debounced search, cursor loading, realtime reconciliation, and virtualization",async()=>{
-  const [ui,feed,pkg]=await Promise.all([
+  const [ui,panel,feed,pkg]=await Promise.all([
     readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/conversation-panel.tsx",import.meta.url),"utf8"),
     readFile(new URL("../../../app/use-conversation-feed.ts",import.meta.url),"utf8"),
     readFile(new URL("../../../package.json",import.meta.url),"utf8"),
   ]);
@@ -107,6 +110,8 @@ test("inbox uses debounced search, cursor loading, realtime reconciliation, and 
   assert.match(ui,/useVirtualizer/);
   assert.match(ui,/conversationCursorRef/);
   assert.match(ui,/useConversationFeed/);
+  assert.match(ui,/tagId:selectedTag/);
+  assert.match(panel,/aria-label="按标签筛选会话"/);
   assert.match(feed,/60_000/);
   assert.match(feed,/100/);
   assert.match(pkg,/@tanstack\/react-virtual/);

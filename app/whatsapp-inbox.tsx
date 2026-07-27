@@ -62,7 +62,7 @@ type ChatMessage = {
   translationSourceText?:string;
   failureMessage?:string;
   queueDiagnostic?:{commandId:string;state:string;attempt:number;lastError:string;availableAt:string;claimedAt:string;createdAt:string;accountStatus:string;agentStatus:string;agentLastSeenAt:string};
-  cachedTranslationText?:string;cachedTranslationLanguage?:string;cachedTranscriptionText?:string;
+  cachedTranslationText?:string;cachedTranslationLanguage?:string;cachedTranslationSourceLanguage?:string;cachedTranscriptionText?:string;
   status?:"received"|"queued"|"dispatching"|"sent"|"delivered"|"read"|"failed"|"uncertain";
   attachment?:{id:string;name:string;size:string;mime:string};
 };
@@ -93,7 +93,7 @@ type ConversationContextState={conversation:Conversation;x:number;y:number;secti
 type ConversationCounts={all:number;mine:number;unassigned:number;favorite:number;closed:number;archived:number;reminders:number};
 type CurrencyItem={code:string;name:string;rate:number};
 type CurrencyConfig={baseCurrency:string;currencies:CurrencyItem[];rateSource?:string|null;rateDate?:string|null;rateUpdatedAt?:string|null};
-type MessageTranslation={status:"idle"|"loading"|"translated"|"failed";text?:string;sourceText?:string;message?:string};
+type MessageTranslation={status:"idle"|"loading"|"translated"|"failed";text?:string;sourceText?:string;sourceLanguage?:string;message?:string};
 type KnowledgeBaseItem={id:string;name:string;description:string;document_count?:number;faq_count?:number};
 type AgentDraft={id:string;text_content:string;reply_zh:string|null;reason:string;citations:string[];created_at:string};
 const DEFAULT_TRANSLATION_PREFERENCE:TranslationPreference={enabled:false,agentLanguage:"zh-CN",customerLanguage:"en",updatedAt:null};
@@ -138,6 +138,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [dateFilter,setDateFilter]=useState<ConversationDateFilter>("all");
   const [query,setQuery]=useState("");
   const [debouncedQuery,setDebouncedQuery]=useState("");
+  const [selectedTag,setSelectedTag]=useState("");
   const [conversationCounts,setConversationCounts]=useState<ConversationCounts>(EMPTY_CONVERSATION_COUNTS);
   const [nextConversationCursor,setNextConversationCursor]=useState<string|null>(null);
   const [loadingMoreConversations,setLoadingMoreConversations]=useState(false);
@@ -299,7 +300,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     sessionStorage.removeItem("relayAccessToken");sessionStorage.removeItem("relayUser");
     conversationAbortRef.current?.abort();conversationCursorRef.current=null;
     notificationBaseline.current.clear();notificationBaselineReady.current=false;
-    dateFilterRef.current="all";setDateFilter("all");setApiToken("");setUser(null);setAccounts([]);setConversations([]);setConversationCounts(EMPTY_CONVERSATION_COUNTS);setNextConversationCursor(null);setMessages({});setFailedMessageCounts({});setEmailActivities({});setMessageTranslations({});setTranslationPreferences({});setTranslationReadyConversationId("");setActiveId("");setAuthOpen(false);setSessionReady(true);setLoading(false);
+    dateFilterRef.current="all";setDateFilter("all");setApiToken("");setUser(null);setAccounts([]);setConversations([]);setConversationCounts(EMPTY_CONVERSATION_COUNTS);setNextConversationCursor(null);setMessages({});setFailedMessageCounts({});setEmailActivities({});setMessageTranslations({});setTranslationPreferences({});setTranslationReadyConversationId("");setActiveId("");setSelectedTag("");setContextTags([]);setAuthOpen(false);setSessionReady(true);setLoading(false);
   },[]);
 
   const loadAccounts=useCallback(async(token:string)=>{
@@ -309,6 +310,17 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     if(!result.response.ok)throw new Error(`账号 API 响应异常（${result.response.status}）`);
     const body=await result.response.json() as {data:Array<Record<string,unknown>>};
     setAccounts(body.data.map(item=>({id:String(item.id),name:String(item.display_name),phone:String(item.phone_e164??""),status:String(item.status),reason:String(item.status_reason??""),transport:String(item.transport??"web") as "web"|"cloud",webhookStatus:item.webhook_status?String(item.webhook_status):undefined,credentialsStatus:item.credentials_status?String(item.credentials_status):undefined,lastEvent:item.last_event_at?String(item.last_event_at):undefined})));
+  },[logout]);
+
+  const loadConversationTags=useCallback(async(token:string)=>{
+    const result=await authorizedFetch("/api/v1/tags",token);
+    if(result.token!==token)setApiToken(result.token);
+    if(result.response.status===401){logout();return;}
+    if(!result.response.ok)return;
+    const body=await result.response.json() as {data:Array<Record<string,unknown>>};
+    const tags=body.data.map(mapTag);
+    setContextTags(tags);
+    setSelectedTag(current=>current&&tags.every(tag=>tag.id!==current)?"":current);
   },[logout]);
 
   const loadConversationCounts=useCallback(async(token:string)=>{
@@ -332,7 +344,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     if(append){setLoadingMoreConversations(true);setLoadMoreError("");}else if(!quiet)setLoading(true);
     if(!append)setLoadError("");
     try{
-      const path=conversationListPath(dateFilter,new Date(),{filter:conversationFilterKey(filter),accountId:selectedAccount,q:debouncedQuery,cursor:append?conversationCursorRef.current??undefined:undefined,limit:40});
+      const path=conversationListPath(dateFilter,new Date(),{filter:conversationFilterKey(filter),accountId:selectedAccount,q:debouncedQuery,tagId:selectedTag,cursor:append?conversationCursorRef.current??undefined:undefined,limit:40});
       const conversationResult=await authorizedFetch(path,token,{signal:!append?conversationAbortRef.current?.signal:undefined});
       if(conversationResult.token!==token)setApiToken(conversationResult.token);
       if(conversationResult.response.status===401){logout();return;}
@@ -362,12 +374,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       if((error as {name?:string}).name==="AbortError")return;
       if(sequence===workspaceLoadSequence.current){const message=error instanceof Error?error.message:"会话数据加载失败";if(append)setLoadMoreError(message);else setLoadError(message);}
     }finally{if(append)setLoadingMoreConversations(false);if(sequence===workspaceLoadSequence.current)setLoading(false);}
-  },[dateFilter,filter,selectedAccount,debouncedQuery,logout,notifyIncomingConversation]);
+  },[dateFilter,filter,selectedAccount,debouncedQuery,selectedTag,logout,notifyIncomingConversation]);
 
   const loadWorkspace=useCallback(async(token:string,quiet=false)=>{
     if(!quiet)setLoading(true);
-    await Promise.allSettled([loadAccounts(token),loadConversations(token,{quiet,notify:quiet}),loadConversationCounts(token)]);
-  },[loadAccounts,loadConversations,loadConversationCounts]);
+    await Promise.allSettled([loadAccounts(token),loadConversationTags(token),loadConversations(token,{quiet,notify:quiet}),loadConversationCounts(token)]);
+  },[loadAccounts,loadConversationTags,loadConversations,loadConversationCounts]);
 
   const selectDateFilter=(next:ConversationDateFilter)=>{
     if(next===dateFilter)return;
@@ -392,7 +404,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       const loadedMessages=body.data.map(mapMessage);
       setMessages(all=>({...all,[conversationId]:loadedMessages}));
       setFailedMessageCounts(all=>({...all,[conversationId]:Number(body.failedCount??0)}));
-      const cachedTranslations=Object.fromEntries(loadedMessages.filter(message=>message.cachedTranslationText).map(message=>[message.id,{status:"translated" as const,text:message.cachedTranslationText,sourceText:message.cachedTranscriptionText}]));
+      const cachedTranslations=Object.fromEntries(loadedMessages.filter(message=>message.cachedTranslationText&&message.cachedTranslationSourceLanguage).map(message=>[message.id,{status:"translated" as const,text:message.cachedTranslationText,sourceText:message.cachedTranscriptionText,sourceLanguage:message.cachedTranslationSourceLanguage}]));
       if(Object.keys(cachedTranslations).length)setMessageTranslations(all=>({...cachedTranslations,...all}));
       if(emailResult.response.ok){const emailBody=await emailResult.response.json() as {data:Array<Record<string,unknown>>};setEmailActivities(all=>({...all,[conversationId]:emailBody.data.map(mapEmailActivity)}));}
       if(markRead)await authorizedFetch(`/api/v1/conversations/${conversationId}`,result.token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({read:true})});
@@ -422,7 +434,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     for(let offset=0;offset<ids.length;offset+=6){
       const chunk=ids.slice(offset,offset+6);
       await Promise.all(chunk.map(async id=>{
-        const path=conversationSummaryPath(id,dateFilter,new Date(),{filter:conversationFilterKey(filter),accountId:selectedAccount,q:debouncedQuery});
+        const path=conversationSummaryPath(id,dateFilter,new Date(),{filter:conversationFilterKey(filter),accountId:selectedAccount,q:debouncedQuery,tagId:selectedTag});
         const result=await authorizedFetch(path,apiToken);
         if(result.token!==apiToken)setApiToken(result.token);
         if(result.response.status===401){logout();return;}
@@ -450,7 +462,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     });
     if(ids.includes(effectiveActiveId))await loadMessages(apiToken,effectiveActiveId);
     await refreshRealtimeCounts(apiToken);
-  },[apiToken,dateFilter,filter,selectedAccount,debouncedQuery,effectiveActiveId,loadMessages,logout,notifyIncomingConversation,refreshRealtimeCounts]);
+  },[apiToken,dateFilter,filter,selectedAccount,debouncedQuery,selectedTag,effectiveActiveId,loadMessages,logout,notifyIncomingConversation,refreshRealtimeCounts]);
 
   const reconcileConversationFeed=useCallback(async()=>{
     await Promise.all([loadConversations(apiToken,{quiet:true}),loadConversationCounts(apiToken),effectiveActiveId?loadMessages(apiToken,effectiveActiveId):Promise.resolve()]);
@@ -482,9 +494,9 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     let accessToken=token;
     for(let offset=0;offset<ids.length;offset+=50){const chunk=ids.slice(offset,offset+50);try{
       const result=await authorizedFetch("/api/v1/translations/messages",accessToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({messageIds:chunk,targetLanguage,generateAudio})});accessToken=result.token;if(result.token!==token)setApiToken(result.token);
-      const body=await result.response.json().catch(()=>({})) as {data?:Array<{messageId:string;status:string;translatedText?:string;sourceText?:string;message?:string}>;message?:string};
+      const body=await result.response.json().catch(()=>({})) as {data?:Array<{messageId:string;status:string;translatedText?:string;sourceText?:string;sourceLanguage?:string;message?:string}>;message?:string};
       if(!result.response.ok||!body.data){setMessageTranslations(all=>({...all,...Object.fromEntries(chunk.map(id=>[id,{status:"failed" as const,message:body.message??"翻译服务暂时不可用"}]))}));continue;}
-      setMessageTranslations(all=>({...all,...Object.fromEntries(body.data!.map(item=>[item.messageId,item.status==="translated"?{status:"translated" as const,text:item.translatedText??"",sourceText:item.sourceText}:item.status==="skipped"?{status:"idle" as const}:{status:"failed" as const,message:item.message}]))}));
+      setMessageTranslations(all=>({...all,...Object.fromEntries(body.data!.map(item=>[item.messageId,item.status==="translated"?{status:"translated" as const,text:item.translatedText??"",sourceText:item.sourceText,sourceLanguage:item.sourceLanguage}:item.status==="skipped"?{status:"idle" as const}:{status:"failed" as const,message:item.message}]))}));
     }catch{setMessageTranslations(all=>({...all,...Object.fromEntries(chunk.map(id=>[id,{status:"failed" as const}]))}));}}
   },[messageTranslations]);
 
@@ -1173,7 +1185,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             </section>
           </aside>
 
-          <ConversationPanel filter={filter} subtitle={debouncedQuery?`已加载 ${visible.length} 条结果`:`${counts[conversationFilterKey(filter)]} 个真实会话`} query={query} onQuery={setQuery} onOpenSidebar={()=>setSidebarOpen(true)} onRefresh={()=>void loadWorkspace(apiToken)} dateFilter={dateFilter} onDateFilter={selectDateFilter} onDateKeyDown={handleDateFilterKeyDown} listRef={conversationListRef} sentinelRef={conversationLoadSentinelRef} items={visible} rows={conversationVirtualizer.getVirtualItems()} totalSize={conversationVirtualizer.getTotalSize()} measure={conversationVirtualizer.measureElement} effectiveActiveId={effectiveActiveId} clock={clock} markingUnreadId={markingUnreadId} onSelect={setActiveId} onMenu={openConversationMenu} onMarkUnread={id=>void markConversationUnread(id)} loading={loading} loadError={loadError} hasAccounts={Boolean(accounts.length)} loadingMore={loadingMoreConversations} loadMoreError={loadMoreError} hasMore={Boolean(nextConversationCursor)} onLoadMore={()=>void loadConversations(apiToken,{append:true})}/>
+          <ConversationPanel filter={filter} subtitle={debouncedQuery||selectedTag?`已加载 ${visible.length} 条结果`:`${counts[conversationFilterKey(filter)]} 个真实会话`} query={query} onQuery={setQuery} tags={contextTags} tagId={selectedTag} onTagId={setSelectedTag} onOpenSidebar={()=>setSidebarOpen(true)} onRefresh={()=>void loadWorkspace(apiToken)} dateFilter={dateFilter} onDateFilter={selectDateFilter} onDateKeyDown={handleDateFilterKeyDown} listRef={conversationListRef} sentinelRef={conversationLoadSentinelRef} items={visible} rows={conversationVirtualizer.getVirtualItems()} totalSize={conversationVirtualizer.getTotalSize()} measure={conversationVirtualizer.measureElement} effectiveActiveId={effectiveActiveId} clock={clock} markingUnreadId={markingUnreadId} onSelect={setActiveId} onMenu={openConversationMenu} onMarkUnread={id=>void markConversationUnread(id)} loading={loading} loadError={loadError} hasAccounts={Boolean(accounts.length)} loadingMore={loadingMoreConversations} loadMoreError={loadMoreError} hasMore={Boolean(nextConversationCursor)} onLoadMore={()=>void loadConversations(apiToken,{append:true})}/>
 
           <section className="chat-panel">
             {active ? (
@@ -2141,14 +2153,14 @@ function CrmDetailsPanel({
     [aliasDraft, setAliasDraft] = useState(active.alias),
     [aliasBusy, setAliasBusy] = useState(false);
   const canManageTags = ["admin", "supervisor"].includes(role);
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?:AbortSignal) => {
     setLoading(true);
     setError("");
     try {
       const [detailResult, tagResult, taskResult] = await Promise.all([
-        authorizedFetch(`/api/v1/conversations/${active.id}/details`, token),
-        authorizedFetch("/api/v1/tags", token),
-        authorizedFetch(`/api/v1/tasks?contactId=${encodeURIComponent(active.contactId)}&limit=20`,token),
+        authorizedFetch(`/api/v1/conversations/${active.id}/details`, token,{signal}),
+        authorizedFetch("/api/v1/tags", token,{signal}),
+        authorizedFetch(`/api/v1/tasks?contactId=${encodeURIComponent(active.contactId)}&limit=20`,token,{signal}),
       ]);
       const nextToken =
         detailResult.token !== token ? detailResult.token : tagResult.token !== token ? tagResult.token : taskResult.token;
@@ -2186,14 +2198,14 @@ function CrmDetailsPanel({
       setCatalog(tagBody.data.map(mapTag));
       setContactTasks((taskBody.data??[]).map(item=>({id:String(item.id),title:String(item.title??""),kind:item.kind==="message"?"message":"general",status:String(item.status??"planned"),dueAt:String(item.due_at),sendAt:item.send_at?String(item.send_at):null,assignedUserName:item.assigned_user_name?String(item.assigned_user_name):null})));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "加载失败");
+      if(!signal?.aborted)setError(reason instanceof Error ? reason.message : "加载失败");
     } finally {
-      setLoading(false);
+      if(!signal?.aborted)setLoading(false);
     }
   }, [active.id, active.contactId, active.customerStage, active.accountId, active.account, active.name, active.phone, token, onToken]);
   useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 0);
-    return () => window.clearTimeout(timer);
+    const controller=new AbortController(),timer = window.setTimeout(() => void load(controller.signal), 0);
+    return () => {window.clearTimeout(timer);controller.abort();};
   }, [load]);
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
@@ -3601,6 +3613,8 @@ const LANGUAGES=[
 ] as const;
 
 function languageName(code:string){return LANGUAGES.find(item=>item[0]===code)?.[1]??code;}
+const DETECTED_LANGUAGE_NAMES:Record<string,string>={zh:"中文",en:"英语",es:"西班牙语",fr:"法语",de:"德语",it:"意大利语",pt:"葡萄牙语",ru:"俄语",ar:"阿拉伯语",hi:"印地语",tr:"土耳其语",nl:"荷兰语",pl:"波兰语",ms:"马来语",id:"印度尼西亚语",th:"泰语",vi:"越南语",ja:"日语",ko:"韩语"};
+function detectedLanguageName(code?:string){if(!code)return"未知语种";if(/^zh-CN$/i.test(code))return"简体中文";if(/^zh-(?:TW|HK|Hant)$/i.test(code))return"繁体中文";return DETECTED_LANGUAGE_NAMES[code.split("-")[0].toLowerCase()]??languageName(code);}
 function isEnglishLanguage(code:string){return /^en(?:-|$)/i.test(code);}
 
 function TranslationMenu({preference,configured,ready,onChange,onClose}:{preference:TranslationPreference;configured:boolean;ready:boolean;onChange:(value:TranslationPreference)=>void;onClose:()=>void}){
@@ -3625,14 +3639,14 @@ function IncomingTranslation({value,language,onRetry}:{value?:MessageTranslation
   if(value?.status==="idle")return null;
   if(!value||value.status==="loading")return <div className="incoming-translation loading"><RefreshCw className="spin" size={12}/>正在翻译为 {languageName(language)}…</div>;
   if(value.status==="failed")return <div className="incoming-translation failed"><span>{value.message??"译文加载失败"}</span><button onClick={onRetry}>重试</button></div>;
-  return <div className="incoming-translation"><span><Languages size={12}/>{languageName(language)}</span><p>{value.text}</p></div>;
+  return <div className="incoming-translation"><span><Languages size={12}/>{detectedLanguageName(value.sourceLanguage)} → {languageName(language)}</span><p>{value.text}</p></div>;
 }
 
 function VoiceTranslation({value,language,configured,onTranslate}:{value?:MessageTranslation;language:string;configured:boolean;onTranslate:()=>void}){
   if(!value||value.status==="idle")return <button className="voice-translate-action" disabled={!configured} onClick={onTranslate}><Languages size={12}/>{configured?`AI 翻译语音为 ${languageName(language)}`:"管理员尚未配置翻译 Provider"}</button>;
   if(value.status==="loading")return <div className="incoming-translation loading"><RefreshCw className="spin" size={12}/>正在转写并翻译语音…</div>;
   if(value.status==="failed")return <div className="incoming-translation failed"><span>{value.message??"语音翻译失败"}</span><button onClick={onTranslate}>重试</button></div>;
-  return <div className="incoming-translation voice-translation">{value.sourceText&&<><span><Mic size={12}/>语音原文</span><p>{value.sourceText}</p></>}<span><Languages size={12}/>{languageName(language)}译文</span><p>{value.text}</p></div>;
+  return <div className="incoming-translation voice-translation">{value.sourceText&&<><span><Mic size={12}/>语音原文</span><p>{value.sourceText}</p></>}<span><Languages size={12}/>{detectedLanguageName(value.sourceLanguage)} → {languageName(language)}</span><p>{value.text}</p></div>;
 }
 
 const QUICK_REPLY_TEXTS=[
@@ -3758,7 +3772,7 @@ function ContactSocialLinks({methods}:{methods:ContactMethod[]}){
   })}</div>;
 }
 function mapTag(item:Record<string,unknown>):TagItem{return{id:String(item.id),name:String(item.name??"标签"),color:String(item.color??"#DFF5E8")};}
-function mapMessage(item:Record<string,unknown>):ChatMessage {const kind=String(item.kind??"text"),mediaId=String(item.media_id??""),occurredAt=String(item.occurred_at),quotedId=String(item.quoted_message_id??""),commandId=String(item.command_id??"");return{id:String(item.id),direction:item.direction as "in"|"out",kind,text:String(item.text_content??(mediaId?"":kindText(kind))),quoted:quotedId?{id:quotedId,direction:item.quoted_direction as "in"|"out",kind:String(item.quoted_kind??"text"),text:String(item.quoted_text_content??item.quoted_file_name??kindText(String(item.quoted_kind??"text")))}:undefined,translationSourceText:item.translation_source_text?String(item.translation_source_text):undefined,failureMessage:item.failure_message?String(item.failure_message):undefined,queueDiagnostic:item.direction==="out"?{commandId,state:String(item.command_state??""),attempt:Number(item.command_attempt??0),lastError:String(item.command_last_error??""),availableAt:String(item.command_available_at??""),claimedAt:String(item.command_claimed_at??""),createdAt:String(item.command_created_at??""),accountStatus:String(item.account_status??""),agentStatus:String(item.agent_status??""),agentLastSeenAt:String(item.agent_last_seen_at??"")}:undefined,cachedTranslationText:item.cached_translation_text?String(item.cached_translation_text):undefined,cachedTranslationLanguage:item.cached_translation_language?String(item.cached_translation_language):undefined,cachedTranscriptionText:item.cached_transcription_text?String(item.cached_transcription_text):undefined,time:formatTime(new Date(occurredAt)),occurredAt,status:item.status as ChatMessage["status"],attachment:item.file_name&&mediaId?{id:mediaId,name:String(item.file_name),mime:String(item.mime_type??"文件"),size:formatBytes(Number(item.byte_size??0))}:undefined};}
+function mapMessage(item:Record<string,unknown>):ChatMessage {const kind=String(item.kind??"text"),mediaId=String(item.media_id??""),occurredAt=String(item.occurred_at),quotedId=String(item.quoted_message_id??""),commandId=String(item.command_id??"");return{id:String(item.id),direction:item.direction as "in"|"out",kind,text:String(item.text_content??(mediaId?"":kindText(kind))),quoted:quotedId?{id:quotedId,direction:item.quoted_direction as "in"|"out",kind:String(item.quoted_kind??"text"),text:String(item.quoted_text_content??item.quoted_file_name??kindText(String(item.quoted_kind??"text")))}:undefined,translationSourceText:item.translation_source_text?String(item.translation_source_text):undefined,failureMessage:item.failure_message?String(item.failure_message):undefined,queueDiagnostic:item.direction==="out"?{commandId,state:String(item.command_state??""),attempt:Number(item.command_attempt??0),lastError:String(item.command_last_error??""),availableAt:String(item.command_available_at??""),claimedAt:String(item.command_claimed_at??""),createdAt:String(item.command_created_at??""),accountStatus:String(item.account_status??""),agentStatus:String(item.agent_status??""),agentLastSeenAt:String(item.agent_last_seen_at??"")}:undefined,cachedTranslationText:item.cached_translation_text?String(item.cached_translation_text):undefined,cachedTranslationLanguage:item.cached_translation_language?String(item.cached_translation_language):undefined,cachedTranslationSourceLanguage:item.cached_translation_source_language?String(item.cached_translation_source_language):undefined,cachedTranscriptionText:item.cached_transcription_text?String(item.cached_transcription_text):undefined,time:formatTime(new Date(occurredAt)),occurredAt,status:item.status as ChatMessage["status"],attachment:item.file_name&&mediaId?{id:mediaId,name:String(item.file_name),mime:String(item.mime_type??"文件"),size:formatBytes(Number(item.byte_size??0))}:undefined};}
 
 function messageQuote(message:ChatMessage):NonNullable<ChatMessage["quoted"]>{return{id:message.id,direction:message.direction,kind:message.kind,text:message.text||message.attachment?.name||kindText(message.kind)};}
 function mapEmailActivity(item:Record<string,unknown>):EmailActivity{return{id:String(item.id),subject:String(item.subject),recipients:Array.isArray(item.recipients)?item.recipients.map(value=>{const recipient=value as Record<string,unknown>;return{email:String(recipient.email),label:String(recipient.label??"")};}):[],contentType:String(item.content_type),status:String(item.status) as EmailActivity["status"],attempt:Number(item.attempt??0),lastError:String(item.last_error??""),createdAt:String(item.created_at),senderName:String(item.sender_name??""),attachmentCount:Number(item.attachment_count??0)};}
@@ -3818,10 +3832,44 @@ function AgentConversationBar({conversationId,token,refreshKey,onToken,onToast,o
 function AgentMemoryPanel({conversationId,token,onToken,onToast}:{conversationId:string;token:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){
   type MemoryResponse={summary:string;updatedAt:string|null;facts:Array<{id:string;fact_key:string;fact_value:string;confidence:number;source_text?:string}>;rebuild?:{id:string;state:"pending"|"processing"|"completed"|"failed"|"cancelled";last_error?:string|null}|null};
   const [memory,setMemory]=useState<MemoryResponse|null>(null),[busy,setBusy]=useState(false);
-  const load=useCallback(async()=>{const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory`,token);if(result.token!==token)onToken(result.token);if(result.response.ok)setMemory(await result.response.json());},[conversationId,token,onToken]);useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer);},[load]);
+  const rebuildAbortRef=useRef<AbortController|null>(null);
+  const load=useCallback(async(signal?:AbortSignal)=>{const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory`,token,{signal});if(result.token!==token)onToken(result.token);if(result.response.ok)setMemory(await result.response.json());},[conversationId,token,onToken]);
+  useEffect(()=>{const controller=new AbortController(),timer=window.setTimeout(()=>void load(controller.signal).catch(()=>undefined),0);return()=>{window.clearTimeout(timer);controller.abort();};},[load]);
+  useEffect(()=>()=>rebuildAbortRef.current?.abort(),[conversationId]);
   async function remove(id:string){const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory/facts/${id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);if(result.response.ok)await load();}
   async function edit(fact:{id:string;fact_key:string;fact_value:string}){const key=await promptAction({title:"编辑 AI 记忆",label:"记忆字段",defaultValue:fact.fact_key,placeholder:"例如：采购偏好",confirmLabel:"下一步",maxLength:120});if(!key?.trim())return;const value=await promptAction({title:"编辑 AI 记忆",label:"记忆内容",defaultValue:fact.fact_value,description:`字段：${key.trim()}`,placeholder:"输入需要记住的内容",confirmLabel:"保存记忆",multiline:true,maxLength:4000});if(!value?.trim())return;const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory/facts/${fact.id}`,token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({key:key.trim(),value:value.trim()})});if(result.token!==token)onToken(result.token);if(result.response.ok)await load();}
-  async function rebuild(){setBusy(true);const started=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory/rebuild`,token,{method:"POST"});let currentToken=started.token;if(currentToken!==token)onToken(currentToken);if(!started.response.ok){setBusy(false);onToast("记忆更新失败");return;}const job=await started.response.json() as {id:string};onToast("正在重新整理聊天记忆");for(let attempt=0;attempt<60;attempt+=1){await new Promise(resolve=>window.setTimeout(resolve,1500));const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory`,currentToken);currentToken=result.token;if(result.token!==token)onToken(result.token);if(!result.response.ok)continue;const next=await result.response.json() as MemoryResponse;setMemory(next);if(next.rebuild?.id!==job.id)continue;if(next.rebuild.state==="completed"){setBusy(false);onToast("聊天记忆已更新");return;}if(next.rebuild.state==="failed"||next.rebuild.state==="cancelled"){setBusy(false);onToast(next.rebuild.last_error?`记忆更新失败：${next.rebuild.last_error}`:"记忆更新失败");return;}}setBusy(false);onToast("记忆整理仍在后台进行，请稍后查看");}
+  async function rebuild(){
+    rebuildAbortRef.current?.abort();
+    const controller=new AbortController();
+    rebuildAbortRef.current=controller;
+    setBusy(true);
+    try{
+      const started=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory/rebuild`,token,{method:"POST",signal:controller.signal});
+      let currentToken=started.token;
+      if(currentToken!==token)onToken(currentToken);
+      if(!started.response.ok){onToast("记忆更新失败");return;}
+      const job=await started.response.json() as {id:string};
+      onToast("正在后台整理聊天记忆，您可以继续查看其他客户");
+      for(let attempt=0;attempt<24;attempt+=1){
+        await new Promise(resolve=>window.setTimeout(resolve,attempt===0?1200:5000));
+        if(controller.signal.aborted)return;
+        const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory/rebuild/${job.id}`,currentToken,{signal:controller.signal});
+        if(result.token!==currentToken)onToken(result.token);
+        currentToken=result.token;
+        if(!result.response.ok)continue;
+        const status=await result.response.json() as NonNullable<MemoryResponse["rebuild"]>;
+        setMemory(value=>value?{...value,rebuild:status}:value);
+        if(status.state==="completed"){await load(controller.signal);onToast("聊天记忆已更新");return;}
+        if(status.state==="failed"||status.state==="cancelled"){onToast(status.last_error?`记忆更新失败：${status.last_error}`:"记忆更新失败");return;}
+      }
+      onToast("记忆整理仍在后台进行，请稍后查看");
+    }catch(reason){
+      if(!controller.signal.aborted)onToast(reason instanceof Error?`记忆更新失败：${reason.message}`:"记忆更新失败");
+    }finally{
+      if(!controller.signal.aborted)setBusy(false);
+      if(rebuildAbortRef.current===controller)rebuildAbortRef.current=null;
+    }
+  }
   const rebuildState=memory?.rebuild?.state;
   return <div className="detail-section agent-memory"><div className="detail-title"><h4><Brain size={13}/>聊天记忆</h4><button disabled={busy} onClick={()=>void rebuild()}><RefreshCw className={busy?"spin":undefined} size={11}/>{busy?"整理中…":"重新整理"}</button></div><p className="memory-summary">{memory?.summary||"Agent 尚未生成会话摘要。"}</p>{!busy&&rebuildState==="failed"&&<p className="memory-rebuild-error">最近一次整理失败：{memory?.rebuild?.last_error||"未知错误"}</p>}{!busy&&rebuildState==="cancelled"&&<p className="memory-rebuild-error">最近一次整理已取消：{memory?.rebuild?.last_error||"未知原因"}</p>}{!busy&&(rebuildState==="pending"||rebuildState==="processing")&&<p className="memory-rebuild-pending"><RefreshCw className="spin" size={11}/>记忆仍在后台整理中</p>}<div className="memory-facts">{memory?.facts.map(fact=><span key={fact.id} title={fact.source_text||"来源消息已删除"}><b>{fact.fact_key}</b><em>{fact.fact_value}</em><i><button onClick={()=>void edit(fact)} aria-label={`编辑记忆 ${fact.fact_key}`}><Pencil size={10}/></button><button onClick={()=>void remove(fact.id)} aria-label={`删除记忆 ${fact.fact_key}`}><X size={10}/></button></i></span>)}</div></div>;
 }

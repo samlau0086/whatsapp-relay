@@ -1,6 +1,6 @@
 export type ConversationDateFilter="all"|"today"|"yesterday"|"last7"|"last15"|"unreplied";
 export type ConversationListFilter="all"|"mine"|"unassigned"|"favorite"|"closed"|"archived"|"reminders";
-export type ConversationListOptions={filter?:ConversationListFilter;accountId?:string;q?:string;cursor?:string;limit?:number};
+export type ConversationListOptions={filter?:ConversationListFilter;accountId?:string;q?:string;tagId?:string;cursor?:string;limit?:number};
 
 export const CONVERSATION_DATE_FILTERS:Array<{value:ConversationDateFilter;label:string}>=[
   {value:"all",label:"全部"},
@@ -27,6 +27,7 @@ export function conversationListPath(filter:ConversationDateFilter,now=new Date(
   if(options.filter)params.set("filter",options.filter);
   if(options.accountId)params.set("accountId",options.accountId);
   if(options.q?.trim())params.set("q",options.q.trim());
+  if(options.tagId)params.set("tagId",options.tagId);
   if(options.cursor)params.set("cursor",options.cursor);
   if(filter==="unreplied")params.set("unreplied","true");
   const range=conversationDateRange(filter,now);

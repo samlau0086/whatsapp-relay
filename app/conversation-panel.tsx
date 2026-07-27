@@ -1,17 +1,17 @@
 "use client";
 
-import {Menu,RefreshCw,Search} from "lucide-react";
+import {Menu,RefreshCw,Search,Tag} from "lucide-react";
 import type {KeyboardEvent,MouseEvent,RefObject} from "react";
 import {CONVERSATION_DATE_FILTERS,type ConversationDateFilter} from "./conversation-date-filter";
 import type {Conversation} from "./conversation-types";
 import {ConversationVirtualList} from "./conversation-virtual-list";
 
 export function ConversationPanel({
-  filter,subtitle,query,onQuery,onOpenSidebar,onRefresh,dateFilter,onDateFilter,onDateKeyDown,
+  filter,subtitle,query,onQuery,tags,tagId,onTagId,onOpenSidebar,onRefresh,dateFilter,onDateFilter,onDateKeyDown,
   listRef,sentinelRef,items,rows,totalSize,measure,effectiveActiveId,clock,markingUnreadId,onSelect,onMenu,onMarkUnread,
   loading,loadError,hasAccounts,loadingMore,loadMoreError,hasMore,onLoadMore,
 }:{
-  filter:string;subtitle:string;query:string;onQuery:(value:string)=>void;onOpenSidebar:()=>void;onRefresh:()=>void;
+  filter:string;subtitle:string;query:string;onQuery:(value:string)=>void;tags:Array<{id:string;name:string;color:string}>;tagId:string;onTagId:(value:string)=>void;onOpenSidebar:()=>void;onRefresh:()=>void;
   dateFilter:ConversationDateFilter;onDateFilter:(value:ConversationDateFilter)=>void;onDateKeyDown:(event:KeyboardEvent<HTMLButtonElement>)=>void;
   listRef:RefObject<HTMLDivElement|null>;sentinelRef:RefObject<HTMLDivElement|null>;items:Conversation[];rows:Array<{index:number;start:number}>;totalSize:number;
   measure:(element:HTMLDivElement|null)=>void;
@@ -25,6 +25,13 @@ export function ConversationPanel({
       <button className="icon-button" onClick={onRefresh} aria-label="刷新"><RefreshCw size={17}/></button>
     </header>
     <label className="search-box"><Search size={15}/><input value={query} onChange={event=>onQuery(event.target.value)} maxLength={100} placeholder="搜索会话、联系人或号码"/></label>
+    <label className="conversation-tag-filter">
+      <Tag size={14}/>
+      <select value={tagId} onChange={event=>onTagId(event.target.value)} aria-label="按标签筛选会话">
+        <option value="">全部标签</option>
+        {tags.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}
+      </select>
+    </label>
     <div className="conversation-date-tabs" role="tablist" aria-label="按最后联系时间筛选会话">
       {CONVERSATION_DATE_FILTERS.map(item=><button key={item.value} type="button" role="tab" aria-selected={dateFilter===item.value} tabIndex={dateFilter===item.value?0:-1} className={dateFilter===item.value?"active":""} onClick={()=>onDateFilter(item.value)} onKeyDown={onDateKeyDown}>{item.label}</button>)}
     </div>

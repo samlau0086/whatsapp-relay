@@ -12,7 +12,7 @@ import { apiKeyCreateSchema, contactAliasSchema, contactCreateSchema, contactUpd
 import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
 import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline } from "./agent-hub.js";
 import { generateSpeech, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
-import { TRANSLATION_PROVIDERS, transcribeAudio, translateText, translationProviderDefaults, type TranslationProvider, type TranslationProviderSetting } from "./translation-providers.js";
+import { TRANSLATION_PROVIDERS, transcribeAudio, translateText, translateTextWithDetection, translationProviderDefaults, type TranslationProvider, type TranslationProviderSetting } from "./translation-providers.js";
 import { normalizeTranscriptionAudio } from "./audio-normalizer.js";
 import { calculateOrderTotal, canManageSharedRecord, ensureCrmTables, primaryContactEmail, type OrderSummaryFee, type OrderSummaryItem } from "./crm.js";
 import { renderTemplateOrderImage } from "./order-image.js";
@@ -292,7 +292,7 @@ app.get("/api/v1/accounts", { preHandler:authenticate }, async (request) => {
 });
 
 type ConversationFilter="all"|"mine"|"unassigned"|"favorite"|"closed"|"archived"|"reminders";
-type ConversationQuery={accountId?:string;status?:string;q?:string;filter?:string;limit?:string;before?:string;cursor?:string;lastMessageFrom?:string;lastMessageBefore?:string;unreplied?:string};
+type ConversationQuery={accountId?:string;status?:string;q?:string;tagId?:string;filter?:string;limit?:string;before?:string;cursor?:string;lastMessageFrom?:string;lastMessageBefore?:string;unreplied?:string};
 const CONVERSATION_FILTERS=new Set<ConversationFilter>(["all","mine","unassigned","favorite","closed","archived","reminders"]);
 
 function parseConversationRange(query:ConversationQuery){
@@ -317,6 +317,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
   if(query.filter&&!CONVERSATION_FILTERS.has(query.filter as ConversationFilter))return reply.code(400).send({error:"invalid_conversation_filter"});
   const range=parseConversationRange(query);if(!range)return reply.code(400).send({error:"invalid_conversation_date_range"});
   const cursor=parseConversationCursor(query.cursor);if(cursor==="invalid")return reply.code(400).send({error:"invalid_cursor"});
+  if(query.tagId&&!isPostgresUuid(query.tagId))return reply.code(400).send({error:"invalid_tag_filter"});
   const keyword=query.q?.trim()||null;if(keyword&&keyword.length>100)return reply.code(400).send({error:"conversation_query_too_long"});
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null,accountIds=request.principal?.accountIds??null,filter=query.filter??null;
   const reminderMode=filter==="reminders";
@@ -336,7 +337,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
   const candidateFilter=filter==="all"?"AND c.status<>'archived'":filter==="mine"?"AND c.assigned_user_id=$9::uuid":filter==="unassigned"?"AND c.assigned_user_id IS NULL":filter==="favorite"?"AND c.favorite":filter==="closed"?"AND c.status='closed'":filter==="archived"?"AND c.status='archived'":reminderMode?"AND r.remind_at IS NOT NULL":"";
   const candidateCursor=!cursor?"":reminderMode?"AND (r.remind_at>$11 OR (r.remind_at=$11 AND c.id<$12::uuid))":`AND (${latestSort}<$11 OR (${latestSort}=$11 AND c.id<$12::uuid))`;
   const result=await pool.query(`WITH parameter_types AS NOT MATERIALIZED (
-    SELECT $4::text keyword_value,$10::text filter_value,$11::timestamptz cursor_at,$12::uuid cursor_id
+    SELECT $4::text keyword_value,$10::text filter_value,$11::timestamptz cursor_at,$12::uuid cursor_id,$14::uuid tag_id
   ), ${searchCte} candidates AS MATERIALIZED (
     SELECT c.id,${reminderMode?"r.remind_at":latestSort} sort_at
     FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id
@@ -345,6 +346,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
     WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::text IS NULL OR c.status::text=$3)
       ${keyword?"AND c.id IN (SELECT id FROM search_ids)":""}
+      AND ($14::uuid IS NULL OR EXISTS(SELECT 1 FROM conversation_tags selected_tag WHERE selected_tag.conversation_id=c.id AND selected_tag.tag_id=$14))
       AND ($5::timestamptz IS NULL OR c.last_message_at<$5) AND ($6::timestamptz IS NULL OR c.last_message_at>=$6) AND ($7::timestamptz IS NULL OR c.last_message_at<$7)
       AND ($8::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in')
       ${candidateFilter}
@@ -363,7 +365,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true
     LEFT JOIN reminders r ON r.conversation_id=c.id AND r.user_id=$9::uuid AND r.dismissed_at IS NULL
     ORDER BY candidates.sort_at ${reminderMode?"ASC":"DESC"},c.id DESC`,
-    [query.accountId??null,accountIds,query.status??null,keyword,query.before??null,range.from,range.before,query.unreplied==="true",principalUserId,filter,cursor?.sortAt??null,cursor?.id??null,limit+1]);
+    [query.accountId??null,accountIds,query.status??null,keyword,query.before??null,range.from,range.before,query.unreplied==="true",principalUserId,filter,cursor?.sortAt??null,cursor?.id??null,limit+1,query.tagId??null]);
   const hasMore=result.rows.length>limit,data=result.rows.slice(0,limit),last=data[data.length-1];
   return{data,nextCursor:hasMore&&last?Buffer.from(JSON.stringify({sortAt:last.sort_at,id:last.id}),"utf8").toString("base64url"):null,total:null};
 });
@@ -399,6 +401,7 @@ app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(requ
   const {id}=request.params as {id:string},query=request.query as ConversationQuery;
   if(query.unreplied!==undefined&&query.unreplied!=="true"&&query.unreplied!=="false")return reply.code(400).send({error:"invalid_unreplied_filter"});
   if(query.filter&&!CONVERSATION_FILTERS.has(query.filter as ConversationFilter))return reply.code(400).send({error:"invalid_conversation_filter"});
+  if(query.tagId&&!isPostgresUuid(query.tagId))return reply.code(400).send({error:"invalid_tag_filter"});
   const range=parseConversationRange(query);if(!range)return reply.code(400).send({error:"invalid_conversation_date_range"});
   const keyword=query.q?.trim().toLocaleLowerCase()||"";if(keyword.length>100)return reply.code(400).send({error:"conversation_query_too_long"});
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null;
@@ -418,6 +421,7 @@ app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(requ
   const filter=query.filter as ConversationFilter|undefined;
   const matches=(!query.accountId||row.account_id===query.accountId)
     &&(!query.status||row.status===query.status)
+    &&(!query.tagId||Array.isArray(row.tags)&&row.tags.some((tag:{id?:unknown})=>String(tag.id)===query.tagId))
     &&(!keyword||[row.display_name,row.phone_e164,row.last_message].some(value=>String(value??"").toLocaleLowerCase().includes(keyword)))
     &&(legacyBefore===null||lastAt!==null&&lastAt<legacyBefore)&&(from===null||lastAt!==null&&lastAt>=from)&&(before===null||lastAt!==null&&lastAt<before)
     &&(query.unreplied!=="true"||row.last_message_direction==="in")
@@ -1159,7 +1163,7 @@ app.get("/api/v1/conversations/:id/messages", { preHandler:authenticate }, async
   const limit=Math.min(100,Math.max(1,Number(query.limit??50)));
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null;
   const [result,failed]=await Promise.all([
-    pool.query("SELECT msg.id,msg.direction,msg.kind,msg.text_content,msg.translation_source_text,msg.status,msg.failure_code,msg.failure_message,msg.whatsapp_message_id,msg.media_id,msg.quoted_message_id,msg.occurred_at,media.file_name,media.mime_type,media.byte_size,quoted.direction quoted_direction,quoted.kind quoted_kind,quoted.text_content quoted_text_content,quoted_media.file_name quoted_file_name,preference.agent_language cached_translation_language,translation.translated_text cached_translation_text,transcription.transcript_text cached_transcription_text,command.id command_id,command.state command_state,command.attempt command_attempt,command.last_error command_last_error,command.available_at command_available_at,command.claimed_at command_claimed_at,command.created_at command_created_at,account.status account_status,agent.status agent_status,agent.last_seen_at agent_last_seen_at FROM messages msg LEFT JOIN media ON media.id=msg.media_id LEFT JOIN messages quoted ON quoted.id=msg.quoted_message_id LEFT JOIN media quoted_media ON quoted_media.id=quoted.media_id LEFT JOIN conversation_translation_preferences preference ON preference.conversation_id=msg.conversation_id AND preference.user_id=$4::uuid LEFT JOIN message_translations translation ON translation.message_id=msg.id AND translation.target_language=preference.agent_language LEFT JOIN message_transcriptions transcription ON transcription.message_id=msg.id LEFT JOIN whatsapp_accounts account ON account.id=msg.account_id LEFT JOIN agents agent ON agent.id=account.agent_id LEFT JOIN LATERAL (SELECT oc.id,oc.state,oc.attempt,oc.last_error,oc.available_at,oc.claimed_at,oc.created_at FROM outbound_commands oc WHERE oc.message_id=msg.id ORDER BY oc.sequence DESC LIMIT 1) command ON true WHERE msg.conversation_id=$1 AND ($2::timestamptz IS NULL OR msg.occurred_at<$2) ORDER BY msg.occurred_at DESC,msg.id DESC LIMIT $3",[id,query.before??null,limit,principalUserId]),
+    pool.query("SELECT msg.id,msg.direction,msg.kind,msg.text_content,msg.translation_source_text,msg.status,msg.failure_code,msg.failure_message,msg.whatsapp_message_id,msg.media_id,msg.quoted_message_id,msg.occurred_at,media.file_name,media.mime_type,media.byte_size,quoted.direction quoted_direction,quoted.kind quoted_kind,quoted.text_content quoted_text_content,quoted_media.file_name quoted_file_name,preference.agent_language cached_translation_language,translation.translated_text cached_translation_text,translation.source_language cached_translation_source_language,transcription.transcript_text cached_transcription_text,command.id command_id,command.state command_state,command.attempt command_attempt,command.last_error command_last_error,command.available_at command_available_at,command.claimed_at command_claimed_at,command.created_at command_created_at,account.status account_status,agent.status agent_status,agent.last_seen_at agent_last_seen_at FROM messages msg LEFT JOIN media ON media.id=msg.media_id LEFT JOIN messages quoted ON quoted.id=msg.quoted_message_id LEFT JOIN media quoted_media ON quoted_media.id=quoted.media_id LEFT JOIN conversation_translation_preferences preference ON preference.conversation_id=msg.conversation_id AND preference.user_id=$4::uuid LEFT JOIN message_translations translation ON translation.message_id=msg.id AND translation.target_language=preference.agent_language LEFT JOIN message_transcriptions transcription ON transcription.message_id=msg.id LEFT JOIN whatsapp_accounts account ON account.id=msg.account_id LEFT JOIN agents agent ON agent.id=account.agent_id LEFT JOIN LATERAL (SELECT oc.id,oc.state,oc.attempt,oc.last_error,oc.available_at,oc.claimed_at,oc.created_at FROM outbound_commands oc WHERE oc.message_id=msg.id ORDER BY oc.sequence DESC LIMIT 1) command ON true WHERE msg.conversation_id=$1 AND ($2::timestamptz IS NULL OR msg.occurred_at<$2) ORDER BY msg.occurred_at DESC,msg.id DESC LIMIT $3",[id,query.before??null,limit,principalUserId]),
     pool.query("SELECT count(*)::int count FROM messages WHERE conversation_id=$1 AND direction='out' AND status IN ('failed','uncertain')",[id]),
   ]);
   return {data:result.rows.reverse(),nextCursor:result.rows.length===limit?result.rows[result.rows.length-1]?.occurred_at:null,failedCount:Number(failed.rows[0]?.count??0)};
@@ -1279,12 +1283,12 @@ app.post("/api/v1/translations/preview", {preHandler:authenticate}, async(reques
 
 app.post("/api/v1/translations/messages", {preHandler:authenticate}, async(request,reply)=>{
   const parsed=messageTranslationsSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
-  const found=await pool.query("SELECT m.id,m.account_id,m.direction,m.kind,m.text_content,m.media_id,media.object_key,media.file_name,media.mime_type,media.byte_size,mt.translated_text,transcription.transcript_text FROM messages m LEFT JOIN media ON media.id=m.media_id LEFT JOIN message_translations mt ON mt.message_id=m.id AND mt.target_language=$2 LEFT JOIN message_transcriptions transcription ON transcription.message_id=m.id WHERE m.id=ANY($1::uuid[])",[parsed.data.messageIds,parsed.data.targetLanguage]);
+  const found=await pool.query("SELECT m.id,m.account_id,m.direction,m.kind,m.text_content,m.media_id,media.object_key,media.file_name,media.mime_type,media.byte_size,mt.translated_text,mt.source_language,transcription.transcript_text FROM messages m LEFT JOIN media ON media.id=m.media_id LEFT JOIN message_translations mt ON mt.message_id=m.id AND mt.target_language=$2 LEFT JOIN message_transcriptions transcription ON transcription.message_id=m.id WHERE m.id=ANY($1::uuid[])",[parsed.data.messageIds,parsed.data.targetLanguage]);
   if(found.rowCount!==new Set(parsed.data.messageIds).size||found.rows.some(row=>!canAccessAccount(request.principal,row.account_id)))return reply.code(404).send({error:"message_not_found"});
   const eligible=found.rows.filter(row=>row.direction==="in"&&((row.kind==="text"&&String(row.text_content??"").trim())||(row.kind==="audio"&&row.media_id&&row.object_key&&(row.translated_text||parsed.data.generateAudio))));
-  const setting=eligible.some(row=>!row.translated_text)?await activeTranslationSetting():null;
-  if(eligible.some(row=>!row.translated_text)&&!setting)return reply.code(503).send({error:"translation_not_configured",message:"管理员尚未启用 AI 翻译 Provider"});
-  const generated=await mapWithConcurrency(eligible.filter(row=>!row.translated_text),3,row=>singleFlight(messageTranslationFlights,`${row.id}:${parsed.data.targetLanguage}`,async()=>{
+  const setting=eligible.some(row=>!row.translated_text||!row.source_language)?await activeTranslationSetting():null;
+  if(eligible.some(row=>!row.translated_text||!row.source_language)&&!setting)return reply.code(503).send({error:"translation_not_configured",message:"管理员尚未启用 AI 翻译 Provider"});
+  const generated=await mapWithConcurrency(eligible.filter(row=>!row.translated_text||!row.source_language),3,row=>singleFlight(messageTranslationFlights,`${row.id}:${parsed.data.targetLanguage}`,async()=>{
     try{
       let sourceText=String(row.text_content??"").trim();
       if(row.kind==="audio"){
@@ -1302,13 +1306,14 @@ app.post("/api/v1/translations/messages", {preHandler:authenticate}, async(reque
           });
         }
       }
-      const translatedText=await translateText(setting!,{text:sourceText,targetLanguage:parsed.data.targetLanguage});
-      await pool.query("INSERT INTO message_translations(message_id,target_language,translated_text,provider,model) VALUES($1,$2,$3,$4,$5) ON CONFLICT(message_id,target_language) DO NOTHING",[row.id,parsed.data.targetLanguage,translatedText,setting!.provider,setting!.model]);
-      return{id:row.id,translatedText,sourceText};
+      const detected=await translateTextWithDetection(setting!,{text:sourceText,targetLanguage:parsed.data.targetLanguage});
+      await pool.query("INSERT INTO message_translations(message_id,target_language,translated_text,source_language,provider,model) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(message_id,target_language) DO NOTHING",[row.id,parsed.data.targetLanguage,detected.translatedText,detected.sourceLanguage,setting!.provider,setting!.model]);
+      await pool.query("UPDATE message_translations SET source_language=COALESCE(source_language,$3) WHERE message_id=$1 AND target_language=$2",[row.id,parsed.data.targetLanguage,detected.sourceLanguage]);
+      return{id:row.id,translatedText:row.translated_text??detected.translatedText,sourceText,sourceLanguage:detected.sourceLanguage};
     }catch(error){const failure=translationFailure(error);request.log.error({messageId:row.id,provider:setting?.provider,error:String(error),failure:failure.error},"Incoming message translation failed");return{id:row.id,...failure};}
   }));
   const generatedById=new Map(generated.map(item=>[item.id,item]));
-  return{data:parsed.data.messageIds.map(messageId=>{const row=found.rows.find(item=>item.id===messageId);const isText=row?.kind==="text"&&String(row.text_content??"").trim();const isAudio=row?.kind==="audio"&&row.media_id&&row.object_key;if(!row||row.direction!=="in"||(!isText&&!isAudio)||(isAudio&&!row.translated_text&&!parsed.data.generateAudio))return{messageId,status:"skipped"};const item=generatedById.get(messageId);if(item?.error)return{messageId,status:"failed",error:item.error,message:item.message};return{messageId,status:"translated",translatedText:row.translated_text??item?.translatedText,...(isAudio?{sourceText:row.transcript_text??item?.sourceText}:{})};})};
+  return{data:parsed.data.messageIds.map(messageId=>{const row=found.rows.find(item=>item.id===messageId);const isText=row?.kind==="text"&&String(row.text_content??"").trim();const isAudio=row?.kind==="audio"&&row.media_id&&row.object_key;if(!row||row.direction!=="in"||(!isText&&!isAudio)||(isAudio&&!row.translated_text&&!parsed.data.generateAudio))return{messageId,status:"skipped"};const item=generatedById.get(messageId);if(item?.error)return{messageId,status:"failed",error:item.error,message:item.message};return{messageId,status:"translated",translatedText:row.translated_text??item?.translatedText,sourceLanguage:row.source_language??item?.sourceLanguage,...(isAudio?{sourceText:row.transcript_text??item?.sourceText}:{})};})};
 });
 
 app.get("/api/v1/admin/translation-providers", {preHandler:authenticate}, async(request,reply)=>{
@@ -1409,6 +1414,7 @@ app.delete("/api/v1/knowledge-documents/:id",{preHandler:authenticate},async(req
 app.get("/api/v1/conversations/:id/agent",{preHandler:authenticate},async(request,reply)=>{const {id}=request.params as {id:string};const conversation=await pool.query("SELECT account_id FROM conversations WHERE id=$1",[id]);if(!conversation.rowCount||!canAccessAccount(request.principal,conversation.rows[0].account_id))return reply.code(404).send({error:"not_found"});const [state,draft,runs]=await Promise.all([pool.query("SELECT COALESCE(st.mode,'human_paused') mode,st.pause_reason,COALESCE(st.followup_count,0) followup_count,COALESCE(s.enabled,false) account_enabled FROM conversations c LEFT JOIN conversation_agent_state st ON st.conversation_id=c.id LEFT JOIN account_agent_settings s ON s.account_id=c.account_id WHERE c.id=$1",[id]),pool.query("SELECT id,text_content,reply_zh,reason,citations,created_at FROM ai_drafts WHERE conversation_id=$1 AND status='pending' ORDER BY created_at DESC LIMIT 1",[id]),pool.query("SELECT id,kind,decision,confidence,citations,status,error,created_at,completed_at FROM agent_runs WHERE conversation_id=$1 ORDER BY created_at DESC LIMIT 20",[id])]);return{...state.rows[0],draft:draft.rows[0]??null,runs:runs.rows};});
 app.put("/api/v1/conversations/:id/agent",{preHandler:authenticate},async(request,reply)=>{if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const {id}=request.params as {id:string};const body=(request.body??{}) as {mode?:string};if(!["cautious","full","human_paused"].includes(body.mode??""))return reply.code(400).send({error:"invalid_mode"});const conversation=await pool.query("SELECT account_id FROM conversations WHERE id=$1",[id]);if(!conversation.rowCount||!canAccessAccount(request.principal,conversation.rows[0].account_id))return reply.code(404).send({error:"not_found"});await transaction(async client=>{await client.query("SELECT id FROM conversations WHERE id=$1 FOR UPDATE",[id]);await client.query("INSERT INTO conversation_agent_state(conversation_id,mode,pause_reason) VALUES($1,$2,$3) ON CONFLICT(conversation_id) DO UPDATE SET mode=EXCLUDED.mode,pause_reason=EXCLUDED.pause_reason,updated_at=now()",[id,body.mode,body.mode==="human_paused"?"manual_pause":null]);if(body.mode==="full")await client.query("UPDATE ai_drafts SET status='dismissed',resolved_at=now(),resolved_by=$2 WHERE conversation_id=$1 AND status='pending'",[id,request.principal!.id]);if(body.mode==="human_paused")await client.query("UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error='manual_pause' WHERE conversation_id=$1 AND state='pending' AND kind IN ('reply','followup')",[id]);});return{mode:body.mode};});
 app.get("/api/v1/conversations/:id/memory",{preHandler:authenticate},async(request,reply)=>{const {id}=request.params as {id:string};const conversation=await pool.query("SELECT account_id FROM conversations WHERE id=$1",[id]);if(!conversation.rowCount||!canAccessAccount(request.principal,conversation.rows[0].account_id))return reply.code(404).send({error:"not_found"});const [memory,facts,rebuild]=await Promise.all([pool.query("SELECT summary,source_message_id,updated_at FROM conversation_memories WHERE conversation_id=$1",[id]),pool.query("SELECT f.id,f.fact_key,f.fact_value,f.confidence,f.source_message_id,f.updated_at,m.text_content source_text FROM customer_memory_facts f LEFT JOIN messages m ON m.id=f.source_message_id WHERE f.conversation_id=$1 ORDER BY f.updated_at DESC",[id]),pool.query("SELECT id,state,last_error,created_at,completed_at FROM agent_jobs WHERE conversation_id=$1 AND kind='refresh_memory' ORDER BY created_at DESC LIMIT 1",[id])]);return{summary:memory.rows[0]?.summary??"",updatedAt:memory.rows[0]?.updated_at??null,facts:facts.rows,rebuild:rebuild.rows[0]??null};});
+app.get("/api/v1/conversations/:id/memory/rebuild/:jobId",{preHandler:authenticate},async(request,reply)=>{const {id,jobId}=request.params as {id:string;jobId:string};const result=await pool.query("SELECT j.id,j.state,j.last_error,j.created_at,j.completed_at,c.account_id FROM agent_jobs j JOIN conversations c ON c.id=j.conversation_id WHERE j.id=$1 AND j.conversation_id=$2 AND j.kind='refresh_memory'",[jobId,id]);if(!result.rowCount||!canAccessAccount(request.principal,result.rows[0].account_id))return reply.code(404).send({error:"not_found"});const row=result.rows[0];return{id:row.id,state:row.state,last_error:row.last_error,created_at:row.created_at,completed_at:row.completed_at};});
 app.patch("/api/v1/conversations/:id/memory/facts/:factId",{preHandler:authenticate},async(request,reply)=>{if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const {id,factId}=request.params as {id:string;factId:string};const access=await pool.query("SELECT account_id FROM conversations WHERE id=$1",[id]);if(!access.rowCount||!canAccessAccount(request.principal,access.rows[0].account_id))return reply.code(404).send({error:"not_found"});const body=(request.body??{}) as {key?:string;value?:string};if(!body.key?.trim()||!body.value?.trim())return reply.code(400).send({error:"invalid_request"});const result=await pool.query("UPDATE customer_memory_facts SET fact_key=$3,fact_value=$4,confidence=1,updated_at=now() WHERE id=$1 AND conversation_id=$2 RETURNING *",[factId,id,body.key.trim().slice(0,120),body.value.trim().slice(0,1000)]);return result.rowCount?result.rows[0]:reply.code(404).send({error:"not_found"});});
 app.delete("/api/v1/conversations/:id/memory/facts/:factId",{preHandler:authenticate},async(request,reply)=>{const {id,factId}=request.params as {id:string;factId:string};const access=await pool.query("SELECT account_id FROM conversations WHERE id=$1",[id]);if(!access.rowCount||!canAccessAccount(request.principal,access.rows[0].account_id))return reply.code(404).send({error:"not_found"});await pool.query("DELETE FROM customer_memory_facts WHERE id=$1 AND conversation_id=$2",[factId,id]);return reply.code(204).send();});
 app.post("/api/v1/conversations/:id/memory/rebuild",{preHandler:authenticate},async(request,reply)=>{const {id}=request.params as {id:string};const access=await pool.query("SELECT account_id FROM conversations WHERE id=$1",[id]);if(!access.rowCount||!canAccessAccount(request.principal,access.rows[0].account_id))return reply.code(404).send({error:"not_found"});const job=await transaction(async client=>{await client.query("SELECT id FROM conversations WHERE id=$1 FOR UPDATE",[id]);const active=await client.query("SELECT id,state FROM agent_jobs WHERE conversation_id=$1 AND kind='refresh_memory' AND state IN ('pending','processing') ORDER BY created_at DESC LIMIT 1",[id]);if(active.rowCount)return active.rows[0];const created=await client.query("INSERT INTO agent_jobs(conversation_id,kind,payload) VALUES($1,'refresh_memory',$2) RETURNING id,state",[id,JSON.stringify({memoryOnly:true})]);return created.rows[0];});return reply.code(202).send({id:job.id,status:job.state});});
@@ -1510,7 +1516,7 @@ async function cancelCurrentPaymentRequest(orderId:string,actorId:string):Promis
 function paypalFailureMessage(error:unknown):string{if(error instanceof PayPalApiError){if(error.status===401||error.status===403)return"PayPal 鉴权失败，请管理员检查凭据和环境";if(error.status===422||error.status===400)return`PayPal 拒绝了该订单：${error.message}`;if(error.status===429)return"PayPal 请求过于频繁，请稍后重试";}return"PayPal 服务暂时不可用，请稍后重试";}
 
 const transcriptionFlights=new Map<string,Promise<string>>();
-const messageTranslationFlights=new Map<string,Promise<{id:string;translatedText?:string;sourceText?:string;error?:string;message?:string}>>();
+const messageTranslationFlights=new Map<string,Promise<{id:string;translatedText?:string;sourceText?:string;sourceLanguage?:string;error?:string;message?:string}>>();
 async function singleFlight<T>(flights:Map<string,Promise<T>>,key:string,work:()=>Promise<T>):Promise<T>{
   const current=flights.get(key);if(current)return current;
   const pending=work().finally(()=>flights.delete(key));flights.set(key,pending);return pending;
@@ -1569,6 +1575,7 @@ async function ensureTranslationTables():Promise<void>{
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (message_id,target_language)
   )`);
+  await pool.query("ALTER TABLE message_translations ADD COLUMN IF NOT EXISTS source_language text");
   await pool.query(`CREATE TABLE IF NOT EXISTS message_transcriptions (
     message_id uuid PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
     transcript_text text NOT NULL,

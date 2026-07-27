@@ -76,6 +76,28 @@ export function chunkText(input: string, max = 1200, overlap = 160): string[] {
   return chunks.filter(Boolean);
 }
 
+export function compactMemoryMessages(
+  messages: Array<Record<string, unknown>>,
+  maxMessages = 40,
+  maxCharacters = 20_000,
+): Array<Record<string, unknown>> {
+  const selected: Array<Record<string, unknown>> = [];
+  let characters = 0;
+  for (const message of messages.slice(-maxMessages).reverse()) {
+    const text = String(message.text_content ?? "").slice(0, 1200);
+    if (selected.length && characters + text.length > maxCharacters) break;
+    characters += text.length;
+    selected.unshift({
+      id: message.id,
+      direction: message.direction,
+      kind: message.kind,
+      text_content: text,
+      occurred_at: message.occurred_at,
+    });
+  }
+  return selected;
+}
+
 export function passesAutoReplyGate(
   decision: AgentDecision,
   threshold: number,
@@ -603,7 +625,7 @@ async function runConversationJob(job: Job): Promise<void> {
   }
   const messages = await pool.query(
     "SELECT m.id,m.direction,m.kind,COALESCE(m.text_content,t.transcript_text) text_content,m.occurred_at FROM messages m LEFT JOIN message_transcriptions t ON t.message_id=m.id WHERE m.conversation_id=$1 ORDER BY m.occurred_at DESC,m.id DESC LIMIT $2",
-    [job.conversation_id, memoryOnly ? 100 : 20],
+    [job.conversation_id, memoryOnly ? 60 : 20],
   );
   const ordered = messages.rows.reverse();
   const latestInbound = ordered
@@ -1044,7 +1066,9 @@ async function generateMemoryDecision(
               previousSummary: input.summary,
               existingFacts: input.facts,
               conversationOrders: input.orders,
-              messages: input.messages,
+              messages: compactMemoryMessages(
+                input.messages as Array<Record<string, unknown>>,
+              ),
             }),
           },
         ],
@@ -1052,8 +1076,9 @@ async function generateMemoryDecision(
           type: "json_schema",
           json_schema: { name: "conversation_memory", strict: true, schema },
         },
+        max_tokens: 1200,
       }),
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(45_000),
     },
   );
   if (!response.ok)
