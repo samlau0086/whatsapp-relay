@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {readFile} from "node:fs/promises";
 import test from "node:test";
 import {CONVERSATION_DATE_FILTERS,conversationCountsPath,conversationDateRange,conversationListPath,conversationSummaryPath} from "../../../app/conversation-date-filter.js";
+import {isPostgresUuid} from "../src/conversation-cursor.js";
 
 test("conversation date filters expose the requested tabs and default all range",()=>{
   assert.deepEqual(CONVERSATION_DATE_FILTERS.map(item=>item.label),["全部","今天","昨天","最近7天","最近15天","未回复"]);
@@ -28,6 +29,12 @@ test("conversation list path only adds date parameters for an active date filter
   const path=conversationListPath("today",new Date(2026,6,26,12));
   assert.match(path,/limit=40&lastMessageFrom=/);
   assert.match(path,/&lastMessageBefore=/);
+});
+
+test("cursor IDs accept every PostgreSQL UUID, not only RFC-versioned UUIDs",()=>{
+  assert.equal(isPostgresUuid("aaaaaaaa-bbbb-0ccc-7ddd-eeeeeeeeeeee"),true);
+  assert.equal(isPostgresUuid("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"),true);
+  assert.equal(isPostgresUuid("not-a-uuid"),false);
 });
 
 test("conversation list and counts paths carry server-side filters without leaking search into counts",()=>{

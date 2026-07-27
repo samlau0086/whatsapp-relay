@@ -34,6 +34,7 @@ import { registerTaskRoutes } from "./task-routes.js";
 import {registerWhatsAppCloudRoutes} from "./whatsapp-cloud.js";
 import {isTemplateRequiredError,queueWhatsAppCommand} from "./whatsapp-outbound.js";
 import {registerBrowserEvents} from "./browser-events.js";
+import {isPostgresUuid} from "./conversation-cursor.js";
 
 const app = Fastify({ logger: { level: config.NODE_ENV === "production" ? "info" : "debug", redact:["req.headers.authorization","req.body.password","req.body.secret","req.body.apiKey","req.body.clientId","req.body.clientSecret","req.body.sandboxClientId","req.body.sandboxClientSecret","req.body.liveClientId","req.body.liveClientSecret","req.body.accessToken","req.body.appSecret"] }, bodyLimit: 2_000_000 });
 const s3 = new S3Client({ region:config.S3_REGION, endpoint:config.S3_ENDPOINT, forcePathStyle:true, credentials:{ accessKeyId:config.S3_ACCESS_KEY, secretAccessKey:config.S3_SECRET_KEY } });
@@ -284,7 +285,6 @@ app.get("/api/v1/accounts", { preHandler:authenticate }, async (request) => {
 type ConversationFilter="all"|"mine"|"unassigned"|"favorite"|"closed"|"archived"|"reminders";
 type ConversationQuery={accountId?:string;status?:string;q?:string;filter?:string;limit?:string;before?:string;cursor?:string;lastMessageFrom?:string;lastMessageBefore?:string;unreplied?:string};
 const CONVERSATION_FILTERS=new Set<ConversationFilter>(["all","mine","unassigned","favorite","closed","archived","reminders"]);
-const UUID_PATTERN=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function parseConversationRange(query:ConversationQuery){
   const from=query.lastMessageFrom?new Date(query.lastMessageFrom):null,before=query.lastMessageBefore?new Date(query.lastMessageBefore):null;
@@ -296,7 +296,7 @@ function parseConversationCursor(value:string|undefined):{sortAt:string;id:strin
   if(!value)return null;
   try{
     const decoded=JSON.parse(Buffer.from(value,"base64url").toString("utf8")) as {sortAt?:string;id?:string};
-    if(!decoded.sortAt||Number.isNaN(Date.parse(decoded.sortAt))||!decoded.id||!UUID_PATTERN.test(decoded.id))return"invalid";
+    if(!decoded.sortAt||Number.isNaN(Date.parse(decoded.sortAt))||!decoded.id||!isPostgresUuid(decoded.id))return"invalid";
     return{sortAt:new Date(decoded.sortAt).toISOString(),id:decoded.id};
   }catch{return"invalid";}
 }

@@ -19,7 +19,12 @@ const benchmark=async(name,path,samples=40)=>{
 };
 
 let cursorPath="/api/v1/conversations?limit=40";
-for(let page=0;page<100;page++){const result=await timed(cursorPath);if(result.status!==200)throw new Error("deep cursor preparation failed");if(!result.body.nextCursor)break;cursorPath=`/api/v1/conversations?limit=40&cursor=${encodeURIComponent(result.body.nextCursor)}`;}
+for(let page=0;page<100;page++){
+  const result=await timed(cursorPath);
+  if(result.status!==200)throw new Error(`deep cursor preparation failed on page ${page+1}: HTTP ${result.status} ${JSON.stringify(result.body)}`);
+  if(!result.body.nextCursor)break;
+  cursorPath=`/api/v1/conversations?limit=40&cursor=${encodeURIComponent(result.body.nextCursor)}`;
+}
 const results=[];
 results.push(await benchmark("first_page","/api/v1/conversations?limit=40"));
 results.push(await benchmark("deep_cursor",cursorPath));

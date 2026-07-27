@@ -3,7 +3,7 @@
 EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON)
 SELECT c.id,c.last_message_text FROM conversations c
 JOIN contacts co ON co.id=c.contact_id
-WHERE c.account_id=md5('account-1')::uuid
+WHERE c.account_id=perf_uuid('account-1')
 ORDER BY COALESCE(c.last_message_at,c.created_at) DESC,c.id DESC LIMIT 40;
 EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON)
 SELECT c.id FROM conversations c
