@@ -5,6 +5,7 @@ import {
   Inbox, Info, Languages, Mail, MessageCircle, Mic, MonitorSmartphone, Paperclip, Phone, Plus,
   Pencil, RefreshCw, Search, Send, Settings, ShieldCheck, ShoppingBag, Smile, Sparkles, Star, Trash2, UploadCloud, UserPlus,
   Users, Wifi, WifiOff, X, ClipboardList, ExternalLink, Bot, Brain, BookOpen, MapPin, Copy, CreditCard, LayoutGrid, List, Eye, EyeOff, ReceiptText, Reply, Zap, Tag,
+  Facebook, Instagram, Linkedin,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -2122,6 +2123,7 @@ function CrmDetailsPanel({
     [tagQuery, setTagQuery] = useState(""),
     [tagName, setTagName] = useState(""),
     [tagColor, setTagColor] = useState("#DFF5E8"),
+    [tagEditing, setTagEditing] = useState<TagItem | null>(null),
     [noteDraft, setNoteDraft] = useState(""),
     [contactTasks, setContactTasks] = useState<ContactTaskSummary[]>([]),
     [taskTitle, setTaskTitle] = useState(""),
@@ -2199,11 +2201,12 @@ function CrmDetailsPanel({
       if (paymentOrderTarget) setPaymentOrderTarget(null);
       else if (sendOrderTarget) setSendOrderTarget(null);
       else if (taskEditing) setTaskEditing(null);
+      else if (tagEditing) setTagEditing(null);
       else if (!orderOpen && !editOrderTarget) onClose();
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [onClose, orderOpen, editOrderTarget, sendOrderTarget, paymentOrderTarget, taskEditing]);
+  }, [onClose, orderOpen, editOrderTarget, sendOrderTarget, paymentOrderTarget, taskEditing, tagEditing]);
   async function request(path: string, init: RequestInit) {
     setBusy(true);
     setError("");
@@ -2282,21 +2285,24 @@ function CrmDetailsPanel({
     });
     if (ok) setTagName("");
   }
-  async function renameTag(tag: TagItem) {
-    const name = (await promptAction({
-      title: "重命名标签",
-      label: "标签名称",
-      defaultValue: tag.name,
-      placeholder: "输入新的标签名称",
-      confirmLabel: "保存名称",
-      maxLength: 40,
-    }))?.trim();
-    if (!name || name === tag.name) return;
-    await request(`/api/v1/tags/${tag.id}`, {
+  async function saveTag() {
+    if (!tagEditing) return;
+    const name = tagEditing.name.trim();
+    if (!name) return;
+    const current = catalog.find((tag) => tag.id === tagEditing.id);
+    if (current && current.name === name && current.color.toLowerCase() === tagEditing.color.toLowerCase()) {
+      setTagEditing(null);
+      return;
+    }
+    const ok = await request(`/api/v1/tags/${tagEditing.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, color: tagEditing.color }),
     });
+    if (ok) {
+      setTagEditing(null);
+      onToast(`标签“${name}”已更新`);
+    }
   }
   async function deleteTag(tag: TagItem) {
     if (!await confirmAction(`删除标签“${tag.name}”后，所有会话都会移除它。`,{title:"删除标签？",confirmLabel:"删除"})) return;
@@ -2440,7 +2446,8 @@ function CrmDetailsPanel({
           </span>
           {details?.contact&&<ContactLocalTime contact={details.contact}/>}
           {details?.contact?.primaryEmail&&<p className="contact-primary-email"><Mail size={12}/>{details.contact.primaryEmail}</p>}
-          {details?.contact?.methods.slice(0,2).map((method,index)=><p className="contact-method-summary" key={`${method.type}-${index}`}>{method.label||contactMethodName(method.type)}：{method.value}</p>)}
+          {details?.contact?.methods.filter(method=>!isSocialContactMethod(method.type)).slice(0,2).map((method,index)=><p className="contact-method-summary" key={`${method.type}-${index}`}>{method.label||contactMethodName(method.type)}：{method.value}</p>)}
+          {details?.contact&&<ContactSocialLinks methods={details.contact.methods}/>}
           <div className="contact-profile-actions"><button className="contact-profile-edit" onClick={()=>setContactEditing(true)}><Pencil size={13}/>编辑资料</button><button className="contact-profile-edit" onClick={()=>setAddressEditing(true)}><MapPin size={13}/>收货地址{details?.contact?.addresses.length?` (${details.contact.addresses.length})`:""}</button></div>
         </div>
         <AgentMemoryPanel conversationId={active.id} token={token} onToken={onToken} onToast={onToast}/>
@@ -2608,8 +2615,8 @@ function CrmDetailsPanel({
                     <span key={tag.id}>
                       <b>{tag.name}</b>
                       <button
-                        onClick={() => void renameTag(tag)}
-                        aria-label={`重命名 ${tag.name}`}
+                        onClick={() => setTagEditing({ ...tag })}
+                        aria-label={`编辑 ${tag.name}`}
                       >
                         <Pencil size={11} />
                       </button>
@@ -2759,6 +2766,17 @@ function CrmDetailsPanel({
       {contactEditing&&<ContactEditDialog contactId={active.contactId} token={token} onToken={onToken} onClose={()=>setContactEditing(false)} onSaved={async profile=>{setContactEditing(false);setDetails(value=>value?{...value,contact:profile}:value);onToast("联系人资料已更新");await onChanged();await load();}}/>}
       {addressEditing&&<ContactAddressDialog contactId={active.contactId} token={token} onToken={onToken} onClose={()=>setAddressEditing(false)} onSaved={async profile=>{setAddressEditing(false);setDetails(value=>value?{...value,contact:profile}:value);onToast("联系人地址已更新，创建订单时可直接选择");await load();}}/>}
       {taskEditing&&<ContactTaskDialog task={taskEditing} token={token} onToken={onToken} onClose={()=>setTaskEditing(null)} onSaved={async()=>{setTaskEditing(null);onToast("任务已更新");await load();}}/>}
+      {tagEditing&&<div className="modal-backdrop tag-edit-backdrop" role="presentation">
+        <section className="login-dialog tag-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="tag-edit-title">
+          <button className="login-close" onClick={()=>setTagEditing(null)} disabled={busy} aria-label="关闭"><X size={17}/></button>
+          <span className="login-logo" style={{background:tagEditing.color}}><Tag size={20}/></span>
+          <h2 id="tag-edit-title">编辑标签</h2>
+          <p>修改名称和颜色后，所有使用该标签的会话会同步更新。</p>
+          <label>标签名称<input autoFocus value={tagEditing.name} maxLength={40} onChange={event=>setTagEditing(tag=>tag?{...tag,name:event.target.value}:tag)} onKeyDown={event=>{if(event.key==="Enter"){event.preventDefault();void saveTag();}}}/></label>
+          <label>标签颜色<span className="tag-edit-color"><input type="color" value={tagEditing.color} onChange={event=>setTagEditing(tag=>tag?{...tag,color:event.target.value}:tag)} aria-label="标签颜色"/><code>{tagEditing.color.toUpperCase()}</code><i style={{background:tagEditing.color}}>{tagEditing.name.trim()||"标签预览"}</i></span></label>
+          <footer><button className="secondary-action" onClick={()=>setTagEditing(null)} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void saveTag()} disabled={busy||!tagEditing.name.trim()}>{busy?"正在保存…":"保存修改"}</button></footer>
+        </section>
+      </div>}
       {orderOpen && (
         <OrderDialog
           active={active}
@@ -3717,7 +3735,28 @@ function ContactLocalTime({contact}:{contact:ContactProfile}){
   const source=contact.timezoneSource==="custom"?"已设置时区":contact.timezoneSource==="country"?`${contact.inferredCountry??"号码国家/地区"}推算`:"未识别国家/地区，使用 UTC";
   return <div className="contact-local-time" title={`${contact.effectiveTimezone} · ${source}`}><Clock3 size={14}/><span><b>{value}</b><small>对方当前时间 · {source}</small></span></div>;
 }
-function contactMethodName(type:ContactMethodType){return({phone:"电话",wechat:"微信",telegram:"Telegram",line:"Line",website:"网站",other:"其他"} as Record<ContactMethodType,string>)[type];}
+function contactMethodName(type:ContactMethodType){return({phone:"电话",wechat:"微信",telegram:"Telegram",line:"Line",website:"网站",facebook:"Facebook",x:"X",linkedin:"LinkedIn",instagram:"Instagram",other:"其他"} as Record<ContactMethodType,string>)[type];}
+function isSocialContactMethod(type:ContactMethodType):type is "facebook"|"x"|"linkedin"|"instagram"{return ["facebook","x","linkedin","instagram"].includes(type);}
+function socialContactUrl(method:ContactMethod){
+  const value=method.value.trim();
+  if(/^https?:\/\//i.test(value))return value;
+  const handle=value.replace(/^@/,"").replace(/^\/+/,"");
+  const domains={facebook:"facebook.com",x:"x.com",linkedin:"linkedin.com",instagram:"instagram.com"} as const;
+  const domain=domains[method.type as keyof typeof domains];
+  if(!domain)return "";
+  const knownDomain=method.type==="x"?"(?:x\\.com|twitter\\.com)":domain.replace(".","\\.");
+  if(new RegExp(`^(?:www\\.)?${knownDomain}/`,"i").test(handle))return `https://${handle}`;
+  return method.type==="linkedin"?`https://${domain}/in/${handle}`:`https://${domain}/${handle}`;
+}
+function ContactSocialLinks({methods}:{methods:ContactMethod[]}){
+  const socialMethods=methods.filter(method=>isSocialContactMethod(method.type));
+  if(!socialMethods.length)return null;
+  return <div className="contact-social-links" aria-label="社交媒体链接">{socialMethods.map((method,index)=>{
+    const label=method.label||contactMethodName(method.type);
+    const icon=method.type==="facebook"?<Facebook size={17}/>:method.type==="linkedin"?<Linkedin size={17}/>:method.type==="instagram"?<Instagram size={17}/>:<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M18.9 2H22l-6.77 7.74L23.2 22h-6.24l-4.89-6.39L6.48 22H3.36l7.26-8.3L2.97 2h6.4l4.42 5.84L18.9 2Zm-1.1 17.84h1.73L8.43 4.05H6.58L17.8 19.84Z" fill="currentColor"/></svg>;
+    return <a key={`${method.type}-${method.id??index}`} href={socialContactUrl(method)} target="_blank" rel="noopener noreferrer" aria-label={`打开 ${label}`} title={`${label} · ${method.value}`}>{icon}</a>;
+  })}</div>;
+}
 function mapTag(item:Record<string,unknown>):TagItem{return{id:String(item.id),name:String(item.name??"标签"),color:String(item.color??"#DFF5E8")};}
 function mapMessage(item:Record<string,unknown>):ChatMessage {const kind=String(item.kind??"text"),mediaId=String(item.media_id??""),occurredAt=String(item.occurred_at),quotedId=String(item.quoted_message_id??""),commandId=String(item.command_id??"");return{id:String(item.id),direction:item.direction as "in"|"out",kind,text:String(item.text_content??(mediaId?"":kindText(kind))),quoted:quotedId?{id:quotedId,direction:item.quoted_direction as "in"|"out",kind:String(item.quoted_kind??"text"),text:String(item.quoted_text_content??item.quoted_file_name??kindText(String(item.quoted_kind??"text")))}:undefined,translationSourceText:item.translation_source_text?String(item.translation_source_text):undefined,failureMessage:item.failure_message?String(item.failure_message):undefined,queueDiagnostic:item.direction==="out"?{commandId,state:String(item.command_state??""),attempt:Number(item.command_attempt??0),lastError:String(item.command_last_error??""),availableAt:String(item.command_available_at??""),claimedAt:String(item.command_claimed_at??""),createdAt:String(item.command_created_at??""),accountStatus:String(item.account_status??""),agentStatus:String(item.agent_status??""),agentLastSeenAt:String(item.agent_last_seen_at??"")}:undefined,cachedTranslationText:item.cached_translation_text?String(item.cached_translation_text):undefined,cachedTranslationLanguage:item.cached_translation_language?String(item.cached_translation_language):undefined,cachedTranscriptionText:item.cached_transcription_text?String(item.cached_transcription_text):undefined,time:formatTime(new Date(occurredAt)),occurredAt,status:item.status as ChatMessage["status"],attachment:item.file_name&&mediaId?{id:mediaId,name:String(item.file_name),mime:String(item.mime_type??"文件"),size:formatBytes(Number(item.byte_size??0))}:undefined};}
 
@@ -4852,7 +4891,7 @@ function ContactEditDialog({contactId,token,onToken,onClose,onSaved}:{contactId:
   function setPrimary(index:number){setEmails(items=>items.map((item,itemIndex)=>({...item,isPrimary:itemIndex===index})));}
   function addMethod(){setMethods(items=>[...items,{id:crypto.randomUUID(),type:"phone",label:"",value:""}]);}
   async function save(){if(emails.some(item=>!item.email.trim())){setError("请填写完整邮箱地址，或移除空白邮箱行");return;}if(methods.some(item=>!item.value.trim())){setError("请填写完整联系方式，或移除空白联系方式行");return;}if(specialDates.some(item=>!item.label.trim())){setError("请填写特殊日期名称，或移除空白项目");return;}if(avatarFile&&avatarFile.size>5*1024*1024){setError("头像文件不能超过 5 MB");return;}if(!profile)return;setBusy(true);setError("");try{let accessToken=token;const result=await authorizedFetch(`/api/v1/contacts/${contactId}`,accessToken,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({alias,phone,note,timezone:timezone||null,birthday,specialDates,emails:emails.map(item=>({label:item.label,email:item.email,isPrimary:item.isPrimary})),methods:methods.map(item=>({type:item.type,label:item.label,value:item.value})),addresses:profile.addresses})});accessToken=result.token;if(result.token!==token)onToken(result.token);const body=await result.response.json().catch(()=>({})) as Record<string,unknown>&{error?:string;message?:string;details?:{fieldErrors?:Record<string,string[]>}};if(!result.response.ok){const detail=body.details?.fieldErrors?Object.values(body.details.fieldErrors).flat()[0]:undefined;throw new Error(detail??body.message??body.error??`保存失败（HTTP ${result.response.status}）`);}if(avatarFile){const form=new FormData();form.append("file",avatarFile);const uploaded=await authorizedFetch(`/api/v1/contacts/${contactId}/avatar`,accessToken,{method:"POST",body:form});accessToken=uploaded.token;if(accessToken!==token)onToken(accessToken);const avatarBody=await uploaded.response.json().catch(()=>({})) as {message?:string};if(!uploaded.response.ok)throw new Error(avatarBody.message??"头像上传失败");}else if(removeAvatar&&profile.avatarUrl){const removed=await authorizedFetch(`/api/v1/contacts/${contactId}/avatar`,accessToken,{method:"DELETE"});if(removed.token!==token)onToken(removed.token);if(!removed.response.ok)throw new Error("头像移除失败");}const refreshed=await authorizedFetch(`/api/v1/contacts/${contactId}`,accessToken);if(refreshed.token!==token)onToken(refreshed.token);await onSaved(mapContactProfile(await refreshed.response.json() as Record<string,unknown>));}catch(reason){setError(reason instanceof Error?reason.message:"联系人保存失败");setBusy(false);}}
-  return <><div className="modal-backdrop contact-dialog-backdrop" role="presentation"><section className="login-dialog contact-dialog" role="dialog" aria-modal="true" aria-labelledby="contact-dialog-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><Users size={20}/></span><h2 id="contact-dialog-title">编辑联系人</h2>{loading?<div className="contact-dialog-loading"><RefreshCw className="spin" size={17}/>正在读取联系人资料…</div>:profile?<><p>{profile.contactName||profile.phone} · {profile.accountName}</p><div className="contact-avatar-editor"><button type="button" className="contact-avatar-picker" onClick={()=>setAvatarPickerOpen(true)} disabled={busy}>{avatarPreview?<span className="contact-avatar large"><img src={avatarPreview} alt="头像预览"/></span>:removeAvatar?<span className="contact-avatar large"><span>{profile.name.slice(0,2).toUpperCase()}</span></span>:<ContactAvatar contact={profile} token={token} onToken={onToken} size="large"/>}<span><b>{profile.avatarUrl&&!removeAvatar?"更换头像":"设置头像"}</b><small>从媒体与附件选择，支持 JPG、PNG 或 WebP，最大 5 MB</small></span></button>{(profile.avatarUrl||avatarFile)&&!removeAvatar&&<button type="button" onClick={()=>{setAvatarFile(null);setRemoveAvatar(true);}}>移除</button>}</div><div className="contact-create-grid"><label>联系人名称<input value={alias} onChange={event=>setAlias(event.target.value)} maxLength={80} placeholder={profile.contactName||profile.phone}/><small>团队维护的名称不会被 WhatsApp 同步覆盖。</small></label><label>WhatsApp 号码<input value={phone} onChange={event=>setPhone(event.target.value)} inputMode="tel" disabled={profile.hasConversation&&Boolean(profile.phone)}/><small>{profile.hasConversation&&profile.phone?"该联系人已有对应会话，号码不可修改。":"必须包含国家或地区代码。"}</small></label></div><section className="contact-field-section contact-timezone-field"><header><span><Clock3 size={15}/><b>联系人时区</b><small>用于详情页显示对方当前时间</small></span>{timezone&&<button type="button" onClick={()=>setTimezone("")}>按国家自动推算</button>}</header><TimezoneSearchDropdown value={timezone} onChange={setTimezone} label="搜索联系人 IANA 时区"/><p>{timezone?`已指定 ${timezone}`:`未指定时区，将根据号码国家/地区自动使用 ${profile.effectiveTimezone}${profile.inferredCountry?`（${profile.inferredCountry}）`:""}`}</p></section><section className="contact-field-section"><header><span><Mail size={15}/><b>邮箱</b><small>邮件功能将默认使用 Primary Email</small></span><button type="button" onClick={addEmail}><Plus size={13}/>添加邮箱</button></header>{emails.length?<div className="contact-repeat-list">{emails.map((email,index)=><div className="contact-email-row" key={email.id??index}><input value={email.label} maxLength={40} onChange={event=>setEmails(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,label:event.target.value}:item))} placeholder="标签，如工作"/><input type="email" value={email.email} maxLength={254} onChange={event=>setEmails(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,email:event.target.value}:item))} placeholder="name@example.com"/><label className="primary-email-radio"><input type="radio" name="primary-email" checked={email.isPrimary} onChange={()=>setPrimary(index)}/>Primary</label><button type="button" className="danger-text" onClick={()=>removeEmail(index)} aria-label="移除邮箱"><Trash2 size={14}/></button></div>)}</div>:<p className="contact-field-empty">尚未添加邮箱</p>}</section><section className="contact-field-section"><header><span><Phone size={15}/><b>其他联系方式</b><small>可按需要弹性增删</small></span><button type="button" onClick={addMethod}><Plus size={13}/>添加方式</button></header>{methods.length?<div className="contact-repeat-list">{methods.map((method,index)=><div className="contact-method-row" key={method.id??index}><select value={method.type} onChange={event=>setMethods(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,type:event.target.value as ContactMethodType}:item))}>{(["phone","wechat","telegram","line","website","other"] as ContactMethodType[]).map(type=><option value={type} key={type}>{contactMethodName(type)}</option>)}</select><input value={method.label} maxLength={40} onChange={event=>setMethods(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,label:event.target.value}:item))} placeholder="自定义标签"/><input value={method.value} maxLength={500} onChange={event=>setMethods(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,value:event.target.value}:item))} placeholder="号码、账号或网址"/><button type="button" className="danger-text" onClick={()=>setMethods(items=>items.filter((_,itemIndex)=>itemIndex!==index))} aria-label="移除联系方式"><Trash2 size={14}/></button></div>)}</div>:<p className="contact-field-empty">尚未添加其他联系方式</p>}</section><label>联系人备注<textarea value={note} onChange={event=>setNote(event.target.value)} maxLength={5000} placeholder="记录联系人级业务信息；不会替代会话共享备注。"/><small>{note.length}/5000</small></label>{error&&<span className="login-error">{error}</span>}<footer className="contact-dialog-actions"><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void save()} disabled={busy}>{busy?"正在保存…":"保存联系人"}</button></footer></>:error?<span className="login-error">{error}</span>:null}</section></div>{avatarPickerOpen&&profile&&<ProductImageMediaDialog request={request} onToken={onToken} onClose={()=>setAvatarPickerOpen(false)} onSelect={asset=>void selectAvatar(asset)} libraryPath={`/api/v1/media?accountId=${encodeURIComponent(profile.accountId)}&limit=100`} uploadPath={`/api/v1/media?accountId=${encodeURIComponent(profile.accountId)}`} title="选择联系人头像" description="复用该 WhatsApp 账号媒体与附件中的图片，或上传新图片。" actionLabel="使用所选头像" acceptedMimeTypes={["image/jpeg","image/png","image/webp"]} maxFileSize={5*1024*1024}/>}</>;
+  return <><div className="modal-backdrop contact-dialog-backdrop" role="presentation"><section className="login-dialog contact-dialog" role="dialog" aria-modal="true" aria-labelledby="contact-dialog-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><Users size={20}/></span><h2 id="contact-dialog-title">编辑联系人</h2>{loading?<div className="contact-dialog-loading"><RefreshCw className="spin" size={17}/>正在读取联系人资料…</div>:profile?<><p>{profile.contactName||profile.phone} · {profile.accountName}</p><div className="contact-avatar-editor"><button type="button" className="contact-avatar-picker" onClick={()=>setAvatarPickerOpen(true)} disabled={busy}>{avatarPreview?<span className="contact-avatar large"><img src={avatarPreview} alt="头像预览"/></span>:removeAvatar?<span className="contact-avatar large"><span>{profile.name.slice(0,2).toUpperCase()}</span></span>:<ContactAvatar contact={profile} token={token} onToken={onToken} size="large"/>}<span><b>{profile.avatarUrl&&!removeAvatar?"更换头像":"设置头像"}</b><small>从媒体与附件选择，支持 JPG、PNG 或 WebP，最大 5 MB</small></span></button>{(profile.avatarUrl||avatarFile)&&!removeAvatar&&<button type="button" onClick={()=>{setAvatarFile(null);setRemoveAvatar(true);}}>移除</button>}</div><div className="contact-create-grid"><label>联系人名称<input value={alias} onChange={event=>setAlias(event.target.value)} maxLength={80} placeholder={profile.contactName||profile.phone}/><small>团队维护的名称不会被 WhatsApp 同步覆盖。</small></label><label>WhatsApp 号码<input value={phone} onChange={event=>setPhone(event.target.value)} inputMode="tel" disabled={profile.hasConversation&&Boolean(profile.phone)}/><small>{profile.hasConversation&&profile.phone?"该联系人已有对应会话，号码不可修改。":"必须包含国家或地区代码。"}</small></label></div><section className="contact-field-section contact-timezone-field"><header><span><Clock3 size={15}/><b>联系人时区</b><small>用于详情页显示对方当前时间</small></span>{timezone&&<button type="button" onClick={()=>setTimezone("")}>按国家自动推算</button>}</header><TimezoneSearchDropdown value={timezone} onChange={setTimezone} label="搜索联系人 IANA 时区"/><p>{timezone?`已指定 ${timezone}`:`未指定时区，将根据号码国家/地区自动使用 ${profile.effectiveTimezone}${profile.inferredCountry?`（${profile.inferredCountry}）`:""}`}</p></section><section className="contact-field-section"><header><span><Mail size={15}/><b>邮箱</b><small>邮件功能将默认使用 Primary Email</small></span><button type="button" onClick={addEmail}><Plus size={13}/>添加邮箱</button></header>{emails.length?<div className="contact-repeat-list">{emails.map((email,index)=><div className="contact-email-row" key={email.id??index}><input value={email.label} maxLength={40} onChange={event=>setEmails(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,label:event.target.value}:item))} placeholder="标签，如工作"/><input type="email" value={email.email} maxLength={254} onChange={event=>setEmails(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,email:event.target.value}:item))} placeholder="name@example.com"/><label className="primary-email-radio"><input type="radio" name="primary-email" checked={email.isPrimary} onChange={()=>setPrimary(index)}/>Primary</label><button type="button" className="danger-text" onClick={()=>removeEmail(index)} aria-label="移除邮箱"><Trash2 size={14}/></button></div>)}</div>:<p className="contact-field-empty">尚未添加邮箱</p>}</section><section className="contact-field-section"><header><span><Phone size={15}/><b>其他联系方式</b><small>支持社媒账号或完整链接</small></span><button type="button" onClick={addMethod}><Plus size={13}/>添加方式</button></header>{methods.length?<div className="contact-repeat-list">{methods.map((method,index)=><div className="contact-method-row" key={method.id??index}><select value={method.type} onChange={event=>setMethods(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,type:event.target.value as ContactMethodType}:item))}>{(["phone","wechat","telegram","line","website","facebook","x","linkedin","instagram","other"] as ContactMethodType[]).map(type=><option value={type} key={type}>{contactMethodName(type)}</option>)}</select><input value={method.label} maxLength={40} onChange={event=>setMethods(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,label:event.target.value}:item))} placeholder="自定义标签"/><input value={method.value} maxLength={500} onChange={event=>setMethods(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,value:event.target.value}:item))} placeholder={isSocialContactMethod(method.type)?"账号名或完整链接":"号码、账号或网址"}/><button type="button" className="danger-text" onClick={()=>setMethods(items=>items.filter((_,itemIndex)=>itemIndex!==index))} aria-label="移除联系方式"><Trash2 size={14}/></button></div>)}</div>:<p className="contact-field-empty">尚未添加其他联系方式</p>}</section><label>联系人备注<textarea value={note} onChange={event=>setNote(event.target.value)} maxLength={5000} placeholder="记录联系人级业务信息；不会替代会话共享备注。"/><small>{note.length}/5000</small></label>{error&&<span className="login-error">{error}</span>}<footer className="contact-dialog-actions"><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void save()} disabled={busy}>{busy?"正在保存…":"保存联系人"}</button></footer></>:error?<span className="login-error">{error}</span>:null}</section></div>{avatarPickerOpen&&profile&&<ProductImageMediaDialog request={request} onToken={onToken} onClose={()=>setAvatarPickerOpen(false)} onSelect={asset=>void selectAvatar(asset)} libraryPath={`/api/v1/media?accountId=${encodeURIComponent(profile.accountId)}&limit=100`} uploadPath={`/api/v1/media?accountId=${encodeURIComponent(profile.accountId)}`} title="选择联系人头像" description="复用该 WhatsApp 账号媒体与附件中的图片，或上传新图片。" actionLabel="使用所选头像" acceptedMimeTypes={["image/jpeg","image/png","image/webp"]} maxFileSize={5*1024*1024}/>}</>;
 }
 
 function OrderManagement({token,accounts,onToken,onToast,onConversation}:{token:string;accounts:Account[];onToken:(token:string)=>void;onToast:(text:string)=>void;onConversation:(conversationId:string)=>void}){

@@ -1,5 +1,5 @@
 export type TagItem={id:string;name:string;color:string};
-export type ContactMethodType="phone"|"wechat"|"telegram"|"line"|"website"|"other";
+export type ContactMethodType="phone"|"wechat"|"telegram"|"line"|"website"|"facebook"|"x"|"linkedin"|"instagram"|"other";
 export type ContactMethod={id?:string;type:ContactMethodType;label:string;value:string};
 export type ConversationMessageStatus="received"|"queued"|"dispatching"|"sent"|"delivered"|"read"|"failed"|"uncertain";
 export type Conversation = {

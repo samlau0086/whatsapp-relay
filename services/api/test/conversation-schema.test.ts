@@ -86,11 +86,12 @@ test("CRM schemas enforce stages, tags, notes, and reminder dates",()=>{
 });
 
 test("contact profiles normalize email and select a single primary address",()=>{
-  const profile=contactUpdateSchema.parse({alias:" Alice ",note:" Follow up ",emails:[{label:"Work",email:" ALICE@EXAMPLE.COM ",isPrimary:false}],methods:[{type:"telegram",label:"Sales",value:" @alice "}]});
+  const profile=contactUpdateSchema.parse({alias:" Alice ",note:" Follow up ",emails:[{label:"Work",email:" ALICE@EXAMPLE.COM ",isPrimary:false}],methods:[{type:"telegram",label:"Sales",value:" @alice "},{type:"linkedin",label:"Professional",value:"alice"}]});
   assert.equal(profile.alias,"Alice");
   assert.equal(profile.emails[0].email,"alice@example.com");
   assert.equal(profile.emails[0].isPrimary,true);
   assert.equal(profile.methods[0].value,"@alice");
+  assert.equal(profile.methods[1].type,"linkedin");
   const withAddress=contactUpdateSchema.parse({...profile,addresses:[{label:"Office",recipientName:"Alice",phone:"+8613800000000",address:"Shanghai"}]});
   assert.equal(withAddress.addresses[0].label,"Office");
   assert.equal(contactUpdateSchema.safeParse({...profile,addresses:[{label:"",address:""}]}).success,false);
