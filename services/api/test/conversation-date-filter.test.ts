@@ -77,6 +77,10 @@ test("performance reports retain representative HTTP failure details",async()=>{
   assert.match(runner,/failureSamples/);
   assert.match(runner,/failureSamples\.length<5/);
   assert.match(runner,/\{status:result\.status,body:result\.body\}/);
+  assert.match(runner,/const warmup=async\(path,samples=30\)/);
+  assert.match(runner,/await warmup\("\/api\/v1\/conversations\?limit=40"\)/);
+  assert.ok(runner.indexOf('await warmup("/api/v1/conversations?limit=40")')<runner.indexOf('benchmark("first_page"'),"concurrent warmup must finish before measured first-page samples");
+  assert.match(runner,/if\(failure\)throw new Error\(`warmup failed:/);
 });
 
 test("conversation summaries, events, and startup runner are wired",async()=>{

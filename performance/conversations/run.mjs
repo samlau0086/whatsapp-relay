@@ -17,6 +17,13 @@ const benchmark=async(name,path,samples=40)=>{
   }
   return{name,path,samples,p50:percentile(values,.5),p95:percentile(values,.95),max:Math.max(...values),errors,errorRate:errors/samples,failureSamples,latenciesMs:values};
 };
+const warmup=async(path,samples=30)=>{
+  for(let offset=0;offset<samples;offset+=10){
+    const batch=await Promise.all(Array.from({length:Math.min(10,samples-offset)},()=>timed(path)));
+    const failure=batch.find(result=>result.status!==200);
+    if(failure)throw new Error(`warmup failed: HTTP ${failure.status} ${JSON.stringify(failure.body)}`);
+  }
+};
 
 let cursorPath="/api/v1/conversations?limit=40";
 for(let page=0;page<100;page++){
@@ -25,6 +32,10 @@ for(let page=0;page<100;page++){
   if(!result.body.nextCursor)break;
   cursorPath=`/api/v1/conversations?limit=40&cursor=${encodeURIComponent(result.body.nextCursor)}`;
 }
+// Exercise concurrent connections and let PostgreSQL/Node reach steady state before
+// enforcing the list-query SLO. Warmup requests are deliberately excluded from
+// percentile samples, but any HTTP failure still fails the performance job.
+await warmup("/api/v1/conversations?limit=40");
 const results=[];
 results.push(await benchmark("first_page","/api/v1/conversations?limit=40"));
 results.push(await benchmark("deep_cursor",cursorPath));
