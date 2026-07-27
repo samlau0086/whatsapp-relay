@@ -7,6 +7,7 @@ import {
   ProductImageMediaDialog,
   type ProductImageAsset,
 } from "./product-image-media-dialog";
+import { WEIGHT_UNITS, type WeightUnit } from "./weight";
 
 type RequestResult = { response: Response; token: string };
 type ProductErrorBody = {
@@ -25,6 +26,8 @@ type Product = {
   name: string;
   description: string;
   currency: string;
+  weightAmount: number | null;
+  weightUnit: WeightUnit | null;
   imageMediaId: string | null;
   imageName: string;
   priceTiers: Tier[];
@@ -53,6 +56,8 @@ export function ProductEditorDialog({
     [sku, setSku] = useState(product?.sku ?? ""),
     [description, setDescription] = useState(product?.description ?? ""),
     [currency, setCurrency] = useState(product?.currency ?? baseCurrency),
+    [weightAmount,setWeightAmount]=useState(product?.weightAmount?.toString()??""),
+    [weightUnit,setWeightUnit]=useState<WeightUnit>(product?.weightUnit??"kg"),
     [tiers, setTiers] = useState(() =>
       (product?.priceTiers.length
         ? product.priceTiers
@@ -150,6 +155,7 @@ export function ProductEditorDialog({
   }
   async function save() {
     const money = /^\d+(?:\.\d{1,2})?$/,
+      positiveNumber=/^\d+(?:\.\d+)?$/,
       quantities = tiers.map((tier) => Number(tier.minQuantity));
     if (
       !name.trim() ||
@@ -159,6 +165,7 @@ export function ProductEditorDialog({
         (tier) =>
           !/^\d+$/.test(tier.minQuantity) || !money.test(tier.unitAmount),
       ) ||
+      (weightAmount!==""&&(!positiveNumber.test(weightAmount)||Number(weightAmount)<=0)) ||
       quantities.some(
         (value, index) =>
           value < 1 || (index > 0 && value <= quantities[index - 1]),
@@ -175,6 +182,8 @@ export function ProductEditorDialog({
         sku: sku.trim(),
         description: description.trim(),
         currency,
+        weightAmount:weightAmount===""?null:Number(weightAmount),
+        weightUnit:weightAmount===""?null:weightUnit,
         imageMediaId,
         priceTiers: tiers.map((tier) => ({
           minQuantity: Number(tier.minQuantity),
@@ -376,6 +385,26 @@ export function ProductEditorDialog({
               ))}
             </select>
           </label>
+          <div className="product-form-grid">
+            <label>
+              单件重量 · 可选
+              <input
+                type="number"
+                value={weightAmount}
+                min="0"
+                step="any"
+                inputMode="decimal"
+                placeholder="例如 500"
+                onChange={(event)=>setWeightAmount(event.target.value)}
+              />
+            </label>
+            <label>
+              重量单位
+              <select value={weightUnit} disabled={!weightAmount} onChange={(event)=>setWeightUnit(event.target.value as WeightUnit)}>
+                {WEIGHT_UNITS.map(unit=><option key={unit} value={unit}>{unit}</option>)}
+              </select>
+            </label>
+          </div>
           <label className="product-image-input">
             产品图片 · 可选
             <button type="button" onClick={() => setImagePickerOpen(true)}>

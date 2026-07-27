@@ -26,6 +26,7 @@ import { confirmAction, ConfirmationHost, promptAction, PromptHost } from "./con
 import {useConversationFeed} from "./use-conversation-feed";
 import {ConversationPanel} from "./conversation-panel";
 import type {ContactMethod,ContactMethodType,Conversation,TagItem} from "./conversation-types";
+import { convertWeight, formatWeight, WEIGHT_UNITS, type WeightUnit } from "./weight";
 
 const API_URL = (process.env.NEXT_PUBLIC_RELAY_API_URL ?? "").replace(/\/$/, "");
 const COLORS = ["#6b4f3a", "#305f72", "#9b5f72", "#477a62", "#705b86"];
@@ -34,17 +35,17 @@ let refreshPromise:Promise<string>|null=null;
 
 type Account = { id:string; name:string; phone:string; status:string; reason:string; transport:"web"|"cloud"; webhookStatus?:string; credentialsStatus?:string; lastEvent?:string };
 type ProductPriceTier={minQuantity:number;unitAmount:number};
-type ProductItem={id:string;sku:string;name:string;description:string;defaultUnitAmount:number;priceTiers:ProductPriceTier[];currency:string;imageMediaId:string|null;imageName:string;tags:TagItem[];createdAt:string;updatedAt:string};
+type ProductItem={id:string;sku:string;name:string;description:string;defaultUnitAmount:number;priceTiers:ProductPriceTier[];currency:string;weightAmount:number|null;weightUnit:WeightUnit|null;imageMediaId:string|null;imageName:string;tags:TagItem[];createdAt:string;updatedAt:string};
 type NoteItem={id:string;body:string;userId:string|null;authorName:string;createdAt:string;updatedAt:string};
 type ContactEmail={id?:string;label:string;email:string;isPrimary:boolean};
 type ContactDate={month:number;day:number;year:number|null};
 type ContactSpecialDate=ContactDate&{id?:string;kind:"anniversary"|"birthday"|"custom";label:string;leadDays:number|null};
 type ContactProfile={id:string;accountId:string;accountName:string;alias:string;contactName:string;name:string;phone:string;avatarUrl:string|null;note:string;timezone:string|null;effectiveTimezone:string;timezoneSource:"custom"|"country"|"fallback";inferredCountry:string|null;birthday:ContactDate|null;specialDates:ContactSpecialDate[];emails:ContactEmail[];primaryEmail:string|null;methods:ContactMethod[];addresses:CustomerAddress[];conversationId:string|null;hasConversation:boolean;lastMessageAt:string|null;updatedAt:string};
-type OrderProductItem={id:string;name:string;sku:string;quantity:number;unitAmount:number;imageMediaId:string|null;imageName:string;productId:string|null};
+type OrderProductItem={id:string;name:string;sku:string;quantity:number;unitAmount:number;weightAmount:number|null;weightUnit:WeightUnit|null;imageMediaId:string|null;imageName:string;productId:string|null};
 type OrderFeeItem={id:string;name:string;amount:number};
 type CustomerAddress={id:string;label:string;recipientName:string;phone:string;address:string};
 type PaymentRequest={id:string;invoiceId:string|null;url:string|null;status:string;amount:number;currency:string;environment:string;createdAt:string;lastSyncedAt:string|null};
-type OrderItem={id:string;orderNumber:string;conversationId:string;accountId:string;accountName:string;customerName:string;customerPhone:string;amount:number;currency:string;description:string;status:string;sendFormat:string;translateOnSend:boolean;targetLanguage:string;createdAt:string;createdByName:string;messageStatus:string;items:OrderProductItem[];fees:OrderFeeItem[];addressId:string|null;address:CustomerAddress|null;paymentRequest:PaymentRequest|null};
+type OrderItem={id:string;orderNumber:string;conversationId:string;accountId:string;accountName:string;customerName:string;customerPhone:string;amount:number;currency:string;weightUnit:WeightUnit;description:string;status:string;sendFormat:string;translateOnSend:boolean;targetLanguage:string;createdAt:string;createdByName:string;messageStatus:string;items:OrderProductItem[];fees:OrderFeeItem[];addressId:string|null;address:CustomerAddress|null;paymentRequest:PaymentRequest|null};
 type OrderSendTarget={order:OrderItem};
 type ContactTaskSummary={id:string;title:string;kind:"general"|"message";status:string;dueAt:string;sendAt:string|null;assignedUserName:string|null};
 type ConversationDetails={customerStage:string;contact:ContactProfile|null;tags:TagItem[];notes:NoteItem[];orders:OrderItem[]};
@@ -106,7 +107,7 @@ const DEFAULT_CURRENCY_CONFIG:CurrencyConfig={baseCurrency:"USD",currencies:[{co
 function convertCurrency(amount:number,from:string,to:string,config:CurrencyConfig):number{if(from===to)return amount;const source=config.currencies.find(item=>item.code===from)?.rate,target=config.currencies.find(item=>item.code===to)?.rate;if(!source||!target)return amount;return amount/source*target;}
 
 function mapOrder(item:Record<string,unknown>,defaults:Partial<OrderItem>={}):OrderItem{return{
-  id:String(item.id),orderNumber:String(item.display_order_number??item.order_number??""),conversationId:String(item.conversation_id??defaults.conversationId??""),accountId:String(item.account_id??defaults.accountId??""),accountName:String(item.account_name??defaults.accountName??""),customerName:String(item.customer_name??defaults.customerName??""),customerPhone:String(item.customer_phone??defaults.customerPhone??""),amount:Number(item.amount),currency:String(item.currency),description:String(item.description??""),status:String(item.status??"draft"),sendFormat:String(item.send_format??""),translateOnSend:Boolean(item.translate_on_send),targetLanguage:String(item.target_language??""),createdAt:String(item.created_at),createdByName:String(item.created_by_name??"已离职坐席"),messageStatus:String(item.message_status??item.status??"draft"),items:Array.isArray(item.items)?(item.items as Array<Record<string,unknown>>).map(product=>({id:String(product.id),name:String(product.name),sku:String(product.sku??""),quantity:Number(product.quantity),unitAmount:Number(product.unitAmount),imageMediaId:product.imageMediaId?String(product.imageMediaId):null,imageName:String(product.imageName??""),productId:product.productId?String(product.productId):null})):[],fees:Array.isArray(item.fees)?(item.fees as Array<Record<string,unknown>>).map(fee=>({id:String(fee.id),name:String(fee.name),amount:Number(fee.amount)})):[],addressId:item.address_id?String(item.address_id):null,address:item.shipping_address_snapshot?mapCustomerAddress(item.shipping_address_snapshot as Record<string,unknown>,item.address_id?String(item.address_id):""):null,paymentRequest:item.payment_request?mapPaymentRequest(item.payment_request as Record<string,unknown>):defaults.paymentRequest??null,
+  id:String(item.id),orderNumber:String(item.display_order_number??item.order_number??""),conversationId:String(item.conversation_id??defaults.conversationId??""),accountId:String(item.account_id??defaults.accountId??""),accountName:String(item.account_name??defaults.accountName??""),customerName:String(item.customer_name??defaults.customerName??""),customerPhone:String(item.customer_phone??defaults.customerPhone??""),amount:Number(item.amount),currency:String(item.currency),weightUnit:(item.weight_unit??defaults.weightUnit??"kg") as WeightUnit,description:String(item.description??""),status:String(item.status??"draft"),sendFormat:String(item.send_format??""),translateOnSend:Boolean(item.translate_on_send),targetLanguage:String(item.target_language??""),createdAt:String(item.created_at),createdByName:String(item.created_by_name??"已离职坐席"),messageStatus:String(item.message_status??item.status??"draft"),items:Array.isArray(item.items)?(item.items as Array<Record<string,unknown>>).map(product=>({id:String(product.id),name:String(product.name),sku:String(product.sku??""),quantity:Number(product.quantity),unitAmount:Number(product.unitAmount),weightAmount:product.weightAmount===null||product.weightAmount===undefined?null:Number(product.weightAmount),weightUnit:product.weightUnit?String(product.weightUnit) as WeightUnit:null,imageMediaId:product.imageMediaId?String(product.imageMediaId):null,imageName:String(product.imageName??""),productId:product.productId?String(product.productId):null})):[],fees:Array.isArray(item.fees)?(item.fees as Array<Record<string,unknown>>).map(fee=>({id:String(fee.id),name:String(fee.name),amount:Number(fee.amount)})):[],addressId:item.address_id?String(item.address_id):null,address:item.shipping_address_snapshot?mapCustomerAddress(item.shipping_address_snapshot as Record<string,unknown>,item.address_id?String(item.address_id):""):null,paymentRequest:item.payment_request?mapPaymentRequest(item.payment_request as Record<string,unknown>):defaults.paymentRequest??null,
 };}
 
 function mapPaymentRequest(item:Record<string,unknown>):PaymentRequest{return{id:String(item.id),invoiceId:item.invoiceId?String(item.invoiceId):null,url:item.url?String(item.url):null,status:String(item.status??"UNKNOWN"),amount:Number(item.amount),currency:String(item.currency),environment:String(item.environment??"sandbox"),createdAt:String(item.createdAt??""),lastSyncedAt:item.lastSyncedAt?String(item.lastSyncedAt):null};}
@@ -2769,9 +2770,9 @@ function OrderSendDialog({order,emails,defaultTargetLanguage,busy,onClose,onSend
   return <div className="modal-backdrop order-backdrop" role="presentation"><section className="login-dialog order-send-dialog" role="dialog" aria-modal="true" aria-labelledby="order-send-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><Send size={19}/></span><h2 id="order-send-title">发送订单 #{order.orderNumber}</h2><p>选择发送渠道、语言和订单格式。</p><div className="email-channel-picker"><button className={channel==="whatsapp"?"active":""} onClick={()=>setChannel("whatsapp")}><MessageCircle size={13}/>WhatsApp</button><button className={channel==="email"?"active":""} onClick={()=>setChannel("email")}><Mail size={13}/>Email</button></div>{channel==="email"&&<div className="email-compose-fields"><fieldset><legend>收件人</legend>{emails.length?emails.map(item=><label key={item.id}><input type="checkbox" checked={recipientIds.includes(item.id)} onChange={()=>setRecipientIds(ids=>ids.includes(item.id)?ids.filter(id=>id!==item.id):[...ids,item.id])}/><span>{item.label||"邮箱"} · {item.email}{item.isPrimary?" · Primary":""}</span></label>):<p>联系人尚未保存邮箱，请先编辑联系人资料。</p>}</fieldset><label>邮件主题<input value={subject} maxLength={200} onChange={event=>setSubject(event.target.value)}/></label><label>正文说明<textarea value={messageBody} maxLength={5000} onChange={event=>setMessageBody(event.target.value)}/></label></div>}<div className="order-send-mode"><label className={!translate?"selected":""}><input type="radio" name="order-language-mode" checked={!translate} onChange={()=>setTranslate(false)}/><span><FileText size={14}/><b>英文原文</b></span></label><label className={translate?"selected":""}><input type="radio" name="order-language-mode" checked={translate} onChange={()=>setTranslate(true)}/><span><Languages size={14}/><b>AI 翻译</b></span></label></div>{translate&&<label className="order-send-language"><span>目标翻译语言</span><LanguagePicker value={targetLanguage} onChange={setTargetLanguage}/></label>}<div className="order-send-options"><label className={format==="text"?"selected":""}><input type="radio" name="order-format" checked={format==="text"} onChange={()=>setFormat("text")}/><span><b><FileText size={16}/>文字版详情</b><small>发送完整订单文字，不包含产品图片</small></span></label><label className={format==="image"?"selected":""}><input type="radio" name="order-format" checked={format==="image"} onChange={()=>setFormat("image")}/><span><b><ShoppingBag size={16}/>图片版完整详情</b><small>生成一张包含全部订单内容和所有产品图片的长图</small></span></label></div>{translate?<p className="order-send-translation"><Languages size={13}/>点击发送后才会将订单详情翻译为 {languageName(targetLanguage)}</p>:<p className="order-send-translation english"><FileText size={13}/>订单将以英文原文发送，不调用 AI 翻译</p>}<button className="login-submit" disabled={busy||!emailReady} onClick={()=>onSend(format,translate,translate?targetLanguage:undefined,channel==="email"?{recipientEmailIds:recipientIds,subject,messageBody}:undefined)}>{busy?format==="image"?"正在生成订单图片…":"正在加入队列…":`通过 ${channel==="email"?"Email":"WhatsApp"} 发送${format==="image"?"图片版":"文字版"}`}</button></section></div>;
 }
 
-type DraftProduct={id:string;mode:"library"|"new"|"legacy";productId:string|null;clientProductId:string|null;sku:string;name:string;quantity:string;unitAmount:string;priceLocked:boolean;imageMediaId:string|null;imageName:string};
+type DraftProduct={id:string;mode:"library"|"new"|"legacy";productId:string|null;clientProductId:string|null;sku:string;name:string;quantity:string;unitAmount:string;weightAmount:string;weightUnit:WeightUnit;priceLocked:boolean;imageMediaId:string|null;imageName:string};
 type DraftFee={id:string;name:string;amount:string};
-const newDraftProduct=():DraftProduct=>({id:crypto.randomUUID(),mode:"new",productId:null,clientProductId:crypto.randomUUID(),sku:"",name:"",quantity:"1",unitAmount:"",priceLocked:false,imageMediaId:null,imageName:""});
+const newDraftProduct=():DraftProduct=>({id:crypto.randomUUID(),mode:"new",productId:null,clientProductId:crypto.randomUUID(),sku:"",name:"",quantity:"1",unitAmount:"",weightAmount:"",weightUnit:"kg",priceLocked:false,imageMediaId:null,imageName:""});
 function tierPrice(product:ProductItem,quantity:number){return [...product.priceTiers].reverse().find(tier=>quantity>=tier.minQuantity)?.unitAmount??product.defaultUnitAmount;}
 
 function ProductSearchDropdown({
@@ -2939,6 +2940,8 @@ function OrderDialog({
             name: item.name,
             quantity: String(item.quantity),
             unitAmount: item.unitAmount.toFixed(2),
+            weightAmount: item.weightAmount?.toString()??"",
+            weightUnit: item.weightUnit??order.weightUnit,
             priceLocked: true,
             imageMediaId: item.imageMediaId,
             imageName: item.imageName,
@@ -2957,6 +2960,7 @@ function OrderDialog({
         : [],
     ),
     [currency, setCurrency] = useState(order?.currency ?? ""),
+    [weightUnit,setWeightUnit]=useState<WeightUnit>(order?.weightUnit??"kg"),
     [description, setDescription] = useState(order?.description ?? ""),
     [addresses, setAddresses] = useState<CustomerAddress[]>([]),
     [addressId, setAddressId] = useState(order?.addressId ?? ""),
@@ -2974,6 +2978,9 @@ function OrderDialog({
       ) + fees.reduce((sum, fee) => sum + (Number(fee.amount) || 0), 0),
     [products, fees],
   );
+  const totalWeight=useMemo(()=>products.reduce((sum,item)=>sum+(item.weightAmount
+    ? (Number(item.quantity)||0)*convertWeight(Number(item.weightAmount)||0,item.weightUnit,weightUnit)
+    : 0),0),[products,weightUnit]);
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !busy) onClose();
@@ -3042,6 +3049,8 @@ function OrderDialog({
       priceLocked: false,
       imageMediaId: selected.imageMediaId,
       imageName: selected.imageName,
+      weightAmount:selected.weightAmount?.toString()??"",
+      weightUnit:selected.weightUnit??weightUnit,
     });
   }
   function changeCurrency(next:string){if(!currency){setCurrency(next);return;}setProducts(all=>all.map(item=>{const selected=catalog.find(product=>product.id===item.productId),amount=selected&&!item.priceLocked?tierPrice(selected,Number(item.quantity)||1):Number(item.unitAmount);const from=selected&&!item.priceLocked?selected.currency:currency;return{...item,unitAmount:Number.isFinite(amount)?convertCurrency(amount,from,next,currencyConfig).toFixed(2):item.unitAmount};}));setFees(all=>all.map(fee=>({...fee,amount:fee.amount?convertCurrency(Number(fee.amount),currency,next,currencyConfig).toFixed(2):fee.amount})));setCurrency(next);}
@@ -3053,13 +3062,15 @@ function OrderDialog({
       sku: "",
       name: "",
       unitAmount: "",
+      weightAmount: "",
+      weightUnit,
       priceLocked: false,
       imageMediaId: null,
       imageName: "",
     });
   }
   async function submit() {
-    const money = /^\d+(?:\.\d{1,2})?$/;
+    const money = /^\d+(?:\.\d{1,2})?$/,positiveNumber=/^\d+(?:\.\d+)?$/;
     if(!currency){setError("请先在设置中配置基准货币");return;}
     if (
       products.some(
@@ -3068,7 +3079,8 @@ function OrderDialog({
           (item.mode === "new" && !item.sku.trim()) ||
           !/^\d+$/.test(item.quantity) ||
           Number(item.quantity) < 1 ||
-          !money.test(item.unitAmount),
+          !money.test(item.unitAmount) ||
+          (item.weightAmount!==""&&(!positiveNumber.test(item.weightAmount)||Number(item.weightAmount)<=0)),
       )
     ) {
       setError("请完整填写每件商品的名称、SKU、数量和最多两位小数的单价");
@@ -3098,6 +3110,7 @@ function OrderDialog({
           ...(product.sku.trim()?{sku:product.sku.trim()}:{}),
           quantity: Number(product.quantity),
           unitAmount: Number(product.unitAmount),
+          ...(product.weightAmount?{weightAmount:Number(product.weightAmount),weightUnit:product.weightUnit}:{}),
           ...(product.imageMediaId ? { imageMediaId: product.imageMediaId } : {}),
           ...(product.productId ? { productId: product.productId } : {}),
           ...(product.clientProductId
@@ -3106,6 +3119,7 @@ function OrderDialog({
         }));
       const payload = {
         currency,
+        weightUnit,
         description: description.trim() || undefined,
         translateOnSend: false,
         items,
@@ -3193,6 +3207,12 @@ function OrderDialog({
               {currencyConfig.currencies.map((item) => (
                 <option key={item.code} value={item.code}>{item.code} · {item.name}</option>
               ))}
+            </select>
+          </label>
+          <label>
+            重量单位
+            <select value={weightUnit} onChange={(event)=>setWeightUnit(event.target.value as WeightUnit)}>
+              {WEIGHT_UNITS.map(unit=><option key={unit} value={unit}>{unit}</option>)}
             </select>
           </label>
         </div>
@@ -3301,6 +3321,21 @@ function OrderDialog({
                     placeholder="0.00"
                   />
                 </label>
+                <label>
+                  单件重量
+                  <input
+                    value={product.weightAmount}
+                    onChange={(event)=>updateProduct(product.id,{weightAmount:event.target.value})}
+                    inputMode="decimal"
+                    placeholder="可选"
+                  />
+                </label>
+                <label>
+                  重量单位
+                  <select value={product.weightUnit} disabled={!product.weightAmount} onChange={(event)=>updateProduct(product.id,{weightUnit:event.target.value as WeightUnit})}>
+                    {WEIGHT_UNITS.map(unit=><option key={unit} value={unit}>{unit}</option>)}
+                  </select>
+                </label>
               </div>
               {product.mode !== "library" && <><label className="product-image-input">
                 产品图片 · 可选
@@ -3342,6 +3377,11 @@ function OrderDialog({
           <Plus size={13} />
           添加商品
         </button>
+        <div className="order-weight-total">
+          <span>订单总重量</span>
+          <strong>{formatWeight(totalWeight,weightUnit)}</strong>
+          <small>按商品数量自动求和并换算为订单重量单位</small>
+        </div>
         <div className="order-fees-head">
           <b>Additional fees</b>
           <button
@@ -4772,7 +4812,7 @@ function ProductBulkEditDialog({count,productIds,token,onToken,onClose,onSaved}:
 }
 
 const CURRENCIES=DEFAULT_CURRENCY_CONFIG.currencies.map(item=>item.code);
-function mapProduct(item:Record<string,unknown>):ProductItem{const priceTiers=Array.isArray(item.priceTiers)?(item.priceTiers as Array<Record<string,unknown>>).map(tier=>({minQuantity:Number(tier.minQuantity),unitAmount:Number(tier.unitAmount)})):[];return{id:String(item.id),sku:String(item.sku??""),name:String(item.name),description:String(item.description??""),defaultUnitAmount:priceTiers[0]?.unitAmount??Number(item.defaultUnitAmount),priceTiers,currency:String(item.currency),imageMediaId:item.imageMediaId?String(item.imageMediaId):null,imageName:String(item.imageName??""),tags:Array.isArray(item.tags)?(item.tags as Array<Record<string,unknown>>).map(mapTag):[],createdAt:String(item.createdAt),updatedAt:String(item.updatedAt)};}
+function mapProduct(item:Record<string,unknown>):ProductItem{const priceTiers=Array.isArray(item.priceTiers)?(item.priceTiers as Array<Record<string,unknown>>).map(tier=>({minQuantity:Number(tier.minQuantity),unitAmount:Number(tier.unitAmount)})):[];return{id:String(item.id),sku:String(item.sku??""),name:String(item.name),description:String(item.description??""),defaultUnitAmount:priceTiers[0]?.unitAmount??Number(item.defaultUnitAmount),priceTiers,currency:String(item.currency),weightAmount:item.weightAmount===null||item.weightAmount===undefined?null:Number(item.weightAmount),weightUnit:item.weightUnit?String(item.weightUnit) as WeightUnit:null,imageMediaId:item.imageMediaId?String(item.imageMediaId):null,imageName:String(item.imageName??""),tags:Array.isArray(item.tags)?(item.tags as Array<Record<string,unknown>>).map(mapTag):[],createdAt:String(item.createdAt),updatedAt:String(item.updatedAt)};}
 
 function ProductImage({
   mediaId,

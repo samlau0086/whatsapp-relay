@@ -41,6 +41,7 @@ export async function ensureCrmTables(db:Queryable):Promise<void>{
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS translated_text text");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS sent_at timestamptz");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS send_format text");
+  await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS weight_unit text NOT NULL DEFAULT 'kg'");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS rendered_media_id uuid REFERENCES media(id) ON DELETE SET NULL");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS deleted_at timestamptz");
   await db.query(`CREATE TABLE IF NOT EXISTS contact_addresses (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),contact_id uuid NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,label text NOT NULL,recipient_name text,phone text,address text NOT NULL,created_by uuid REFERENCES users(id) ON DELETE SET NULL,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now())`);
@@ -62,8 +63,12 @@ export async function ensureCrmTables(db:Queryable):Promise<void>{
   await db.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='orders_status_check') THEN ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK(status IN ('draft','queued')); END IF; END $$`);
   await db.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='orders_send_format_check') THEN ALTER TABLE orders ADD CONSTRAINT orders_send_format_check CHECK(send_format IS NULL OR send_format IN ('text','image')); END IF; END $$`);
   await db.query(`CREATE TABLE IF NOT EXISTS order_items (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),order_id uuid NOT NULL REFERENCES orders(id) ON DELETE CASCADE,position smallint NOT NULL,product_name text NOT NULL,quantity integer NOT NULL CHECK(quantity BETWEEN 1 AND 9999),unit_amount numeric(12,2) NOT NULL CHECK(unit_amount>=0),image_media_id uuid REFERENCES media(id) ON DELETE RESTRICT,UNIQUE(order_id,position))`);
+  await db.query("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS weight_amount numeric(14,6)");
+  await db.query("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS weight_unit text");
   await db.query(`CREATE TABLE IF NOT EXISTS order_fees (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),order_id uuid NOT NULL REFERENCES orders(id) ON DELETE CASCADE,position smallint NOT NULL,name text NOT NULL,amount numeric(12,2) NOT NULL CHECK(amount>0),UNIQUE(order_id,position))`);
   await db.query(`CREATE TABLE IF NOT EXISTS products (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),client_product_id uuid UNIQUE NOT NULL,name text NOT NULL,default_unit_amount numeric(12,2) NOT NULL CHECK(default_unit_amount>=0),currency text NOT NULL CHECK(currency IN ('USD','CNY','EUR','GBP','JPY','HKD','SGD','AUD','CAD','AED')),image_media_id uuid REFERENCES media(id) ON DELETE RESTRICT,created_by uuid REFERENCES users(id) ON DELETE SET NULL,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now(),deleted_at timestamptz)`);
+  await db.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS weight_amount numeric(14,6)");
+  await db.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS weight_unit text");
   await db.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS sku text");
   await db.query("UPDATE products SET sku='SKU-'||upper(substr(replace(id::text,'-',''),1,12)) WHERE sku IS NULL OR btrim(sku)=''");
   await db.query("ALTER TABLE products ALTER COLUMN sku SET NOT NULL");
