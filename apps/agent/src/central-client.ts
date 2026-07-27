@@ -2,10 +2,11 @@ import WebSocket from "ws";
 import { AgentStore } from "./store.js";
 
 type CommandHandler = (command:{sequence:number;commandId:string;accountId:string;command:string;payload:Record<string,unknown>})=>Promise<Record<string,unknown>>;
+type AttentionClearedHandler = (input:{accountId:string;chatJid:string})=>void;
 
 export class CentralClient {
   private socket?:WebSocket; private retry=0; private stopped=false; private heartbeat?:NodeJS.Timeout;
-  constructor(private store:AgentStore,private baseUrl:string,private agentId:string,private credential:string,private agentVersion:string,private protocolVersion:number,private onCommand:CommandHandler,private onStatus:(value:string)=>void){}
+  constructor(private store:AgentStore,private baseUrl:string,private agentId:string,private credential:string,private agentVersion:string,private protocolVersion:number,private onCommand:CommandHandler,private onStatus:(value:string)=>void,private onAttentionCleared:AttentionClearedHandler){}
   start():void{this.stopped=false;this.connect();}
   stop():void{this.stopped=true;clearInterval(this.heartbeat);this.socket?.close();}
   flush():void{
@@ -25,6 +26,7 @@ export class CentralClient {
     if(frame.type==="ack"){this.store.ack(Number(frame.cursor));this.store.set("lastSyncError","");this.flush();return;}
     if(frame.type==="error"){this.store.set("lastSyncError",JSON.stringify({code:frame.code,cursor:frame.cursor,detail:frame.detail,at:new Date().toISOString()}));return;}
     if(frame.type==="incompatible"){this.onStatus("incompatible");this.stop();return;}
+    if(frame.type==="attention_cleared"){this.onAttentionCleared({accountId:String(frame.accountId??""),chatJid:String(frame.chatJid??"")});return;}
     if(frame.type!=="command")return;
     const command=frame as {type:string;sequence:number;commandId:string;accountId:string;command:string;payload:Record<string,unknown>};
     const prior=this.store.priorResult(command.commandId);if(prior){this.socket?.send(JSON.stringify(prior));return;}

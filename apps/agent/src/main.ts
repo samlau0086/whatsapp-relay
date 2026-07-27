@@ -20,6 +20,8 @@ let window: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let trayIcon: Electron.NativeImage | undefined;
 let trayFlashTimer: NodeJS.Timeout | undefined;
+const attentionKeys=new Set<string>();
+const messageNotifications=new Map<string,Notification>();
 let store: AgentStore;
 let client: CentralClient | undefined;
 let masterKey = "";
@@ -98,8 +100,9 @@ function showWindow():void{
   window?.focus();
 }
 
-function startAttention():void{
+function startAttention(key:string):void{
   if(!window||window.isFocused())return;
+  attentionKeys.add(key);
   window.flashFrame(true);
   if(trayFlashTimer||!tray||!trayIcon)return;
   let visible=true;
@@ -110,6 +113,21 @@ function startAttention():void{
 }
 
 function stopAttention():void{
+  attentionKeys.clear();
+  for(const notification of messageNotifications.values())notification.close();
+  messageNotifications.clear();
+  stopVisualAttention();
+}
+
+function clearAttention(accountId:string,chatJid:string):void{
+  const key=attentionKey(accountId,chatJid);
+  attentionKeys.delete(key);
+  messageNotifications.get(key)?.close();
+  messageNotifications.delete(key);
+  if(!attentionKeys.size)stopVisualAttention();
+}
+
+function stopVisualAttention():void{
   window?.flashFrame(false);
   if(trayFlashTimer){clearInterval(trayFlashTimer);trayFlashTimer=undefined;}
   if(tray&&trayIcon)tray.setImage(trayIcon);
@@ -271,6 +289,7 @@ function startCentral(baseUrl: string, agentId: string, credential: string): voi
       store.set("connection", status);
       window?.webContents.send("agent:event", { type: "central_status", status });
     },
+    ({accountId,chatJid})=>clearAttention(accountId,chatJid),
   );
   client = nextClient;
   nextClient.start();
@@ -360,8 +379,10 @@ function notifyIncomingMessage(accountId:string,payload:Record<string,unknown>):
   const text=typeof payload.text==="string"?payload.text.trim():"";
   const kind=String(payload.kind??"message");
   const body=(text||({image:"[图片]",video:"[视频]",audio:"[语音]",document:"[文件]",sticker:"[贴纸]"} as Record<string,string>)[kind]||"收到一条新消息").slice(0,180);
-  startAttention();
+  const key=attentionKey(accountId,String(payload.chatJid??""));
+  startAttention(key);
   if(!Notification.isSupported())return;
+  messageNotifications.get(key)?.close();
   const notification=new Notification({
     title:`RelayDesk · ${sender}`,
     subtitle:accountName,
@@ -372,8 +393,12 @@ function notifyIncomingMessage(accountId:string,payload:Record<string,unknown>):
   notification.on("click",()=>{
     showWindow();
   });
+  notification.on("close",()=>{if(messageNotifications.get(key)===notification)messageNotifications.delete(key);});
+  messageNotifications.set(key,notification);
   notification.show();
 }
+
+function attentionKey(accountId:string,chatJid:string):string{return `${accountId}:${chatJid}`;}
 
 async function resetAccountAuthAndStart(accountId:string,name:string,dataDir:string):Promise<void>{
   try{

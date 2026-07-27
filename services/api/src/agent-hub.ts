@@ -43,6 +43,13 @@ export function disconnectAgent(agentId:string,reason="revoked"):void {
   socket.close(4003,reason);
 }
 
+export function clearAgentAttention(agentId:string,accountId:string,chatJid:string):boolean{
+  const socket=liveAgents.get(agentId);
+  if(!socket||socket.readyState!==socket.OPEN)return false;
+  socket.send(JSON.stringify({type:"attention_cleared",accountId,chatJid}));
+  return true;
+}
+
 export async function markStaleAgentsOffline():Promise<number>{
   return transaction(async client=>{
     const stale=await client.query(`UPDATE agents SET status='offline' WHERE status='online' AND last_seen_at<now()-($1::text||' seconds')::interval RETURNING id`,[HEARTBEAT_TIMEOUT_SECONDS]);
