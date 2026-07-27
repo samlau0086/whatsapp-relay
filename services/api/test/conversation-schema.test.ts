@@ -125,7 +125,7 @@ test("orders validate idempotency, products, fees, currency, and translation",()
   assert.equal(orderSendSchema.safeParse({format:"text",translate:true,targetLanguage:"ar"}).success,true);
   assert.equal(orderSendSchema.safeParse({format:"text",translate:true}).success,false);
   assert.equal(orderSendSchema.safeParse({format:"image",clientSendId:"retry-1"}).success,false);
-  assert.equal(orderSendSchema.safeParse({format:"pdf"}).success,false);
+  assert.equal(orderSendSchema.safeParse({format:"pdf"}).success,true);
   assert.equal(orderSendSchema.parse(undefined).format,"text");
 });
 

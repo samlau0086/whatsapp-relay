@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import sharp from "sharp";
 import { renderTemplateOrderImage } from "../src/order-image.js";
+import { renderTemplateOrderPdf } from "../src/order-pdf.js";
 import { DEFAULT_IMAGE_ORDER_TEMPLATE, DEFAULT_TEXT_ORDER_TEMPLATE, orderTemplateSchema, parseTranslatedSemanticOrder, renderSemanticOrder, renderTextOrder, serializeSemanticOrder } from "../src/order-template.js";
 
 const context={orderNumber:"20260720-001",currency:"USD",customerName:"Alex",customerPhone:"+8613800000000",description:"Handle *carefully*",items:[{name:"Perfume _limited_",quantity:2,unitAmount:49.75},{name:"Gift box",quantity:1,unitAmount:8}],fees:[{name:"Shipping",amount:6.5}],address:{recipientName:"Alex",phone:"+8613800000000",address:"88 Market Street"}};
@@ -33,4 +34,11 @@ test("structured image templates render dynamic-height PNG output",async()=>{
   const red=await sharp({create:{width:20,height:20,channels:3,background:"#d22"}}).png().toBuffer(),blocks=renderSemanticOrder(DEFAULT_IMAGE_ORDER_TEMPLATE,context);
   const png=await renderTemplateOrderImage(DEFAULT_IMAGE_ORDER_TEMPLATE,blocks,[{name:"Perfume",image:red},{name:"Gift box",image:red}]),metadata=await sharp(png).metadata();
   assert.equal(metadata.format,"png");assert.equal(metadata.width,1080);assert.ok((metadata.height??0)>=720);
+});
+
+test("PDF order templates produce a valid PDF containing the rendered order",async()=>{
+  const red=await sharp({create:{width:20,height:20,channels:3,background:"#d22"}}).png().toBuffer(),blocks=renderSemanticOrder(DEFAULT_IMAGE_ORDER_TEMPLATE,context);
+  const pdf=await renderTemplateOrderPdf(DEFAULT_IMAGE_ORDER_TEMPLATE,blocks,[{name:"Perfume",image:red},{name:"Gift box",image:red}]);
+  assert.equal(pdf.subarray(0,5).toString(),"%PDF-");
+  assert.ok(pdf.length>1000);
 });

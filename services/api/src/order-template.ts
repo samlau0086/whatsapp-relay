@@ -3,7 +3,7 @@ import { calculateOrderTotal, type OrderSummaryFee, type OrderSummaryItem } from
 
 export const ORDER_BLOCK_TYPES=["orderHeader","itemList","feeList","total","paymentSummary","shippingAddress","notes","divider","customText"] as const;
 export type OrderBlockType=typeof ORDER_BLOCK_TYPES[number];
-export type OrderTemplateFormat="text"|"image";
+export type OrderTemplateFormat="text"|"image"|"pdf";
 export type OrderTemplateBlock={
   id:string;type:OrderBlockType;label?:string;text?:string;
   bold?:boolean;italic?:boolean;strikethrough?:boolean;monospace?:boolean;blankAfter?:boolean;
@@ -61,10 +61,11 @@ export const DEFAULT_IMAGE_ORDER_TEMPLATE:OrderTemplate={version:1,blocks:[
   {id:"payment-summary",type:"paymentSummary",label:"Payment:",fontSize:"medium",textColor:"#20372D",backgroundColor:"#EEF6F2",align:"left"},
   {id:"notes",type:"notes",label:"Notes:",fontSize:"small",textColor:"#20372D",backgroundColor:"#FFFAF0",align:"left"},
 ]};
+export const DEFAULT_PDF_ORDER_TEMPLATE:OrderTemplate=structuredClone(DEFAULT_IMAGE_ORDER_TEMPLATE);
 
 export function parseOrderTemplate(value:unknown,format:OrderTemplateFormat):OrderTemplate{
   const normalized=normalizePaymentSummary(value,format),parsed=orderTemplateSchema.safeParse(normalized);
-  return parsed.success?parsed.data:(format==="text"?DEFAULT_TEXT_ORDER_TEMPLATE:DEFAULT_IMAGE_ORDER_TEMPLATE);
+  return parsed.success?parsed.data:(format==="text"?DEFAULT_TEXT_ORDER_TEMPLATE:format==="pdf"?DEFAULT_PDF_ORDER_TEMPLATE:DEFAULT_IMAGE_ORDER_TEMPLATE);
 }
 
 function normalizePaymentSummary(value:unknown,format:OrderTemplateFormat):unknown{
