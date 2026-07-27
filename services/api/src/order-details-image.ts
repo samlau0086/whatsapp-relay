@@ -15,12 +15,12 @@ export async function ensureOrderDetailsImage(orderId:string,targetLanguage:stri
   if(!found.rowCount)return null;const order=found.rows[0];
   if(!targetLanguage&&order.rendered_media_id&&order.media_status==="ready")return String(order.rendered_media_id);
   const [itemResult,feeResult,templateResult]=await Promise.all([
-    pool.query("SELECT i.product_name name,i.quantity,i.unit_amount,m.object_key FROM order_items i LEFT JOIN media m ON m.id=i.image_media_id AND m.status='ready' WHERE i.order_id=$1 ORDER BY i.position",[orderId]),
+    pool.query("SELECT i.product_name name,i.product_sku sku,i.quantity,i.unit_amount,m.object_key FROM order_items i LEFT JOIN media m ON m.id=i.image_media_id AND m.status='ready' WHERE i.order_id=$1 ORDER BY i.position",[orderId]),
     pool.query("SELECT name,amount FROM order_fees WHERE order_id=$1 ORDER BY position",[orderId]),
     pool.query("SELECT image_template FROM order_settings WHERE singleton=true"),
   ]);
   if(!itemResult.rowCount)return null;
-  const items:OrderSummaryItem[]=itemResult.rows.map(item=>({name:String(item.name),quantity:Number(item.quantity),unitAmount:Number(item.unit_amount)}));
+  const items:OrderSummaryItem[]=itemResult.rows.map(item=>({name:String(item.name),sku:String(item.sku??""),quantity:Number(item.quantity),unitAmount:Number(item.unit_amount)}));
   const fees:OrderSummaryFee[]=feeResult.rows.map(fee=>({name:String(fee.name),amount:Number(fee.amount)}));
   const template=parseOrderTemplate(templateResult.rows[0]?.image_template,"image"),sourceBlocks=renderSemanticOrder(template,{orderNumber:String(order.display_order_number),currency:String(order.currency),customerName:String(order.customer_name??""),customerPhone:String(order.customer_phone??""),description:String(order.description??""),items,fees,address:order.shipping_address_snapshot??null});
   let blocks=sourceBlocks;

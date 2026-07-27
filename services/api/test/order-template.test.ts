@@ -5,7 +5,7 @@ import { renderTemplateOrderImage } from "../src/order-image.js";
 import { renderTemplateOrderPdf } from "../src/order-pdf.js";
 import { DEFAULT_IMAGE_ORDER_TEMPLATE, DEFAULT_TEXT_ORDER_TEMPLATE, orderTemplateSchema, parseTranslatedSemanticOrder, renderSemanticOrder, renderTextOrder, serializeSemanticOrder } from "../src/order-template.js";
 
-const context={orderNumber:"20260720-001",currency:"USD",customerName:"Alex",customerPhone:"+8613800000000",description:"Handle *carefully*",items:[{name:"Perfume _limited_",quantity:2,unitAmount:49.75},{name:"Gift box",quantity:1,unitAmount:8}],fees:[{name:"Shipping",amount:6.5}],address:{recipientName:"Alex",phone:"+8613800000000",address:"88 Market Street"}};
+const context={orderNumber:"20260720-001",currency:"USD",customerName:"Alex",customerPhone:"+8613800000000",description:"Handle *carefully*",items:[{name:"Perfume _limited_",sku:"PERFUME-001",quantity:2,unitAmount:49.75},{name:"Gift box",sku:"GIFT-001",quantity:1,unitAmount:8}],fees:[{name:"Shipping",amount:6.5}],address:{recipientName:"Alex",phone:"+8613800000000",address:"88 Market Street"}};
 
 test("template validation protects core blocks and variables",()=>{
   assert.equal(orderTemplateSchema.safeParse(DEFAULT_TEXT_ORDER_TEMPLATE).success,true);
@@ -13,6 +13,15 @@ test("template validation protects core blocks and variables",()=>{
   assert.equal(orderTemplateSchema.safeParse({version:1,blocks:[{id:"items",type:"itemList"},{id:"total",type:"total"},{id:"again",type:"total"}]}).success,false);
   assert.equal(orderTemplateSchema.safeParse({version:1,blocks:[{id:"items",type:"itemList"},{id:"total",type:"total"},{id:"custom",type:"customText",text:"{{unknown}}"}]}).success,false);
   assert.equal(orderTemplateSchema.safeParse({version:1,blocks:[{id:"items",type:"itemList"},{id:"total",type:"total"},{id:"custom",type:"customText",text:"{{orderNumber"}]}).success,false);
+  assert.equal(orderTemplateSchema.safeParse({version:1,blocks:[{id:"items",type:"itemList",itemTemplate:"{{unknown}}"},{id:"total",type:"total"},{id:"payment",type:"paymentSummary"}]}).success,false);
+});
+
+test("item templates render every supported product variable",()=>{
+  const template=structuredClone(DEFAULT_TEXT_ORDER_TEMPLATE),items=template.blocks.find(block=>block.type==="itemList")!;
+  items.itemTemplate="{{index}} | {{title}} | {{sku}} | {{quantity}} | {{price}} | {{subtotal}}";
+  const block=renderSemanticOrder(template,context).find(item=>item.type==="itemList")!;
+  assert.equal(block.lines[1],"1 | Perfume _limited_ | PERFUME-001 | 2 | USD 49.75 | USD 99.50");
+  assert.equal(block.lines[2],"2 | Gift box | GIFT-001 | 1 | USD 8.00 | USD 8.00");
 });
 
 test("semantic and WhatsApp rendering follow order and hide empty optional blocks",()=>{

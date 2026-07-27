@@ -8,7 +8,7 @@ export type OrderTemplateBlock={
   id:string;type:OrderBlockType;label?:string;text?:string;
   bold?:boolean;italic?:boolean;strikethrough?:boolean;monospace?:boolean;blankAfter?:boolean;
   fontSize?:"small"|"medium"|"large";textColor?:string;backgroundColor?:string;align?:"left"|"center"|"right";
-  showProductImages?:boolean;imageSize?:"small"|"medium"|"large";
+  itemTemplate?:string;showProductImages?:boolean;imageSize?:"small"|"medium"|"large";
 };
 export type OrderTemplate={version:1;blocks:OrderTemplateBlock[]};
 export type OrderTemplateContext={
@@ -20,11 +20,13 @@ export type OrderTemplateContext={
 export type SemanticOrderBlock={id:string;type:OrderBlockType;lines:string[]};
 
 const color=z.string().regex(/^#[0-9A-Fa-f]{6}$/);
+export const DEFAULT_ORDER_ITEM_TEMPLATE="{{index}}. {{title}} x {{quantity}} - {{price}} each - {{subtotal}}";
+const ORDER_ITEM_VARIABLES=new Set(["index","title","sku","quantity","price","subtotal"]);
 const blockSchema=z.object({
   id:z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/),type:z.enum(ORDER_BLOCK_TYPES),label:z.string().max(80).optional(),text:z.string().max(1000).optional(),
   bold:z.boolean().optional(),italic:z.boolean().optional(),strikethrough:z.boolean().optional(),monospace:z.boolean().optional(),blankAfter:z.boolean().optional(),
   fontSize:z.enum(["small","medium","large"]).optional(),textColor:color.optional(),backgroundColor:color.optional(),align:z.enum(["left","center","right"]).optional(),
-  showProductImages:z.boolean().optional(),imageSize:z.enum(["small","medium","large"]).optional(),
+  itemTemplate:z.string().min(1).max(500).optional(),showProductImages:z.boolean().optional(),imageSize:z.enum(["small","medium","large"]).optional(),
 }).strict().superRefine((block,ctx)=>{
   if(block.type==="customText"){
     if(!block.text?.trim())ctx.addIssue({code:"custom",path:["text"],message:"customText requires text"});
@@ -32,6 +34,14 @@ const blockSchema=z.object({
     const allowed=new Set(["{{orderNumber}}","{{customerName}}","{{customerPhone}}","{{currency}}","{{total}}","{{address}}","{{recipientName}}","{{recipientPhone}}","{{notes}}"]);
     for(const variable of variables)if(!allowed.has(variable.replace(/\s/g,"")))ctx.addIssue({code:"custom",path:["text"],message:`unsupported variable: ${variable}`});
     if(/{{|}}/.test((block.text??"").replace(/{{\s*[^{}]+\s*}}/g,"")))ctx.addIssue({code:"custom",path:["text"],message:"invalid variable syntax"});
+  }
+  if(block.type==="itemList"&&block.itemTemplate!==undefined){
+    const variables=block.itemTemplate.match(/{{\s*[^{}]+\s*}}/g)??[];
+    for(const variable of variables){
+      const name=variable.slice(2,-2).trim();
+      if(!ORDER_ITEM_VARIABLES.has(name))ctx.addIssue({code:"custom",path:["itemTemplate"],message:`unsupported variable: ${variable}`});
+    }
+    if(/{{|}}/.test(block.itemTemplate.replace(/{{\s*[^{}]+\s*}}/g,"")))ctx.addIssue({code:"custom",path:["itemTemplate"],message:"invalid variable syntax"});
   }
 });
 
@@ -46,7 +56,7 @@ export const orderTemplateUpdateSchema=orderTemplateSchema;
 
 export const DEFAULT_TEXT_ORDER_TEMPLATE:OrderTemplate={version:1,blocks:[
   {id:"order-header",type:"orderHeader",label:"Order",bold:true,blankAfter:true},
-  {id:"items",type:"itemList",label:"Items:",blankAfter:true},
+  {id:"items",type:"itemList",label:"Items:",itemTemplate:DEFAULT_ORDER_ITEM_TEMPLATE,blankAfter:true},
   {id:"fees",type:"feeList",label:"Additional fees:",blankAfter:true},
   {id:"total",type:"total",label:"Total:",bold:true},
   {id:"payment-summary",type:"paymentSummary",label:"Payment:",blankAfter:true},
@@ -55,7 +65,7 @@ export const DEFAULT_TEXT_ORDER_TEMPLATE:OrderTemplate={version:1,blocks:[
 
 export const DEFAULT_IMAGE_ORDER_TEMPLATE:OrderTemplate={version:1,blocks:[
   {id:"order-header",type:"orderHeader",label:"Order",fontSize:"large",textColor:"#FFFFFF",backgroundColor:"#153F2F",align:"left"},
-  {id:"items",type:"itemList",label:"Items:",fontSize:"medium",textColor:"#20372D",backgroundColor:"#F6F9F7",align:"left",showProductImages:true,imageSize:"medium"},
+  {id:"items",type:"itemList",label:"Items:",itemTemplate:DEFAULT_ORDER_ITEM_TEMPLATE,fontSize:"medium",textColor:"#20372D",backgroundColor:"#F6F9F7",align:"left",showProductImages:true,imageSize:"medium"},
   {id:"fees",type:"feeList",label:"Additional fees:",fontSize:"small",textColor:"#20372D",backgroundColor:"#FAFCFB",align:"left"},
   {id:"total",type:"total",label:"Total:",fontSize:"large",textColor:"#FFFFFF",backgroundColor:"#153F2F",align:"left"},
   {id:"payment-summary",type:"paymentSummary",label:"Payment:",fontSize:"medium",textColor:"#20372D",backgroundColor:"#EEF6F2",align:"left"},
@@ -64,18 +74,20 @@ export const DEFAULT_IMAGE_ORDER_TEMPLATE:OrderTemplate={version:1,blocks:[
 export const DEFAULT_PDF_ORDER_TEMPLATE:OrderTemplate=structuredClone(DEFAULT_IMAGE_ORDER_TEMPLATE);
 
 export function parseOrderTemplate(value:unknown,format:OrderTemplateFormat):OrderTemplate{
-  const normalized=normalizePaymentSummary(value,format),parsed=orderTemplateSchema.safeParse(normalized);
+  const normalized=normalizeOrderTemplate(value,format),parsed=orderTemplateSchema.safeParse(normalized);
   return parsed.success?parsed.data:(format==="text"?DEFAULT_TEXT_ORDER_TEMPLATE:format==="pdf"?DEFAULT_PDF_ORDER_TEMPLATE:DEFAULT_IMAGE_ORDER_TEMPLATE);
 }
 
-function normalizePaymentSummary(value:unknown,format:OrderTemplateFormat):unknown{
+function normalizeOrderTemplate(value:unknown,format:OrderTemplateFormat):unknown{
   if(!value||typeof value!=="object"||!Array.isArray((value as {blocks?:unknown}).blocks))return value;
   const template=value as {version?:unknown;blocks:Array<Record<string,unknown>>};
-  if(template.blocks.some(block=>block.type==="paymentSummary"))return value;
-  const block=format==="text"
-    ?{id:"payment-summary",type:"paymentSummary",label:"Payment:",blankAfter:true}
-    :{id:"payment-summary",type:"paymentSummary",label:"Payment:",fontSize:"medium",textColor:"#20372D",backgroundColor:"#EEF6F2",align:"left"};
-  const blocks=[...template.blocks],totalIndex=blocks.findIndex(item=>item.type==="total");blocks.splice(totalIndex<0?blocks.length:totalIndex+1,0,block);
+  const blocks=template.blocks.map(block=>block.type==="itemList"&&block.itemTemplate===undefined?{...block,itemTemplate:DEFAULT_ORDER_ITEM_TEMPLATE}:block);
+  if(!blocks.some(block=>block.type==="paymentSummary")){
+    const block=format==="text"
+      ?{id:"payment-summary",type:"paymentSummary",label:"Payment:",blankAfter:true}
+      :{id:"payment-summary",type:"paymentSummary",label:"Payment:",fontSize:"medium",textColor:"#20372D",backgroundColor:"#EEF6F2",align:"left"};
+    const totalIndex=blocks.findIndex(item=>item.type==="total");blocks.splice(totalIndex<0?blocks.length:totalIndex+1,0,block);
+  }
   return{...template,blocks};
 }
 
@@ -87,7 +99,7 @@ export function renderSemanticOrder(template:OrderTemplate,context:OrderTemplate
   return template.blocks.flatMap(block=>{
     let lines:string[]=[];const label=block.label??defaultLabel(block.type);
     if(block.type==="orderHeader")lines=[`${label}${label?" ":""}#${context.orderNumber}`];
-    else if(block.type==="itemList")lines=[...(label?[label]:[]),...context.items.map((item,index)=>`${index+1}. ${item.name} x ${item.quantity} - ${context.currency} ${item.unitAmount.toFixed(2)} each - ${context.currency} ${(item.quantity*item.unitAmount).toFixed(2)}`)];
+    else if(block.type==="itemList")lines=[...(label?[label]:[]),...context.items.map((item,index)=>renderOrderItem(block.itemTemplate,item,index,context.currency))];
     else if(block.type==="feeList"){if(!context.fees.length)return[];lines=[...(label?[label]:[]),...context.fees.map(fee=>`${fee.name} - ${context.currency} ${fee.amount.toFixed(2)}`)];}
     else if(block.type==="total")lines=[`${label}${label?" ":""}${total}`];
     else if(block.type==="paymentSummary"){if(!context.paymentProfile?.summary)return[];lines=[`${label}${label?" ":""}${context.paymentProfile.summary}`];}
@@ -119,4 +131,15 @@ export function renderTextOrder(template:OrderTemplate,blocks:SemanticOrderBlock
 }
 
 function escapeWhatsApp(value:string):string{return value.replace(/([*_~`])/g,"$1\u200b");}
+function renderOrderItem(template:string|undefined,item:OrderSummaryItem,index:number,currency:string):string{
+  const variables:Record<string,string>={
+    index:String(index+1),
+    title:item.name,
+    sku:item.sku??"",
+    quantity:String(item.quantity),
+    price:`${currency} ${item.unitAmount.toFixed(2)}`,
+    subtotal:`${currency} ${(item.quantity*item.unitAmount).toFixed(2)}`,
+  };
+  return(template?.trim()||DEFAULT_ORDER_ITEM_TEMPLATE).replace(/{{\s*([A-Za-z]+)\s*}}/g,(_,name:string)=>variables[name]??"");
+}
 function defaultLabel(type:OrderBlockType):string{return({orderHeader:"Order",itemList:"Items:",feeList:"Additional fees:",total:"Total:",paymentSummary:"Payment:",shippingAddress:"Shipping address:",notes:"Notes:",divider:"",customText:""})[type];}
