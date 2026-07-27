@@ -55,6 +55,21 @@ type OrderSendTarget={order:OrderItem};
 type ContactTaskSummary={id:string;title:string;kind:"general"|"message";status:string;dueAt:string;sendAt:string|null;assignedUserName:string|null};
 type ContactTaskDetail=ContactTaskSummary&{description:string;progress:number;startAt:string;sendMode:"approval"|"auto";accountName:string;source:string};
 type ConversationDetails={customerStage:string;contact:ContactProfile|null;tags:TagItem[];notes:NoteItem[];orders:OrderItem[]};
+type ConversationDetailsCacheEntry={details:ConversationDetails;catalog:TagItem[];contactTasks:ContactTaskSummary[]};
+const CONVERSATION_DETAILS_CACHE_LIMIT=100;
+const conversationDetailsCache=new Map<string,ConversationDetailsCacheEntry>();
+function cacheConversationDetails(conversationId:string,entry:ConversationDetailsCacheEntry){
+  conversationDetailsCache.delete(conversationId);
+  conversationDetailsCache.set(conversationId,entry);
+  if(conversationDetailsCache.size>CONVERSATION_DETAILS_CACHE_LIMIT){
+    const oldest=conversationDetailsCache.keys().next().value as string|undefined;
+    if(oldest)conversationDetailsCache.delete(oldest);
+  }
+}
+function updateCachedConversationDetails(conversationId:string,update:(details:ConversationDetails)=>ConversationDetails){
+  const cached=conversationDetailsCache.get(conversationId);
+  if(cached)cacheConversationDetails(conversationId,{...cached,details:update(cached.details)});
+}
 const CONTACT_TASK_STATUS:Record<string,string>={planned:"计划中",in_progress:"进行中",waiting_approval:"待审批",scheduled:"待发送",completed:"已完成",overdue:"已逾期",failed:"失败",cancelled:"已取消"};
 type ChatMessage = {
   id:string; direction:"in"|"out"; kind:string; text:string; time:string;occurredAt?:string;
@@ -298,6 +313,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
 
   const logout=useCallback(()=>{
     sessionStorage.removeItem("relayAccessToken");sessionStorage.removeItem("relayUser");
+    conversationDetailsCache.clear();
     conversationAbortRef.current?.abort();conversationCursorRef.current=null;
     notificationBaseline.current.clear();notificationBaselineReady.current=false;
     dateFilterRef.current="all";setDateFilter("all");setApiToken("");setUser(null);setAccounts([]);setConversations([]);setConversationCounts(EMPTY_CONVERSATION_COUNTS);setNextConversationCursor(null);setMessages({});setFailedMessageCounts({});setEmailActivities({});setMessageTranslations({});setTranslationPreferences({});setTranslationReadyConversationId("");setActiveId("");setSelectedTag("");setContextTags([]);setAuthOpen(false);setSessionReady(true);setLoading(false);
@@ -920,7 +936,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     router.push(WORKSPACE_PATHS[nextView]);
   };
   const openInbox=(nextFilter="全部会话")=>{navigate("inbox");setFilter(nextFilter);};
-  const completeLogin=(token:string,nextUser:User)=>{sessionStorage.setItem("relayAccessToken",token);sessionStorage.setItem("relayUser",JSON.stringify(nextUser));setApiToken(token);setUser(nextUser);setAuthOpen(false);setSessionReady(true);void loadWorkspace(token);};
+  const completeLogin=(token:string,nextUser:User)=>{conversationDetailsCache.clear();sessionStorage.setItem("relayAccessToken",token);sessionStorage.setItem("relayUser",JSON.stringify(nextUser));setApiToken(token);setUser(nextUser);setAuthOpen(false);setSessionReady(true);void loadWorkspace(token);};
 
   if(!sessionReady)return <AccessPortal loading onLogin={()=>{}}/>;
   if(!apiToken)return <><AccessPortal loading={false} onLogin={()=>setAuthOpen(true)}/>{authOpen&&<LoginDialog connected={false} token="" canClose onClose={()=>setAuthOpen(false)} onLogin={completeLogin} onLogout={logout}/>}</>;
@@ -2127,9 +2143,10 @@ function CrmDetailsPanel({
   onChanged: () => Promise<void>;
   onDeleted: () => Promise<void>;
 }) {
-  const [details, setDetails] = useState<ConversationDetails | null>(null),
-    [catalog, setCatalog] = useState<TagItem[]>([]),
-    [loading, setLoading] = useState(true),
+  const cachedDetails=conversationDetailsCache.get(active.id);
+  const [details, setDetails] = useState<ConversationDetails | null>(()=>cachedDetails?.details??null),
+    [catalog, setCatalog] = useState<TagItem[]>(()=>cachedDetails?.catalog??[]),
+    [loading, setLoading] = useState(()=>!cachedDetails),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [tagQuery, setTagQuery] = useState(""),
@@ -2137,7 +2154,7 @@ function CrmDetailsPanel({
     [tagColor, setTagColor] = useState("#DFF5E8"),
     [tagEditing, setTagEditing] = useState<TagItem | null>(null),
     [noteDraft, setNoteDraft] = useState(""),
-    [contactTasks, setContactTasks] = useState<ContactTaskSummary[]>([]),
+    [contactTasks, setContactTasks] = useState<ContactTaskSummary[]>(()=>cachedDetails?.contactTasks??[]),
     [taskTitle, setTaskTitle] = useState(""),
     [taskKind, setTaskKind] = useState<"general"|"message">("general"),
     [taskDueAt, setTaskDueAt] = useState(()=>toDateTimeLocal(new Date(Date.now()+86400000).toISOString())),
@@ -2175,7 +2192,7 @@ function CrmDetailsPanel({
           data: Array<Record<string, unknown>>;
         },
         taskBody=(await taskResult.response.json()) as {data?:Array<Record<string,unknown>>};
-      setDetails({
+      const nextDetails:ConversationDetails={
         customerStage: String(body.customerStage ?? active.customerStage),
         contact:body.contact&&typeof body.contact==="object"?mapContactProfile(body.contact as Record<string,unknown>):null,
         tags: Array.isArray(body.tags)
@@ -2194,9 +2211,13 @@ function CrmDetailsPanel({
         orders: Array.isArray(body.orders)
           ? (body.orders as Array<Record<string, unknown>>).map(item=>mapOrder(item,{conversationId:active.id,accountId:active.accountId,accountName:active.account,customerName:active.name,customerPhone:active.phone}))
           : [],
-      });
-      setCatalog(tagBody.data.map(mapTag));
-      setContactTasks((taskBody.data??[]).map(item=>({id:String(item.id),title:String(item.title??""),kind:item.kind==="message"?"message":"general",status:String(item.status??"planned"),dueAt:String(item.due_at),sendAt:item.send_at?String(item.send_at):null,assignedUserName:item.assigned_user_name?String(item.assigned_user_name):null})));
+      };
+      const nextCatalog=tagBody.data.map(mapTag);
+      const nextContactTasks:ContactTaskSummary[]=(taskBody.data??[]).map(item=>({id:String(item.id),title:String(item.title??""),kind:item.kind==="message"?"message":"general",status:String(item.status??"planned"),dueAt:String(item.due_at),sendAt:item.send_at?String(item.send_at):null,assignedUserName:item.assigned_user_name?String(item.assigned_user_name):null}));
+      setDetails(nextDetails);
+      setCatalog(nextCatalog);
+      setContactTasks(nextContactTasks);
+      cacheConversationDetails(active.id,{details:nextDetails,catalog:nextCatalog,contactTasks:nextContactTasks});
     } catch (reason) {
       if(!signal?.aborted)setError(reason instanceof Error ? reason.message : "加载失败");
     } finally {
@@ -2204,9 +2225,10 @@ function CrmDetailsPanel({
     }
   }, [active.id, active.contactId, active.customerStage, active.accountId, active.account, active.name, active.phone, token, onToken]);
   useEffect(() => {
+    if(conversationDetailsCache.has(active.id))return;
     const controller=new AbortController(),timer = window.setTimeout(() => void load(controller.signal), 0);
     return () => {window.clearTimeout(timer);controller.abort();};
-  }, [load]);
+  }, [active.id,load]);
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -2255,6 +2277,7 @@ function CrmDetailsPanel({
       const body=await result.response.json().catch(()=>({})) as {error?:string};
       if(!result.response.ok)throw new Error(body.error??`别名保存失败（HTTP ${result.response.status}）`);
       await onChanged();
+      await load();
       setAliasEditing(false);
       onToast(aliasDraft.trim()?"联系人别名已保存":"联系人别名已清除");
     }catch(reason){setError(reason instanceof Error?reason.message:"别名保存失败");}
@@ -2267,6 +2290,7 @@ function CrmDetailsPanel({
       const result=await authorizedFetch(`/api/v1/conversations/${active.id}`,token,{method:"DELETE"});
       if(result.token!==token)onToken(result.token);
       if(!result.response.ok){const body=await result.response.json().catch(()=>({})) as {message?:string};throw new Error(body.message??`删除失败（HTTP ${result.response.status}）`);}
+      conversationDetailsCache.delete(active.id);
       onToast("会话已永久删除");
       await onDeleted();
     }catch(reason){setError(reason instanceof Error?reason.message:"会话删除失败");}
@@ -2275,6 +2299,7 @@ function CrmDetailsPanel({
   async function setStage(customerStage: string) {
     await onConversationChange({ customerStage });
     setDetails((value) => (value ? { ...value, customerStage } : value));
+    updateCachedConversationDetails(active.id,details=>({...details,customerStage}));
     await onChanged();
   }
   async function toggleTag(tagId: string) {
@@ -2839,6 +2864,7 @@ function CrmDetailsPanel({
           onPaymentChange={paymentRequest=>{
             setPaymentOrderTarget(order=>order?{...order,paymentRequest}:order);
             setDetails(value=>value?{...value,orders:value.orders.map(order=>order.id===paymentOrderTarget.id?{...order,paymentRequest}:order)}:value);
+            updateCachedConversationDetails(active.id,details=>({...details,orders:details.orders.map(order=>order.id===paymentOrderTarget.id?{...order,paymentRequest}:order)}));
           }}
           onClose={()=>setPaymentOrderTarget(null)}
           onEdit={()=>{setEditOrderTarget(paymentOrderTarget);setPaymentOrderTarget(null);}}
