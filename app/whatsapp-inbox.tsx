@@ -52,6 +52,7 @@ type PaymentMethod={id:string;type:PaymentMethodType;name:string;enabled:boolean
 type OrderItem={id:string;orderNumber:string;conversationId:string;accountId:string;accountName:string;customerName:string;customerPhone:string;amount:number;currency:string;weightUnit:WeightUnit;description:string;status:string;sendFormat:string;translateOnSend:boolean;targetLanguage:string;createdAt:string;createdByName:string;messageStatus:string;items:OrderProductItem[];fees:OrderFeeItem[];addressId:string|null;address:CustomerAddress|null;paymentProfileId:string|null;paymentProfile:PaymentProfile|null;paymentRequest:PaymentRequest|null};
 type OrderSendTarget={order:OrderItem};
 type ContactTaskSummary={id:string;title:string;kind:"general"|"message";status:string;dueAt:string;sendAt:string|null;assignedUserName:string|null};
+type ContactTaskDetail=ContactTaskSummary&{description:string;progress:number;startAt:string;sendMode:"approval"|"auto";accountName:string;source:string};
 type ConversationDetails={customerStage:string;contact:ContactProfile|null;tags:TagItem[];notes:NoteItem[];orders:OrderItem[]};
 const CONTACT_TASK_STATUS:Record<string,string>={planned:"计划中",in_progress:"进行中",waiting_approval:"待审批",scheduled:"待发送",completed:"已完成",overdue:"已逾期",failed:"失败",cancelled:"已取消"};
 type ChatMessage = {
@@ -2044,6 +2045,50 @@ function ConversationQuickTaskDialog({conversation,token,assignedUserId,onToken,
   return <div className="modal-backdrop context-action-backdrop" role="presentation"><section className="login-dialog context-action-dialog" role="dialog" aria-modal="true" aria-labelledby="context-task-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><ClipboardList size={19}/></span><h2 id="context-task-title">给 {conversation.name} 添加任务</h2><p>任务会自动关联当前客户与会话，并默认分配给你。</p><label>任务标题<input autoFocus value={title} onChange={event=>setTitle(event.target.value)} maxLength={200} placeholder="例如：跟进报价反馈"/></label><div className="context-task-grid"><label>任务类型<select value={kind} onChange={event=>setKind(event.target.value as "general"|"message")}><option value="general">普通待办</option><option value="message">定时消息</option></select></label><label>{kind==="message"?"计划发送时间":"截止时间"}<input type="datetime-local" value={dueAt} min={toDateTimeLocal(new Date().toISOString())} onChange={event=>setDueAt(event.target.value)}/></label></div>{kind==="message"&&<small className="context-task-hint">定时消息将进入审批模式，可在任务中心补充内容并生成草稿。</small>}{error&&<span className="login-error">{error}</span>}<footer><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void save()} disabled={busy||!title.trim()}>{busy?"正在创建…":"创建任务"}</button></footer></section></div>;
 }
 
+function ContactTaskDialog({task,token,onToken,onClose,onSaved}:{task:ContactTaskSummary;token:string;onToken:(token:string)=>void;onClose:()=>void;onSaved:()=>void}){
+  const [detail,setDetail]=useState<ContactTaskDetail|null>(null),[title,setTitle]=useState(task.title),[description,setDescription]=useState(""),[status,setStatus]=useState(task.status),[progress,setProgress]=useState(0),[startAt,setStartAt]=useState(""),[dueAt,setDueAt]=useState(toDateTimeLocal(task.dueAt)),[sendAt,setSendAt]=useState(task.sendAt?toDateTimeLocal(task.sendAt):""),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  useEffect(()=>{
+    let cancelled=false;
+    void authorizedFetch(`/api/v1/tasks/${task.id}`,token).then(async result=>{
+      if(result.token!==token)onToken(result.token);
+      if(!result.response.ok)throw new Error(`任务加载失败（HTTP ${result.response.status}）`);
+      const item=await result.response.json() as Record<string,unknown>;
+      if(cancelled)return;
+      const next:ContactTaskDetail={id:String(item.id),title:String(item.title??""),description:String(item.description??""),kind:item.kind==="message"?"message":"general",status:String(item.status??"planned"),progress:Number(item.progress??0),startAt:String(item.start_at),dueAt:String(item.due_at),sendAt:item.send_at?String(item.send_at):null,sendMode:item.send_mode==="auto"?"auto":"approval",assignedUserName:item.assigned_user_name?String(item.assigned_user_name):null,accountName:String(item.account_name??""),source:String(item.source??"manual")};
+      setDetail(next);setTitle(next.title);setDescription(next.description);setStatus(next.status);setProgress(next.progress);setStartAt(toDateTimeLocal(next.startAt));setDueAt(toDateTimeLocal(next.dueAt));setSendAt(next.sendAt?toDateTimeLocal(next.sendAt):"");
+    }).catch(reason=>{if(!cancelled)setError(reason instanceof Error?reason.message:"任务加载失败");}).finally(()=>{if(!cancelled)setLoading(false);});
+    return()=>{cancelled=true;};
+  },[task.id,token,onToken]);
+  async function save(){
+    const start=new Date(startAt),due=new Date(dueAt),send=sendAt?new Date(sendAt):null;
+    if(!title.trim()){setError("请输入任务标题");return;}
+    if(Number.isNaN(start.getTime())||Number.isNaN(due.getTime())||due<start){setError("截止时间不能早于开始时间");return;}
+    if(detail?.kind==="message"&&(!send||Number.isNaN(send.getTime()))){setError("请选择计划发送时间");return;}
+    setBusy(true);setError("");
+    try{
+      const result=await authorizedFetch(`/api/v1/tasks/${task.id}`,token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({title:title.trim(),description:description.trim(),status,progress,startAt:start.toISOString(),dueAt:due.toISOString(),sendAt:detail?.kind==="message"?send!.toISOString():null})});
+      if(result.token!==token)onToken(result.token);
+      if(!result.response.ok){const body=await result.response.json().catch(()=>({})) as {message?:string;error?:string};throw new Error(body.message??body.error??`任务保存失败（HTTP ${result.response.status}）`);}
+      onSaved();
+    }catch(reason){setError(reason instanceof Error?reason.message:"任务保存失败");setBusy(false);}
+  }
+  return <div className="modal-backdrop contact-task-modal-backdrop" role="presentation">
+    <section className="contact-task-modal" role="dialog" aria-modal="true" aria-labelledby="contact-task-modal-title">
+      <header><div><span className={`contact-task-icon ${task.kind}`} aria-hidden="true">{task.kind==="message"?<Send size={15}/>:<ClipboardList size={15}/>}</span><span><small>{task.kind==="message"?"定时消息任务":"普通任务"}</small><h2 id="contact-task-modal-title">查看与编辑任务</h2></span></div><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button></header>
+      {loading?<div className="contact-task-modal-loading"><RefreshCw className="spin" size={18}/>正在加载任务…</div>:<div className="contact-task-modal-body">
+        {detail&&<div className="contact-task-meta"><span>账号：{detail.accountName||"—"}</span><span>负责人：{detail.assignedUserName||"未分配"}</span><span>来源：{{manual:"手工",birthday:"生日",special_date:"特殊日期",holiday:"节日",agent:"Agent",recurring:"周期"}[detail.source]??detail.source}</span></div>}
+        <label>任务标题<input autoFocus value={title} onChange={event=>setTitle(event.target.value)} maxLength={200}/></label>
+        <label>任务描述<textarea value={description} onChange={event=>setDescription(event.target.value)} maxLength={10000} placeholder="补充任务目标、背景或执行说明"/></label>
+        <div className="contact-task-modal-grid"><label>状态<select value={status} onChange={event=>{const next=event.target.value;setStatus(next);if(next==="completed")setProgress(100);}}>{Object.entries(CONTACT_TASK_STATUS).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label><label>完成进度<span className="contact-task-progress-input"><input type="range" min="0" max="100" step="5" value={progress} onChange={event=>setProgress(Number(event.target.value))}/><b>{progress}%</b></span></label></div>
+        <div className="contact-task-modal-grid"><label>开始时间<input type="datetime-local" value={startAt} onChange={event=>setStartAt(event.target.value)}/></label><label>截止时间<input type="datetime-local" value={dueAt} onChange={event=>setDueAt(event.target.value)}/></label></div>
+        {detail?.kind==="message"&&<label>计划发送时间<input type="datetime-local" value={sendAt} onChange={event=>setSendAt(event.target.value)}/><small>发送模式：{detail.sendMode==="auto"?"自动发送":"审批后发送"}</small></label>}
+        {error&&<p className="task-error">{error}</p>}
+      </div>}
+      <footer><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void save()} disabled={loading||busy||!detail||!title.trim()}>{busy?"正在保存…":"保存更改"}</button></footer>
+    </section>
+  </div>;
+}
+
 function CrmDetailsPanel({
   active,
   token,
@@ -2083,6 +2128,7 @@ function CrmDetailsPanel({
     [taskKind, setTaskKind] = useState<"general"|"message">("general"),
     [taskDueAt, setTaskDueAt] = useState(()=>toDateTimeLocal(new Date(Date.now()+86400000).toISOString())),
     [taskMinAt] = useState(()=>Date.now()),
+    [taskEditing, setTaskEditing] = useState<ContactTaskSummary | null>(null),
     [orderOpen, setOrderOpen] = useState(false),
     [editOrderTarget, setEditOrderTarget] = useState<OrderItem | null>(null),
     [sendOrderTarget, setSendOrderTarget] = useState<OrderSendTarget | null>(null),
@@ -2152,11 +2198,12 @@ function CrmDetailsPanel({
       if (event.key !== "Escape") return;
       if (paymentOrderTarget) setPaymentOrderTarget(null);
       else if (sendOrderTarget) setSendOrderTarget(null);
+      else if (taskEditing) setTaskEditing(null);
       else if (!orderOpen && !editOrderTarget) onClose();
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [onClose, orderOpen, editOrderTarget, sendOrderTarget, paymentOrderTarget]);
+  }, [onClose, orderOpen, editOrderTarget, sendOrderTarget, paymentOrderTarget, taskEditing]);
   async function request(path: string, init: RequestInit) {
     setBusy(true);
     setError("");
@@ -2624,7 +2671,7 @@ function CrmDetailsPanel({
             <div className="detail-section crm-section">
               <h4 className="detail-title"><span>任务</span><Link href="/tasks">查看全部</Link></h4>
               <div className="contact-task-list">
-                {contactTasks.length?contactTasks.slice(0,6).map(task=><article key={task.id}>
+                {contactTasks.length?contactTasks.slice(0,6).map(task=><article key={task.id} role="button" tabIndex={0} aria-label={`查看并编辑任务：${task.title}`} onClick={()=>setTaskEditing(task)} onKeyDown={event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();setTaskEditing(task);}}}>
                   <span className={`contact-task-icon ${task.kind}`} aria-hidden="true">{task.kind==="message"?<Send size={12}/>:<ClipboardList size={12}/>}</span>
                   <span><b>{task.title}</b><small><CalendarDays size={10}/>{formatDateTime(task.sendAt??task.dueAt)}{task.assignedUserName?` · ${task.assignedUserName}`:""}</small></span>
                   <em className={task.status}>{CONTACT_TASK_STATUS[task.status]??task.status}</em>
@@ -2711,6 +2758,7 @@ function CrmDetailsPanel({
       </aside>
       {contactEditing&&<ContactEditDialog contactId={active.contactId} token={token} onToken={onToken} onClose={()=>setContactEditing(false)} onSaved={async profile=>{setContactEditing(false);setDetails(value=>value?{...value,contact:profile}:value);onToast("联系人资料已更新");await onChanged();await load();}}/>}
       {addressEditing&&<ContactAddressDialog contactId={active.contactId} token={token} onToken={onToken} onClose={()=>setAddressEditing(false)} onSaved={async profile=>{setAddressEditing(false);setDetails(value=>value?{...value,contact:profile}:value);onToast("联系人地址已更新，创建订单时可直接选择");await load();}}/>}
+      {taskEditing&&<ContactTaskDialog task={taskEditing} token={token} onToken={onToken} onClose={()=>setTaskEditing(null)} onSaved={async()=>{setTaskEditing(null);onToast("任务已更新");await load();}}/>}
       {orderOpen && (
         <OrderDialog
           active={active}
@@ -3729,12 +3777,13 @@ function AgentConversationBar({conversationId,token,refreshKey,onToken,onToast,o
 }
 
 function AgentMemoryPanel({conversationId,token,onToken,onToast}:{conversationId:string;token:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){
-  const [memory,setMemory]=useState<{summary:string;updatedAt:string|null;facts:Array<{id:string;fact_key:string;fact_value:string;confidence:number;source_text?:string}>}|null>(null),[busy,setBusy]=useState(false);
+  type MemoryResponse={summary:string;updatedAt:string|null;facts:Array<{id:string;fact_key:string;fact_value:string;confidence:number;source_text?:string}>;rebuild?:{id:string;state:"pending"|"processing"|"completed"|"failed"|"cancelled";last_error?:string|null}|null};
+  const [memory,setMemory]=useState<MemoryResponse|null>(null),[busy,setBusy]=useState(false);
   const load=useCallback(async()=>{const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory`,token);if(result.token!==token)onToken(result.token);if(result.response.ok)setMemory(await result.response.json());},[conversationId,token,onToken]);useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer);},[load]);
   async function remove(id:string){const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory/facts/${id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);if(result.response.ok)await load();}
   async function edit(fact:{id:string;fact_key:string;fact_value:string}){const key=await promptAction({title:"编辑 AI 记忆",label:"记忆字段",defaultValue:fact.fact_key,placeholder:"例如：采购偏好",confirmLabel:"下一步",maxLength:120});if(!key?.trim())return;const value=await promptAction({title:"编辑 AI 记忆",label:"记忆内容",defaultValue:fact.fact_value,description:`字段：${key.trim()}`,placeholder:"输入需要记住的内容",confirmLabel:"保存记忆",multiline:true,maxLength:4000});if(!value?.trim())return;const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory/facts/${fact.id}`,token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({key:key.trim(),value:value.trim()})});if(result.token!==token)onToken(result.token);if(result.response.ok)await load();}
-  async function rebuild(){setBusy(true);const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory/rebuild`,token,{method:"POST"});if(result.token!==token)onToken(result.token);setBusy(false);onToast(result.response.ok?"记忆更新任务已创建":"记忆更新失败");}
-  return <div className="detail-section agent-memory"><div className="detail-title"><h4><Brain size={13}/>聊天记忆</h4><button disabled={busy} onClick={()=>void rebuild()}><RefreshCw size={11}/>重新整理</button></div><p className="memory-summary">{memory?.summary||"Agent 尚未生成会话摘要。"}</p><div className="memory-facts">{memory?.facts.map(fact=><span key={fact.id} title={fact.source_text||"来源消息已删除"}><b>{fact.fact_key}</b><em>{fact.fact_value}</em><i><button onClick={()=>void edit(fact)} aria-label={`编辑记忆 ${fact.fact_key}`}><Pencil size={10}/></button><button onClick={()=>void remove(fact.id)} aria-label={`删除记忆 ${fact.fact_key}`}><X size={10}/></button></i></span>)}</div></div>;
+  async function rebuild(){setBusy(true);const started=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory/rebuild`,token,{method:"POST"});let currentToken=started.token;if(currentToken!==token)onToken(currentToken);if(!started.response.ok){setBusy(false);onToast("记忆更新失败");return;}const job=await started.response.json() as {id:string};onToast("正在重新整理聊天记忆");for(let attempt=0;attempt<60;attempt+=1){await new Promise(resolve=>window.setTimeout(resolve,1500));const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory`,currentToken);currentToken=result.token;if(result.token!==token)onToken(result.token);if(!result.response.ok)continue;const next=await result.response.json() as MemoryResponse;setMemory(next);if(next.rebuild?.id!==job.id)continue;if(next.rebuild.state==="completed"){setBusy(false);onToast("聊天记忆已更新");return;}if(next.rebuild.state==="failed"||next.rebuild.state==="cancelled"){setBusy(false);onToast(next.rebuild.last_error?`记忆更新失败：${next.rebuild.last_error}`:"记忆更新失败");return;}}setBusy(false);onToast("记忆整理仍在后台进行，请稍后查看");}
+  return <div className="detail-section agent-memory"><div className="detail-title"><h4><Brain size={13}/>聊天记忆</h4><button disabled={busy} onClick={()=>void rebuild()}><RefreshCw className={busy?"spin":undefined} size={11}/>{busy?"整理中…":"重新整理"}</button></div><p className="memory-summary">{memory?.summary||"Agent 尚未生成会话摘要。"}</p><div className="memory-facts">{memory?.facts.map(fact=><span key={fact.id} title={fact.source_text||"来源消息已删除"}><b>{fact.fact_key}</b><em>{fact.fact_value}</em><i><button onClick={()=>void edit(fact)} aria-label={`编辑记忆 ${fact.fact_key}`}><Pencil size={10}/></button><button onClick={()=>void remove(fact.id)} aria-label={`删除记忆 ${fact.fact_key}`}><X size={10}/></button></i></span>)}</div></div>;
 }
 
 type CloudTemplate={name:string;language:string;category?:string;components:Array<{type:string;text?:string;format?:string}>};

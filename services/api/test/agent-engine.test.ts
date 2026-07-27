@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { captionOrderDetailsImage, chunkText, detectOrderDetailsLanguage, groundOrderDetailsImageReply, groundOrderNumberReply, isConversationAgentActive, isReplySourceCurrent, isWithinBusinessHours, passesAutoReplyGate, resolveOrderDetailsImage, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
+import { captionOrderDetailsImage, chunkText, detectOrderDetailsLanguage, groundOrderDetailsImageReply, groundOrderNumberReply, isConversationAgentActive, isConversationJobEligible, isReplySourceCurrent, isWithinBusinessHours, passesAutoReplyGate, resolveOrderDetailsImage, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
 
 test("chunkText creates bounded overlapping chunks",()=>{
   const input=("A paragraph with useful knowledge. ").repeat(120);
@@ -29,6 +29,11 @@ test("automatic replies require per-conversation AI takeover",()=>{
   assert.equal(isConversationAgentActive(true,"human_paused"),false);
   assert.equal(isConversationAgentActive(true,null),false);
   assert.equal(isConversationAgentActive(false,"full"),false);
+});
+
+test("manual memory rebuilds do not depend on automatic reply eligibility",()=>{
+  assert.equal(isConversationJobEligible({memoryOnly:true,accountEnabled:false,mode:"human_paused",status:"closed",customerStage:"won"}),true);
+  assert.equal(isConversationJobEligible({memoryOnly:false,accountEnabled:false,mode:"human_paused",status:"closed",customerStage:"won"}),false);
 });
 
 test("full takeover sends useful replies without the cautious evidence gate",()=>{

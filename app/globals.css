@@ -528,3 +528,53 @@ button { color:inherit; }
 .contact-local-time>svg{width:18px;height:18px;flex:0 0 auto}
 .contact-local-time b{font-size:15px;line-height:1.4}
 .contact-local-time small{margin-top:4px;font-size:12px;line-height:1.45}
+
+/* Contact task cards open a focused view/edit modal. */
+.contact-task-list article[role="button"]{cursor:pointer;transition:border-color .15s,background .15s,box-shadow .15s}
+.contact-task-list article[role="button"]:hover{border-color:#b9d7c8;background:#f3faf6;box-shadow:0 3px 12px #173d2a0d}
+.contact-task-list article[role="button"]:focus-visible{outline:2px solid #229b64;outline-offset:2px}
+.contact-task-modal-backdrop{z-index:1250;padding:20px}
+.contact-task-modal{
+  width:min(680px,calc(100vw - 32px));
+  max-height:min(760px,calc(100vh - 40px));
+  overflow:hidden;
+  border-radius:16px;
+  background:#fff;
+  box-shadow:0 28px 80px #0b281b42;
+  display:flex;
+  flex-direction:column;
+}
+.contact-task-modal>header{
+  position:relative;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  padding:20px 22px;
+  border-bottom:1px solid #e3ebe7;
+}
+.contact-task-modal>header>div{display:flex;align-items:center;gap:11px}
+.contact-task-modal>header span>small{display:block;margin-bottom:3px;color:#728078;font-size:12px}
+.contact-task-modal h2{margin:0;font-size:20px}
+.contact-task-modal .login-close{position:static;flex:0 0 auto}
+.contact-task-modal-body{overflow:auto;padding:20px 22px;display:grid;gap:16px}
+.contact-task-modal-body>label,.contact-task-modal-grid>label{display:grid;gap:7px;color:#405249;font-size:13px;font-weight:650}
+.contact-task-modal-body input:not([type="range"]),.contact-task-modal-body select,.contact-task-modal-body textarea{width:100%;min-height:42px;border:1px solid #d8e2dd;border-radius:8px;background:#fff;padding:9px 11px;outline:0;font:inherit}
+.contact-task-modal-body textarea{min-height:100px;resize:vertical;line-height:1.55}
+.contact-task-modal-body input:focus,.contact-task-modal-body select:focus,.contact-task-modal-body textarea:focus{border-color:#289a66;box-shadow:0 0 0 3px #289a6617}
+.contact-task-modal-body label>small{color:#7c8982;font-size:12px;font-weight:400}
+.contact-task-meta{display:flex;flex-wrap:wrap;gap:7px}
+.contact-task-meta span{padding:6px 9px;border-radius:999px;background:#f0f5f2;color:#607169;font-size:12px}
+.contact-task-modal-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px}
+.contact-task-progress-input{min-height:42px;display:grid;grid-template-columns:minmax(0,1fr) 44px;align-items:center;gap:10px}
+.contact-task-progress-input input{width:100%;accent-color:#168255}
+.contact-task-progress-input b{text-align:right;color:#168255}
+.contact-task-modal-loading{min-height:300px;display:flex;align-items:center;justify-content:center;gap:8px;color:#6f7e76}
+.contact-task-modal .task-error{margin:0;border-radius:8px}
+.contact-task-modal>footer{display:flex;justify-content:flex-end;gap:9px;padding:15px 22px;border-top:1px solid #e3ebe7;background:#fbfcfb}
+.contact-task-modal>footer button{height:40px;font-size:13px}
+@media(max-width:620px){
+  .contact-task-modal-backdrop{padding:8px}
+  .contact-task-modal{width:100%;max-height:calc(100vh - 16px)}
+  .contact-task-modal-grid{grid-template-columns:1fr}
+}

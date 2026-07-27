@@ -94,6 +94,21 @@ export function isConversationAgentActive(
   return accountEnabled === true && (mode === "cautious" || mode === "full");
 }
 
+export function isConversationJobEligible(input: {
+  memoryOnly: boolean;
+  accountEnabled: unknown;
+  mode: unknown;
+  status: unknown;
+  customerStage: unknown;
+}): boolean {
+  return (
+    input.memoryOnly ||
+    (isConversationAgentActive(input.accountEnabled, input.mode) &&
+      input.status === "open" &&
+      !["won", "lost"].includes(String(input.customerStage)))
+  );
+}
+
 export function shouldAutoReply(
   decision: AgentDecision,
   mode: ConversationAgentMode,
@@ -330,14 +345,12 @@ export async function processOneAgentJob(): Promise<boolean> {
   try {
     if (job.kind === "index_document") await indexDocument(job);
     else if (job.kind === "index_faq") await indexFaq(job);
-    else if (job.kind === "reply" || job.kind === "followup")
+    else if (
+      job.kind === "reply" ||
+      job.kind === "followup" ||
+      job.kind === "refresh_memory"
+    )
       await runConversationJob(job);
-    else if (job.kind === "refresh_memory")
-      await runConversationJob({
-        ...job,
-        kind: "reply",
-        payload: { ...job.payload, memoryOnly: true },
-      });
     await pool.query(
       "UPDATE agent_jobs SET state='completed',completed_at=now(),last_error=NULL WHERE id=$1 AND state='processing'",
       [job.id],
@@ -541,16 +554,23 @@ async function indexFaq(job: Job): Promise<void> {
 
 async function runConversationJob(job: Job): Promise<void> {
   if (!job.conversation_id) return;
+  const memoryOnly =
+    job.kind === "refresh_memory" ||
+    String(job.payload.memoryOnly ?? "") === "true";
   const context = await pool.query(
-    `SELECT c.id,c.status,c.customer_stage,c.account_id,a.status account_status,a.agent_id,s.enabled,s.persona,s.reply_language,s.timezone,s.business_days,s.business_start::text,s.business_end::text,s.confidence_threshold,s.followup_enabled,s.followup_delays_hours,COALESCE(st.mode,'human_paused') mode,COALESCE(st.followup_count,0) followup_count,mem.summary FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id LEFT JOIN account_agent_settings s ON s.account_id=c.account_id LEFT JOIN conversation_agent_state st ON st.conversation_id=c.id LEFT JOIN conversation_memories mem ON mem.conversation_id=c.id WHERE c.id=$1`,
+    `SELECT c.id,c.status,c.customer_stage,c.account_id,a.status account_status,a.agent_id,s.enabled,COALESCE(s.persona,'You are a helpful, concise relationship assistant.') persona,COALESCE(s.reply_language,'auto') reply_language,s.timezone,s.business_days,s.business_start::text,s.business_end::text,COALESCE(s.confidence_threshold,0.8) confidence_threshold,s.followup_enabled,s.followup_delays_hours,COALESCE(st.mode,'human_paused') mode,COALESCE(st.followup_count,0) followup_count,mem.summary FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id LEFT JOIN account_agent_settings s ON s.account_id=c.account_id LEFT JOIN conversation_agent_state st ON st.conversation_id=c.id LEFT JOIN conversation_memories mem ON mem.conversation_id=c.id WHERE c.id=$1`,
     [job.conversation_id],
   );
   if (!context.rowCount) return;
   const cfg = context.rows[0];
   if (
-    !isConversationAgentActive(cfg.enabled, cfg.mode) ||
-    cfg.status !== "open" ||
-    ["won", "lost"].includes(cfg.customer_stage)
+    !isConversationJobEligible({
+      memoryOnly,
+      accountEnabled: cfg.enabled,
+      mode: cfg.mode,
+      status: cfg.status,
+      customerStage: cfg.customer_stage,
+    })
   ) {
     await cancelRunJob(job, "agent_not_eligible");
     return;
@@ -578,8 +598,8 @@ async function runConversationJob(job: Job): Promise<void> {
     }
   }
   const messages = await pool.query(
-    "SELECT m.id,m.direction,m.kind,COALESCE(m.text_content,t.transcript_text) text_content,m.occurred_at FROM messages m LEFT JOIN message_transcriptions t ON t.message_id=m.id WHERE m.conversation_id=$1 ORDER BY m.occurred_at DESC,m.id DESC LIMIT 20",
-    [job.conversation_id],
+    "SELECT m.id,m.direction,m.kind,COALESCE(m.text_content,t.transcript_text) text_content,m.occurred_at FROM messages m LEFT JOIN message_transcriptions t ON t.message_id=m.id WHERE m.conversation_id=$1 ORDER BY m.occurred_at DESC,m.id DESC LIMIT $2",
+    [job.conversation_id, memoryOnly ? 100 : 20],
   );
   const ordered = messages.rows.reverse();
   const latestInbound = ordered
@@ -623,11 +643,13 @@ async function runConversationJob(job: Job): Promise<void> {
     .map((item) => item.text_content ?? "")
     .join("\n");
   const provider = await activeProvider();
-  const chunks = await retrieveKnowledge(
-    provider,
-    cfg.account_id,
-    query || String(cfg.summary ?? ""),
-  );
+  const chunks = memoryOnly
+    ? []
+    : await retrieveKnowledge(
+        provider,
+        cfg.account_id,
+        query || String(cfg.summary ?? ""),
+      );
   const run = await pool.query(
     "INSERT INTO agent_runs(conversation_id,source_message_id,kind) VALUES($1,$2,$3) RETURNING id",
     [job.conversation_id, job.source_message_id, job.kind],
@@ -727,8 +749,12 @@ async function runConversationJob(job: Job): Promise<void> {
         return;
       }
     }
-    await saveMemory(job.conversation_id, job.source_message_id, decision);
-    if (String(job.payload.memoryOnly ?? "") === "true") {
+    await saveMemory(
+      job.conversation_id,
+      job.source_message_id ?? latestInbound?.id ?? null,
+      decision,
+    );
+    if (memoryOnly) {
       await finishRun(run.rows[0].id, { ...decision, decision: "ignore" });
       return;
     }
@@ -875,7 +901,9 @@ async function generateDecision(
         role: "user",
         content: JSON.stringify({
           task:
-            input.kind === "followup"
+            input.kind === "refresh_memory"
+              ? "Rebuild the conversation memory from the supplied messages and orders. Return decision=ignore, empty reply and replyZh, a concise durable summary, and only stable customer facts. Resolve contradictions in favor of newer messages."
+              : input.kind === "followup"
               ? "Write a natural, non-repetitive follow-up"
               : "Answer latestCustomerMessage only",
           latestCustomerMessage: input.sourceMessage,
