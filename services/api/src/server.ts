@@ -33,6 +33,7 @@ import { stitchMaterialImages } from "./material-stitch-image.js";
 import { registerTaskRoutes } from "./task-routes.js";
 import {registerWhatsAppCloudRoutes} from "./whatsapp-cloud.js";
 import {isTemplateRequiredError,queueWhatsAppCommand} from "./whatsapp-outbound.js";
+import {registerBrowserEvents} from "./browser-events.js";
 
 const app = Fastify({ logger: { level: config.NODE_ENV === "production" ? "info" : "debug", redact:["req.headers.authorization","req.body.password","req.body.secret","req.body.apiKey","req.body.clientId","req.body.clientSecret","req.body.sandboxClientId","req.body.sandboxClientSecret","req.body.liveClientId","req.body.liveClientSecret","req.body.accessToken","req.body.appSecret"] }, bodyLimit: 2_000_000 });
 const s3 = new S3Client({ region:config.S3_REGION, endpoint:config.S3_ENDPOINT, forcePathStyle:true, credentials:{ accessKeyId:config.S3_ACCESS_KEY, secretAccessKey:config.S3_SECRET_KEY } });
@@ -50,6 +51,7 @@ await ensureEmailTables();
 await ensureCollageTables();
 await registerTaskRoutes(app);
 await registerWhatsAppCloudRoutes(app);
+await registerBrowserEvents(app);
 app.setErrorHandler((error,request,reply)=>{
   if(isTemplateRequiredError(error))return reply.code(409).send({error:"template_required",message:error.message,serviceWindowExpiresAt:error.serviceWindowExpiresAt});
   request.log.error({error},"request failed");
@@ -76,6 +78,9 @@ app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"Rel
   "/api/v1/meta/whatsapp/webhook":{get:{summary:"Meta Webhook challenge"},post:{summary:"接收 Meta Webhook 事件"}},
   "/api/v1/conversations":{get:{summary:"分页查询会话"},post:{summary:"创建或复用单个联系人会话并发送首条文本消息"}},
   "/api/v1/conversations/counts":{get:{summary:"按账号和日期统计会话筛选数量"}},
+  "/api/v1/conversations/{id}/summary":{get:{summary:"读取单个会话摘要并判断是否匹配当前筛选"}},
+  "/api/v1/events/ticket":{post:{summary:"签发 30 秒有效的浏览器事件 WebSocket 票据"}},
+  "/api/v1/events/ws":{get:{summary:"接收账号权限范围内的会话增量事件"}},
   "/api/v1/conversations/{id}":{patch:{summary:"认领、收藏、更新客户阶段、关闭或标记已读"},delete:{summary:"永久删除会话及其关联数据"}},
   "/api/v1/conversations/{id}/contact":{patch:{summary:"编辑联系人别名"}},
   "/api/v1/conversations/{id}/details":{get:{summary:"读取会话标签、备注、个人提醒与订单"}},
@@ -306,29 +311,34 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
   const keyword=query.q?.trim()||null;if(keyword&&keyword.length>100)return reply.code(400).send({error:"conversation_query_too_long"});
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null,accountIds=request.principal?.accountIds??null,filter=query.filter??null;
   const result=await pool.query(`WITH listed AS (
-    SELECT c.id,c.status,c.favorite,c.unread_count,c.last_message_at,c.created_at,c.service_window_expires_at,c.assigned_user_id,c.customer_stage,
+    SELECT c.id,c.status,c.favorite,c.unread_count,CASE WHEN c.summary_updated_at IS NOT NULL THEN c.last_message_at ELSE m.occurred_at END last_message_at,c.created_at,c.service_window_expires_at,c.assigned_user_id,c.customer_stage,
       co.id contact_id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164) display_name,co.alias,co.display_name contact_name,co.phone_e164,co.avatar_url,
       (SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) primary_email,
       COALESCE((SELECT json_agg(json_build_object('id',method.id,'type',method.type,'label',method.label,'value',method.value) ORDER BY method.position,method.id) FROM contact_methods method WHERE method.contact_id=co.id),'[]'::json) contact_methods,
-      a.id account_id,a.display_name account_name,a.status account_status,a.transport,m.text_content last_message,m.kind last_message_kind,m.direction last_message_direction,m.status last_message_status,
+      a.id account_id,a.display_name account_name,a.status account_status,a.transport,COALESCE(c.last_message_text,m.text_content) last_message,COALESCE(c.last_message_kind,m.kind) last_message_kind,COALESCE(c.last_message_direction,m.direction) last_message_direction,COALESCE(c.last_message_status,m.status) last_message_status,
       COALESCE(tag_list.tags,'[]'::json) tags,r.remind_at,
-      CASE WHEN $10::text='reminders' THEN r.remind_at ELSE COALESCE(c.last_message_at,c.created_at) END sort_at
+      CASE WHEN $10::text='reminders' THEN r.remind_at ELSE COALESCE(CASE WHEN c.summary_updated_at IS NOT NULL THEN c.last_message_at ELSE m.occurred_at END,c.created_at) END sort_at
     FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN whatsapp_accounts a ON a.id=c.account_id
-    LEFT JOIN LATERAL (SELECT text_content,kind,direction,status FROM messages WHERE conversation_id=c.id ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
+    LEFT JOIN LATERAL (SELECT text_content,kind,direction,status,occurred_at FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true
     LEFT JOIN reminders r ON r.conversation_id=c.id AND r.user_id=$9::uuid AND r.dismissed_at IS NULL
     WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::text IS NULL OR c.status::text=$3)
-      AND ($4::text IS NULL OR co.alias ILIKE '%'||$4||'%' OR co.display_name ILIKE '%'||$4||'%' OR co.phone_e164 ILIKE '%'||$4||'%' OR m.text_content ILIKE '%'||$4||'%')
+      AND ($4::text IS NULL OR c.id IN (
+        SELECT search_conversation.id FROM conversations search_conversation WHERE search_conversation.last_message_text ILIKE '%'||$4||'%'
+        UNION
+        SELECT contact_conversation.id FROM conversations contact_conversation JOIN contacts search_contact ON search_contact.id=contact_conversation.contact_id
+        WHERE search_contact.alias ILIKE '%'||$4||'%' OR search_contact.display_name ILIKE '%'||$4||'%' OR search_contact.phone_e164 ILIKE '%'||$4||'%'
+      ) OR (c.summary_updated_at IS NULL AND m.text_content ILIKE '%'||$4||'%'))
       AND ($5::timestamptz IS NULL OR c.last_message_at<$5) AND ($6::timestamptz IS NULL OR c.last_message_at>=$6) AND ($7::timestamptz IS NULL OR c.last_message_at<$7)
-      AND ($8::boolean IS NOT TRUE OR m.direction='in')
+      AND ($8::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in')
       AND ($10::text IS NULL OR ($10='all' AND c.status<>'archived') OR ($10='mine' AND c.assigned_user_id=$9::uuid) OR ($10='unassigned' AND c.assigned_user_id IS NULL) OR ($10='favorite' AND c.favorite) OR ($10='closed' AND c.status='closed') OR ($10='archived' AND c.status='archived') OR ($10='reminders' AND r.remind_at IS NOT NULL))
-  ) SELECT *,COUNT(*) OVER()::int total_count FROM listed
+  ) SELECT * FROM listed
     WHERE ($11::timestamptz IS NULL OR ($10='reminders' AND (sort_at>$11 OR (sort_at=$11 AND id<$12::uuid))) OR (COALESCE($10,'')<>'reminders' AND (sort_at<$11 OR (sort_at=$11 AND id<$12::uuid))))
     ORDER BY CASE WHEN $10='reminders' THEN sort_at END ASC,CASE WHEN COALESCE($10,'')<>'reminders' THEN sort_at END DESC,id DESC LIMIT $13`,
     [query.accountId??null,accountIds,query.status??null,keyword,query.before??null,range.from,range.before,query.unreplied==="true",principalUserId,filter,cursor?.sortAt??null,cursor?.id??null,limit+1]);
   const hasMore=result.rows.length>limit,data=result.rows.slice(0,limit),last=data[data.length-1];
-  return{data,nextCursor:hasMore&&last?Buffer.from(JSON.stringify({sortAt:last.sort_at,id:last.id}),"utf8").toString("base64url"):null,total:Number(data[0]?.total_count??0)};
+  return{data,nextCursor:hasMore&&last?Buffer.from(JSON.stringify({sortAt:last.sort_at,id:last.id}),"utf8").toString("base64url"):null,total:null};
 });
 
 app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,reply)=>{
@@ -338,13 +348,13 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
   const range=parseConversationRange(query);if(!range)return reply.code(400).send({error:"invalid_conversation_date_range"});
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null,accountIds=request.principal?.accountIds??null;
   const result=await pool.query(`WITH base AS (
-    SELECT c.status,c.favorite,c.assigned_user_id,m.direction,r.remind_at
+    SELECT c.status,c.favorite,c.assigned_user_id,COALESCE(c.last_message_direction,m.direction) direction,r.remind_at
     FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id
-    LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id=c.id ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
+    LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     LEFT JOIN reminders r ON r.conversation_id=c.id AND r.user_id=$7::uuid AND r.dismissed_at IS NULL
     WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
-      AND ($5::boolean IS NOT TRUE OR m.direction='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
+      AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
   ) SELECT COUNT(*) FILTER(WHERE status<>'archived')::int all_count,COUNT(*) FILTER(WHERE assigned_user_id=$7::uuid)::int mine,
     COUNT(*) FILTER(WHERE assigned_user_id IS NULL)::int unassigned,COUNT(*) FILTER(WHERE favorite)::int favorite,
     COUNT(*) FILTER(WHERE status='closed')::int closed,COUNT(*) FILTER(WHERE status='archived')::int archived,
@@ -356,6 +366,36 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
     WHERE r.user_id=$1 AND r.dismissed_at IS NULL AND r.remind_at<=now() AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
     ORDER BY r.remind_at,c.id LIMIT 20`,[request.principal.id,accountIds])).rows:[];
   return{all:Number(row.all_count??0),mine:Number(row.mine??0),unassigned:Number(row.unassigned??0),favorite:Number(row.favorite??0),closed:Number(row.closed??0),archived:Number(row.archived??0),reminders:Number(row.reminders??0),dueReminders};
+});
+
+app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(request,reply)=>{
+  const {id}=request.params as {id:string},query=request.query as ConversationQuery;
+  if(query.unreplied!==undefined&&query.unreplied!=="true"&&query.unreplied!=="false")return reply.code(400).send({error:"invalid_unreplied_filter"});
+  if(query.filter&&!CONVERSATION_FILTERS.has(query.filter as ConversationFilter))return reply.code(400).send({error:"invalid_conversation_filter"});
+  const range=parseConversationRange(query);if(!range)return reply.code(400).send({error:"invalid_conversation_date_range"});
+  const keyword=query.q?.trim().toLocaleLowerCase()||"";if(keyword.length>100)return reply.code(400).send({error:"conversation_query_too_long"});
+  const principalUserId=request.principal?.kind==="user"?request.principal.id:null;
+  const result=await pool.query(`SELECT c.id,c.status,c.favorite,c.unread_count,CASE WHEN c.summary_updated_at IS NOT NULL THEN c.last_message_at ELSE m.occurred_at END last_message_at,
+    c.created_at,c.service_window_expires_at,c.assigned_user_id,c.customer_stage,co.id contact_id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164) display_name,
+    co.alias,co.display_name contact_name,co.phone_e164,co.avatar_url,(SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) primary_email,
+    COALESCE((SELECT json_agg(json_build_object('id',method.id,'type',method.type,'label',method.label,'value',method.value) ORDER BY method.position,method.id) FROM contact_methods method WHERE method.contact_id=co.id),'[]'::json) contact_methods,
+    a.id account_id,a.display_name account_name,a.status account_status,a.transport,COALESCE(c.last_message_text,m.text_content) last_message,
+    COALESCE(c.last_message_kind,m.kind) last_message_kind,COALESCE(c.last_message_direction,m.direction) last_message_direction,COALESCE(c.last_message_status,m.status) last_message_status,
+    COALESCE(tag_list.tags,'[]'::json) tags,r.remind_at
+    FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN whatsapp_accounts a ON a.id=c.account_id
+    LEFT JOIN LATERAL (SELECT text_content,kind,direction,status,occurred_at FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
+    LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true
+    LEFT JOIN reminders r ON r.conversation_id=c.id AND r.user_id=$2::uuid AND r.dismissed_at IS NULL WHERE c.id=$1`,[id,principalUserId]);
+  const row=result.rows[0];if(!row||!canAccessAccount(request.principal,String(row.account_id)))return reply.code(404).send({error:"not_found"});
+  const lastAt=row.last_message_at?new Date(row.last_message_at).getTime():null,from=range.from?new Date(range.from).getTime():null,before=range.before?new Date(range.before).getTime():null,legacyBefore=query.before?new Date(query.before).getTime():null;
+  const filter=query.filter as ConversationFilter|undefined;
+  const matches=(!query.accountId||row.account_id===query.accountId)
+    &&(!query.status||row.status===query.status)
+    &&(!keyword||[row.display_name,row.phone_e164,row.last_message].some(value=>String(value??"").toLocaleLowerCase().includes(keyword)))
+    &&(legacyBefore===null||lastAt!==null&&lastAt<legacyBefore)&&(from===null||lastAt!==null&&lastAt>=from)&&(before===null||lastAt!==null&&lastAt<before)
+    &&(query.unreplied!=="true"||row.last_message_direction==="in")
+    &&(!filter||(filter==="all"&&row.status!=="archived")||(filter==="mine"&&row.assigned_user_id===principalUserId)||(filter==="unassigned"&&!row.assigned_user_id)||(filter==="favorite"&&row.favorite)||(filter==="closed"&&row.status==="closed")||(filter==="archived"&&row.status==="archived")||(filter==="reminders"&&row.remind_at));
+  return{data:row,matches:Boolean(matches)};
 });
 
 app.patch("/api/v1/conversations/:id", { preHandler:authenticate }, async (request,reply) => {
@@ -711,7 +751,7 @@ app.post("/api/v1/conversations/:id/materials/send",{preHandler:authenticate},as
         await queueWhatsAppCommand(client,{accountId:input.accountId,conversationId:id,messageId:message.rows[0].id,payload:{accountId:input.accountId,conversationId:id,clientMessageId,type:"image",...(caption?{text:caption}:{}),mediaId:item.mediaId,messageId:message.rows[0].id,toJid:context.wa_jid}});
         messageIds.push(String(message.rows[0].id));
       }
-      await client.query("UPDATE conversations SET status='open',closed_at=NULL,last_message_at=now() WHERE id=$1",[id]);
+      await client.query("UPDATE conversations SET status='open',closed_at=NULL WHERE id=$1",[id]);
       await pauseAgentForHuman(client,id);
       await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'material.send','conversation',$2,$3)",[principal.id,id,JSON.stringify({clientBatchId:input.clientBatchId,materialBatchIds:input.materialBatchIds,mediaIds:selected.rows.map(row=>String(row.media_id)),mode:input.mode,orientation:input.orientation,captioned:Boolean(input.caption?.trim()),translatedCaption:Boolean(input.translationSourceText),messageIds})]);
       return{deduplicated:false,messageIds};
@@ -883,7 +923,7 @@ app.post("/api/v1/orders/:orderId/payment-request/refresh",{preHandler:authentic
 
 app.post("/api/v1/orders/:orderId/payment-request/send",{preHandler:authenticate},async(request,reply)=>{
   if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const principal=request.principal,{orderId}=request.params as {orderId:string},found=await pool.query("SELECT o.display_order_number,o.client_order_id,c.id conversation_id,c.account_id,a.agent_id,co.wa_jid,pr.id payment_request_id,pr.payment_url,pr.status,pr.amount,pr.currency FROM orders o JOIN conversations c ON c.id=o.conversation_id JOIN whatsapp_accounts a ON a.id=c.account_id JOIN contacts co ON co.id=c.contact_id JOIN order_payment_requests pr ON pr.order_id=o.id AND pr.is_current WHERE o.id=$1 AND o.deleted_at IS NULL",[orderId]);if(!found.rowCount||!canAccessAccount(principal,found.rows[0].account_id))return reply.code(404).send({error:"not_found"});const row=found.rows[0];if(!row.payment_url)return reply.code(409).send({error:"payment_url_unavailable"});const clientMessageId=`${row.client_order_id}:paypal:${row.payment_request_id}`,text=`Payment request for Order #${row.display_order_number}\n${row.currency} ${Number(row.amount).toFixed(2)}\n${row.payment_url}`;
-  const queued=await transaction(async client=>{const existing=await client.query("SELECT id,status FROM messages WHERE account_id=$1 AND client_message_id=$2",[row.account_id,clientMessageId]);if(existing.rowCount)return{messageId:existing.rows[0].id,status:existing.rows[0].status,deduplicated:true};const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,status,occurred_at) VALUES($1,$2,$3,$4,'out','text',$5,'queued',now()) RETURNING id,status",[row.conversation_id,row.account_id,principal.id,clientMessageId,text]);await queueOrderCommand(client,row,row.conversation_id,message.rows[0].id,clientMessageId,"text",text);await client.query("UPDATE conversations SET status='open',closed_at=NULL,last_message_at=now() WHERE id=$1",[row.conversation_id]);await pauseAgentForHuman(client,row.conversation_id);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'payment_request.send','order',$2,$3)",[principal.id,orderId,JSON.stringify({paymentRequestId:row.payment_request_id,messageId:message.rows[0].id})]);return{messageId:message.rows[0].id,status:message.rows[0].status,deduplicated:false};});if(row.agent_id)void dispatchPending(row.agent_id);return reply.code(202).send(queued);
+  const queued=await transaction(async client=>{const existing=await client.query("SELECT id,status FROM messages WHERE account_id=$1 AND client_message_id=$2",[row.account_id,clientMessageId]);if(existing.rowCount)return{messageId:existing.rows[0].id,status:existing.rows[0].status,deduplicated:true};const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,status,occurred_at) VALUES($1,$2,$3,$4,'out','text',$5,'queued',now()) RETURNING id,status",[row.conversation_id,row.account_id,principal.id,clientMessageId,text]);await queueOrderCommand(client,row,row.conversation_id,message.rows[0].id,clientMessageId,"text",text);await client.query("UPDATE conversations SET status='open',closed_at=NULL WHERE id=$1",[row.conversation_id]);await pauseAgentForHuman(client,row.conversation_id);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'payment_request.send','order',$2,$3)",[principal.id,orderId,JSON.stringify({paymentRequestId:row.payment_request_id,messageId:message.rows[0].id})]);return{messageId:message.rows[0].id,status:message.rows[0].status,deduplicated:false};});if(row.agent_id)void dispatchPending(row.agent_id);return reply.code(202).send(queued);
 });
 
 app.get("/api/v1/admin/order-templates",{preHandler:authenticate},async(request,reply)=>{
@@ -969,7 +1009,7 @@ app.post("/api/v1/conversations/:conversationId/email-sends",{preHandler:authent
     textContent=products.map(product=>`${product.name} (${product.sku})`).join("\n");contentHtml=`<div style="margin-top:20px">${attachments.map((attachment,index)=>`<img alt="${escapeHtml(products[Math.min(index,products.length-1)].name)}" src="cid:${attachment.contentId}" style="display:block;max-width:100%;height:auto;margin:0 auto 18px">`).join("")}</div>`;contentType="product_cards";
   }
   if(attachments.reduce((sum,item)=>sum+item.byteSize,0)>15*1024*1024)return reply.code(413).send({error:"email_attachments_too_large",message:"邮件图片超过 15 MB，请减少产品数量或改用合并长图"});const textBody=[parsed.data.messageBody,textContent].filter(Boolean).join("\n\n"),htmlBody=emailShell(parsed.data.messageBody,contentHtml);
-  const created=await transaction(async client=>{const inserted=await client.query("INSERT INTO email_messages(client_send_id,conversation_id,contact_id,sender_user_id,provider,provider_config,provider_secret_encrypted,recipients,subject,message_body,text_body,html_body,content_type,order_id,product_ids) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT(client_send_id) DO NOTHING RETURNING id,status",[parsed.data.clientSendId,conversationId,context.contact_id,principal.id,provider.provider,JSON.stringify(provider.config),provider.secret_encrypted,JSON.stringify(recipients),parsed.data.subject,parsed.data.messageBody,textBody,htmlBody,contentType,orderId,productIds?JSON.stringify(productIds):null]);if(!inserted.rowCount)return(await client.query("SELECT id,status FROM email_messages WHERE client_send_id=$1",[parsed.data.clientSendId])).rows[0];for(const [position,item] of attachments.entries())await client.query("INSERT INTO email_attachments(email_id,media_id,position,file_name,content_id,mime_type,byte_size) VALUES($1,$2,$3,$4,$5,'image/png',$6)",[inserted.rows[0].id,item.mediaId,position,item.fileName,item.contentId,item.byteSize]);await client.query("UPDATE conversations SET status='open',closed_at=NULL,last_message_at=now() WHERE id=$1",[conversationId]);await pauseAgentForHuman(client,conversationId);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'email.queue','email_message',$2,$3)",[principal.id,inserted.rows[0].id,JSON.stringify({conversationId,contentType,recipientCount:recipients.length,attachmentCount:attachments.length})]);return inserted.rows[0];});return reply.code(202).send({emailId:created.id,status:created.status});
+  const created=await transaction(async client=>{const inserted=await client.query("INSERT INTO email_messages(client_send_id,conversation_id,contact_id,sender_user_id,provider,provider_config,provider_secret_encrypted,recipients,subject,message_body,text_body,html_body,content_type,order_id,product_ids) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT(client_send_id) DO NOTHING RETURNING id,status",[parsed.data.clientSendId,conversationId,context.contact_id,principal.id,provider.provider,JSON.stringify(provider.config),provider.secret_encrypted,JSON.stringify(recipients),parsed.data.subject,parsed.data.messageBody,textBody,htmlBody,contentType,orderId,productIds?JSON.stringify(productIds):null]);if(!inserted.rowCount)return(await client.query("SELECT id,status FROM email_messages WHERE client_send_id=$1",[parsed.data.clientSendId])).rows[0];for(const [position,item] of attachments.entries())await client.query("INSERT INTO email_attachments(email_id,media_id,position,file_name,content_id,mime_type,byte_size) VALUES($1,$2,$3,$4,$5,'image/png',$6)",[inserted.rows[0].id,item.mediaId,position,item.fileName,item.contentId,item.byteSize]);await client.query("UPDATE conversations SET status='open',closed_at=NULL WHERE id=$1",[conversationId]);await pauseAgentForHuman(client,conversationId);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'email.queue','email_message',$2,$3)",[principal.id,inserted.rows[0].id,JSON.stringify({conversationId,contentType,recipientCount:recipients.length,attachmentCount:attachments.length})]);return inserted.rows[0];});return reply.code(202).send({emailId:created.id,status:created.status});
 });
 
 app.post("/api/v1/conversations/:id/product-cards/send",{preHandler:authenticate},async(request,reply)=>{
@@ -983,7 +1023,7 @@ app.post("/api/v1/conversations/:id/product-cards/send",{preHandler:authenticate
   const rendered=parsed.data.mode==="combined"?[await renderProductCards(template,products,parsed.data.showPrice)]:await Promise.all(products.map(product=>renderProductCards(template,[product],parsed.data.showPrice)));
   const uploaded:Array<{objectKey:string;sha256:string;bytes:Buffer;fileName:string}>=[];
   try{for(const [index,bytes] of rendered.entries()){const sha256=createHash("sha256").update(bytes).digest("hex"),fileName=parsed.data.mode==="combined"?`product-cards-${parsed.data.clientBatchId}.png`:`product-${products[index].sku}.png`,objectKey=`product-cards/${parsed.data.accountId}/${new Date().toISOString().slice(0,10)}/${randomBytes(16).toString("hex")}.png`;await s3.send(new PutObjectCommand({Bucket:config.S3_BUCKET,Key:objectKey,Body:bytes,ContentType:"image/png",Metadata:{sha256,source:"product-card"}}));uploaded.push({objectKey,sha256,bytes,fileName});}
-    const result=await transaction(async client=>{const duplicate=await client.query("SELECT id FROM messages WHERE account_id=$1 AND client_message_id=ANY($2::text[])",[parsed.data.accountId,clientMessageIds]);if(duplicate.rowCount)throw Object.assign(new Error("product_card_batch_conflict"),{statusCode:409});const messageIds:string[]=[];for(const [index,item] of uploaded.entries()){const media=await client.query("INSERT INTO media(account_id,object_key,file_name,mime_type,byte_size,sha256) VALUES($1,$2,$3,'image/png',$4,$5) RETURNING id",[parsed.data.accountId,item.objectKey,item.fileName,item.bytes.length,item.sha256]),clientMessageId=clientMessageIds[index],caption=parsed.data.mode==="combined"?`${products.length} products`: `${products[index].name} · ${products[index].sku}`;const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,media_id,status,occurred_at) VALUES($1,$2,$3,$4,'out','image',$5,$6,'queued',now()) RETURNING id",[id,parsed.data.accountId,principal.id,clientMessageId,caption,media.rows[0].id]);await queueWhatsAppCommand(client,{accountId:parsed.data.accountId,conversationId:id,messageId:message.rows[0].id,payload:{accountId:parsed.data.accountId,conversationId:id,clientMessageId,type:"image",text:caption,mediaId:media.rows[0].id,messageId:message.rows[0].id,toJid:context.wa_jid}});messageIds.push(String(message.rows[0].id));}await client.query("UPDATE conversations SET status='open',closed_at=NULL,last_message_at=now() WHERE id=$1",[id]);await pauseAgentForHuman(client,id);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'product_card.send','conversation',$2,$3)",[principal.id,id,JSON.stringify({clientBatchId:parsed.data.clientBatchId,productIds:parsed.data.productIds,mode:parsed.data.mode,showPrice:parsed.data.showPrice,messageIds})]);return{deduplicated:false,messageIds};});if(context.agent_id)void dispatchPending(context.agent_id);return reply.code(202).send(result);
+    const result=await transaction(async client=>{const duplicate=await client.query("SELECT id FROM messages WHERE account_id=$1 AND client_message_id=ANY($2::text[])",[parsed.data.accountId,clientMessageIds]);if(duplicate.rowCount)throw Object.assign(new Error("product_card_batch_conflict"),{statusCode:409});const messageIds:string[]=[];for(const [index,item] of uploaded.entries()){const media=await client.query("INSERT INTO media(account_id,object_key,file_name,mime_type,byte_size,sha256) VALUES($1,$2,$3,'image/png',$4,$5) RETURNING id",[parsed.data.accountId,item.objectKey,item.fileName,item.bytes.length,item.sha256]),clientMessageId=clientMessageIds[index],caption=parsed.data.mode==="combined"?`${products.length} products`: `${products[index].name} · ${products[index].sku}`;const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,media_id,status,occurred_at) VALUES($1,$2,$3,$4,'out','image',$5,$6,'queued',now()) RETURNING id",[id,parsed.data.accountId,principal.id,clientMessageId,caption,media.rows[0].id]);await queueWhatsAppCommand(client,{accountId:parsed.data.accountId,conversationId:id,messageId:message.rows[0].id,payload:{accountId:parsed.data.accountId,conversationId:id,clientMessageId,type:"image",text:caption,mediaId:media.rows[0].id,messageId:message.rows[0].id,toJid:context.wa_jid}});messageIds.push(String(message.rows[0].id));}await client.query("UPDATE conversations SET status='open',closed_at=NULL WHERE id=$1",[id]);await pauseAgentForHuman(client,id);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'product_card.send','conversation',$2,$3)",[principal.id,id,JSON.stringify({clientBatchId:parsed.data.clientBatchId,productIds:parsed.data.productIds,mode:parsed.data.mode,showPrice:parsed.data.showPrice,messageIds})]);return{deduplicated:false,messageIds};});if(context.agent_id)void dispatchPending(context.agent_id);return reply.code(202).send(result);
   }catch(error){await Promise.allSettled(uploaded.map(item=>s3.send(new DeleteObjectCommand({Bucket:config.S3_BUCKET,Key:item.objectKey}))));throw error;}
 });
 
@@ -1041,7 +1081,7 @@ app.post("/api/v1/conversations/:conversationId/orders/:orderId/send",{preHandle
     }catch(error){request.log.error({orderId,error:String(error)},"Order image generation failed");return reply.code(502).send({error:"order_image_failed",message:"订单图片生成失败，草稿仍保留且尚未发送"});}
   }
   const queued=await transaction(async client=>{const locked=await client.query("SELECT deleted_at FROM orders WHERE id=$1 FOR UPDATE",[orderId]);if(!locked.rowCount||locked.rows[0].deleted_at)return null;const existing=await client.query("SELECT id FROM messages WHERE account_id=$1 AND client_message_id=$2",[order.account_id,requestMessageId]);if(existing.rowCount)return{messageId:existing.rows[0].id,format:parsed.data.format,deduplicated:true};const kind=parsed.data.format==="image"?"image":"text",caption=parsed.data.format==="image"?`Order #${String(order.display_order_number)}`:outgoingText;const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,translation_source_text,media_id,status,occurred_at) VALUES($1,$2,$3,$4,'out',$5,$6,$7,$8,'queued',now()) RETURNING id,status",[conversationId,order.account_id,principal.id,requestMessageId,kind,caption,parsed.data.format==="text"&&shouldTranslate?sourceText:null,renderedMediaId]);await queueOrderCommand(client,order,conversationId,message.rows[0].id,requestMessageId,kind,caption,renderedMediaId??undefined);
-    await client.query("UPDATE orders SET status='queued',send_format=$2,summary_message_id=$3,rendered_media_id=$4,translated_text=$5,sent_at=now() WHERE id=$1",[orderId,parsed.data.format,message.rows[0].id,renderedMediaId,shouldTranslate?outgoingText:null]);await client.query("UPDATE conversations SET status='open',closed_at=NULL,last_message_at=now() WHERE id=$1",[conversationId]);await pauseAgentForHuman(client,conversationId);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'order.send','order',$2,$3)",[principal.id,orderId,JSON.stringify({conversationId,resend:order.status!=="draft",format:parsed.data.format,translated:shouldTranslate,targetLanguage:shouldTranslate?targetLanguage:null,productImageCount:itemResult.rows.filter(item=>item.image_media_id).length})]);return{messageId:message.rows[0].id,format:parsed.data.format,deduplicated:false};});
+    await client.query("UPDATE orders SET status='queued',send_format=$2,summary_message_id=$3,rendered_media_id=$4,translated_text=$5,sent_at=now() WHERE id=$1",[orderId,parsed.data.format,message.rows[0].id,renderedMediaId,shouldTranslate?outgoingText:null]);await client.query("UPDATE conversations SET status='open',closed_at=NULL WHERE id=$1",[conversationId]);await pauseAgentForHuman(client,conversationId);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'order.send','order',$2,$3)",[principal.id,orderId,JSON.stringify({conversationId,resend:order.status!=="draft",format:parsed.data.format,translated:shouldTranslate,targetLanguage:shouldTranslate?targetLanguage:null,productImageCount:itemResult.rows.filter(item=>item.image_media_id).length})]);return{messageId:message.rows[0].id,format:parsed.data.format,deduplicated:false};});
   if(!queued)return reply.code(404).send({error:"not_found"});if(order.agent_id)void dispatchPending(order.agent_id);return reply.code(202).send({orderId,orderNumber:String(order.display_order_number),messageId:queued.messageId,status:"queued",format:queued.format,deduplicated:queued.deduplicated});
 });
 
@@ -1060,7 +1100,7 @@ app.post("/api/v1/conversations", {preHandler:authenticate}, async(request,reply
     if(existing.rowCount)return {conversationId:existing.rows[0].conversation_id,messageId:existing.rows[0].message_id,status:existing.rows[0].status,deduplicated:true,agentId:account.rows[0].agent_id};
     const phone=`+${parsed.data.phone}`,waJid=`${parsed.data.phone}@s.whatsapp.net`,displayName=parsed.data.displayName||phone;
     const contact=await client.query("INSERT INTO contacts(account_id,wa_jid,phone_e164,display_name,alias) VALUES($1,$2,$3,$4,CASE WHEN $5 THEN $4 ELSE NULL END) ON CONFLICT(account_id,wa_jid) DO UPDATE SET phone_e164=EXCLUDED.phone_e164,display_name=CASE WHEN $5 THEN EXCLUDED.display_name ELSE COALESCE(contacts.display_name,EXCLUDED.display_name) END,alias=CASE WHEN $5 THEN EXCLUDED.alias ELSE contacts.alias END RETURNING id",[parsed.data.accountId,waJid,phone,displayName,Boolean(parsed.data.displayName)]);
-    const conversation=await client.query("INSERT INTO conversations(account_id,contact_id,status,last_message_at) VALUES($1,$2,'open',now()) ON CONFLICT(account_id,contact_id) DO UPDATE SET status='open',closed_at=NULL,last_message_at=now() RETURNING id",[parsed.data.accountId,contact.rows[0].id]);
+    const conversation=await client.query("INSERT INTO conversations(account_id,contact_id,status) VALUES($1,$2,'open') ON CONFLICT(account_id,contact_id) DO UPDATE SET status='open',closed_at=NULL RETURNING id",[parsed.data.accountId,contact.rows[0].id]);
     const first=parsed.data.message??{type:"text" as const,text:parsed.data.firstMessage!};
     if(account.rows[0].transport==="cloud"&&first.type!=="template")throw Object.assign(new Error("template_required"),{code:"template_required",statusCode:409,serviceWindowExpiresAt:null});
     const template=first.type==="template"?first.template:null,text=first.type==="text"?first.text:`[Template] ${template!.name} (${template!.language})`;
@@ -1099,7 +1139,7 @@ app.post("/api/v1/messages", { preHandler:authenticate }, async (request, reply)
     if(parsed.data.quotedMessageId&&conversation.rows[0].transport==="web"&&Number(conversation.rows[0].agent_protocol_version)!==2)throw Object.assign(new Error("agent_upgrade_required"),{statusCode:409});
     const templateText=parsed.data.type==="template"?`[Template] ${parsed.data.template!.name} (${parsed.data.template!.language})`:parsed.data.text??null;
     const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,translation_source_text,media_id,quoted_message_id,status,occurred_at,provider_payload) VALUES($1,$2,$3,$4,'out',$5,$6,$7,$8,$9,'queued',now(),$10) RETURNING id,status",[parsed.data.conversationId,parsed.data.accountId,request.principal?.kind==='user'?request.principal.id:null,parsed.data.clientMessageId,parsed.data.type,templateText,parsed.data.translationSourceText??null,parsed.data.mediaId??null,parsed.data.quotedMessageId??null,parsed.data.template?JSON.stringify(parsed.data.template):null]);
-    await client.query("UPDATE conversations SET status='open',closed_at=NULL,last_message_at=now() WHERE id=$1",[parsed.data.conversationId]);
+    await client.query("UPDATE conversations SET status='open',closed_at=NULL WHERE id=$1",[parsed.data.conversationId]);
     if(request.principal?.kind==='user')await pauseAgentForHuman(client,parsed.data.conversationId);
     const outboundMessage={...parsed.data};delete outboundMessage.translationSourceText;delete outboundMessage.quotedMessageId;
     if(quoted?.rowCount){const row=quoted.rows[0];Object.assign(outboundMessage,{quotedWhatsappMessageId:String(row.whatsapp_message_id),quotedDirection:row.direction as "in"|"out",quotedText:String(row.text_content??`[${row.kind??"message"}]`)});}
@@ -1137,7 +1177,7 @@ app.post("/api/v1/messages/:id/retry", { preHandler:authenticate }, async (reque
     const payload={...commandPayload,retryRequestId:parsed.data.clientMessageId,messageId:id,conversationId:String(row.conversation_id),accountId:String(row.account_id),toJid:String(row.wa_jid)};
     const queued=await queueWhatsAppCommand(client,{accountId:String(row.account_id),conversationId:String(row.conversation_id),messageId:id,payload:payload as unknown as Parameters<typeof queueWhatsAppCommand>[1]["payload"]});
     await client.query("UPDATE messages SET status='queued',failure_code=NULL,failure_message=NULL,whatsapp_message_id=NULL WHERE id=$1",[id]);
-    await client.query("UPDATE conversations SET status='open',closed_at=NULL,last_message_at=now() WHERE id=$1",[row.conversation_id]);
+    await client.query("UPDATE conversations SET status='open',closed_at=NULL WHERE id=$1",[row.conversation_id]);
     if(request.principal?.kind==="user")await pauseAgentForHuman(client,row.conversation_id);
     await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'message.retry','message',$3,$4)",[request.principal?.kind,request.principal?.id,id,JSON.stringify({commandId:queued.commandId,originalStatus:row.status,reusedMessage:true})]);
     return{messageId:id,status:"queued",deduplicated:false,agentId:queued.agentId};
@@ -1157,7 +1197,6 @@ app.delete("/api/v1/conversations/:id/messages/failed", {preHandler:authenticate
     const deleted=await client.query("DELETE FROM messages WHERE conversation_id=$1 AND direction='out' AND status IN ('failed','uncertain') RETURNING id",[id]);
     const messageIds=deleted.rows.map(row=>String(row.id));
     if(messageIds.length){
-      await client.query("UPDATE conversations SET last_message_at=(SELECT max(occurred_at) FROM messages WHERE conversation_id=$1) WHERE id=$1",[id]);
       await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'message.clear_failed','conversation',$2,$3)",[principal.id,id,JSON.stringify({deletedCount:messageIds.length,messageIds})]);
     }
     return{deletedCount:messageIds.length};

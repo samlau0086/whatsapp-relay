@@ -1,0 +1,43 @@
+name: relaydesk-conversation-perf
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: relay_perf
+      POSTGRES_USER: relay_perf
+      POSTGRES_PASSWORD: relay_perf_only
+    ports: ["127.0.0.1:55432:5432"]
+    volumes:
+      - ../../infra/postgres/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U relay_perf -d relay_perf"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  api:
+    build:
+      context: ../..
+      dockerfile: services/api/Dockerfile
+    environment:
+      NODE_ENV: test
+      PORT: 8080
+      DATABASE_URL: postgres://relay_perf:relay_perf_only@postgres:5432/relay_perf
+      JWT_SECRET: conversation-performance-only-secret
+      DATA_ENCRYPTION_KEY: conversation-performance-data-key
+      ADMIN_EMAIL: perf@example.test
+      ADMIN_PASSWORD: Performance123!
+      S3_ENDPOINT: http://127.0.0.1:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: perf
+      S3_ACCESS_KEY: perf
+      S3_SECRET_KEY: perf-only
+      CORS_ORIGIN: http://127.0.0.1:18080
+    depends_on:
+      postgres: {condition: service_healthy}
+    ports: ["127.0.0.1:18080:8080"]
+    healthcheck:
+      test: ["CMD","node","-e","fetch('http://localhost:8080/health').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+

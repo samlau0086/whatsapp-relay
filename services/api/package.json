@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
+    "backfill:conversation-summaries": "node dist/backfill-conversation-summaries.js",
     "start": "node dist/server.js",
     "worker": "node dist/worker.js",
     "test": "node --import tsx --test test/*.test.ts"

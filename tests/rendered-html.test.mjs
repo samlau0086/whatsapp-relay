@@ -30,8 +30,9 @@ test("server-renders the RelayDesk inbox", async () => {
 });
 
 test("workspace includes the reliable-sync UI and responsive breakpoints", async () => {
-  const [component, css] = await Promise.all([
+  const [component, conversationRow, css] = await Promise.all([
     readFile(new URL("../app/whatsapp-inbox.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/conversation-list-row.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
   const clipboard = await readFile(new URL("../app/clipboard-files.ts", import.meta.url), "utf8");
@@ -161,11 +162,11 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /重新发送/);
   assert.match(component, /英文原文/);
   assert.match(component, /order-send-mode/);
-  assert.match(component, /conversation-stage stage-\$\{stageValue\(item\.customerStage\)\}/);
+  assert.match(conversationRow, /conversation-stage stage-\$\{stageValue\(item\.customerStage\)\}/);
   assert.match(component, /last_message_direction/);
   assert.match(component, /last_message_status/);
-  assert.match(component, /ArrowDownLeft/);
-  assert.match(component, /ArrowUpRight/);
+  assert.match(conversationRow, /ArrowDownLeft/);
+  assert.match(conversationRow, /ArrowUpRight/);
   assert.match(css, /\.conversation-direction\.in/);
   assert.match(css, /\.conversation-direction\.out\.sent/);
   assert.match(css, /\.conversation-direction\.out\.delivered/);
@@ -314,12 +315,17 @@ test("workspace navigation is URL based", async () => {
   assert.match(component, /const view=pathView in WORKSPACE_PATHS\?pathView:initialView/);
 });
 
-test("task requests stay stable and inbox polling stops on other views", async () => {
-  const component = await readFile(new URL("../app/whatsapp-inbox.tsx", import.meta.url), "utf8");
+test("task requests stay stable and the realtime feed is scoped to inbox", async () => {
+  const [component,feed] = await Promise.all([
+    readFile(new URL("../app/whatsapp-inbox.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/use-conversation-feed.ts", import.meta.url), "utf8"),
+  ]);
   assert.match(component, /const taskRequest=useCallback\(\(path:string,init\?:RequestInit\)=>authorizedFetch\(path,apiToken,init\),\[apiToken\]\)/);
   assert.match(component, /<TaskCenter\s+token=\{apiToken\}\s+accounts=\{accounts\}\s+request=\{taskRequest\}/);
   assert.doesNotMatch(component, /<TaskCenter[^>]+request=\{\(path,init\)=>authorizedFetch/);
-  assert.match(component, /if\(view!=="inbox"\|\|!apiToken\)return;const timer=window\.setInterval\(\(\)=>void loadConversations/);
+  assert.match(component, /enabled:view==="inbox"&&Boolean\(apiToken\)/);
+  assert.match(feed, /60_000/);
+  assert.doesNotMatch(component, /setInterval\(\(\)=>void loadConversations\(apiToken/);
   assert.match(component, /if\(view!=="inbox"\|\|!apiToken\|\|!effectiveActiveId\)return;const initial=/);
 });
 
@@ -399,7 +405,7 @@ test("failed and uncertain messages expose a manual resend action", async () => 
   assert.match(component,/api\/v1\/messages\/\$\{message\.id\}\/retry/);
   assert.match(css,/\.message-retry-action\{/);
   assert.match(css,/\.message-queue-diagnostic\{/);
-  assert.match(component,/currentMessages\.some\(item=>item\.direction==="out"&&\(item\.status==="queued"\|\|item\.status==="dispatching"\)\)/);
+  assert.match(component,/if\(ids\.includes\(effectiveActiveId\)\)await loadMessages\(apiToken,effectiveActiveId\)/);
   assert.match(component,/function QueueDiagnostic/);
   assert.match(server,/LEFT JOIN LATERAL \(SELECT oc\.id,oc\.state,oc\.attempt,oc\.last_error/);
   assert.match(server,/app\.post\("\/api\/v1\/messages\/:id\/retry"/);

@@ -2,10 +2,9 @@
 
 import {
   Archive, Bell, Bookmark, CalendarDays, Check, CheckCheck, ChevronDown, CircleHelp, Clock3, FileText,
-  Inbox, Info, Languages, Mail, Menu, MessageCircle, Mic, MonitorSmartphone, Paperclip, Phone, Plus,
+  Inbox, Info, Languages, Mail, MessageCircle, Mic, MonitorSmartphone, Paperclip, Phone, Plus,
   Pencil, RefreshCw, Search, Send, Settings, ShieldCheck, ShoppingBag, Smile, Sparkles, Star, Trash2, UploadCloud, UserPlus,
   Users, Wifi, WifiOff, X, ClipboardList, ExternalLink, Bot, Brain, BookOpen, MapPin, Copy, CreditCard, LayoutGrid, List, Eye, EyeOff, ReceiptText, Reply, Zap, Tag,
-  ArrowDownLeft, ArrowUpRight,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -22,8 +21,11 @@ import { clipboardFiles } from "./clipboard-files";
 import { CollageGenerateDialog, ProductWorkspace } from "./collage-materials";
 import { MaterialLibrarySendDialog } from "./material-library-send-dialog";
 import { TaskCenter } from "./task-center";
-import { CONVERSATION_DATE_FILTERS, conversationCountsPath, conversationListPath, type ConversationDateFilter, type ConversationListFilter } from "./conversation-date-filter";
+import { conversationCountsPath, conversationListPath, conversationSummaryPath, type ConversationDateFilter, type ConversationListFilter } from "./conversation-date-filter";
 import { confirmAction, ConfirmationHost, promptAction, PromptHost } from "./confirmation-ui";
+import {useConversationFeed} from "./use-conversation-feed";
+import {ConversationPanel} from "./conversation-panel";
+import type {ContactMethod,ContactMethodType,Conversation,TagItem} from "./conversation-types";
 
 const API_URL = (process.env.NEXT_PUBLIC_RELAY_API_URL ?? "").replace(/\/$/, "");
 const COLORS = ["#6b4f3a", "#305f72", "#9b5f72", "#477a62", "#705b86"];
@@ -31,21 +33,10 @@ const PRODUCT_PAGE_SIZES = [24,32,36,48,64] as const;
 let refreshPromise:Promise<string>|null=null;
 
 type Account = { id:string; name:string; phone:string; status:string; reason:string; transport:"web"|"cloud"; webhookStatus?:string; credentialsStatus?:string; lastEvent?:string };
-type Conversation = {
-  id:string; name:string; initials:string; color:string; account:string; accountId:string; phone:string;
-  contactId:string; alias:string; contactName:string; primaryEmail:string; contactMethods:ContactMethod[];
-  preview:string; lastDirection:"in"|"out"|null; lastMessageStatus:ChatMessage["status"]|null; time:string; unread:number; accountStatus:string; assignedUserId:string|null;
-  lastMessageAt:string|null;
-  favorite:boolean; conversationStatus:string; customerStage:string; tags:TagItem[]; remindAt:string|null;
-  transport:"web"|"cloud";serviceWindowExpiresAt:string|null;
-};
-type TagItem={id:string;name:string;color:string};
 type ProductPriceTier={minQuantity:number;unitAmount:number};
 type ProductItem={id:string;sku:string;name:string;description:string;defaultUnitAmount:number;priceTiers:ProductPriceTier[];currency:string;imageMediaId:string|null;imageName:string;tags:TagItem[];createdAt:string;updatedAt:string};
 type NoteItem={id:string;body:string;userId:string|null;authorName:string;createdAt:string;updatedAt:string};
 type ContactEmail={id?:string;label:string;email:string;isPrimary:boolean};
-type ContactMethodType="phone"|"wechat"|"telegram"|"line"|"website"|"other";
-type ContactMethod={id?:string;type:ContactMethodType;label:string;value:string};
 type ContactDate={month:number;day:number;year:number|null};
 type ContactSpecialDate=ContactDate&{id?:string;kind:"anniversary"|"birthday"|"custom";label:string;leadDays:number|null};
 type ContactProfile={id:string;accountId:string;accountName:string;alias:string;contactName:string;name:string;phone:string;avatarUrl:string|null;note:string;timezone:string|null;effectiveTimezone:string;timezoneSource:"custom"|"country"|"fallback";inferredCountry:string|null;birthday:ContactDate|null;specialDates:ContactSpecialDate[];emails:ContactEmail[];primaryEmail:string|null;methods:ContactMethod[];addresses:CustomerAddress[];conversationId:string|null;hasConversation:boolean;lastMessageAt:string|null;updatedAt:string};
@@ -138,7 +129,6 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [dateFilter,setDateFilter]=useState<ConversationDateFilter>("all");
   const [query,setQuery]=useState("");
   const [debouncedQuery,setDebouncedQuery]=useState("");
-  const [conversationTotal,setConversationTotal]=useState(0);
   const [conversationCounts,setConversationCounts]=useState<ConversationCounts>(EMPTY_CONVERSATION_COUNTS);
   const [nextConversationCursor,setNextConversationCursor]=useState<string|null>(null);
   const [loadingMoreConversations,setLoadingMoreConversations]=useState(false);
@@ -198,6 +188,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const notificationBaseline=useRef<Map<string,{lastMessageAt:string|null;unread:number}>>(new Map());
   const notificationBaselineReady=useRef(false);
   const notificationAudio=useRef<AudioContext|null>(null);
+  const lastRealtimeCountsRefresh=useRef(0);
 
   const userId=user?.id??tokenSubject(apiToken);
   const counts=conversationCounts;
@@ -299,7 +290,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     sessionStorage.removeItem("relayAccessToken");sessionStorage.removeItem("relayUser");
     conversationAbortRef.current?.abort();conversationCursorRef.current=null;
     notificationBaseline.current.clear();notificationBaselineReady.current=false;
-    dateFilterRef.current="all";setDateFilter("all");setApiToken("");setUser(null);setAccounts([]);setConversations([]);setConversationTotal(0);setConversationCounts(EMPTY_CONVERSATION_COUNTS);setNextConversationCursor(null);setMessages({});setFailedMessageCounts({});setEmailActivities({});setMessageTranslations({});setTranslationPreferences({});setTranslationReadyConversationId("");setActiveId("");setAuthOpen(false);setSessionReady(true);setLoading(false);
+    dateFilterRef.current="all";setDateFilter("all");setApiToken("");setUser(null);setAccounts([]);setConversations([]);setConversationCounts(EMPTY_CONVERSATION_COUNTS);setNextConversationCursor(null);setMessages({});setFailedMessageCounts({});setEmailActivities({});setMessageTranslations({});setTranslationPreferences({});setTranslationReadyConversationId("");setActiveId("");setAuthOpen(false);setSessionReady(true);setLoading(false);
   },[]);
 
   const loadAccounts=useCallback(async(token:string)=>{
@@ -337,7 +328,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       if(conversationResult.token!==token)setApiToken(conversationResult.token);
       if(conversationResult.response.status===401){logout();return;}
       if(!conversationResult.response.ok)throw new Error(`会话 API 响应异常（${conversationResult.response.status}）`);
-      const conversationBody=await conversationResult.response.json() as {data:Array<Record<string,unknown>>;nextCursor:string|null;total:number};
+      const conversationBody=await conversationResult.response.json() as {data:Array<Record<string,unknown>>;nextCursor:string|null;total:null};
       if(sequence!==workspaceLoadSequence.current)return;
       const mapped=conversationBody.data.map((item,index)=>mapConversation(item,index));
       if(options.notify&&notificationBaselineReady.current){
@@ -351,7 +342,6 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       notificationBaseline.current=new Map(mapped.map(item=>[item.id,{lastMessageAt:item.lastMessageAt,unread:item.unread}]));
       notificationBaselineReady.current=true;
       if(!quiet||!previousCursor){conversationCursorRef.current=conversationBody.nextCursor;setNextConversationCursor(conversationBody.nextCursor);}
-      setConversationTotal(Number(conversationBody.total??0));
       setConversations(current=>{
         if(append){const ids=new Set(current.map(item=>item.id));return[...current,...mapped.filter(item=>!ids.has(item.id))];}
         if(!quiet)return mapped;
@@ -400,7 +390,70 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     }catch{setToast("消息加载失败，正在等待下次同步");}
   },[logout]);
 
-  useEffect(()=>{if(view!=="inbox"||!apiToken||!active)return;const whatsappPending=currentMessages.some(item=>item.direction==="out"&&(item.status==="queued"||item.status==="dispatching")),emailPending=currentEmailActivities.some(item=>["queued","sending","retrying"].includes(item.status));if(!whatsappPending&&!emailPending)return;const timer=window.setInterval(()=>void loadMessages(apiToken,active.id),3000);return()=>window.clearInterval(timer);},[view,apiToken,active,currentMessages,currentEmailActivities,loadMessages]);
+  const getConversationEventUrl=useCallback(async()=>{
+    const result=await authorizedFetch("/api/v1/events/ticket",apiToken,{method:"POST"});
+    if(result.token!==apiToken)setApiToken(result.token);
+    if(result.response.status===401){logout();throw new Error("unauthorized");}
+    if(!result.response.ok)throw new Error(`event ticket HTTP ${result.response.status}`);
+    const body=await result.response.json() as {ticket:string;websocketPath:string};
+    const url=new URL(`${API_URL}${body.websocketPath}`,window.location.origin);
+    url.protocol=url.protocol==="https:"?"wss:":"ws:";
+    url.searchParams.set("ticket",body.ticket);
+    return url.toString();
+  },[apiToken,logout]);
+
+  const refreshRealtimeCounts=useCallback(async(token:string)=>{
+    if(Date.now()-lastRealtimeCountsRefresh.current<5000)return;
+    lastRealtimeCountsRefresh.current=Date.now();
+    await loadConversationCounts(token);
+  },[loadConversationCounts]);
+
+  const applyConversationEvents=useCallback(async(ids:string[])=>{
+    const updates=new Map<string,{data?:Record<string,unknown>;matches:boolean}>();
+    for(let offset=0;offset<ids.length;offset+=6){
+      const chunk=ids.slice(offset,offset+6);
+      await Promise.all(chunk.map(async id=>{
+        const path=conversationSummaryPath(id,dateFilter,new Date(),{filter:conversationFilterKey(filter),accountId:selectedAccount,q:debouncedQuery});
+        const result=await authorizedFetch(path,apiToken);
+        if(result.token!==apiToken)setApiToken(result.token);
+        if(result.response.status===401){logout();return;}
+        if(result.response.status===404){updates.set(id,{matches:false});return;}
+        if(!result.response.ok)return;
+        const body=await result.response.json() as {data:Record<string,unknown>;matches:boolean};
+        updates.set(id,body);
+      }));
+    }
+    setConversations(current=>{
+      const byId=new Map(current.map(item=>[item.id,item]));
+      for(const id of ids){
+        const update=updates.get(id);
+        if(!update)continue;
+        if(!update.matches||!update.data){byId.delete(id);notificationBaseline.current.delete(id);continue;}
+        const mapped=mapConversation(update.data,Math.max(0,current.findIndex(item=>item.id===id)));
+        const baseline=notificationBaseline.current.get(id);
+        if(baseline&&mapped.lastDirection==="in"&&mapped.lastMessageAt&&mapped.lastMessageAt!==baseline.lastMessageAt)notifyIncomingConversation(mapped);
+        notificationBaseline.current.set(id,{lastMessageAt:mapped.lastMessageAt,unread:mapped.unread});
+        byId.set(id,mapped);
+      }
+      return[...byId.values()].sort((a,b)=>conversationFilterKey(filter)==="reminders"
+        ? new Date(a.remindAt??8640000000000000).getTime()-new Date(b.remindAt??8640000000000000).getTime()
+        : (new Date(b.lastMessageAt??0).getTime()-new Date(a.lastMessageAt??0).getTime())||b.id.localeCompare(a.id));
+    });
+    if(ids.includes(effectiveActiveId))await loadMessages(apiToken,effectiveActiveId);
+    await refreshRealtimeCounts(apiToken);
+  },[apiToken,dateFilter,filter,selectedAccount,debouncedQuery,effectiveActiveId,loadMessages,logout,notifyIncomingConversation,refreshRealtimeCounts]);
+
+  const reconcileConversationFeed=useCallback(async()=>{
+    await Promise.all([loadConversations(apiToken,{quiet:true}),loadConversationCounts(apiToken),effectiveActiveId?loadMessages(apiToken,effectiveActiveId):Promise.resolve()]);
+  },[apiToken,effectiveActiveId,loadConversations,loadConversationCounts,loadMessages]);
+
+  useConversationFeed({
+    enabled:view==="inbox"&&Boolean(apiToken),
+    getWebSocketUrl:getConversationEventUrl,
+    onConversationIds:applyConversationEvents,
+    onConnected:reconcileConversationFeed,
+    onReconcile:reconcileConversationFeed,
+  });
 
   const loadTranslationSettings=useCallback(async(token:string,conversationId:string)=>{
     const sequence=++translationLoadSequence.current;
@@ -441,15 +494,13 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   useEffect(()=>{if(view!=="inbox"||!apiToken)return;conversationCursorRef.current=null;setNextConversationCursor(null);conversationListRef.current?.scrollTo({top:0});void Promise.all([loadConversations(apiToken),loadConversationCounts(apiToken)]);},[view,apiToken,loadConversations,loadConversationCounts]);
   useEffect(()=>{const timer=window.setTimeout(()=>{if(window.matchMedia("(max-width: 1280px)").matches)setDetailsOpen(false);},0);return()=>window.clearTimeout(timer);},[]);
 
-  useEffect(()=>{if(view!=="inbox"||!apiToken)return;const timer=window.setInterval(()=>void loadConversations(apiToken,{quiet:true,notify:true}),5000);return()=>window.clearInterval(timer);},[view,apiToken,loadConversations]);
-  useEffect(()=>{if(view!=="inbox"||!apiToken)return;const timer=window.setInterval(()=>void loadConversationCounts(apiToken),30000);return()=>window.clearInterval(timer);},[view,apiToken,loadConversationCounts]);
   useEffect(()=>{
     const root=conversationListRef.current,target=conversationLoadSentinelRef.current;
     if(!root||!target||!nextConversationCursor||loadingMoreConversations)return;
     const observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting))void loadConversations(apiToken,{append:true});},{root,rootMargin:"240px"});
     observer.observe(target);return()=>observer.disconnect();
   },[apiToken,nextConversationCursor,loadingMoreConversations,loadConversations]);
-  useEffect(()=>{if(view!=="inbox"||!apiToken||!effectiveActiveId)return;const initial=window.setTimeout(()=>void loadMessages(apiToken,effectiveActiveId,true),0);const timer=window.setInterval(()=>void loadMessages(apiToken,effectiveActiveId),3000);return()=>{window.clearTimeout(initial);window.clearInterval(timer);};},[view,apiToken,effectiveActiveId,loadMessages]);
+  useEffect(()=>{if(view!=="inbox"||!apiToken||!effectiveActiveId)return;const initial=window.setTimeout(()=>void loadMessages(apiToken,effectiveActiveId,true),0);return()=>window.clearTimeout(initial);},[view,apiToken,effectiveActiveId,loadMessages]);
   useEffect(()=>{if(view!=="inbox"||!apiToken||!effectiveActiveId)return;const timer=window.setTimeout(()=>void loadTranslationSettings(apiToken,effectiveActiveId),0);return()=>window.clearTimeout(timer);},[view,apiToken,effectiveActiveId,loadTranslationSettings]);
   useEffect(()=>{const timer=window.setTimeout(()=>setMessageTranslations({}),0);return()=>window.clearTimeout(timer);},[translationPreference.agentLanguage]);
   useEffect(()=>{
@@ -1113,200 +1164,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             </section>
           </aside>
 
-          <section className="conversation-panel">
-            <header className="conversation-head">
-              <button
-                className="mobile-menu"
-                onClick={() => setSidebarOpen(true)}
-                aria-label="打开筛选"
-              >
-                <Menu size={18} />
-              </button>
-              <div>
-                <h2>{filter}</h2>
-                <span>{conversationTotal} 个真实会话</span>
-                <span>{visible.length} 个真实会话</span>
-              </div>
-              <button
-                className="icon-button"
-                onClick={() => void loadWorkspace(apiToken)}
-                aria-label="刷新"
-              >
-                <RefreshCw size={17} />
-              </button>
-            </header>
-            <label className="search-box">
-              <Search size={15} />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                maxLength={100}
-                placeholder="搜索会话、联系人或号码"
-              />
-            </label>
-            <div
-              className="conversation-date-tabs"
-              role="tablist"
-              aria-label="按最后联系时间筛选会话"
-            >
-              {CONVERSATION_DATE_FILTERS.map((item) => (
-                <button
-                  key={item.value}
-                  type="button"
-                  role="tab"
-                  aria-selected={dateFilter === item.value}
-                  tabIndex={dateFilter === item.value ? 0 : -1}
-                  className={dateFilter === item.value ? "active" : ""}
-                  onClick={() => selectDateFilter(item.value)}
-                  onKeyDown={handleDateFilterKeyDown}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-            <div className="conversation-list" ref={conversationListRef}>
-              {loading ? (
-                <EmptyState title="正在读取中心数据" text="请稍候…" />
-              ) : loadError ? (
-                <EmptyState title="中心数据加载失败" text={loadError} />
-              ) : visible.length ? (
-                <>
-                  <div className="conversation-virtual-list" style={{height:conversationVirtualizer.getTotalSize()}}>
-                    {conversationVirtualizer.getVirtualItems().map(virtualRow=>{
-                      const item=visible[virtualRow.index];
-                      return <div key={item.id} data-index={virtualRow.index} ref={conversationVirtualizer.measureElement} className="conversation-virtual-row" style={{transform:`translateY(${virtualRow.start}px)`}}>
-                        <ConversationListRow item={item} active={item.id===effectiveActiveId} clock={clock} markingUnreadId={markingUnreadId} onSelect={()=>setActiveId(item.id)} onMenu={event=>openConversationMenu(event,item)} onMarkUnread={()=>void markConversationUnread(item.id)}/>
-                      </div>;
-                    })}
-                  </div>
-                  <div ref={conversationLoadSentinelRef} className="conversation-load-sentinel">
-                    {loadingMoreConversations&&<span>正在加载更多会话…</span>}
-                    {loadMoreError&&<button onClick={()=>void loadConversations(apiToken,{append:true})}>加载失败，点击重试</button>}
-                    {!nextConversationCursor&&!loadingMoreConversations&&<span>已加载全部会话</span>}
-                  </div>
-                </>
-              ):(
-                <EmptyState title="暂无真实会话" text={accounts.length?"当前筛选条件下暂无会话":"请先在 Windows Agent 绑定 WhatsApp 账号"}/>
-              )}
-            </div>
-            <div className="conversation-list conversation-list-legacy" aria-hidden="true">
-              {loading ? (
-                <EmptyState title="正在读取中心数据" text="请稍候…" />
-              ) : loadError ? (
-                <EmptyState title="中心数据加载失败" text={loadError} />
-              ) : false ? (
-                visible.map((item) => (
-                  <div
-                    key={item.id}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setActiveId(item.id)}
-                    onContextMenu={(event) => openConversationMenu(event, item)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        setActiveId(item.id);
-                      }
-                    }}
-                    className={
-                      item.id === effectiveActiveId
-                        ? "conversation active"
-                        : "conversation"
-                    }
-                    title="右键打开客户快捷操作"
-                  >
-                    <span className="avatar" style={{ background: item.color }}>
-                      {item.initials}
-                      <i
-                        className={`presence ${item.accountStatus === "online" ? "online" : "offline"}`}
-                      />
-                    </span>
-                    <span className="conversation-copy">
-                      <span className="conversation-line">
-                        <b>{item.name}</b>
-                        <time>{item.time}</time>
-                      </span>
-                      <span className="conversation-line preview">
-                        {item.lastDirection && (
-                          <i
-                            className={`conversation-direction ${item.lastDirection}${item.lastDirection === "out" ? ` ${conversationPreviewStatusClass(item.lastMessageStatus)}` : ""}`}
-                            role="img"
-                            aria-label={
-                              item.lastDirection === "in"
-                                ? "最后一条消息为接收"
-                                : `最后一条消息为发送，${conversationPreviewStatusText(item.lastMessageStatus)}`
-                            }
-                            title={
-                              item.lastDirection === "in"
-                                ? "接收"
-                                : conversationPreviewStatusText(
-                                    item.lastMessageStatus,
-                                  )
-                            }
-                          >
-                            {item.lastDirection === "in" ? (
-                              <ArrowDownLeft size={13} />
-                            ) : (
-                              <ArrowUpRight size={13} />
-                            )}
-                          </i>
-                        )}
-                        <span>{item.preview}</span>
-                        {item.unread > 0 && <em>{item.unread}</em>}
-                      </span>
-                      <small className="conversation-meta">
-                        <span
-                          className={`conversation-stage stage-${stageValue(item.customerStage)}`}
-                        >
-                          {stageName(item.customerStage)}
-                        </span>
-                        {item.tags.slice(0, 1).map((tag) => (
-                          <i key={tag.id} style={{ background: tag.color }}>
-                            {tag.name}
-                          </i>
-                        ))}
-                        {item.remindAt && (
-                          <em
-                            className={
-                              new Date(item.remindAt).getTime() <= clock
-                                ? "due"
-                                : ""
-                            }
-                          >
-                            <Bell size={10} />
-                            {formatDateTime(item.remindAt)}
-                          </em>
-                        )}
-                      </small>
-                    </span>
-                    {item.unread === 0 && (
-                      <button
-                        className="mark-unread-button"
-                        disabled={markingUnreadId === item.id}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void markConversationUnread(item.id);
-                        }}
-                        aria-label={`将 ${item.name} 标记为未读`}
-                        title="标记为未读"
-                      >
-                        <Mail size={15} />
-                      </button>
-                    )}
-                  </div>
-                ))
-              ) : (
-                <EmptyState
-                  title="暂无真实会话"
-                  text={
-                    accounts.length
-                      ? "当前筛选条件下暂无会话"
-                      : "请先在 Windows Agent 绑定 WhatsApp 账号"
-                  }
-                />
-              )}
-            </div>
-          </section>
+          <ConversationPanel filter={filter} subtitle={debouncedQuery?`已加载 ${visible.length} 条结果`:`${counts[conversationFilterKey(filter)]} 个真实会话`} query={query} onQuery={setQuery} onOpenSidebar={()=>setSidebarOpen(true)} onRefresh={()=>void loadWorkspace(apiToken)} dateFilter={dateFilter} onDateFilter={selectDateFilter} onDateKeyDown={handleDateFilterKeyDown} listRef={conversationListRef} sentinelRef={conversationLoadSentinelRef} items={visible} rows={conversationVirtualizer.getVirtualItems()} totalSize={conversationVirtualizer.getTotalSize()} measure={conversationVirtualizer.measureElement} effectiveActiveId={effectiveActiveId} clock={clock} markingUnreadId={markingUnreadId} onSelect={setActiveId} onMenu={openConversationMenu} onMarkUnread={id=>void markConversationUnread(id)} loading={loading} loadError={loadError} hasAccounts={Boolean(accounts.length)} loadingMore={loadingMoreConversations} loadMoreError={loadMoreError} hasMore={Boolean(nextConversationCursor)} onLoadMore={()=>void loadConversations(apiToken,{append:true})}/>
 
           <section className="chat-panel">
             {active ? (
@@ -2150,7 +2008,6 @@ const CUSTOMER_STAGES=[
 ] as const;
 
 function stageName(value:string){return CUSTOMER_STAGES.find(item=>item[0]===value)?.[1]??"新线索";}
-function stageValue(value:string){return CUSTOMER_STAGES.some(item=>item[0]===value)?value:"new";}
 
 function ConversationContextMenu({state,tags,busy,onSection,onTags,onStage,onToggleTag,onNote,onStatus,onEdit,onTask}:{state:ConversationContextState;tags:TagItem[];busy:boolean;onSection:(section:ConversationContextState["section"])=>void;onTags:()=>void;onStage:(value:string)=>void;onToggleTag:(tag:TagItem)=>void;onNote:()=>void;onStatus:()=>void;onEdit:()=>void;onTask:()=>void}){
   const item=state.conversation;
@@ -3597,8 +3454,6 @@ function OrderDialog({
 function toDateTimeLocal(value:string){const date=new Date(value),offset=date.getTimezoneOffset()*60000;return new Date(date.getTime()-offset).toISOString().slice(0,16);}
 function formatDateTime(value:string){const date=new Date(value);return Number.isNaN(date.getTime())?"":date.toLocaleString("zh-CN",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"});}
 function deliveryText(status:string){return({queued:"排队中",dispatching:"发送中",sent:"已发送",delivered:"已送达",read:"已读",failed:"失败",uncertain:"待确认"} as Record<string,string>)[status]??status;}
-function conversationPreviewStatusClass(status:Conversation["lastMessageStatus"]){if(status==="delivered"||status==="read")return"delivered";if(status==="failed")return"failed";if(status==="uncertain"||status==="queued"||status==="dispatching")return"uncertain";return"sent";}
-function conversationPreviewStatusText(status:Conversation["lastMessageStatus"]){if(status==="delivered"||status==="read")return"已送达";if(status==="failed")return"发送失败";if(status==="uncertain"||status==="queued"||status==="dispatching")return"待确认";return"已发送";}
 
 function AccessPortal({loading,onLogin}:{loading:boolean;onLogin:()=>void}){
   return <main className="access-shell">
@@ -3744,16 +3599,6 @@ function mapMediaAsset(item:Record<string,unknown>):MediaAsset{return{id:String(
 function mediaKind(mime:string){return mime.startsWith("image/")?"image":mime.startsWith("video/")?"video":mime.startsWith("audio/")?"audio":"document";}
 
 function mapConversation(item:Record<string,unknown>,index:number):Conversation {const name=String(item.display_name??item.phone_e164??"未知联系人"),methods=Array.isArray(item.contact_methods)?item.contact_methods.map(mapContactMethod):[],lastDirection=item.last_message_direction==="in"||item.last_message_direction==="out"?item.last_message_direction:null,lastMessageStatus=["received","queued","dispatching","sent","delivered","read","failed","uncertain"].includes(String(item.last_message_status))?item.last_message_status as ChatMessage["status"]:null,lastMessageAt=item.last_message_at?String(item.last_message_at):null;return{id:String(item.id),name,initials:name.slice(0,2).toUpperCase(),color:COLORS[index%COLORS.length],account:String(item.account_name??"未知账号"),accountId:String(item.account_id),phone:String(item.phone_e164??""),contactId:String(item.contact_id??""),alias:String(item.alias??""),contactName:String(item.contact_name??item.phone_e164??""),primaryEmail:String(item.primary_email??""),contactMethods:methods,preview:String(item.last_message??kindText(String(item.last_message_kind??""))),lastDirection,lastMessageStatus,lastMessageAt,time:lastMessageAt?formatTime(new Date(lastMessageAt)):"",unread:Number(item.unread_count??0),accountStatus:String(item.account_status??"offline"),assignedUserId:item.assigned_user_id?String(item.assigned_user_id):null,favorite:Boolean(item.favorite),conversationStatus:String(item.status??"open"),customerStage:String(item.customer_stage??"new"),tags:Array.isArray(item.tags)?item.tags.map(mapTag):[],remindAt:item.remind_at?String(item.remind_at):null,transport:String(item.transport??"web") as "web"|"cloud",serviceWindowExpiresAt:item.service_window_expires_at?String(item.service_window_expires_at):null};}
-function ConversationListRow({item,active,clock,markingUnreadId,onSelect,onMenu,onMarkUnread}:{item:Conversation;active:boolean;clock:number;markingUnreadId:string;onSelect:()=>void;onMenu:(event:React.MouseEvent)=>void;onMarkUnread:()=>void}){
-  return <div role="button" tabIndex={0} onClick={onSelect} onContextMenu={onMenu} onKeyDown={event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();onSelect();}}} className={active?"conversation active":"conversation"} title="右键打开客户快捷操作">
-    <span className="avatar" style={{background:item.color}}>{item.initials}<i className={`presence ${item.accountStatus==="online"?"online":"offline"}`}/></span>
-    <span className="conversation-copy"><span className="conversation-line"><b>{item.name}</b><time>{item.time}</time></span>
-      <span className="conversation-line preview">{item.lastDirection&&<i className={`conversation-direction ${item.lastDirection}${item.lastDirection==="out"?` ${conversationPreviewStatusClass(item.lastMessageStatus)}`:""}`} role="img" aria-label={item.lastDirection==="in"?"最后一条消息为接收":`最后一条消息为发送，${conversationPreviewStatusText(item.lastMessageStatus)}`} title={item.lastDirection==="in"?"接收":conversationPreviewStatusText(item.lastMessageStatus)}>{item.lastDirection==="in"?<ArrowDownLeft size={13}/>:<ArrowUpRight size={13}/>}</i>}<span>{item.preview}</span>{item.unread>0&&<em>{item.unread}</em>}</span>
-      <small className="conversation-meta"><span className={`conversation-stage stage-${stageValue(item.customerStage)}`}>{stageName(item.customerStage)}</span>{item.tags.slice(0,1).map(tag=><i key={tag.id} style={{background:tag.color}}>{tag.name}</i>)}{item.remindAt&&<em className={new Date(item.remindAt).getTime()<=clock?"due":""}><Bell size={10}/>{formatDateTime(item.remindAt)}</em>}</small>
-    </span>
-    {item.unread===0&&<button className="mark-unread-button" disabled={markingUnreadId===item.id} onClick={event=>{event.stopPropagation();onMarkUnread();}} aria-label={`将 ${item.name} 标记为未读`} title="标记为未读"><Mail size={15}/></button>}
-  </div>;
-}
 function mapContactMethod(item:Record<string,unknown>):ContactMethod{return{id:item.id?String(item.id):undefined,type:String(item.type??"other") as ContactMethodType,label:String(item.label??""),value:String(item.value??"")};}
 function mapContactProfile(item:Record<string,unknown>):ContactProfile{const emails=Array.isArray(item.emails)?item.emails.map(email=>{const value=email as Record<string,unknown>;return{id:value.id?String(value.id):undefined,label:String(value.label??""),email:String(value.email??""),isPrimary:Boolean(value.isPrimary??value.is_primary)};}):[],methods=Array.isArray(item.methods)?item.methods.map(method=>mapContactMethod(method as Record<string,unknown>)):[],addresses=Array.isArray(item.addresses)?item.addresses.map(address=>mapCustomerAddress(address as Record<string,unknown>)):[],birthday=item.birthday&&typeof item.birthday==="object"?item.birthday as ContactDate:null,specialDates=Array.isArray(item.specialDates)?item.specialDates as ContactSpecialDate[]:[],conversationId=item.conversationId?String(item.conversationId):item.conversation_id?String(item.conversation_id):null;return{id:String(item.id),accountId:String(item.accountId??item.account_id??""),accountName:String(item.accountName??item.account_name??""),alias:String(item.alias??""),contactName:String(item.contactName??item.contact_name??""),name:String(item.name??item.alias??item.contactName??item.phone??"未知联系人"),phone:String(item.phone??item.phone_e164??""),avatarUrl:item.avatarUrl?String(item.avatarUrl):item.avatar_url?String(item.avatar_url):null,note:String(item.note??""),timezone:item.timezone?String(item.timezone):null,effectiveTimezone:String(item.effectiveTimezone??item.effective_timezone??"UTC"),timezoneSource:(item.timezoneSource??item.timezone_source??"fallback") as ContactProfile["timezoneSource"],inferredCountry:item.inferredCountry?String(item.inferredCountry):item.inferred_country?String(item.inferred_country):null,birthday,specialDates,emails,primaryEmail:item.primaryEmail?String(item.primaryEmail):emails.find(email=>email.isPrimary)?.email??null,methods,addresses,conversationId,hasConversation:Boolean(item.hasConversation??conversationId),lastMessageAt:item.lastMessageAt?String(item.lastMessageAt):item.last_message_at?String(item.last_message_at):null,updatedAt:String(item.updatedAt??item.updated_at??"")};}
 

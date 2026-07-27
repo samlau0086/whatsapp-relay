@@ -15,6 +15,7 @@ const APP_ICON_PATH = join(import.meta.dirname, "assets", "icon.ico");
 if(process.platform==="win32")app.setAppUserModelId("com.relaydesk.agent");
 mkdirSync(STABLE_USER_DATA,{recursive:true});
 app.setPath("userData", STABLE_USER_DATA);
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 let window: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let trayIcon: Electron.NativeImage | undefined;
@@ -29,21 +30,26 @@ const removedWorkers = new Set<string>();
 const repairWorkers = new Set<string>();
 const qrCodes = new Map<string,{dataUrl:string;generatedAt:number}>();
 
-app.whenReady().then(async () => {
-  if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: true });
-  const dataDir = app.getPath("userData");
-  store = new AgentStore(join(dataDir, "relay-agent.db"));
-  store.discardRemovedAccountStatusEvents();
-  store.discardUnsupportedMessageEvents();
-  masterKey = await loadMasterKey(dataDir);
-  createWindow();
-  createTray();
-  const agentId = store.get("agentId");
-  const credential = store.get("credential");
-  const baseUrl = store.get("baseUrl");
-  if (agentId && credential && baseUrl) startCentral(baseUrl, agentId, credential);
-  for (const account of store.accounts()) await startAccount(account.id, account.name, dataDir);
-});
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", showWindow);
+  app.whenReady().then(async () => {
+    if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: true });
+    const dataDir = app.getPath("userData");
+    store = new AgentStore(join(dataDir, "relay-agent.db"));
+    store.discardRemovedAccountStatusEvents();
+    store.discardUnsupportedMessageEvents();
+    masterKey = await loadMasterKey(dataDir);
+    createWindow();
+    createTray();
+    const agentId = store.get("agentId");
+    const credential = store.get("credential");
+    const baseUrl = store.get("baseUrl");
+    if (agentId && credential && baseUrl) startCentral(baseUrl, agentId, credential);
+    for (const account of store.accounts()) await startAccount(account.id, account.name, dataDir);
+  });
+}
 
 function createWindow(): void {
   window = new BrowserWindow({

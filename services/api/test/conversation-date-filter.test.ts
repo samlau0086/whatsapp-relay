@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {readFile} from "node:fs/promises";
 import test from "node:test";
-import {CONVERSATION_DATE_FILTERS,conversationCountsPath,conversationDateRange,conversationListPath} from "../../../app/conversation-date-filter.js";
+import {CONVERSATION_DATE_FILTERS,conversationCountsPath,conversationDateRange,conversationListPath,conversationSummaryPath} from "../../../app/conversation-date-filter.js";
 
 test("conversation date filters expose the requested tabs and default all range",()=>{
   assert.deepEqual(CONVERSATION_DATE_FILTERS.map(item=>item.label),["全部","今天","昨天","最近7天","最近15天","未回复"]);
@@ -35,6 +35,9 @@ test("conversation list and counts paths carry server-side filters without leaki
   assert.match(path,/filter=mine/);assert.match(path,/accountId=account-id/);assert.match(path,/q=Alice/);assert.match(path,/cursor=cursor/);
   const counts=conversationCountsPath("today",now,"account-id");
   assert.match(counts,/accountId=account-id/);assert.doesNotMatch(counts,/[?&]q=/);
+  const summary=conversationSummaryPath("conversation-id","today",now,{filter:"mine",accountId:"account-id",q:" Alice "});
+  assert.match(summary,/\/api\/v1\/conversations\/conversation-id\/summary\?/);
+  assert.match(summary,/filter=mine/);assert.doesNotMatch(summary,/[?&]limit=/);
 });
 
 test("conversation API applies a closed-open last-message range",async()=>{
@@ -42,35 +45,42 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.match(server,/c\.last_message_at>=\$6/);
   assert.match(server,/c\.last_message_at<\$7/);
   assert.match(server,/invalid_conversation_date_range/);
-  assert.match(server,/m\.direction='in'/);
+  assert.match(server,/COALESCE\(c\.last_message_direction,m\.direction\)='in'/);
   assert.match(server,/invalid_unreplied_filter/);
   assert.match(server,/invalid_conversation_filter/);
   assert.match(server,/invalid_cursor/);
   assert.match(server,/m\.text_content ILIKE/);
-  assert.match(server,/COUNT\(\*\) OVER\(\)::int total_count/);
+  const conversationRoute=server.slice(server.indexOf('app.get("/api/v1/conversations"'),server.indexOf('app.get("/api/v1/conversations/counts"'));
+  assert.doesNotMatch(conversationRoute,/COUNT\(\*\) OVER/);
+  assert.match(conversationRoute,/total:null/);
   assert.match(server,/request\.principal\?\.accountIds/);
 });
 
-test("conversation performance migration and startup runner are wired",async()=>{
-  const [migration,migrator]=await Promise.all([
-    readFile(new URL("../../../infra/postgres/migrations/039_conversation_list_performance.sql",import.meta.url),"utf8"),
+test("conversation summaries, events, and startup runner are wired",async()=>{
+  const [migration,migrator,events]=await Promise.all([
+    readFile(new URL("../../../infra/postgres/migrations/040_conversation_summaries_events.sql",import.meta.url),"utf8"),
     readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/browser-events.ts",import.meta.url),"utf8"),
   ]);
-  assert.match(migration,/CREATE EXTENSION IF NOT EXISTS pg_trgm/);
-  assert.match(migration,/contacts_alias_trgm_idx/);
-  assert.match(migration,/conversations_account_sort_idx/);
-  assert.match(migrator,/039_conversation_list_performance\.sql/);
+  assert.match(migration,/REFERENCING NEW TABLE AS new_messages/);
+  assert.match(migration,/relay_conversation_changes/);
+  assert.match(migrator,/040_conversation_summaries_events\.sql/);
+  assert.match(events,/\/api\/v1\/events\/ticket/);
+  assert.match(events,/LISTEN/);
 });
 
-test("inbox uses debounced server search, cursor loading, polling merge, and virtualization",async()=>{
-  const [ui,pkg]=await Promise.all([
+test("inbox uses debounced search, cursor loading, realtime reconciliation, and virtualization",async()=>{
+  const [ui,feed,pkg]=await Promise.all([
     readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/use-conversation-feed.ts",import.meta.url),"utf8"),
     readFile(new URL("../../../package.json",import.meta.url),"utf8"),
   ]);
   assert.match(ui,/setDebouncedQuery\(query\.trim\(\)\),300/);
   assert.match(ui,/IntersectionObserver/);
   assert.match(ui,/useVirtualizer/);
   assert.match(ui,/conversationCursorRef/);
-  assert.match(ui,/quiet:true,notify:true/);
+  assert.match(ui,/useConversationFeed/);
+  assert.match(feed,/60_000/);
+  assert.match(feed,/100/);
   assert.match(pkg,/@tanstack\/react-virtual/);
 });

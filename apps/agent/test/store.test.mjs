@@ -110,6 +110,13 @@ test("stale WhatsApp sockets and stale renderer refreshes cannot overwrite curre
   assert.match(renderer,/sequence\s*!==\s*refreshSequence/);
 });
 
+test("only one desktop agent instance can own the shared WhatsApp sessions", () => {
+  const main=readFileSync(new URL("../dist/main.js",import.meta.url),"utf8");
+  assert.match(main,/requestSingleInstanceLock/);
+  assert.match(main,/if\s*\(!hasSingleInstanceLock\)\s*\{\s*app\.quit\(\)/);
+  assert.match(main,/app\.on\("second-instance",\s*showWindow\)/);
+});
+
 test("offline accounts can reconnect without clearing their saved session", () => {
   const main=readFileSync(new URL("../dist/main.js",import.meta.url),"utf8");
   const worker=readFileSync(new URL("../dist/account-worker.js",import.meta.url),"utf8");

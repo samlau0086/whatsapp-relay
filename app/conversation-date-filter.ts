@@ -45,3 +45,10 @@ export function conversationCountsPath(filter:ConversationDateFilter,now=new Dat
   const suffix=params.toString();
   return`/api/v1/conversations/counts${suffix?`?${suffix}`:""}`;
 }
+
+export function conversationSummaryPath(id:string,filter:ConversationDateFilter,now=new Date(),options:Omit<ConversationListOptions,"cursor"|"limit">={}):string{
+  const list=new URL(conversationListPath(filter,now,{...options,limit:40}),"http://relay.local");
+  list.pathname=`/api/v1/conversations/${encodeURIComponent(id)}/summary`;
+  list.searchParams.delete("limit");
+  return`${list.pathname}${list.search}`;
+}

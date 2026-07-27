@@ -1067,10 +1067,6 @@ async function queueAiMessage(
         message.rows[0].id,
       ],
     );
-    await client.query(
-      "UPDATE conversations SET last_message_at=now() WHERE id=$1",
-      [job.conversation_id],
-    );
     if (cfg.followup_enabled) {
       const delays = (cfg.followup_delays_hours as number[]) ?? [24, 72],
         step = job.kind === "followup" ? Number(job.payload.step ?? 0) + 1 : 0;

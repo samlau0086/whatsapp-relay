@@ -66,11 +66,50 @@ jobs:
       - run: npm run build
       - run: npm run test:store
 
+  conversation-performance:
+    name: 100k conversation performance gate
+    needs: [validate-web, validate-api]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22.13.0
+      - name: Start isolated performance stack
+        run: docker compose -f performance/conversations/compose.yaml up --detach --build --wait
+      - name: Seed 100k conversations and 1m messages
+        run: docker compose -f performance/conversations/compose.yaml exec -T postgres psql -U relay_perf -d relay_perf < performance/conversations/seed.sql
+      - name: Build summary indexes and validate backfill
+        run: docker compose -f performance/conversations/compose.yaml exec -T api npm run backfill:conversation-summaries
+      - name: Run HTTP and WebSocket performance gate
+        run: node performance/conversations/run.mjs
+      - name: Save database execution plans
+        if: always()
+        run: |
+          mkdir -p performance-artifacts
+          docker compose -f performance/conversations/compose.yaml exec -T postgres \
+            psql -U relay_perf -d relay_perf < performance/conversations/explain.sql \
+            > performance-artifacts/explain.jsonl
+          grep -q 'conversations_account_summary_sort_idx' performance-artifacts/explain.jsonl
+          grep -Eq 'contacts_display_name_trgm_idx|conversations_summary_text_trgm_idx' performance-artifacts/explain.jsonl
+      - name: Upload performance artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: conversation-performance
+          path: performance-artifacts/
+      - name: Stop isolated performance stack
+        if: always()
+        run: docker compose -f performance/conversations/compose.yaml down --volumes --remove-orphans
+
   deploy:
     name: Deploy production
-    needs: [validate-web, validate-api, validate-agent]
+    needs: [validate-web, validate-api, validate-agent, conversation-performance]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     environment: production
     env:
       VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -249,6 +288,7 @@ jobs:
           cd "$release"
           WEB_PORT="$web_port" docker compose -p relaydesk config --quiet
           WEB_PORT="$web_port" docker compose -p relaydesk up --detach --build --remove-orphans --wait --wait-timeout 180
+          WEB_PORT="$web_port" docker compose -p relaydesk exec -T api npm run backfill:conversation-summaries
 
           for attempt in $(seq 1 30); do
             if curl --fail --silent --show-error http://127.0.0.1:8080/health >/dev/null \
