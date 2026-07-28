@@ -22,3 +22,16 @@ test("status commands are capability-gated while protocol version remains compat
   assert.match(protocol,/PROTOCOL_VERSION = 2/);
   assert.match(protocol,/"publish_status"/);
 });
+
+test("status posts preserve translated copy and its source text",()=>{
+  const migration=readFileSync(new URL("../../../infra/postgres/migrations/049_status_post_translation.sql",import.meta.url),"utf8");
+  const migrator=readFileSync(new URL("../src/migrate-agent.ts",import.meta.url),"utf8");
+  const routes=readFileSync(new URL("../src/status-routes.ts",import.meta.url),"utf8");
+  assert.match(migration,/translation_source_text text/);
+  assert.match(migration,/translation_target_language varchar\(35\)/);
+  assert.match(migration,/status_posts_translation_pair_check/);
+  assert.match(migrator,/049_status_post_translation\.sql/);
+  assert.match(routes,/translationSourceText/);
+  assert.match(routes,/translationTargetLanguage/);
+  assert.match(routes,/translation_source_text,translation_target_language/);
+});

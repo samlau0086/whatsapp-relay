@@ -453,4 +453,8 @@ test("status campaigns reuse the account media library for images and videos", a
   assert.match(mediaDialog,/"video\/mp4":"MP4"/);
   assert.match(css,/\.status-media-picker\{z-index:1450\}/);
   assert.match(css,/\.status-media-select\{/);
+  assert.match(statusCenter,/\/api\/v1\/translations\/preview/);
+  assert.match(statusCenter,/translationSourceText:item\.sourceText/);
+  assert.match(statusCenter,/function TranslationTools/);
+  assert.match(css,/\.status-translation-tools\{/);
 });
