@@ -74,5 +74,15 @@ console.log(JSON.stringify(report,null,2));
 const firstPage=results.find(item=>item.name==="first_page");
 const searches=results.filter(item=>item.name.endsWith("_search"));
 const counts=results.find(item=>item.name==="counts");
-const failed=results.some(item=>item.errors)||firstPage.p95>300||searches.some(item=>item.p95>600)||counts.p95>800||websocket.p95>1000||websocket.errors;
-if(failed)process.exitCode=1;
+const failures=[
+  ...(results.some(item=>item.errors)?["one or more HTTP benchmarks returned errors"]:[]),
+  ...(firstPage.p95>300?[`first_page p95 ${firstPage.p95.toFixed(1)}ms exceeds 300ms`]:[]),
+  ...searches.filter(item=>item.p95>600).map(item=>`${item.name} p95 ${item.p95.toFixed(1)}ms exceeds 600ms`),
+  ...(counts.p95>800?[`counts p95 ${counts.p95.toFixed(1)}ms exceeds 800ms`]:[]),
+  ...(websocket.p95>1000?[`websocket p95 ${websocket.p95.toFixed(1)}ms exceeds 1000ms`]:[]),
+  ...(websocket.errors?[`websocket returned ${websocket.errors} delivery errors`]:[])
+];
+if(failures.length){
+  console.error(`Performance gate failed:\n- ${failures.join("\n- ")}`);
+  process.exitCode=1;
+}

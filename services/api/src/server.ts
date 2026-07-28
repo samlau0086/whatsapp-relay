@@ -386,24 +386,25 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
   if(query.unreplied!==undefined&&query.unreplied!=="true"&&query.unreplied!=="false")return reply.code(400).send({error:"invalid_unreplied_filter"});
   const range=parseConversationRange(query);if(!range)return reply.code(400).send({error:"invalid_conversation_date_range"});
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null,accountIds=request.principal?.accountIds??null;
-  const result=await pool.query(`WITH base AS (
-    SELECT c.status,c.favorite,c.assigned_user_id,COALESCE(c.last_message_direction,m.direction) direction,reminder_task.due_at remind_at
+  const result=await pool.query(`WITH base AS MATERIALIZED (
+    SELECT c.id,c.contact_id,c.status,c.favorite,c.assigned_user_id,COALESCE(c.last_message_direction,m.direction) direction
     FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id
     LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
-    LEFT JOIN LATERAL (
-      SELECT task.due_at FROM tasks task
-      WHERE (task.conversation_id=c.id OR (task.conversation_id IS NULL AND task.contact_id=c.contact_id))
-        AND task.assigned_user_id=$7::uuid AND task.status NOT IN ('completed','cancelled','failed')
-        AND task.due_at<now()+interval '3 days'
-      ORDER BY task.due_at,task.id LIMIT 1
-    ) reminder_task ON true
     WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
       AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
+  ), reminder_conversations AS (
+    SELECT b.id FROM tasks task JOIN base b ON b.id=task.conversation_id
+    WHERE task.conversation_id IS NOT NULL AND task.assigned_user_id=$7::uuid
+      AND task.status NOT IN ('completed','cancelled','failed') AND task.due_at<now()+interval '3 days'
+    UNION
+    SELECT b.id FROM tasks task JOIN base b ON b.contact_id=task.contact_id
+    WHERE task.conversation_id IS NULL AND task.contact_id IS NOT NULL AND task.assigned_user_id=$7::uuid
+      AND task.status NOT IN ('completed','cancelled','failed') AND task.due_at<now()+interval '3 days'
   ) SELECT COUNT(*) FILTER(WHERE status<>'archived')::int all_count,COUNT(*) FILTER(WHERE assigned_user_id=$7::uuid)::int mine,
     COUNT(*) FILTER(WHERE assigned_user_id IS NULL)::int unassigned,COUNT(*) FILTER(WHERE favorite)::int favorite,
     COUNT(*) FILTER(WHERE status='closed')::int closed,COUNT(*) FILTER(WHERE status='archived')::int archived,
-    COUNT(*) FILTER(WHERE remind_at IS NOT NULL)::int reminders FROM base`,
+    (SELECT COUNT(*) FROM reminder_conversations)::int reminders FROM base`,
     [query.accountId??null,accountIds,range.from,range.before,query.unreplied==="true",query.before??null,principalUserId]);
   const row=result.rows[0]??{};
   const dueReminders=request.principal?.kind==="user"?(await pool.query(`SELECT task.id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164) display_name,task.due_at remind_at

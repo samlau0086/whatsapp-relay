@@ -75,6 +75,12 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.doesNotMatch(conversationRoute,/\$10::text filter,/);
   assert.ok(conversationRoute.indexOf("LIMIT $13")<conversationRoute.indexOf("FROM candidates JOIN conversations"),"candidate pagination must happen before detail hydration");
   assert.match(server,/request\.principal\?\.accountIds/);
+  const countsRoute=server.slice(server.indexOf('app.get("/api/v1/conversations/counts"'),server.indexOf('app.get("/api/v1/conversations/:id/summary"'));
+  assert.match(countsRoute,/WITH base AS MATERIALIZED/);
+  assert.match(countsRoute,/reminder_conversations AS/);
+  assert.match(countsRoute,/JOIN base b ON b\.id=task\.conversation_id/);
+  assert.match(countsRoute,/JOIN base b ON b\.contact_id=task\.contact_id/);
+  assert.doesNotMatch(countsRoute,/LEFT JOIN LATERAL \(\s*SELECT task\.due_at/);
 });
 
 test("performance reports retain representative HTTP failure details",async()=>{
@@ -86,6 +92,8 @@ test("performance reports retain representative HTTP failure details",async()=>{
   assert.match(runner,/await warmup\("\/api\/v1\/conversations\?limit=40"\)/);
   assert.ok(runner.indexOf('await warmup("/api/v1/conversations?limit=40")')<runner.indexOf('benchmark("first_page"'),"concurrent warmup must finish before measured first-page samples");
   assert.match(runner,/if\(failure\)throw new Error\(`warmup failed:/);
+  assert.match(runner,/Performance gate failed:/);
+  assert.match(runner,/counts p95 .* exceeds 800ms/);
 });
 
 test("conversation summaries, events, and startup runner are wired",async()=>{
