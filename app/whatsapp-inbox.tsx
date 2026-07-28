@@ -76,6 +76,7 @@ type ChatMessage = {
   id:string; direction:"in"|"out"; kind:string; text:string; time:string;occurredAt?:string;
   quoted?:{id:string;direction:"in"|"out";kind:string;text:string};
   translationSourceText?:string;
+  translationTargetLanguage?:string;
   failureMessage?:string;
   queueDiagnostic?:{commandId:string;state:string;attempt:number;lastError:string;availableAt:string;claimedAt:string;createdAt:string;accountStatus:string;agentStatus:string;agentLastSeenAt:string};
   cachedTranslationText?:string;cachedTranslationLanguage?:string;cachedTranslationSourceLanguage?:string;cachedTranscriptionText?:string;
@@ -191,7 +192,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [translationReadyConversationId,setTranslationReadyConversationId]=useState("");
   const [translationMenuOpen,setTranslationMenuOpen]=useState(false);
   const [messageTranslations,setMessageTranslations]=useState<Record<string,MessageTranslation>>({});
-  const [translationPreview,setTranslationPreview]=useState<{source:string;translated:string}|null>(null);
+  const [translationPreview,setTranslationPreview]=useState<{source:string;translated:string;targetLanguage:string}|null>(null);
   const [translatingDraft,setTranslatingDraft]=useState(false);
   const [translationError,setTranslationError]=useState("");
   const [conversationMenu,setConversationMenu]=useState<ConversationContextState|null>(null);
@@ -645,7 +646,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     if(translationPreference.enabled){
       if(!translationConfigured){setToast("AI 翻译暂不可用，请联系管理员配置 Provider");return;}
       setTranslatingDraft(true);setTranslationError("");
-      try{const result=await authorizedFetch("/api/v1/translations/preview",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:source,targetLanguage:translationPreference.customerLanguage})});if(result.token!==apiToken)setApiToken(result.token);const body=await result.response.json().catch(()=>({})) as {translatedText?:string;message?:string};if(!result.response.ok||!body.translatedText)throw new Error(body.message??"翻译失败");setTranslationPreview({source,translated:body.translatedText});}catch(reason){setTranslationError(reason instanceof Error?reason.message:"翻译失败");setToast("AI 翻译失败，原文未发送");}finally{setTranslatingDraft(false);}return;
+      try{const targetLanguage=translationPreference.customerLanguage,result=await authorizedFetch("/api/v1/translations/preview",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:source,targetLanguage})});if(result.token!==apiToken)setApiToken(result.token);const body=await result.response.json().catch(()=>({})) as {translatedText?:string;message?:string};if(!result.response.ok||!body.translatedText)throw new Error(body.message??"翻译失败");setTranslationPreview({source,translated:body.translatedText,targetLanguage});}catch(reason){setTranslationError(reason instanceof Error?reason.message:"翻译失败");setToast("AI 翻译失败，原文未发送");}finally{setTranslatingDraft(false);}return;
     }
     await queueTextMessage(source);
   }
@@ -653,6 +654,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   async function queueTextMessage(
     text: string,
     translationSourceText?: string,
+    translationTargetLanguage?: string,
   ) {
     if (!active || !apiToken || !text.trim()) return;
     const clientMessageId = crypto.randomUUID(),
@@ -671,6 +673,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           kind: "text",
           text,
           translationSourceText,
+          translationTargetLanguage,
           quoted,
           time: formatTime(new Date()),
           status: "queued",
@@ -687,6 +690,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
         type: "text",
         text,
         ...(translationSourceText ? { translationSourceText } : {}),
+        ...(translationTargetLanguage ? { translationTargetLanguage } : {}),
         ...(quoted ? { quotedMessageId: quoted.id } : {}),
       }),
     });
@@ -759,6 +763,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             type: message.kind,
             text: message.text || undefined,
             translationSourceText: message.translationSourceText,
+            translationTargetLanguage: message.translationTargetLanguage,
             mediaId: message.attachment?.id,
             quotedMessageId: message.quoted?.id,
           }),
@@ -1414,7 +1419,11 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                               <div className="outgoing-translation-source">
                                 <span>
                                   <Languages size={12} />
-                                  原文（仅坐席可见）
+                                  原文（仅坐席可见）→{" "}
+                                  {detectedLanguageName(
+                                    message.translationTargetLanguage ??
+                                      translationPreference.customerLanguage,
+                                  )}
                                 </span>
                                 <p>{message.translationSourceText}</p>
                               </div>
@@ -1985,10 +1994,14 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
         <TranslationPreviewDialog
           source={translationPreview.source}
           translated={translationPreview.translated}
-          targetLanguage={translationPreference.customerLanguage}
+          targetLanguage={translationPreview.targetLanguage}
           onClose={() => setTranslationPreview(null)}
           onConfirm={(text) =>
-            void queueTextMessage(text, translationPreview.source)
+            void queueTextMessage(
+              text,
+              translationPreview.source,
+              translationPreview.targetLanguage,
+            )
           }
         />
       )}
@@ -3831,7 +3844,7 @@ function ContactSocialLinks({methods}:{methods:ContactMethod[]}){
   })}</div>;
 }
 function mapTag(item:Record<string,unknown>):TagItem{return{id:String(item.id),name:String(item.name??"标签"),color:String(item.color??"#DFF5E8")};}
-function mapMessage(item:Record<string,unknown>):ChatMessage {const kind=String(item.kind??"text"),mediaId=String(item.media_id??""),occurredAt=String(item.occurred_at),quotedId=String(item.quoted_message_id??""),commandId=String(item.command_id??"");return{id:String(item.id),direction:item.direction as "in"|"out",kind,text:String(item.text_content??(mediaId?"":kindText(kind))),quoted:quotedId?{id:quotedId,direction:item.quoted_direction as "in"|"out",kind:String(item.quoted_kind??"text"),text:String(item.quoted_text_content??item.quoted_file_name??kindText(String(item.quoted_kind??"text")))}:undefined,translationSourceText:item.translation_source_text?String(item.translation_source_text):undefined,failureMessage:item.failure_message?String(item.failure_message):undefined,queueDiagnostic:item.direction==="out"?{commandId,state:String(item.command_state??""),attempt:Number(item.command_attempt??0),lastError:String(item.command_last_error??""),availableAt:String(item.command_available_at??""),claimedAt:String(item.command_claimed_at??""),createdAt:String(item.command_created_at??""),accountStatus:String(item.account_status??""),agentStatus:String(item.agent_status??""),agentLastSeenAt:String(item.agent_last_seen_at??"")}:undefined,cachedTranslationText:item.cached_translation_text?String(item.cached_translation_text):undefined,cachedTranslationLanguage:item.cached_translation_language?String(item.cached_translation_language):undefined,cachedTranslationSourceLanguage:item.cached_translation_source_language?String(item.cached_translation_source_language):undefined,cachedTranscriptionText:item.cached_transcription_text?String(item.cached_transcription_text):undefined,time:formatTime(new Date(occurredAt)),occurredAt,status:item.status as ChatMessage["status"],attachment:item.file_name&&mediaId?{id:mediaId,name:String(item.file_name),mime:String(item.mime_type??"文件"),size:formatBytes(Number(item.byte_size??0))}:undefined};}
+function mapMessage(item:Record<string,unknown>):ChatMessage {const kind=String(item.kind??"text"),mediaId=String(item.media_id??""),occurredAt=String(item.occurred_at),quotedId=String(item.quoted_message_id??""),commandId=String(item.command_id??"");return{id:String(item.id),direction:item.direction as "in"|"out",kind,text:String(item.text_content??(mediaId?"":kindText(kind))),quoted:quotedId?{id:quotedId,direction:item.quoted_direction as "in"|"out",kind:String(item.quoted_kind??"text"),text:String(item.quoted_text_content??item.quoted_file_name??kindText(String(item.quoted_kind??"text")))}:undefined,translationSourceText:item.translation_source_text?String(item.translation_source_text):undefined,translationTargetLanguage:item.translation_target_language?String(item.translation_target_language):undefined,failureMessage:item.failure_message?String(item.failure_message):undefined,queueDiagnostic:item.direction==="out"?{commandId,state:String(item.command_state??""),attempt:Number(item.command_attempt??0),lastError:String(item.command_last_error??""),availableAt:String(item.command_available_at??""),claimedAt:String(item.command_claimed_at??""),createdAt:String(item.command_created_at??""),accountStatus:String(item.account_status??""),agentStatus:String(item.agent_status??""),agentLastSeenAt:String(item.agent_last_seen_at??"")}:undefined,cachedTranslationText:item.cached_translation_text?String(item.cached_translation_text):undefined,cachedTranslationLanguage:item.cached_translation_language?String(item.cached_translation_language):undefined,cachedTranslationSourceLanguage:item.cached_translation_source_language?String(item.cached_translation_source_language):undefined,cachedTranscriptionText:item.cached_transcription_text?String(item.cached_transcription_text):undefined,time:formatTime(new Date(occurredAt)),occurredAt,status:item.status as ChatMessage["status"],attachment:item.file_name&&mediaId?{id:mediaId,name:String(item.file_name),mime:String(item.mime_type??"文件"),size:formatBytes(Number(item.byte_size??0))}:undefined};}
 
 function messageQuote(message:ChatMessage):NonNullable<ChatMessage["quoted"]>{return{id:message.id,direction:message.direction,kind:message.kind,text:message.text||message.attachment?.name||kindText(message.kind)};}
 function mapEmailActivity(item:Record<string,unknown>):EmailActivity{return{id:String(item.id),subject:String(item.subject),recipients:Array.isArray(item.recipients)?item.recipients.map(value=>{const recipient=value as Record<string,unknown>;return{email:String(recipient.email),label:String(recipient.label??"")};}):[],contentType:String(item.content_type),status:String(item.status) as EmailActivity["status"],attempt:Number(item.attempt??0),lastError:String(item.last_error??""),createdAt:String(item.created_at),senderName:String(item.sender_name??""),attachmentCount:Number(item.attachment_count??0)};}

@@ -43,11 +43,12 @@ test("material send routes keep cross-library ordering, translated caption sourc
   assert.match(server,/selectedBatchIds\.length!==input\.materialBatchIds\.length/);
   assert.match(server,/caption=index===0/);
   assert.match(server,/translationSourceText=index===0/);
-  assert.match(server,/text_content,translation_source_text,media_id/);
+  assert.match(server,/text_content,translation_source_text,translation_target_language,media_id/);
   assert.match(server,/material_send_batch_conflict/);
   assert.match(server,/\/api\/v1\/conversations\/:id\/materials\/batches\/:batchId/);
   assert.match(server,/source:"material-stitch"/);
   assert.match(dialog,/\/api\/v1\/translations\/preview/);
   assert.match(dialog,/确认图片说明翻译/);
   assert.match(dialog,/translationSourceText/);
+  assert.match(dialog,/translationTargetLanguage/);
 });

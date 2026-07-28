@@ -122,11 +122,12 @@ export function MaterialLibrarySendDialog({accountId,conversationId,customerName
       return;
     }
     const outgoingCaption=(translatedCaption??sourceCaption).trim();
-    const mediaIds=selectedAssets.map(item=>item.mediaId),materialBatchIds=[...new Set(selectedAssets.map(item=>item.batchId))],fingerprint=JSON.stringify({materialBatchIds,mediaIds,mode,orientation,caption:outgoingCaption,translationSourceText});
+    const translationTargetLanguage=translationSourceText?targetLanguage:undefined;
+    const mediaIds=selectedAssets.map(item=>item.mediaId),materialBatchIds=[...new Set(selectedAssets.map(item=>item.batchId))],fingerprint=JSON.stringify({materialBatchIds,mediaIds,mode,orientation,caption:outgoingCaption,translationSourceText,translationTargetLanguage});
     const pending=pendingBatchRef.current?.fingerprint===fingerprint?pendingBatchRef.current:{id:`material-${crypto.randomUUID()}`,fingerprint};
     pendingBatchRef.current=pending;setSending(true);setConfirming(false);setError("");
     try{
-      const {result,body}=await requestJsonWithTimeout(`/api/v1/conversations/${conversationId}/materials/send`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId,clientBatchId:pending.id,materialBatchIds,mediaIds,mode,orientation,caption:outgoingCaption||undefined,translationSourceText})},15_000);
+      const {result,body}=await requestJsonWithTimeout(`/api/v1/conversations/${conversationId}/materials/send`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId,clientBatchId:pending.id,materialBatchIds,mediaIds,mode,orientation,caption:outgoingCaption||undefined,translationSourceText,translationTargetLanguage})},15_000);
       if(!result.response.ok)throw Object.assign(new Error(materialSendError(body,result.response.status)),{definitive:true});
       completeSend();
     }catch(reason){

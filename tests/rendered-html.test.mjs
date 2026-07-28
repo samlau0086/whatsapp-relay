@@ -140,8 +140,9 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(css, /\.incoming-translation/);
   assert.match(css, /\.voice-translate-action/);
   assert.match(css, /\.settings-tabs/);
-  assert.match(component, /原文（仅坐席可见）/);
+  assert.match(component, /原文（仅坐席可见）→/);
   assert.match(component, /translationSourceText/);
+  assert.match(component, /translationTargetLanguage/);
   assert.match(component, /generateAudio/);
   assert.match(component, /value\.status==="idle"/);
   assert.match(css, /\.outgoing-translation-source/);

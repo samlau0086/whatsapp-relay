@@ -54,14 +54,15 @@ export function ProductCardSendDialog({accountId,conversationId,contactId,transl
     }
     const outgoingCaption=(translatedCaption??sourceCaption).trim();
     setBusy(true);setConfirming(false);setError("");
-    const fingerprint=JSON.stringify({accountId,conversationId,productIds:selected,mode,showPrice,caption:outgoingCaption,translationSourceText}),pending=pendingBatchRef.current,clientBatchId=pending?.fingerprint===fingerprint?pending.id:crypto.randomUUID();
+    const translationTargetLanguage=translationSourceText?targetLanguage:undefined;
+    const fingerprint=JSON.stringify({accountId,conversationId,productIds:selected,mode,showPrice,caption:outgoingCaption,translationSourceText,translationTargetLanguage}),pending=pendingBatchRef.current,clientBatchId=pending?.fingerprint===fingerprint?pending.id:crypto.randomUUID();
     if(!email)pendingBatchRef.current={id:clientBatchId,fingerprint};
     try{
       if(email){
         const result=await request(`/api/v1/conversations/${conversationId}/email-sends`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({clientSendId:crypto.randomUUID(),recipientEmailIds:recipientIds,subject,messageBody,content:{type:"product_cards",productIds:selected,mode,showPrice}})});onToken(result.token);
         const body=await result.response.json().catch(()=>({})) as {message?:string;error?:string};if(!result.response.ok)throw new Error(body.message??body.error??`HTTP ${result.response.status}`);completeSend(true);return;
       }
-      const {result,body}=await requestJsonWithTimeout(`/api/v1/conversations/${conversationId}/product-cards/send`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId,clientBatchId,productIds:selected,mode,showPrice,caption:outgoingCaption,translationSourceText})},15_000);
+      const {result,body}=await requestJsonWithTimeout(`/api/v1/conversations/${conversationId}/product-cards/send`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId,clientBatchId,productIds:selected,mode,showPrice,caption:outgoingCaption,translationSourceText,translationTargetLanguage})},15_000);
       if(!result.response.ok){const failure=Object.assign(new Error(String(body.message??body.error??`HTTP ${result.response.status}`)),{recoverable:result.response.status>=500});throw failure;}
       completeSend(false);
     }catch(reason){

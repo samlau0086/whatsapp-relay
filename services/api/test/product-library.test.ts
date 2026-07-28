@@ -143,8 +143,9 @@ test("product card captions come from the template and are translated before Wha
   assert.match(dialog,/\/api\/v1\/translations\/preview/);
   assert.match(dialog,/确认图片说明翻译/);
   assert.match(dialog,/translationSourceText/);
+  assert.match(dialog,/translationTargetLanguage/);
   assert.match(server,/renderProductCardCaption/);
-  assert.match(server,/text_content,translation_source_text,media_id/);
+  assert.match(server,/text_content,translation_source_text,translation_target_language,media_id/);
 });
 
 test("product card search queries the complete product library and preserves selected products",async()=>{

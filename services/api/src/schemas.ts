@@ -18,6 +18,7 @@ const messageTemplateSchema=z.object({
     parameters:z.array(templateParameterSchema).max(20),
   })).max(20).default([]),
 });
+const languageCodeSchema=z.string().trim().min(2).max(35).regex(/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/,"invalid BCP 47 language code");
 export const messageSchema = z.object({
   accountId: z.string().uuid(),
   conversationId: z.string().uuid(),
@@ -25,6 +26,7 @@ export const messageSchema = z.object({
   type: z.enum(["text","image","video","audio","document","location","contact","template"]),
   text: z.string().max(65536).optional(),
   translationSourceText: z.string().trim().min(1).max(65536).optional(),
+  translationTargetLanguage: languageCodeSchema.optional(),
   mediaId: z.string().uuid().optional(),
   quotedMessageId: z.string().uuid().optional(),
   template: messageTemplateSchema.optional(),
@@ -32,6 +34,7 @@ export const messageSchema = z.object({
   if(value.type==="template"&&!value.template)ctx.addIssue({code:"custom",path:["template"],message:"template message requires template data"});
   if (value.type === "text" && !value.text?.trim()) ctx.addIssue({ code:"custom", path:["text"], message:"文本消息不能为空" });
   if (value.type !== "text" && value.translationSourceText) ctx.addIssue({ code:"custom", path:["translationSourceText"], message:"只有文本消息可以保存翻译原文" });
+  if (Boolean(value.translationSourceText) !== Boolean(value.translationTargetLanguage)) ctx.addIssue({ code:"custom", path:["translationTargetLanguage"], message:"翻译原文和目标语言必须同时提供" });
   if (["image","video","audio","document"].includes(value.type) && !value.mediaId) ctx.addIssue({ code:"custom", path:["mediaId"], message:"媒体消息必须提供 mediaId" });
 });
 
@@ -53,8 +56,6 @@ export const ttsProviderSettingsSchema=z.object({
   model:z.string().trim().max(200).default(""),
   voice:z.string().trim().min(1).max(200),
 });
-
-const languageCodeSchema=z.string().trim().min(2).max(35).regex(/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/,"invalid BCP 47 language code");
 
 export const translationPreferenceSchema=z.object({
   conversationId:z.string().uuid(),
@@ -177,7 +178,7 @@ const bulkTitleOperation=z.discriminatedUnion("mode",[
 export const productBulkEditSchema=z.object({productIds:z.array(z.string().uuid()).min(1).max(100),operation:z.union([bulkPriceOperation,bulkTagOperation,bulkTitleOperation])}).superRefine((value,ctx)=>{if(new Set(value.productIds).size!==value.productIds.length)ctx.addIssue({code:"custom",path:["productIds"],message:"product ids must be unique"});if(value.operation.field==="price"&&value.operation.mode==="percentDecrease"&&value.operation.value>100)ctx.addIssue({code:"custom",path:["operation","value"],message:"percentage decrease cannot exceed 100"});});
 export const productCardBatchIdSchema=z.string().min(8).max(96).regex(/^[A-Za-z0-9_-]+$/,"invalid product card batch id");
 export const productCardBatchStatusSchema=z.object({accountId:z.string().uuid(),batchId:productCardBatchIdSchema});
-export const productCardSendSchema=z.object({accountId:z.string().uuid(),clientBatchId:productCardBatchIdSchema,productIds:z.array(z.string().uuid()).min(1).max(50),mode:z.enum(["individual","combined"]),showPrice:z.boolean(),caption:z.string().max(65536).optional(),translationSourceText:z.string().max(65536).optional()}).superRefine((value,ctx)=>{if(new Set(value.productIds).size!==value.productIds.length)ctx.addIssue({code:"custom",path:["productIds"],message:"product ids must be unique"});if(value.mode==="combined"&&value.productIds.length>10)ctx.addIssue({code:"custom",path:["productIds"],message:"combined cards support at most 10 products"});if(value.translationSourceText&&!value.caption?.trim())ctx.addIssue({code:"custom",path:["translationSourceText"],message:"translated product card captions require a caption"});});
+export const productCardSendSchema=z.object({accountId:z.string().uuid(),clientBatchId:productCardBatchIdSchema,productIds:z.array(z.string().uuid()).min(1).max(50),mode:z.enum(["individual","combined"]),showPrice:z.boolean(),caption:z.string().max(65536).optional(),translationSourceText:z.string().max(65536).optional(),translationTargetLanguage:languageCodeSchema.optional()}).superRefine((value,ctx)=>{if(new Set(value.productIds).size!==value.productIds.length)ctx.addIssue({code:"custom",path:["productIds"],message:"product ids must be unique"});if(value.mode==="combined"&&value.productIds.length>10)ctx.addIssue({code:"custom",path:["productIds"],message:"combined cards support at most 10 products"});if(value.translationSourceText&&!value.caption?.trim())ctx.addIssue({code:"custom",path:["translationSourceText"],message:"translated product card captions require a caption"});if(Boolean(value.translationSourceText)!==Boolean(value.translationTargetLanguage))ctx.addIssue({code:"custom",path:["translationTargetLanguage"],message:"translation source and target language must be provided together"});});
 export const materialSendBatchIdSchema=z.string().min(8).max(96).regex(/^[A-Za-z0-9_-]+$/,"invalid material send batch id");
 export const materialSendBatchStatusSchema=z.object({accountId:z.string().uuid(),batchId:materialSendBatchIdSchema});
 export const materialSendSchema=z.object({
@@ -189,7 +190,8 @@ export const materialSendSchema=z.object({
   orientation:z.enum(["vertical","horizontal"]).default("vertical"),
   caption:z.string().max(65536).optional(),
   translationSourceText:z.string().trim().min(1).max(65536).optional(),
-}).superRefine((value,ctx)=>{if(new Set(value.materialBatchIds).size!==value.materialBatchIds.length)ctx.addIssue({code:"custom",path:["materialBatchIds"],message:"material batch ids must be unique"});if(new Set(value.mediaIds).size!==value.mediaIds.length)ctx.addIssue({code:"custom",path:["mediaIds"],message:"media ids must be unique"});if(value.translationSourceText&&!value.caption?.trim())ctx.addIssue({code:"custom",path:["translationSourceText"],message:"translated material captions require a caption"});});
+  translationTargetLanguage:languageCodeSchema.optional(),
+}).superRefine((value,ctx)=>{if(new Set(value.materialBatchIds).size!==value.materialBatchIds.length)ctx.addIssue({code:"custom",path:["materialBatchIds"],message:"material batch ids must be unique"});if(new Set(value.mediaIds).size!==value.mediaIds.length)ctx.addIssue({code:"custom",path:["mediaIds"],message:"media ids must be unique"});if(value.translationSourceText&&!value.caption?.trim())ctx.addIssue({code:"custom",path:["translationSourceText"],message:"translated material captions require a caption"});if(Boolean(value.translationSourceText)!==Boolean(value.translationTargetLanguage))ctx.addIssue({code:"custom",path:["translationTargetLanguage"],message:"translation source and target language must be provided together"});});
 const orderItemSchema=z.object({name:z.string().trim().min(1).max(120),sku:z.string().trim().min(1).max(80).optional(),quantity:z.coerce.number().int().min(1).max(9999),unitAmount:moneySchema,imageMediaId:z.string().uuid().optional(),productId:z.string().uuid().optional(),clientProductId:z.string().uuid().optional(),...optionalWeightFields}).superRefine((value,ctx)=>{validateWeightPair(value,ctx);if(value.productId&&value.clientProductId)ctx.addIssue({code:"custom",path:["productId"],message:"productId and clientProductId are mutually exclusive"});if(value.clientProductId&&!value.sku)ctx.addIssue({code:"custom",path:["sku"],message:"new products require a sku"});});
 const orderFeeSchema=z.object({name:z.string().trim().min(1).max(80),amount:moneySchema.refine(value=>value>0,"fee must be positive")});
 export const customerAddressSchema=z.object({

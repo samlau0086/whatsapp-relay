@@ -66,8 +66,10 @@ test("translation inputs enforce text and batch limits",()=>{
 });
 
 test("translated outgoing text can retain an agent-only source",()=>{
-  const translated=messageSchema.parse({accountId,conversationId:accountId,clientMessageId:"translated-message-001",type:"text",text:"Hello",translationSourceText:"你好"});
+  const translated=messageSchema.parse({accountId,conversationId:accountId,clientMessageId:"translated-message-001",type:"text",text:"Hello",translationSourceText:"你好",translationTargetLanguage:"en"});
   assert.equal(translated.translationSourceText,"你好");
+  assert.equal(translated.translationTargetLanguage,"en");
+  assert.equal(messageSchema.safeParse({accountId,conversationId:accountId,clientMessageId:"translated-message-002",type:"text",text:"Hello",translationSourceText:"你好"}).success,false);
   assert.equal(messageSchema.safeParse({accountId,conversationId:accountId,clientMessageId:"translated-audio-001",type:"audio",mediaId:accountId,translationSourceText:"你好"}).success,false);
 });
 
@@ -159,7 +161,7 @@ test("product library schemas validate SKU, tiered prices, and editable labels",
   assert.equal(productBulkEditSchema.safeParse({productIds:[accountId],operation:{field:"title",mode:"replace",search:"old",value:"new"}}).success,true);
   assert.equal(productBulkEditSchema.safeParse({productIds:[accountId,accountId],operation:{field:"title",mode:"prefix",value:"New "}}).success,false);
   assert.equal(productCardSendSchema.safeParse({accountId,clientBatchId:"batch-001",productIds:[accountId],mode:"individual",showPrice:true}).success,true);
-  assert.equal(productCardSendSchema.safeParse({accountId,clientBatchId:"batch-001",productIds:[accountId],mode:"individual",showPrice:true,caption:"Two products",translationSourceText:"两个产品"}).success,true);
+  assert.equal(productCardSendSchema.safeParse({accountId,clientBatchId:"batch-001",productIds:[accountId],mode:"individual",showPrice:true,caption:"Two products",translationSourceText:"两个产品",translationTargetLanguage:"en"}).success,true);
   assert.equal(productCardSendSchema.safeParse({accountId,clientBatchId:"batch-001",productIds:[accountId],mode:"individual",showPrice:true,translationSourceText:"两个产品"}).success,false);
   assert.equal(productCardSendSchema.safeParse({accountId,clientBatchId:"batch-001",productIds:Array.from({length:11},(_,index)=>`10000000-0000-4000-8000-${String(index).padStart(12,"0")}`),mode:"combined",showPrice:false}).success,false);
   assert.equal(productCardBatchStatusSchema.safeParse({accountId,batchId:"batch-001"}).success,true);
@@ -170,7 +172,7 @@ test("product library schemas validate SKU, tiered prices, and editable labels",
   assert.equal(materialSendSchema.safeParse({...materialBase,mediaIds:[...materialMediaIds,"20000000-0000-4000-8000-000000000011"]}).success,false);
   assert.equal(materialSendSchema.safeParse({...materialBase,mediaIds:[materialMediaIds[0],materialMediaIds[0]]}).success,false);
   assert.equal(materialSendSchema.safeParse({...materialBase,materialBatchIds:[materialBatchIds[0],materialBatchIds[0]],mediaIds:[materialMediaIds[0]]}).success,false);
-  assert.equal(materialSendSchema.safeParse({...materialBase,mediaIds:[materialMediaIds[0]],caption:"Hello",translationSourceText:"你好"}).success,true);
+  assert.equal(materialSendSchema.safeParse({...materialBase,mediaIds:[materialMediaIds[0]],caption:"Hello",translationSourceText:"你好",translationTargetLanguage:"en"}).success,true);
   assert.equal(materialSendSchema.safeParse({...materialBase,mediaIds:[materialMediaIds[0]],translationSourceText:"你好"}).success,false);
 });
 
