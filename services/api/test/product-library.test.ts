@@ -204,7 +204,8 @@ test("product pagination uses bounded stale-while-revalidate data and media cach
   assert.match(component,/cached&&fresh&&cachedCurrency&&!options\.force/);
   assert.match(component,/adjacentPages=\[page-1,page\+1\]/);
   assert.match(component,/invalidateProductCache/);
-  assert.match(component,/acquireMedia\(mediaId/);
+  assert.match(component,/const cacheKey=`\$\{mediaId\}\$\{preview\?":preview":""\}`/);
+  assert.match(component,/acquireMedia\(cacheKey/);
   assert.match(component,/rootMargin:"500px 0px"/);
 });
 
