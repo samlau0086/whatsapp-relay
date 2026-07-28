@@ -5,6 +5,7 @@ import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import websocket from "@fastify/websocket";
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { ifNoneMatchMatches, IMMUTABLE_PRIVATE_CACHE_CONTROL, strongEtag } from "./http-cache.js";
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount, hasScope, type Principal } from "./auth.js";
@@ -42,7 +43,7 @@ import { paypalProfileSetting, registerPaymentMethodRoutes, resolvePaymentProfil
 
 const app = Fastify({ logger: { level: config.NODE_ENV === "production" ? "info" : "debug", redact:["req.headers.authorization","req.body.password","req.body.secret","req.body.apiKey","req.body.clientId","req.body.clientSecret","req.body.sandboxClientId","req.body.sandboxClientSecret","req.body.liveClientId","req.body.liveClientSecret","req.body.accessToken","req.body.appSecret"] }, bodyLimit: 2_000_000 });
 const s3 = new S3Client({ region:config.S3_REGION, endpoint:config.S3_ENDPOINT, forcePathStyle:true, credentials:{ accessKeyId:config.S3_ACCESS_KEY, secretAccessKey:config.S3_SECRET_KEY } });
-const videoNormalizationJobs=new Map<string,Promise<{object_key:string;file_name:string;mime_type:string}>>();
+const videoNormalizationJobs=new Map<string,Promise<{object_key:string;file_name:string;mime_type:string;sha256:string}>>();
 const refreshCookie=(token:string,persistent:boolean)=>`relay_refresh=${token}; HttpOnly; SameSite=Lax; Path=/api/v1/auth${persistent?"; Max-Age=34560000":""}${config.NODE_ENV==="production"?"; Secure":""}`;
 
 await app.register(cors, { origin:config.CORS_ORIGIN, credentials:true });
@@ -1437,23 +1438,25 @@ app.get("/api/v1/media", {preHandler:authenticate}, async(request,reply)=>{
 });
 
 app.get("/api/v1/media/:id", {preHandler:authenticate}, async(request,reply)=>{
-  const {id}=request.params as {id:string};const found=await pool.query("SELECT id,account_id,object_key,file_name,mime_type FROM media WHERE id=$1 AND status='ready'",[id]);
+  const {id}=request.params as {id:string};const found=await pool.query("SELECT id,account_id,object_key,file_name,mime_type,sha256 FROM media WHERE id=$1 AND status='ready'",[id]);
   if(!found.rowCount)return reply.code(404).send({error:"not_found"});let item=found.rows[0];if(item.account_id&&!canAccessAccount(request.principal,item.account_id))return reply.code(403).send({error:"account_forbidden"});
   if(String(item.mime_type).startsWith("video/")&&!isBrowserCompatibleVideo(String(item.mime_type)))try{item=await ensureStoredVideoIsBrowserCompatible(String(item.id),item);}catch(error){request.log.warn({error,mediaId:id},"stored video normalization failed");}
-  const object=await s3.send(new GetObjectCommand({Bucket:config.S3_BUCKET,Key:item.object_key}));reply.header("content-type",item.mime_type).header("content-disposition",`${String(item.mime_type).startsWith("image/")||String(item.mime_type).startsWith("video/")||String(item.mime_type).startsWith("audio/")?"inline":"attachment"}; filename*=UTF-8''${encodeURIComponent(item.file_name??"attachment")}`).header("cache-control","private, max-age=300");return reply.send(object.Body);
+  const etag=strongEtag(String(item.sha256));reply.header("content-type",item.mime_type).header("content-disposition",`${String(item.mime_type).startsWith("image/")||String(item.mime_type).startsWith("video/")||String(item.mime_type).startsWith("audio/")?"inline":"attachment"}; filename*=UTF-8''${encodeURIComponent(item.file_name??"attachment")}`).header("cache-control",IMMUTABLE_PRIVATE_CACHE_CONTROL).header("etag",etag);
+  if(ifNoneMatchMatches(request.headers["if-none-match"],etag))return reply.code(304).send();
+  const object=await s3.send(new GetObjectCommand({Bucket:config.S3_BUCKET,Key:item.object_key}));return reply.send(object.Body);
 });
 
-async function ensureStoredVideoIsBrowserCompatible(mediaId:string,item:{object_key:string;file_name:string;mime_type:string}):Promise<{object_key:string;file_name:string;mime_type:string}>{
+async function ensureStoredVideoIsBrowserCompatible(mediaId:string,item:{object_key:string;file_name:string;mime_type:string;sha256:string}):Promise<{object_key:string;file_name:string;mime_type:string;sha256:string}>{
   const running=videoNormalizationJobs.get(mediaId);if(running)return running;
   const job=(async()=>{
     const source=await s3.send(new GetObjectCommand({Bucket:config.S3_BUCKET,Key:item.object_key}));if(!source.Body)throw new Error("video_source_missing");
     const normalized=await normalizeBrowserVideo({bytes:Buffer.from(await source.Body.transformToByteArray()),fileName:item.file_name??"video",mimeType:item.mime_type});
     const sha256=createHash("sha256").update(normalized.bytes).digest("hex"),objectKey=`normalized/${new Date().toISOString().slice(0,10)}/${mediaId}/${sha256}.mp4`;
     await s3.send(new PutObjectCommand({Bucket:config.S3_BUCKET,Key:objectKey,Body:normalized.bytes,ContentType:normalized.mimeType,Metadata:{sha256,source:"browser-video-normalizer"}}));
-    const updated=await pool.query("UPDATE media SET object_key=$2,file_name=$3,mime_type=$4,byte_size=$5,sha256=$6 WHERE id=$1 AND object_key=$7 RETURNING object_key,file_name,mime_type",[mediaId,objectKey,normalized.fileName,normalized.mimeType,normalized.bytes.length,sha256,item.object_key]);
+    const updated=await pool.query("UPDATE media SET object_key=$2,file_name=$3,mime_type=$4,byte_size=$5,sha256=$6 WHERE id=$1 AND object_key=$7 RETURNING object_key,file_name,mime_type,sha256",[mediaId,objectKey,normalized.fileName,normalized.mimeType,normalized.bytes.length,sha256,item.object_key]);
     if(updated.rowCount){void s3.send(new DeleteObjectCommand({Bucket:config.S3_BUCKET,Key:item.object_key})).catch(()=>undefined);return updated.rows[0];}
     void s3.send(new DeleteObjectCommand({Bucket:config.S3_BUCKET,Key:objectKey})).catch(()=>undefined);
-    const current=await pool.query("SELECT object_key,file_name,mime_type FROM media WHERE id=$1 AND status='ready'",[mediaId]);if(!current.rowCount)throw new Error("video_media_missing");return current.rows[0];
+    const current=await pool.query("SELECT object_key,file_name,mime_type,sha256 FROM media WHERE id=$1 AND status='ready'",[mediaId]);if(!current.rowCount)throw new Error("video_media_missing");return current.rows[0];
   })();
   videoNormalizationJobs.set(mediaId,job);
   try{return await job;}finally{if(videoNormalizationJobs.get(mediaId)===job)videoNormalizationJobs.delete(mediaId);}
