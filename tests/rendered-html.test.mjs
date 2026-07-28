@@ -474,6 +474,6 @@ test("translation language picker supports search and keyboard selection", async
   assert.match(picker,/event\.key==="ArrowDown"/);
   assert.match(picker,/event\.key==="Enter"/);
   assert.match(picker,/没有匹配语言/);
-  assert.match(inbox,/import \{LanguagePicker,languageName\} from "\.\/language-picker"/);
+  assert.match(inbox,/import \{LanguagePicker,languageFlag,languageName,languageShortCode\} from "\.\/language-picker"/);
   assert.match(statusCenter,/import \{LanguagePicker,languageName\} from "\.\/language-picker"/);
 });
