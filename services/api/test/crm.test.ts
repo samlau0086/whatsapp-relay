@@ -133,6 +133,23 @@ test("contact profile migration and routes preserve account-scoped contacts",asy
   assert.match(server,/canAccessAccount/);
 });
 
+test("contact preferred language is persisted and exposed to the detail sidebar",async()=>{
+  const [server,inbox,migration,migrator]=await Promise.all([
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../../../infra/postgres/migrations/050_contact_preferred_language.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(migration,/ADD COLUMN IF NOT EXISTS preferred_language varchar\(35\)/);
+  assert.match(migrator,/050_contact_preferred_language\.sql/);
+  assert.match(server,/preferred_language=CASE WHEN/);
+  assert.match(server,/preferredLanguage:row\.preferred_language/);
+  assert.match(inbox,/label="搜索联系人偏好语言"/);
+  assert.match(inbox,/className="contact-preferred-language"/);
+  assert.match(inbox,/languageFlag\(details\.contact\.preferredLanguage\)/);
+  assert.match(inbox,/languageShortCode\(details\.contact\.preferredLanguage\)/);
+});
+
 test("contact avatars reuse the account media picker",async()=>{
   const [inbox,mediaDialog]=await Promise.all([
     readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),

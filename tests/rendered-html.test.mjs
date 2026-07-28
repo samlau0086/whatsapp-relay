@@ -199,10 +199,9 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(taskCenter, /confirmAction\(`删除任务/);
   assert.match(taskCenter, /onSaved\("任务已删除"\)/);
   assert.match(component, /添加团队共享备注/);
-  assert.match(component, /新标签名称/);
-  assert.match(component, /id="tag-edit-title">编辑标签/);
-  assert.match(component, /JSON\.stringify\(\{ name, color: tagEditing\.color \}\)/);
-  assert.match(css, /\.tag-edit-color/);
+  assert.match(component, /id="contact-tag-options"/);
+  assert.match(component, /创建后添加到此联系人/);
+  assert.doesNotMatch(component, /className="tag-manager"/);
   assert.match(component, /添加商品/);
   assert.match(component, /Additional fees/);
   assert.doesNotMatch(component, /AI translation on send/);
