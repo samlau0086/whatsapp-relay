@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import sharp from "sharp";
-import { DEFAULT_PRODUCT_CARD_TEMPLATE, productCardTemplateSchema } from "../src/product-card-template.js";
+import { DEFAULT_PRODUCT_CARD_TEMPLATE, productCardTemplateSchema, renderProductCardCaption } from "../src/product-card-template.js";
 import { renderProductCards } from "../src/product-card-image.js";
 
 test("product pricing and card migration is idempotent and enforces active SKU uniqueness",async()=>{
@@ -14,10 +14,12 @@ test("product pricing and card migration is idempotent and enforces active SKU u
   assert.match(migration,/CREATE TABLE IF NOT EXISTS product_card_settings/);
 });
 
-test("product card templates protect required singleton blocks",()=>{
+test("product card templates allow optional names and prices but protect SKU and singleton blocks",()=>{
   assert.equal(productCardTemplateSchema.safeParse(DEFAULT_PRODUCT_CARD_TEMPLATE).success,true);
+  assert.equal(productCardTemplateSchema.safeParse({...DEFAULT_PRODUCT_CARD_TEMPLATE,blocks:DEFAULT_PRODUCT_CARD_TEMPLATE.blocks.filter(block=>!["productName","priceTiers"].includes(block.type))}).success,true);
   assert.equal(productCardTemplateSchema.safeParse({...DEFAULT_PRODUCT_CARD_TEMPLATE,blocks:DEFAULT_PRODUCT_CARD_TEMPLATE.blocks.filter(block=>block.type!=="sku")}).success,false);
   assert.equal(productCardTemplateSchema.safeParse({...DEFAULT_PRODUCT_CARD_TEMPLATE,blocks:[...DEFAULT_PRODUCT_CARD_TEMPLATE.blocks,{...DEFAULT_PRODUCT_CARD_TEMPLATE.blocks[1],id:"name-2"}]}).success,false);
+  assert.equal(renderProductCardCaption({...DEFAULT_PRODUCT_CARD_TEMPLATE,captionTemplate:"Selected {{productCount}}: {{productNames}}" },[{name:"A",sku:"A-1"},{name:"B",sku:"B-1"}]),"Selected 2: A、B");
 });
 
 test("product cards render priced, unpriced, and combined PNG output",async()=>{

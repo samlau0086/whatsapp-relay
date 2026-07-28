@@ -159,6 +159,8 @@ test("product library schemas validate SKU, tiered prices, and editable labels",
   assert.equal(productBulkEditSchema.safeParse({productIds:[accountId],operation:{field:"title",mode:"replace",search:"old",value:"new"}}).success,true);
   assert.equal(productBulkEditSchema.safeParse({productIds:[accountId,accountId],operation:{field:"title",mode:"prefix",value:"New "}}).success,false);
   assert.equal(productCardSendSchema.safeParse({accountId,clientBatchId:"batch-001",productIds:[accountId],mode:"individual",showPrice:true}).success,true);
+  assert.equal(productCardSendSchema.safeParse({accountId,clientBatchId:"batch-001",productIds:[accountId],mode:"individual",showPrice:true,caption:"Two products",translationSourceText:"两个产品"}).success,true);
+  assert.equal(productCardSendSchema.safeParse({accountId,clientBatchId:"batch-001",productIds:[accountId],mode:"individual",showPrice:true,translationSourceText:"两个产品"}).success,false);
   assert.equal(productCardSendSchema.safeParse({accountId,clientBatchId:"batch-001",productIds:Array.from({length:11},(_,index)=>`10000000-0000-4000-8000-${String(index).padStart(12,"0")}`),mode:"combined",showPrice:false}).success,false);
   assert.equal(productCardBatchStatusSchema.safeParse({accountId,batchId:"batch-001"}).success,true);
   assert.equal(productCardBatchStatusSchema.safeParse({accountId,batchId:"batch:%"}).success,false);

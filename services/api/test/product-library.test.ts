@@ -131,6 +131,22 @@ test("product card sending recovers from a lost response without duplicating the
   assert.match(server,/left\(client_message_id,length\(\$3\)\+1\)=\$3\|\|':'/);
 });
 
+test("product card captions come from the template and are translated before WhatsApp sending",async()=>{
+  const [dialog,editor,server]=await Promise.all([
+    readFile(new URL("../../../app/product-card-send-dialog.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/product-card-template-editor.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(editor,/默认图片说明/);
+  assert.match(editor,/\{\{productCount\}\}/);
+  assert.match(dialog,/\/api\/v1\/product-card-template/);
+  assert.match(dialog,/\/api\/v1\/translations\/preview/);
+  assert.match(dialog,/确认图片说明翻译/);
+  assert.match(dialog,/translationSourceText/);
+  assert.match(server,/renderProductCardCaption/);
+  assert.match(server,/text_content,translation_source_text,media_id/);
+});
+
 test("product card search queries the complete product library and preserves selected products",async()=>{
   const [dialog,server]=await Promise.all([
     readFile(new URL("../../../app/product-card-send-dialog.tsx",import.meta.url),"utf8"),

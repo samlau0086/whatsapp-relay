@@ -1926,6 +1926,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           accountId={active.accountId}
           conversationId={active.id}
           contactId={active.contactId}
+          translationEnabled={translationPreference.enabled}
+          translationConfigured={translationConfigured}
+          targetLanguage={translationPreference.customerLanguage}
+          targetLanguageName={languageName(
+            translationPreference.customerLanguage,
+          )}
           request={(path, init) => authorizedFetch(path, apiToken, init)}
           onToken={setApiToken}
           onClose={() => setProductCardsOpen(false)}
