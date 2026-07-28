@@ -71,7 +71,7 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.match(conversationRoute,/task\.conversation_id=c\.id OR \(task\.conversation_id IS NULL AND task\.contact_id=c\.contact_id\)/);
   assert.doesNotMatch(conversationRoute,/\$10::text IS NULL OR/);
   assert.match(conversationRoute,/parameter_types AS NOT MATERIALIZED/);
-  assert.match(conversationRoute,/\$4::text keyword_value,\$10::text filter_value,\$11::timestamptz cursor_at,\$12::uuid cursor_id/);
+  assert.match(conversationRoute,/\$4::text keyword_value,\$9::uuid principal_user_id,\$10::text filter_value,\$11::timestamptz cursor_at,\$12::uuid cursor_id/);
   assert.doesNotMatch(conversationRoute,/\$10::text filter,/);
   assert.ok(conversationRoute.indexOf("LIMIT $13")<conversationRoute.indexOf("FROM candidates JOIN conversations"),"candidate pagination must happen before detail hydration");
   assert.match(server,/request\.principal\?\.accountIds/);

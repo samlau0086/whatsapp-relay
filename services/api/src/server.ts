@@ -337,7 +337,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
   const candidateFilter=filter==="all"?"AND c.status<>'archived'":filter==="mine"?"AND c.assigned_user_id=$9::uuid":filter==="unassigned"?"AND c.assigned_user_id IS NULL":filter==="favorite"?"AND c.favorite":filter==="closed"?"AND c.status='closed'":filter==="archived"?"AND c.status='archived'":"";
   const candidateCursor=!cursor?"":reminderMode?"AND (reminder_task.due_at>$11 OR (reminder_task.due_at=$11 AND c.id<$12::uuid))":`AND (${latestSort}<$11 OR (${latestSort}=$11 AND c.id<$12::uuid))`;
   const result=await pool.query(`WITH parameter_types AS NOT MATERIALIZED (
-    SELECT $4::text keyword_value,$10::text filter_value,$11::timestamptz cursor_at,$12::uuid cursor_id,$14::uuid tag_id
+    SELECT $4::text keyword_value,$9::uuid principal_user_id,$10::text filter_value,$11::timestamptz cursor_at,$12::uuid cursor_id,$14::uuid tag_id
   ), ${searchCte} candidates AS MATERIALIZED (
     SELECT c.id,${reminderMode?"reminder_task.due_at":latestSort} sort_at
     FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id
