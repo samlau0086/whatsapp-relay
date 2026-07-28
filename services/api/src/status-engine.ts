@@ -1,5 +1,5 @@
 import type {PoolClient} from "pg";
-import {pool,transaction} from "./db.js";
+import {transaction} from "./db.js";
 import {generateStatusSlots,type StatusSchedule} from "./status-schedule.js";
 
 type CampaignRow={
