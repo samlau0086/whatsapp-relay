@@ -322,13 +322,15 @@ test("workspace navigation is URL based", async () => {
     readFile(new URL("../app/whatsapp-inbox.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/[view]/page.tsx", import.meta.url), "utf8"),
   ]);
-  for (const view of ["inbox", "contacts", "tasks", "orders", "products", "agents", "settings", "help"]) {
+  for (const view of ["inbox", "contacts", "tasks", "statuses", "orders", "products", "agents", "settings", "help"]) {
     assert.match(component, new RegExp(`${view}:"/${view}"`));
     assert.match(route, new RegExp(`"${view}"`));
   }
   assert.match(component, /router\.push\(WORKSPACE_PATHS\[nextView\]\)/);
   assert.match(component, /const pathView=pathname\.split\("\/"\)\[1\] as WorkspaceView/);
-  assert.match(component, /const view=pathView in WORKSPACE_PATHS\?pathView:initialView/);
+  assert.match(component, /const routeView=pathView in WORKSPACE_PATHS\?pathView:initialView/);
+  assert.match(component, /setWorkspaceView\(nextView\);\s*router\.push/);
+  assert.match(component, /useEffect\(\(\)=>\{setWorkspaceView\(routeView\);\},\[routeView\]\)/);
 });
 
 test("task requests stay stable and the realtime feed is scoped to inbox", async () => {
@@ -443,6 +445,7 @@ test("status campaigns reuse the account media library for images and videos", a
     readFile(new URL("../app/globals.css",import.meta.url),"utf8"),
   ]);
   assert.match(statusCenter,/ProductImageMediaDialog/);
+  assert.match(statusCenter,/controller\.abort\(\)/);
   assert.match(statusCenter,/mediaId:item\.media\?\.id/);
   assert.match(statusCenter,/acceptedMimeTypes=\{pickerItem\.type==="image"\?\["image\/jpeg","image\/png","image\/webp"\]:\["video\/mp4"\]\}/);
   assert.doesNotMatch(statusCenter,/form\.append\("file",item\.file\)/);

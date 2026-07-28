@@ -144,7 +144,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const router=useRouter();
   const pathname=usePathname();
   const pathView=pathname.split("/")[1] as WorkspaceView;
-  const view=pathView in WORKSPACE_PATHS?pathView:initialView;
+  const routeView=pathView in WORKSPACE_PATHS?pathView:initialView;
+  const [view,setWorkspaceView]=useState<WorkspaceView>(routeView);
   const [accounts,setAccounts]=useState<Account[]>([]);
   const [conversations,setConversations]=useState<Conversation[]>([]);
   const [messages,setMessages]=useState<Record<string,ChatMessage[]>>({});
@@ -939,7 +940,10 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const cloudWindowClosed=Boolean(active?.transport==="cloud"&&(!active.serviceWindowExpiresAt||new Date(active.serviceWindowExpiresAt).getTime()<=clock));
   const profileText=(user?.displayName||user?.email||"坐席").slice(0,1).toUpperCase();
   const userRole=user?.role||tokenRole(apiToken);
+  useEffect(()=>{setWorkspaceView(routeView);},[routeView]);
   const navigate=(nextView:WorkspaceView)=>{
+    if(nextView===view)return;
+    setWorkspaceView(nextView);
     router.push(WORKSPACE_PATHS[nextView]);
   };
   const openInbox=(nextFilter="全部会话")=>{navigate("inbox");setFilter(nextFilter);};
