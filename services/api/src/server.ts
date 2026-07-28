@@ -330,25 +330,26 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
   // candidate sort on summary columns lets global and per-account keyset
   // pagination use their indexes; the detail query retains the legacy fallback.
   const latestSort="COALESCE(c.last_message_at,c.created_at)";
-  const searchCte=keyword?`search_ids AS MATERIALIZED (
-    SELECT search_conversation.id FROM conversations search_conversation
+  const searchCte=keyword?`search_conversations AS MATERIALIZED (
+    SELECT search_conversation.id,search_conversation.account_id,search_conversation.contact_id,search_conversation.status,search_conversation.favorite,
+      search_conversation.assigned_user_id,search_conversation.last_message_at,search_conversation.last_message_direction,search_conversation.summary_updated_at,search_conversation.created_at
+    FROM conversations search_conversation
     WHERE search_conversation.last_message_text ILIKE '%'||$4||'%'
     UNION
-    SELECT contact_conversation.id FROM contacts search_contact
+    SELECT contact_conversation.id,contact_conversation.account_id,contact_conversation.contact_id,contact_conversation.status,contact_conversation.favorite,
+      contact_conversation.assigned_user_id,contact_conversation.last_message_at,contact_conversation.last_message_direction,contact_conversation.summary_updated_at,contact_conversation.created_at
+    FROM contacts search_contact
     JOIN conversations contact_conversation ON contact_conversation.contact_id=search_contact.id
     WHERE search_contact.alias ILIKE '%'||$4||'%' OR search_contact.display_name ILIKE '%'||$4||'%' OR search_contact.phone_e164 ILIKE '%'||$4||'%'
-    UNION
-    SELECT legacy_conversation.id FROM conversations legacy_conversation
-    JOIN LATERAL (SELECT text_content FROM messages WHERE conversation_id=legacy_conversation.id ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
-    WHERE legacy_conversation.summary_updated_at IS NULL AND m.text_content ILIKE '%'||$4||'%'
   ),`:"";
+  const candidateSource=keyword?"search_conversations c":"conversations c";
   const candidateFilter=filter==="all"?"AND c.status<>'archived'":filter==="mine"?"AND c.assigned_user_id=$9::uuid":filter==="unassigned"?"AND c.assigned_user_id IS NULL":filter==="favorite"?"AND c.favorite":filter==="closed"?"AND c.status='closed'":filter==="archived"?"AND c.status='archived'":"";
   const candidateCursor=!cursor?"":reminderMode?"AND (reminder_task.due_at>$11 OR (reminder_task.due_at=$11 AND c.id<$12::uuid))":`AND (${latestSort}<$11 OR (${latestSort}=$11 AND c.id<$12::uuid))`;
   const result=await pool.query(`WITH parameter_types AS NOT MATERIALIZED (
     SELECT $4::text keyword_value,$9::uuid principal_user_id,$10::text filter_value,$11::timestamptz cursor_at,$12::uuid cursor_id,$14::uuid tag_id
   ), ${searchCte} candidates AS MATERIALIZED (
     SELECT c.id,${reminderMode?"reminder_task.due_at":latestSort} sort_at
-    FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id
+    FROM ${candidateSource} JOIN whatsapp_accounts a ON a.id=c.account_id
     LEFT JOIN LATERAL (SELECT direction,occurred_at FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     ${reminderMode?`JOIN LATERAL (
       SELECT task.due_at FROM tasks task
@@ -359,7 +360,6 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
     ) reminder_task ON true`:""}
     WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::text IS NULL OR c.status::text=$3)
-      ${keyword?"AND c.id IN (SELECT id FROM search_ids)":""}
       AND ($14::uuid IS NULL OR EXISTS(SELECT 1 FROM conversation_tags selected_tag WHERE selected_tag.conversation_id=c.id AND selected_tag.tag_id=$14))
       AND ($5::timestamptz IS NULL OR c.last_message_at<$5) AND ($6::timestamptz IS NULL OR c.last_message_at>=$6) AND ($7::timestamptz IS NULL OR c.last_message_at<$7)
       AND ($8::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in')
