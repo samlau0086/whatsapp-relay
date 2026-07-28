@@ -135,6 +135,10 @@ export function isConversationJobEligible(input: {
   );
 }
 
+export function agentRunKind(jobKind: string, memoryOnly: boolean): string {
+  return memoryOnly ? "memory" : jobKind;
+}
+
 export function shouldAutoReply(
   decision: AgentDecision,
   mode: ConversationAgentMode,
@@ -678,7 +682,11 @@ async function runConversationJob(job: Job): Promise<void> {
       );
   const run = await pool.query(
     "INSERT INTO agent_runs(conversation_id,source_message_id,kind) VALUES($1,$2,$3) RETURNING id",
-    [job.conversation_id, job.source_message_id, job.kind],
+    [
+      job.conversation_id,
+      job.source_message_id,
+      agentRunKind(job.kind, memoryOnly),
+    ],
   );
   try {
     if (memoryOnly) {

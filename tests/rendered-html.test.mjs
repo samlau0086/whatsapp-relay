@@ -30,10 +30,11 @@ test("server-renders the RelayDesk inbox", async () => {
 });
 
 test("workspace includes the reliable-sync UI and responsive breakpoints", async () => {
-  const [component, conversationRow, css] = await Promise.all([
+  const [component, conversationRow, css, taskCenter] = await Promise.all([
     readFile(new URL("../app/whatsapp-inbox.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/conversation-list-row.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../app/task-center.tsx", import.meta.url), "utf8"),
   ]);
   const clipboard = await readFile(new URL("../app/clipboard-files.ts", import.meta.url), "utf8");
   assert.match(component, /离线队列已启用/);
@@ -178,6 +179,12 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(css, /\.conversation-meta>\.stage-qualified/);
   assert.match(css, /\.conversation-meta>\.stage-won/);
   assert.match(css, /\.conversation-meta>\.stage-lost/);
+  assert.match(conversationRow, /label:"已过期"/);
+  assert.match(conversationRow, /label:"今天"/);
+  assert.match(conversationRow, /label:"3 天内"/);
+  assert.match(css, /\.conversation-meta>em\.overdue/);
+  assert.match(css, /\.conversation-meta>em\.today/);
+  assert.match(css, /\.conversation-meta>em\.upcoming/);
   assert.doesNotMatch(component, /order-send-english/);
   assert.match(component, /目标翻译语言/);
   assert.match(component, /LanguagePicker value=\{targetLanguage\}/);
@@ -186,6 +193,10 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /method\s*:\s*order\s*\?\s*"PATCH"\s*:\s*"POST"/);
   assert.match(component, /客户阶段/);
   assert.match(component, /我的提醒/);
+  assert.match(component, /删除后将不再出现在联系人任务和“我的提醒”中/);
+  assert.match(component, />删除任务</);
+  assert.match(taskCenter, /confirmAction\(`删除任务/);
+  assert.match(taskCenter, /onSaved\("任务已删除"\)/);
   assert.match(component, /添加团队共享备注/);
   assert.match(component, /新标签名称/);
   assert.match(component, /id="tag-edit-title">编辑标签/);

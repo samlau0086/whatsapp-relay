@@ -79,3 +79,10 @@ test("holiday plans can be arranged for every contact from task settings",async(
   assert.match(engine,/ruleCount/);
   assert.match(engine,/taskCount/);
 });
+
+test("deleted tasks are cancelled and hidden from the default task list",async()=>{
+  const routes=await readFile(new URL("../src/task-routes.ts",import.meta.url),"utf8");
+  assert.match(routes,/UPDATE tasks SET status='cancelled'/);
+  assert.match(routes,/\(\$3::text IS NOT NULL OR t\.status<>'cancelled'\)/);
+  assert.match(routes,/app\.delete\("\/api\/v1\/tasks\/:id"/);
+});

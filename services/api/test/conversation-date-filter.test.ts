@@ -65,7 +65,10 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.match(conversationRoute,/search_ids AS MATERIALIZED/);
   assert.match(conversationRoute,/candidates AS MATERIALIZED/);
   assert.match(conversationRoute,/const searchCte=keyword/);
-  assert.match(conversationRoute,/reminderMode\?"JOIN reminders/);
+  assert.match(conversationRoute,/task\.assigned_user_id=\$9::uuid/);
+  assert.match(conversationRoute,/task\.status NOT IN \('completed','cancelled','failed'\)/);
+  assert.match(conversationRoute,/task\.due_at<now\(\)\+interval '3 days'/);
+  assert.match(conversationRoute,/task\.conversation_id=c\.id OR \(task\.conversation_id IS NULL AND task\.contact_id=c\.contact_id\)/);
   assert.doesNotMatch(conversationRoute,/\$10::text IS NULL OR/);
   assert.match(conversationRoute,/parameter_types AS NOT MATERIALIZED/);
   assert.match(conversationRoute,/\$4::text keyword_value,\$10::text filter_value,\$11::timestamptz cursor_at,\$12::uuid cursor_id/);

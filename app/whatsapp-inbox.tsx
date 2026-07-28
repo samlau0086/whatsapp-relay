@@ -347,7 +347,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       const body=await result.response.json() as ConversationCounts&{dueReminders?:Array<{id:string;display_name:string;remind_at:string}>};
       setConversationCounts(body);
       const due=body.dueReminders?.find(item=>!notifiedReminders.current.has(item.id));
-      if(due){notifiedReminders.current.add(due.id);setToast(`${due.display_name} 的会话提醒已到期`);}
+      if(due){notifiedReminders.current.add(due.id);setToast(`${due.display_name} 的任务已到期`);}
     }
   },[dateFilter,selectedAccount,logout]);
 
@@ -2074,7 +2074,7 @@ function ConversationQuickTaskDialog({conversation,token,assignedUserId,onToken,
   return <div className="modal-backdrop context-action-backdrop" role="presentation"><section className="login-dialog context-action-dialog" role="dialog" aria-modal="true" aria-labelledby="context-task-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><ClipboardList size={19}/></span><h2 id="context-task-title">给 {conversation.name} 添加任务</h2><p>任务会自动关联当前客户与会话，并默认分配给你。</p><label>任务标题<input autoFocus value={title} onChange={event=>setTitle(event.target.value)} maxLength={200} placeholder="例如：跟进报价反馈"/></label><div className="context-task-grid"><label>任务类型<select value={kind} onChange={event=>setKind(event.target.value as "general"|"message")}><option value="general">普通待办</option><option value="message">定时消息</option></select></label><label>{kind==="message"?"计划发送时间":"截止时间"}<input type="datetime-local" value={dueAt} min={toDateTimeLocal(new Date().toISOString())} onChange={event=>setDueAt(event.target.value)}/></label></div>{kind==="message"&&<small className="context-task-hint">定时消息将进入审批模式，可在任务中心补充内容并生成草稿。</small>}{error&&<span className="login-error">{error}</span>}<footer><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void save()} disabled={busy||!title.trim()}>{busy?"正在创建…":"创建任务"}</button></footer></section></div>;
 }
 
-function ContactTaskDialog({task,token,onToken,onClose,onSaved}:{task:ContactTaskSummary;token:string;onToken:(token:string)=>void;onClose:()=>void;onSaved:()=>void}){
+function ContactTaskDialog({task,token,onToken,onClose,onSaved}:{task:ContactTaskSummary;token:string;onToken:(token:string)=>void;onClose:()=>void;onSaved:(message:string)=>void}){
   const [detail,setDetail]=useState<ContactTaskDetail|null>(null),[title,setTitle]=useState(task.title),[description,setDescription]=useState(""),[status,setStatus]=useState(task.status),[progress,setProgress]=useState(0),[startAt,setStartAt]=useState(""),[dueAt,setDueAt]=useState(toDateTimeLocal(task.dueAt)),[sendAt,setSendAt]=useState(task.sendAt?toDateTimeLocal(task.sendAt):""),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState("");
   useEffect(()=>{
     let cancelled=false;
@@ -2098,8 +2098,18 @@ function ContactTaskDialog({task,token,onToken,onClose,onSaved}:{task:ContactTas
       const result=await authorizedFetch(`/api/v1/tasks/${task.id}`,token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({title:title.trim(),description:description.trim(),status,progress,startAt:start.toISOString(),dueAt:due.toISOString(),sendAt:detail?.kind==="message"?send!.toISOString():null})});
       if(result.token!==token)onToken(result.token);
       if(!result.response.ok){const body=await result.response.json().catch(()=>({})) as {message?:string;error?:string};throw new Error(body.message??body.error??`任务保存失败（HTTP ${result.response.status}）`);}
-      onSaved();
+      onSaved("任务已更新");
     }catch(reason){setError(reason instanceof Error?reason.message:"任务保存失败");setBusy(false);}
+  }
+  async function remove(){
+    if(!await confirmAction(`删除任务“${task.title}”？删除后将不再出现在联系人任务和“我的提醒”中。`,{title:"删除任务？",confirmLabel:"删除"}))return;
+    setBusy(true);setError("");
+    try{
+      const result=await authorizedFetch(`/api/v1/tasks/${task.id}`,token,{method:"DELETE"});
+      if(result.token!==token)onToken(result.token);
+      if(!result.response.ok){const body=await result.response.json().catch(()=>({})) as {message?:string;error?:string};throw new Error(body.message??body.error??`任务删除失败（HTTP ${result.response.status}）`);}
+      onSaved("任务已删除");
+    }catch(reason){setError(reason instanceof Error?reason.message:"任务删除失败");setBusy(false);}
   }
   return <div className="modal-backdrop contact-task-modal-backdrop" role="presentation">
     <section className="contact-task-modal" role="dialog" aria-modal="true" aria-labelledby="contact-task-modal-title">
@@ -2113,7 +2123,7 @@ function ContactTaskDialog({task,token,onToken,onClose,onSaved}:{task:ContactTas
         {detail?.kind==="message"&&<label>计划发送时间<input type="datetime-local" value={sendAt} onChange={event=>setSendAt(event.target.value)}/><small>发送模式：{detail.sendMode==="auto"?"自动发送":"审批后发送"}</small></label>}
         {error&&<p className="task-error">{error}</p>}
       </div>}
-      <footer><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void save()} disabled={loading||busy||!detail||!title.trim()}>{busy?"正在保存…":"保存更改"}</button></footer>
+      <footer><button className="danger-text contact-task-delete" onClick={()=>void remove()} disabled={loading||busy}><Trash2 size={14}/>删除任务</button><span/><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void save()} disabled={loading||busy||!detail||!title.trim()}>{busy?"正在处理…":"保存更改"}</button></footer>
     </section>
   </div>;
 }
@@ -2802,7 +2812,7 @@ function CrmDetailsPanel({
       </aside>
       {contactEditing&&<ContactEditDialog contactId={active.contactId} token={token} onToken={onToken} onClose={()=>setContactEditing(false)} onSaved={async profile=>{setContactEditing(false);setDetails(value=>value?{...value,contact:profile}:value);onToast("联系人资料已更新");await onChanged();await load();}}/>}
       {addressEditing&&<ContactAddressDialog contactId={active.contactId} token={token} onToken={onToken} onClose={()=>setAddressEditing(false)} onSaved={async profile=>{setAddressEditing(false);setDetails(value=>value?{...value,contact:profile}:value);onToast("联系人地址已更新，创建订单时可直接选择");await load();}}/>}
-      {taskEditing&&<ContactTaskDialog task={taskEditing} token={token} onToken={onToken} onClose={()=>setTaskEditing(null)} onSaved={async()=>{setTaskEditing(null);onToast("任务已更新");await load();}}/>}
+      {taskEditing&&<ContactTaskDialog task={taskEditing} token={token} onToken={onToken} onClose={()=>setTaskEditing(null)} onSaved={async message=>{setTaskEditing(null);onToast(message);await load();await onChanged();}}/>}
       {tagEditing&&<div className="modal-backdrop tag-edit-backdrop" role="presentation">
         <section className="login-dialog tag-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="tag-edit-title">
           <button className="login-close" onClick={()=>setTagEditing(null)} disabled={busy} aria-label="关闭"><X size={17}/></button>

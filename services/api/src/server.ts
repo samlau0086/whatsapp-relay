@@ -334,15 +334,21 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
     JOIN LATERAL (SELECT text_content FROM messages WHERE conversation_id=legacy_conversation.id ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     WHERE legacy_conversation.summary_updated_at IS NULL AND m.text_content ILIKE '%'||$4||'%'
   ),`:"";
-  const candidateFilter=filter==="all"?"AND c.status<>'archived'":filter==="mine"?"AND c.assigned_user_id=$9::uuid":filter==="unassigned"?"AND c.assigned_user_id IS NULL":filter==="favorite"?"AND c.favorite":filter==="closed"?"AND c.status='closed'":filter==="archived"?"AND c.status='archived'":reminderMode?"AND r.remind_at IS NOT NULL":"";
-  const candidateCursor=!cursor?"":reminderMode?"AND (r.remind_at>$11 OR (r.remind_at=$11 AND c.id<$12::uuid))":`AND (${latestSort}<$11 OR (${latestSort}=$11 AND c.id<$12::uuid))`;
+  const candidateFilter=filter==="all"?"AND c.status<>'archived'":filter==="mine"?"AND c.assigned_user_id=$9::uuid":filter==="unassigned"?"AND c.assigned_user_id IS NULL":filter==="favorite"?"AND c.favorite":filter==="closed"?"AND c.status='closed'":filter==="archived"?"AND c.status='archived'":"";
+  const candidateCursor=!cursor?"":reminderMode?"AND (reminder_task.due_at>$11 OR (reminder_task.due_at=$11 AND c.id<$12::uuid))":`AND (${latestSort}<$11 OR (${latestSort}=$11 AND c.id<$12::uuid))`;
   const result=await pool.query(`WITH parameter_types AS NOT MATERIALIZED (
     SELECT $4::text keyword_value,$10::text filter_value,$11::timestamptz cursor_at,$12::uuid cursor_id,$14::uuid tag_id
   ), ${searchCte} candidates AS MATERIALIZED (
-    SELECT c.id,${reminderMode?"r.remind_at":latestSort} sort_at
+    SELECT c.id,${reminderMode?"reminder_task.due_at":latestSort} sort_at
     FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id
     LEFT JOIN LATERAL (SELECT direction,occurred_at FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
-    ${reminderMode?"JOIN reminders r ON r.conversation_id=c.id AND r.user_id=$9::uuid AND r.dismissed_at IS NULL":""}
+    ${reminderMode?`JOIN LATERAL (
+      SELECT task.due_at FROM tasks task
+      WHERE (task.conversation_id=c.id OR (task.conversation_id IS NULL AND task.contact_id=c.contact_id))
+        AND task.assigned_user_id=$9::uuid AND task.status NOT IN ('completed','cancelled','failed')
+        AND task.due_at<now()+interval '3 days'
+      ORDER BY task.due_at,task.id LIMIT 1
+    ) reminder_task ON true`:""}
     WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::text IS NULL OR c.status::text=$3)
       ${keyword?"AND c.id IN (SELECT id FROM search_ids)":""}
@@ -359,11 +365,10 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
       (SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) primary_email,
       COALESCE((SELECT json_agg(json_build_object('id',method.id,'type',method.type,'label',method.label,'value',method.value) ORDER BY method.position,method.id) FROM contact_methods method WHERE method.contact_id=co.id),'[]'::json) contact_methods,
       a.id account_id,a.display_name account_name,a.status account_status,a.transport,COALESCE(c.last_message_text,m.text_content) last_message,COALESCE(c.last_message_kind,m.kind) last_message_kind,COALESCE(c.last_message_direction,m.direction) last_message_direction,COALESCE(c.last_message_status,m.status) last_message_status,
-      COALESCE(tag_list.tags,'[]'::json) tags,r.remind_at,candidates.sort_at
+      COALESCE(tag_list.tags,'[]'::json) tags,CASE WHEN $10::text='reminders' THEN candidates.sort_at END remind_at,candidates.sort_at
     FROM candidates JOIN conversations c ON c.id=candidates.id JOIN contacts co ON co.id=c.contact_id JOIN whatsapp_accounts a ON a.id=c.account_id
     LEFT JOIN LATERAL (SELECT text_content,kind,direction,status,occurred_at FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true
-    LEFT JOIN reminders r ON r.conversation_id=c.id AND r.user_id=$9::uuid AND r.dismissed_at IS NULL
     ORDER BY candidates.sort_at ${reminderMode?"ASC":"DESC"},c.id DESC`,
     [query.accountId??null,accountIds,query.status??null,keyword,query.before??null,range.from,range.before,query.unreplied==="true",principalUserId,filter,cursor?.sortAt??null,cursor?.id??null,limit+1,query.tagId??null]);
   const hasMore=result.rows.length>limit,data=result.rows.slice(0,limit),last=data[data.length-1];
@@ -377,10 +382,16 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
   const range=parseConversationRange(query);if(!range)return reply.code(400).send({error:"invalid_conversation_date_range"});
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null,accountIds=request.principal?.accountIds??null;
   const result=await pool.query(`WITH base AS (
-    SELECT c.status,c.favorite,c.assigned_user_id,COALESCE(c.last_message_direction,m.direction) direction,r.remind_at
+    SELECT c.status,c.favorite,c.assigned_user_id,COALESCE(c.last_message_direction,m.direction) direction,reminder_task.due_at remind_at
     FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id
     LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
-    LEFT JOIN reminders r ON r.conversation_id=c.id AND r.user_id=$7::uuid AND r.dismissed_at IS NULL
+    LEFT JOIN LATERAL (
+      SELECT task.due_at FROM tasks task
+      WHERE (task.conversation_id=c.id OR (task.conversation_id IS NULL AND task.contact_id=c.contact_id))
+        AND task.assigned_user_id=$7::uuid AND task.status NOT IN ('completed','cancelled','failed')
+        AND task.due_at<now()+interval '3 days'
+      ORDER BY task.due_at,task.id LIMIT 1
+    ) reminder_task ON true
     WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
       AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
@@ -390,10 +401,12 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
     COUNT(*) FILTER(WHERE remind_at IS NOT NULL)::int reminders FROM base`,
     [query.accountId??null,accountIds,range.from,range.before,query.unreplied==="true",query.before??null,principalUserId]);
   const row=result.rows[0]??{};
-  const dueReminders=request.principal?.kind==="user"?(await pool.query(`SELECT c.id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164) display_name,r.remind_at
-    FROM reminders r JOIN conversations c ON c.id=r.conversation_id JOIN contacts co ON co.id=c.contact_id
-    WHERE r.user_id=$1 AND r.dismissed_at IS NULL AND r.remind_at<=now() AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
-    ORDER BY r.remind_at,c.id LIMIT 20`,[request.principal.id,accountIds])).rows:[];
+  const dueReminders=request.principal?.kind==="user"?(await pool.query(`SELECT task.id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164) display_name,task.due_at remind_at
+    FROM tasks task JOIN contacts co ON co.id=task.contact_id
+    WHERE task.assigned_user_id=$1 AND task.status NOT IN ('completed','cancelled','failed') AND task.due_at<=now()
+      AND (task.conversation_id IS NOT NULL OR EXISTS(SELECT 1 FROM conversations linked WHERE linked.contact_id=task.contact_id))
+      AND ($2::uuid[] IS NULL OR task.account_id=ANY($2))
+    ORDER BY task.due_at,task.id LIMIT 20`,[request.principal.id,accountIds])).rows:[];
   return{all:Number(row.all_count??0),mine:Number(row.mine??0),unassigned:Number(row.unassigned??0),favorite:Number(row.favorite??0),closed:Number(row.closed??0),archived:Number(row.archived??0),reminders:Number(row.reminders??0),dueReminders};
 });
 
@@ -411,11 +424,17 @@ app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(requ
     COALESCE((SELECT json_agg(json_build_object('id',method.id,'type',method.type,'label',method.label,'value',method.value) ORDER BY method.position,method.id) FROM contact_methods method WHERE method.contact_id=co.id),'[]'::json) contact_methods,
     a.id account_id,a.display_name account_name,a.status account_status,a.transport,COALESCE(c.last_message_text,m.text_content) last_message,
     COALESCE(c.last_message_kind,m.kind) last_message_kind,COALESCE(c.last_message_direction,m.direction) last_message_direction,COALESCE(c.last_message_status,m.status) last_message_status,
-    COALESCE(tag_list.tags,'[]'::json) tags,r.remind_at
+    COALESCE(tag_list.tags,'[]'::json) tags,reminder_task.due_at remind_at
     FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN whatsapp_accounts a ON a.id=c.account_id
     LEFT JOIN LATERAL (SELECT text_content,kind,direction,status,occurred_at FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true
-    LEFT JOIN reminders r ON r.conversation_id=c.id AND r.user_id=$2::uuid AND r.dismissed_at IS NULL WHERE c.id=$1`,[id,principalUserId]);
+    LEFT JOIN LATERAL (
+      SELECT task.due_at FROM tasks task
+      WHERE (task.conversation_id=c.id OR (task.conversation_id IS NULL AND task.contact_id=c.contact_id))
+        AND task.assigned_user_id=$2::uuid AND task.status NOT IN ('completed','cancelled','failed')
+        AND task.due_at<now()+interval '3 days'
+      ORDER BY task.due_at,task.id LIMIT 1
+    ) reminder_task ON true WHERE c.id=$1`,[id,principalUserId]);
   const row=result.rows[0];if(!row||!canAccessAccount(request.principal,String(row.account_id)))return reply.code(404).send({error:"not_found"});
   const lastAt=row.last_message_at?new Date(row.last_message_at).getTime():null,from=range.from?new Date(range.from).getTime():null,before=range.before?new Date(range.before).getTime():null,legacyBefore=query.before?new Date(query.before).getTime():null;
   const filter=query.filter as ConversationFilter|undefined;
