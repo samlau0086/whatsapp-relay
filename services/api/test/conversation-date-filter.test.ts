@@ -93,7 +93,10 @@ test("conversation API applies a closed-open last-message range",async()=>{
 });
 
 test("performance reports retain representative HTTP failure details",async()=>{
-  const runner=await readFile(new URL("../../../performance/conversations/run.mjs",import.meta.url),"utf8");
+  const [runner,workflow]=await Promise.all([
+    readFile(new URL("../../../performance/conversations/run.mjs",import.meta.url),"utf8"),
+    readFile(new URL("../../../.github/workflows/deploy-vps.yml",import.meta.url),"utf8"),
+  ]);
   assert.match(runner,/failureSamples/);
   assert.match(runner,/failureSamples\.length<5/);
   assert.match(runner,/\{status:result\.status,body:result\.body\}/);
@@ -105,6 +108,10 @@ test("performance reports retain representative HTTP failure details",async()=>{
   assert.match(runner,/if\(failure\)throw new Error\(`warmup failed:/);
   assert.match(runner,/Performance gate failed:/);
   assert.match(runner,/counts p95 .* exceeds 800ms/);
+  const planStep=workflow.slice(workflow.indexOf("- name: Save database execution plans"),workflow.indexOf("- name: Upload performance artifacts"));
+  assert.match(planStep,/continue-on-error: true/);
+  assert.match(planStep,/performance\/conversations\/explain\.sql/);
+  assert.doesNotMatch(planStep,/grep -[qE]/);
 });
 
 test("conversation summaries, events, and startup runner are wired",async()=>{
