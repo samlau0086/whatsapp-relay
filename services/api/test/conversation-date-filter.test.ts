@@ -103,7 +103,11 @@ test("performance reports retain representative HTTP failure details",async()=>{
   assert.match(runner,/const warmup=async\(path,samples=30\)/);
   assert.match(runner,/await warmup\("\/api\/v1\/conversations\?limit=40"\)/);
   assert.match(runner,/await warmup\("\/api\/v1\/conversations\/counts",10\)/);
+  assert.match(runner,/await warmup\(contactSearchPath,10\)/);
+  assert.match(runner,/await warmup\(summarySearchPath,10\)/);
   assert.ok(runner.indexOf('await warmup("/api/v1/conversations?limit=40")')<runner.indexOf('benchmark("first_page"'),"concurrent warmup must finish before measured first-page samples");
+  assert.ok(runner.indexOf("await warmup(contactSearchPath,10)")<runner.indexOf('benchmark("contact_search"'),"contact search warmup must finish before measured samples");
+  assert.ok(runner.indexOf("await warmup(summarySearchPath,10)")<runner.indexOf('benchmark("summary_search"'),"summary search warmup must finish before measured samples");
   assert.ok(runner.indexOf('await warmup("/api/v1/conversations/counts",10)')<runner.indexOf('benchmark("counts"'),"concurrent warmup must finish before measured counts samples");
   assert.match(runner,/if\(failure\)throw new Error\(`warmup failed:/);
   assert.match(runner,/Performance gate failed:/);

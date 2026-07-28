@@ -41,8 +41,12 @@ results.push(await benchmark("first_page","/api/v1/conversations?limit=40"));
 results.push(await benchmark("deep_cursor",cursorPath));
 results.push(await benchmark("mine","/api/v1/conversations?filter=mine&limit=40"));
 results.push(await benchmark("favorite","/api/v1/conversations?filter=favorite&limit=40"));
-results.push(await benchmark("contact_search","/api/v1/conversations?q=Contact%209999&limit=40"));
-results.push(await benchmark("summary_search","/api/v1/conversations?q=summary%209999&limit=40"));
+const contactSearchPath="/api/v1/conversations?q=Contact%209999&limit=40";
+const summarySearchPath="/api/v1/conversations?q=summary%209999&limit=40";
+await warmup(contactSearchPath,10);
+results.push(await benchmark("contact_search",contactSearchPath));
+await warmup(summarySearchPath,10);
+results.push(await benchmark("summary_search",summarySearchPath));
 await warmup("/api/v1/conversations/counts",10);
 results.push(await benchmark("counts","/api/v1/conversations/counts"));
 

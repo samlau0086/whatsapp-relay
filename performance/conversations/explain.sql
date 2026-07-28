@@ -15,7 +15,7 @@ WITH search_conversations AS MATERIALIZED (
   UNION
   SELECT contact_conversation.id,contact_conversation.last_message_at,contact_conversation.created_at
   FROM conversations contact_conversation JOIN contacts search_contact ON search_contact.id=contact_conversation.contact_id
-  WHERE search_contact.alias ILIKE '%Contact 9999%' OR search_contact.display_name ILIKE '%Contact 9999%' OR search_contact.phone_e164 ILIKE '%Contact 9999%'
+  WHERE (COALESCE(search_contact.alias,'') || ' ' || COALESCE(search_contact.display_name,'') || ' ' || search_contact.phone_e164) ILIKE '%Contact 9999%'
 )
 SELECT c.id FROM search_conversations c
 ORDER BY COALESCE(c.last_message_at,c.created_at) DESC,c.id DESC LIMIT 40;

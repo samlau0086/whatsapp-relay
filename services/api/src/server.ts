@@ -345,7 +345,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
       contact_conversation.assigned_user_id,contact_conversation.last_message_at,contact_conversation.last_message_direction,contact_conversation.summary_updated_at,contact_conversation.created_at
     FROM contacts search_contact
     JOIN conversations contact_conversation ON contact_conversation.contact_id=search_contact.id
-    WHERE search_contact.alias ILIKE '%'||$4||'%' OR search_contact.display_name ILIKE '%'||$4||'%' OR search_contact.phone_e164 ILIKE '%'||$4||'%'
+    WHERE (COALESCE(search_contact.alias,'') || ' ' || COALESCE(search_contact.display_name,'') || ' ' || search_contact.phone_e164) ILIKE '%'||$4||'%'
   ),`:"";
   const candidateSource=keyword?"search_conversations c":"conversations c";
   const candidateFilter=filter==="all"?"AND c.status<>'archived'":filter==="mine"?"AND c.assigned_user_id=$9::uuid":filter==="unassigned"?"AND c.assigned_user_id IS NULL":filter==="favorite"?"AND c.favorite":filter==="closed"?"AND c.status='closed'":filter==="archived"?"AND c.status='archived'":"";

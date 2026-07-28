@@ -45,4 +45,8 @@ INSERT INTO reminders(conversation_id,user_id,remind_at)
 SELECT perf_uuid('conversation-'||n),(SELECT id FROM users ORDER BY created_at LIMIT 1),now()+(n%120||' minutes')::interval
 FROM generate_series(250,100000,250)n;
 SET session_replication_role=origin;
-ANALYZE;
+-- Bulk inserts accumulate entries in GIN pending lists. Flush the contact search
+-- indexes so the gate measures steady-state query performance instead of seed
+-- maintenance work on the first search requests.
+VACUUM (ANALYZE) contacts;
+ANALYZE conversations;
