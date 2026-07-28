@@ -74,6 +74,10 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /window\.addEventListener\("paste"/);
   assert.match(component, /拖拽文件到这里/);
   assert.match(component, /发送所选附件/);
+  assert.match(component, /MEDIA_PAGE_SIZE=24/);
+  assert.match(component, /继续滚动加载更多/);
+  assert.match(component, /搜索全部文件名/);
+  assert.match(component, /kind:filter/);
   assert.match(component, /uploadComposerImages/);
   assert.match(component, /onPaste=\{\s*\(?event\)?\s*=>/);
   assert.match(component, /松开即可发送图片/);
