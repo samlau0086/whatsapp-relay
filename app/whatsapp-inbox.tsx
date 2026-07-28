@@ -32,6 +32,7 @@ import type {ContactMethod,ContactMethodType,Conversation,TagItem} from "./conve
 import { convertWeight, formatWeight, WEIGHT_UNITS, type WeightUnit } from "./weight";
 
 const API_URL = (process.env.NEXT_PUBLIC_RELAY_API_URL ?? "").replace(/\/$/, "");
+const REMEMBER_LOGIN_KEY="relayRememberLogin";
 const COLORS = ["#6b4f3a", "#305f72", "#9b5f72", "#477a62", "#705b86"];
 const PRODUCT_PAGE_SIZES = [24,32,36,48,64] as const;
 let refreshPromise:Promise<string>|null=null;
@@ -443,7 +444,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   },[conversationMenu]);
 
   const logout=useCallback(()=>{
-    sessionStorage.removeItem("relayAccessToken");sessionStorage.removeItem("relayUser");
+    void fetch(`${API_URL}/api/v1/auth/logout`,{method:"POST",credentials:"include"}).catch(()=>undefined);
+    clearStoredSession();
     conversationDetailsCache.clear();
     conversationAbortRef.current?.abort();conversationCursorRef.current=null;
     accountsLoadedForRef.current="";conversationLoadKeyRef.current="";messageInitialLoadKeyRef.current="";messageCursorsRef.current={};messagePaginationDepthRef.current.clear();messageStickToBottomRef.current=true;
@@ -674,8 +676,10 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
 
   useEffect(()=>{
     const timer=window.setTimeout(()=>{
-      const token=sessionStorage.getItem("relayAccessToken")??"";
-      const storedUser=sessionStorage.getItem("relayUser");
+      const persistent=localStorage.getItem(REMEMBER_LOGIN_KEY)==="true";
+      const storage=persistent?localStorage:sessionStorage;
+      const token=storage.getItem("relayAccessToken")??"";
+      const storedUser=storage.getItem("relayUser");
       if(!token){setLoading(false);setSessionReady(true);return;}
       setApiToken(token);if(storedUser)try{setUser(JSON.parse(storedUser) as User);}catch{}
       setAuthOpen(false);setSessionReady(true);
@@ -1119,7 +1123,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     router.push(WORKSPACE_PATHS[nextView]);
   };
   const openInbox=(nextFilter="全部会话")=>{navigate("inbox");setFilter(nextFilter);};
-  const completeLogin=(token:string,nextUser:User)=>{conversationDetailsCache.clear();accountsLoadedForRef.current="";conversationLoadKeyRef.current="";messageInitialLoadKeyRef.current="";sessionStorage.setItem("relayAccessToken",token);sessionStorage.setItem("relayUser",JSON.stringify(nextUser));setApiToken(token);setUser(nextUser);setAuthOpen(false);setSessionReady(true);};
+  const completeLogin=(token:string,nextUser:User,rememberMe:boolean)=>{conversationDetailsCache.clear();accountsLoadedForRef.current="";conversationLoadKeyRef.current="";messageInitialLoadKeyRef.current="";storeSession(token,nextUser,rememberMe);setApiToken(token);setUser(nextUser);setAuthOpen(false);setSessionReady(true);};
 
   if(!sessionReady)return <AccessPortal loading onLogin={()=>{}}/>;
   if(!apiToken)return <><AccessPortal loading={false} onLogin={()=>setAuthOpen(true)}/>{authOpen&&<LoginDialog connected={false} token="" canClose onClose={()=>setAuthOpen(false)} onLogin={completeLogin} onLogout={logout}/>}</>;
@@ -4013,13 +4017,27 @@ function parseFormattedBytes(value:string){const amount=Number.parseFloat(value)
 function quickReplyStorageKey(userId:string,accountId:string){return`relayQuickReplies:${userId}:${accountId}`;}
 function tokenSubject(token:string){try{return String(JSON.parse(atob(token.split(".")[1].replace(/-/g,"+").replace(/_/g,"/"))).sub??"");}catch{return"";}}
 function tokenRole(token:string){try{return String(JSON.parse(atob(token.split(".")[1].replace(/-/g,"+").replace(/_/g,"/"))).role??"");}catch{return"";}}
+function storeSession(token:string,user:User,rememberMe:boolean){
+  clearStoredSession();
+  const storage=rememberMe?localStorage:sessionStorage;
+  storage.setItem("relayAccessToken",token);storage.setItem("relayUser",JSON.stringify(user));
+  if(rememberMe)localStorage.setItem(REMEMBER_LOGIN_KEY,"true");
+}
+function storeRefreshedToken(token:string){
+  const storage=localStorage.getItem(REMEMBER_LOGIN_KEY)==="true"?localStorage:sessionStorage;
+  storage.setItem("relayAccessToken",token);
+}
+function clearStoredSession(){
+  for(const storage of [localStorage,sessionStorage]){storage.removeItem("relayAccessToken");storage.removeItem("relayUser");}
+  localStorage.removeItem(REMEMBER_LOGIN_KEY);
+}
 async function authorizedFetch(path:string,token:string,init:RequestInit={}):Promise<{response:Response;token:string}>{
   const send=(accessToken:string)=>fetch(`${API_URL}${path}`,{...init,credentials:"include",headers:{...init.headers,authorization:`Bearer ${accessToken}`}});
   let response=await send(token);if(response.status!==401)return{response,token};
   refreshPromise??=refreshAccessToken();
   let refreshedToken="";try{refreshedToken=await refreshPromise;}finally{refreshPromise=null;}
   if(!refreshedToken)return{response,token};
-  sessionStorage.setItem("relayAccessToken",refreshedToken);response=await send(refreshedToken);return{response,token:refreshedToken};
+  storeRefreshedToken(refreshedToken);response=await send(refreshedToken);return{response,token:refreshedToken};
 }
 async function refreshAccessToken(){const response=await fetch(`${API_URL}/api/v1/auth/refresh`,{method:"POST",credentials:"include"});if(!response.ok)return"";const body=await response.json() as {accessToken?:string};return body.accessToken??"";}
 
@@ -5417,10 +5435,10 @@ function CloudNewConversationDialog({accounts,accountId,onAccountId,token,onToke
   return <div className="modal-backdrop" role="presentation"><section className="login-dialog new-conversation-dialog" role="dialog" aria-modal="true"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><MessageCircle size={21}/></span><h2>新建 Cloud API 会话</h2><p>新会话必须使用 Meta 已审核的消息模板发起。</p><label>发送账号<select value={accountId} onChange={event=>onAccountId(event.target.value)}>{accounts.map(item=><option value={item.id} key={item.id}>{item.name} · {item.transport==="cloud"?"Cloud API":"Web"}</option>)}</select></label><div className="conversation-form-grid"><label>WhatsApp 号码<input value={phone} onChange={event=>setPhone(event.target.value)} placeholder="例如：+8613800138000" inputMode="tel" autoFocus/></label><label>联系人名称（可选）<input value={displayName} onChange={event=>setDisplayName(event.target.value)} maxLength={80}/></label></div><label>已审核模板<select value={selected} onChange={event=>{const next=templates.find(item=>`${item.name}:${item.language}`===event.target.value);setSelected(event.target.value);setHeaderMediaId("");setValues(Array.from({length:cloudTemplateVariableCount(next)},()=>("")));}}>{templates.map(item=><option key={`${item.name}:${item.language}`} value={`${item.name}:${item.language}`}>{item.name} · {item.language}</option>)}</select></label>{headerType&&<label>{headerType} 头部<select value={headerMediaId} onChange={event=>setHeaderMediaId(event.target.value)}><option value="">选择媒体</option>{headerAssets.map(asset=><option value={asset.id} key={asset.id}>{asset.fileName}</option>)}</select></label>}{bodyText&&<p className="template-preview">{bodyText}</p>}{values.map((value,index)=><label key={index}>变量 {index+1}<input value={value} onChange={event=>setValues(all=>all.map((item,i)=>i===index?event.target.value:item))}/></label>)}{error&&<span className="login-error">{error}</span>}<button className="login-submit" disabled={busy||!template||!phone.trim()||Boolean(headerType&&!headerMediaId)||values.some(value=>!value.trim())} onClick={()=>void submit()}>{busy?"正在创建…":"使用模板创建会话"}</button></section></div>;
 }
 
-function LoginDialog({connected,token,canClose,onClose,onLogin,onLogout}:{connected:boolean;token:string;canClose:boolean;onClose:()=>void;onLogin:(token:string,user:User)=>void;onLogout:()=>void}){
-  const [email,setEmail]=useState("");const [password,setPassword]=useState("");const [error,setError]=useState("");const [busy,setBusy]=useState(false);const [agentName,setAgentName]=useState("Windows Agent");const [enrollment,setEnrollment]=useState<{code:string;expiresAt:string}|null>(null);const [copied,setCopied]=useState(false);
-  async function submit(){setBusy(true);setError("");try{const response=await fetch(`${API_URL}/api/v1/auth/login`,{method:"POST",credentials:"include",headers:{"content-type":"application/json"},body:JSON.stringify({email,password})});const body=await response.json() as {accessToken?:string;user?:User;error?:string};if(!response.ok||!body.accessToken||!body.user)throw new Error(response.status===401?"邮箱或密码错误":`登录失败（HTTP ${response.status}）`);onLogin(body.accessToken,body.user);}catch(reason){setError(reason instanceof Error?reason.message:"登录失败");}finally{setBusy(false);}}
+function LoginDialog({connected,token,canClose,onClose,onLogin,onLogout}:{connected:boolean;token:string;canClose:boolean;onClose:()=>void;onLogin:(token:string,user:User,rememberMe:boolean)=>void;onLogout:()=>void}){
+  const [email,setEmail]=useState("");const [password,setPassword]=useState("");const [rememberMe,setRememberMe]=useState(true);const [error,setError]=useState("");const [busy,setBusy]=useState(false);const [agentName,setAgentName]=useState("Windows Agent");const [enrollment,setEnrollment]=useState<{code:string;expiresAt:string}|null>(null);const [copied,setCopied]=useState(false);
+  async function submit(){setBusy(true);setError("");try{const response=await fetch(`${API_URL}/api/v1/auth/login`,{method:"POST",credentials:"include",headers:{"content-type":"application/json"},body:JSON.stringify({email,password,rememberMe})});const body=await response.json() as {accessToken?:string;user?:User;error?:string};if(!response.ok||!body.accessToken||!body.user)throw new Error(response.status===401?"邮箱或密码错误":`登录失败（HTTP ${response.status}）`);onLogin(body.accessToken,body.user,rememberMe);}catch(reason){setError(reason instanceof Error?reason.message:"登录失败");}finally{setBusy(false);}}
   async function createEnrollment(){setBusy(true);setError("");setEnrollment(null);try{const response=await fetch(`${API_URL}/api/v1/agents/enrollment`,{method:"POST",headers:{authorization:`Bearer ${token}`,"content-type":"application/json"},body:JSON.stringify({name:agentName.trim()||"Windows Agent"})});if(response.status===401)throw new Error("登录已过期");if(response.status===403)throw new Error("只有管理员可以生成注册码");if(!response.ok)throw new Error(`注册码生成失败（HTTP ${response.status}）`);const body=await response.json() as {enrollmentCode:string;expiresAt:string};setEnrollment({code:body.enrollmentCode,expiresAt:body.expiresAt});}catch(reason){setError(reason instanceof Error?reason.message:"注册码生成失败");}finally{setBusy(false);}}
   async function copyEnrollment(){if(!enrollment)return;try{await navigator.clipboard.writeText(enrollment.code);setCopied(true);window.setTimeout(()=>setCopied(false),1500);}catch{setError("剪贴板不可用，请手动复制");}}
-  return <div className="modal-backdrop" role="presentation"><section className="login-dialog" role="dialog" aria-modal="true" aria-labelledby="login-title">{canClose&&<button className="login-close" onClick={onClose} aria-label="关闭"><X size={17}/></button>}<span className="login-logo"><ShieldCheck size={21}/></span><h2 id="login-title">{connected?"中心设置":"登录 RelayDesk"}</h2><p>{connected?"生成 Agent 一次性注册码，或退出当前坐席。":"仅限获授权的 GeekMT 团队成员。请使用管理员发放的 RelayDesk 坐席凭据。"}</p>{connected?<><div className="center-endpoint"><span>中心地址</span><strong>{API_URL||"当前站点"}</strong></div><label>Agent 设备名称<input value={agentName} onChange={event=>setAgentName(event.target.value)} maxLength={80}/></label><button className="login-submit" disabled={busy} onClick={()=>void createEnrollment()}>{busy?"正在生成...":"生成一次性注册码"}</button>{enrollment&&<div className="enrollment-result"><span>一次性注册码</span><code>{enrollment.code}</code><small>有效期至 {new Date(enrollment.expiresAt).toLocaleString("zh-CN")}</small><button onClick={()=>void copyEnrollment()}>{copied?"已复制":"复制注册码"}</button></div>}{error&&<span className="login-error">{error}</span>}<button className="login-submit danger" onClick={onLogout}>退出中心平台</button></>:<><div className="login-safety"><ShieldCheck size={15}/><span>不要输入 WhatsApp / Meta 密码、短信验证码或两步验证 PIN。</span></div><label>RelayDesk 邮箱<input value={email} onChange={event=>setEmail(event.target.value)} autoComplete="username" autoFocus/></label><label>RelayDesk 密码<input type="password" value={password} onChange={event=>setPassword(event.target.value)} onKeyDown={event=>{if(event.key==="Enter")void submit();}} autoComplete="current-password"/></label>{error&&<span className="login-error">{error}</span>}<button className="login-submit" disabled={busy||!email||!password} onClick={()=>void submit()}>{busy?"正在验证...":"登录私有工作台"}</button><small className="login-affiliation">由 GeekMT 运营 · 与 Meta 或 WhatsApp 无隶属、赞助或背书关系</small></>}</section></div>;
+  return <div className="modal-backdrop" role="presentation"><section className="login-dialog" role="dialog" aria-modal="true" aria-labelledby="login-title">{canClose&&<button className="login-close" onClick={onClose} aria-label="关闭"><X size={17}/></button>}<span className="login-logo"><ShieldCheck size={21}/></span><h2 id="login-title">{connected?"中心设置":"登录 RelayDesk"}</h2><p>{connected?"生成 Agent 一次性注册码，或退出当前坐席。":"仅限获授权的 GeekMT 团队成员。请使用管理员发放的 RelayDesk 坐席凭据。"}</p>{connected?<><div className="center-endpoint"><span>中心地址</span><strong>{API_URL||"当前站点"}</strong></div><label>Agent 设备名称<input value={agentName} onChange={event=>setAgentName(event.target.value)} maxLength={80}/></label><button className="login-submit" disabled={busy} onClick={()=>void createEnrollment()}>{busy?"正在生成...":"生成一次性注册码"}</button>{enrollment&&<div className="enrollment-result"><span>一次性注册码</span><code>{enrollment.code}</code><small>有效期至 {new Date(enrollment.expiresAt).toLocaleString("zh-CN")}</small><button onClick={()=>void copyEnrollment()}>{copied?"已复制":"复制注册码"}</button></div>}{error&&<span className="login-error">{error}</span>}<button className="login-submit danger" onClick={onLogout}>退出中心平台</button></>:<><div className="login-safety"><ShieldCheck size={15}/><span>不要输入 WhatsApp / Meta 密码、短信验证码或两步验证 PIN。</span></div><label>RelayDesk 邮箱<input value={email} onChange={event=>setEmail(event.target.value)} autoComplete="username" autoFocus/></label><label>RelayDesk 密码<input type="password" value={password} onChange={event=>setPassword(event.target.value)} onKeyDown={event=>{if(event.key==="Enter")void submit();}} autoComplete="current-password"/></label><label className="remember-login"><input type="checkbox" checked={rememberMe} onChange={event=>setRememberMe(event.target.checked)}/><span><b>保持登录</b><small>除非主动退出，否则关闭浏览器后仍保持登录</small></span></label>{error&&<span className="login-error">{error}</span>}<button className="login-submit" disabled={busy||!email||!password} onClick={()=>void submit()}>{busy?"正在验证...":"登录私有工作台"}</button><small className="login-affiliation">由 GeekMT 运营 · 与 Meta 或 WhatsApp 无隶属、赞助或背书关系</small></>}</section></div>;
 }

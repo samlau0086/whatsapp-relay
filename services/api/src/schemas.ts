@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { WEIGHT_UNITS } from "./weight.js";
 
-export const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1) });
+export const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(1),
+  rememberMe: z.boolean().default(false),
+});
 export const apiKeyScopeSchema=z.enum(["products:read","products:write","messages:read","messages:send"]);
 export const apiKeyCreateSchema=z.object({name:z.string().trim().min(1).max(120),scopes:z.array(apiKeyScopeSchema).min(1).max(4),expiresInDays:z.union([z.literal(30),z.literal(90),z.literal(365),z.null()]).default(90)}).superRefine((value,ctx)=>{if(new Set(value.scopes).size!==value.scopes.length)ctx.addIssue({code:"custom",path:["scopes"],message:"api key scopes must be unique"});});
 const templateParameterSchema=z.union([
