@@ -6,16 +6,12 @@ export function formatMessageTime(value: Date | string, now = new Date()): strin
 
   const dayDifference = localCalendarDay(now) - localCalendarDay(date);
   if (dayDifference === 0) {
-    return date.toLocaleTimeString("zh-CN", {
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    });
+    return formatClockTime(date);
   }
-  if (dayDifference === 1) return "昨天";
-  if (dayDifference === 2) return "前天";
+  if (dayDifference === 1) return `昨天 ${formatClockTime(date)}`;
+  if (dayDifference === 2) return `前天 ${formatClockTime(date)}`;
 
-  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())}`;
+  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${formatClockTime(date)}`;
 }
 
 export function formatMessageTimeTitle(value: Date | string): string {
@@ -27,6 +23,14 @@ export function formatMessageTimeTitle(value: Date | string): string {
 
 function localCalendarDay(date: Date): number {
   return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / DAY_IN_MILLISECONDS;
+}
+
+function formatClockTime(date: Date): string {
+  return date.toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
 }
 
 function pad(value: number): string {
