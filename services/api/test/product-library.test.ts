@@ -195,6 +195,19 @@ test("product pagination includes nearby pages, boundary shortcuts, and direct j
   assert.match(component,/Math\.ceil\(total\/pageSize\)/);
 });
 
+test("product pagination uses bounded stale-while-revalidate data and media caches",async()=>{
+  const component=await readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8");
+  assert.match(component,/const PRODUCT_PAGE_CACHE_TTL=60_000/);
+  assert.match(component,/const PRODUCT_PAGE_CACHE_LIMIT=60/);
+  assert.match(component,/const PRODUCT_CURRENCY_CACHE_TTL=5\*60_000/);
+  assert.match(component,/const productPageFlights=new Map/);
+  assert.match(component,/cached&&fresh&&cachedCurrency&&!options\.force/);
+  assert.match(component,/adjacentPages=\[page-1,page\+1\]/);
+  assert.match(component,/invalidateProductCache/);
+  assert.match(component,/acquireMedia\(mediaId/);
+  assert.match(component,/rootMargin:"500px 0px"/);
+});
+
 test("product tags support searching, creating, editing, and deleting labels",async()=>{
   const dialog=await readFile(new URL("../../../app/product-editor-dialog.tsx",import.meta.url),"utf8");
   assert.match(dialog,/role="combobox"/);

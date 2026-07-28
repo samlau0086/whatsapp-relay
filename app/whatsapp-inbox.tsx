@@ -95,6 +95,60 @@ function releaseMedia(id:string){
 type Account = { id:string; name:string; phone:string; status:string; reason:string; transport:"web"|"cloud"; webhookStatus?:string; credentialsStatus?:string; lastEvent?:string };
 type ProductPriceTier={minQuantity:number;unitAmount:number};
 type ProductItem={id:string;sku:string;name:string;description:string;category:string;brand:string;defaultUnitAmount:number;priceTiers:ProductPriceTier[];currency:string;weightAmount:number|null;weightUnit:WeightUnit|null;imageMediaId:string|null;imageName:string;tags:TagItem[];createdAt:string;updatedAt:string};
+type ProductPageCacheEntry={products:ProductItem[];total:number;tags:string[];categories:string[];brands:string[];fetchedAt:number;lastUsed:number};
+type ProductPageResponse={data:Array<Record<string,unknown>>;total:number;tags:string[];categories?:string[];brands?:string[]};
+const PRODUCT_PAGE_CACHE_TTL=60_000;
+const PRODUCT_PAGE_CACHE_LIMIT=60;
+const PRODUCT_CURRENCY_CACHE_TTL=5*60_000;
+const productPageCache=new Map<string,ProductPageCacheEntry>();
+const productPageFlights=new Map<string,Promise<{entry:ProductPageCacheEntry;token:string}>>();
+const productCurrencyCache=new Map<string,{config:CurrencyConfig;fetchedAt:number}>();
+const productCurrencyFlights=new Map<string,Promise<{config:CurrencyConfig;token:string}>>();
+const productCacheEpoch=new Map<string,number>();
+
+function productCacheKey(subject:string,input:{page:number;pageSize:number;query:string;currency:string;category:string;brand:string;tag:string}){
+  return`${subject}:${productCacheEpoch.get(subject)??0}|${JSON.stringify(input)}`;
+}
+
+function pruneProductPageCache(){
+  if(productPageCache.size<=PRODUCT_PAGE_CACHE_LIMIT)return;
+  const oldest=[...productPageCache.entries()].sort((a,b)=>a[1].lastUsed-b[1].lastUsed);
+  while(productPageCache.size>PRODUCT_PAGE_CACHE_LIMIT&&oldest.length)productPageCache.delete(oldest.shift()![0]);
+}
+
+function invalidateProductCache(subject:string){
+  productCacheEpoch.set(subject,(productCacheEpoch.get(subject)??0)+1);
+  for(const key of productPageCache.keys())if(key.startsWith(`${subject}:`))productPageCache.delete(key);
+}
+
+function fetchProductPage(key:string,path:string,token:string):Promise<{entry:ProductPageCacheEntry;token:string}>{
+  const current=productPageFlights.get(key);
+  if(current)return current;
+  const pending=authorizedFetch(path,token).then(async result=>{
+    if(!result.response.ok)throw new Error(`产品库加载失败（HTTP ${result.response.status}）`);
+    const body=await result.response.json() as ProductPageResponse;
+    const now=Date.now(),entry:ProductPageCacheEntry={products:body.data.map(mapProduct),total:body.total,tags:body.tags,categories:body.categories??[],brands:body.brands??[],fetchedAt:now,lastUsed:now};
+    productPageCache.set(key,entry);pruneProductPageCache();
+    return{entry,token:result.token};
+  }).finally(()=>productPageFlights.delete(key));
+  productPageFlights.set(key,pending);
+  return pending;
+}
+
+function fetchProductCurrencies(subject:string,token:string,force=false):Promise<{config:CurrencyConfig;token:string}>{
+  const cached=productCurrencyCache.get(subject);
+  if(!force&&cached&&Date.now()-cached.fetchedAt<PRODUCT_CURRENCY_CACHE_TTL)return Promise.resolve({config:cached.config,token});
+  const current=productCurrencyFlights.get(subject);
+  if(current)return current;
+  const pending=authorizedFetch("/api/v1/currencies",token).then(async result=>{
+    if(!result.response.ok)throw new Error(`货币配置加载失败（HTTP ${result.response.status}）`);
+    const config=await result.response.json() as CurrencyConfig;
+    productCurrencyCache.set(subject,{config,fetchedAt:Date.now()});
+    return{config,token:result.token};
+  }).finally(()=>productCurrencyFlights.delete(subject));
+  productCurrencyFlights.set(subject,pending);
+  return pending;
+}
 type NoteItem={id:string;body:string;userId:string|null;authorName:string;createdAt:string;updatedAt:string};
 type ContactEmail={id?:string;label:string;email:string;isPrimary:boolean};
 type ContactDate={month:number;day:number;year:number|null};
@@ -5204,25 +5258,62 @@ function paymentStatusText(status:string){return({CREATING:"生成中",DRAFT:"�
 function productPaginationItems(current:number,total:number):Array<number|string>{const pages=new Set<number>([1,total]);for(let value=Math.max(1,current-3);value<=Math.min(total,current+3);value++)pages.add(value);const sorted=[...pages].sort((a,b)=>a-b),items:Array<number|string>=[];for(const value of sorted){const previous=items.at(-1);if(typeof previous==="number"&&value-previous>1)items.push(`ellipsis-${previous}-${value}`);items.push(value);}return items;}
 
 function ProductManagement({token,role,onToken,onToast}:{token:string;role:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){
-  const [products,setProducts]=useState<ProductItem[]>([]),[currencyConfig,setCurrencyConfig]=useState<CurrencyConfig>(DEFAULT_CURRENCY_CONFIG),[loading,setLoading]=useState(true),[error,setError]=useState(""),[query,setQuery]=useState(""),[currency,setCurrency]=useState(""),[category,setCategory]=useState(""),[brand,setBrand]=useState(""),[tag,setTag]=useState(""),[tagNames,setTagNames]=useState<string[]>([]),[categoryNames,setCategoryNames]=useState<string[]>([]),[brandNames,setBrandNames]=useState<string[]>([]),[page,setPage]=useState(1),[pageSize,setPageSize]=useState<number>(PRODUCT_PAGE_SIZES[0]),[jumpPage,setJumpPage]=useState(""),[total,setTotal]=useState(0),[view,setView]=useState<"card"|"list">("card"),[editing,setEditing]=useState<ProductItem|"new"|null>(null),[importing,setImporting]=useState(false),[selected,setSelected]=useState<string[]>([]),[bulkEditing,setBulkEditing]=useState(false),[generating,setGenerating]=useState(false);const loadVersion=useRef(0);
-  const load=useCallback(async()=>{const version=++loadVersion.current;setLoading(true);try{const params=new URLSearchParams({limit:String(pageSize),offset:String((page-1)*pageSize)});if(query.trim())params.set("q",query.trim());if(currency)params.set("currency",currency);if(category)params.set("category",category);if(brand)params.set("brand",brand);if(tag)params.set("tag",tag);const [result,currencyResult]=await Promise.all([authorizedFetch(`/api/v1/products?${params}`,token),authorizedFetch("/api/v1/currencies",token)]);if(version!==loadVersion.current)return;if(result.token!==token)onToken(result.token);else if(currencyResult.token!==token)onToken(currencyResult.token);if(!result.response.ok)throw new Error(`产品库加载失败（HTTP ${result.response.status}）`);const body=await result.response.json() as {data:Array<Record<string,unknown>>;total:number;tags:string[];categories:string[];brands:string[]};if(page>1&&!body.data.length){setPage(page-1);return;}setProducts(body.data.map(mapProduct));setTotal(body.total);setTagNames(body.tags);setCategoryNames(body.categories??[]);setBrandNames(body.brands??[]);if(currencyResult.response.ok)setCurrencyConfig(await currencyResult.response.json() as CurrencyConfig);setError("");}catch(reason){if(version===loadVersion.current)setError(reason instanceof Error?reason.message:"产品库加载失败");}finally{if(version===loadVersion.current)setLoading(false);}},[token,onToken,page,pageSize,query,currency,category,brand,tag]);
+  const [products,setProducts]=useState<ProductItem[]>([]),[currencyConfig,setCurrencyConfig]=useState<CurrencyConfig>(DEFAULT_CURRENCY_CONFIG),[loading,setLoading]=useState(true),[refreshing,setRefreshing]=useState(false),[error,setError]=useState(""),[query,setQuery]=useState(""),[currency,setCurrency]=useState(""),[category,setCategory]=useState(""),[brand,setBrand]=useState(""),[tag,setTag]=useState(""),[tagNames,setTagNames]=useState<string[]>([]),[categoryNames,setCategoryNames]=useState<string[]>([]),[brandNames,setBrandNames]=useState<string[]>([]),[page,setPage]=useState(1),[pageSize,setPageSize]=useState<number>(PRODUCT_PAGE_SIZES[0]),[jumpPage,setJumpPage]=useState(""),[total,setTotal]=useState(0),[view,setView]=useState<"card"|"list">("card"),[editing,setEditing]=useState<ProductItem|"new"|null>(null),[importing,setImporting]=useState(false),[selected,setSelected]=useState<string[]>([]),[bulkEditing,setBulkEditing]=useState(false),[generating,setGenerating]=useState(false);const loadVersion=useRef(0);
+  const load=useCallback(async(options:{force?:boolean}={})=>{
+    const version=++loadVersion.current,subject=tokenSubject(token)||"unknown";
+    const input={page,pageSize,query:query.trim(),currency,category,brand,tag},key=productCacheKey(subject,input);
+    const params=new URLSearchParams({limit:String(pageSize),offset:String((page-1)*pageSize)});
+    if(input.query)params.set("q",input.query);if(currency)params.set("currency",currency);if(category)params.set("category",category);if(brand)params.set("brand",brand);if(tag)params.set("tag",tag);
+    const cached=productPageCache.get(key),fresh=Boolean(cached&&Date.now()-cached.fetchedAt<PRODUCT_PAGE_CACHE_TTL),cachedCurrency=productCurrencyCache.get(subject);
+    const apply=(entry:ProductPageCacheEntry)=>{entry.lastUsed=Date.now();setProducts(entry.products);setTotal(entry.total);setTagNames(entry.tags);setCategoryNames(entry.categories);setBrandNames(entry.brands);};
+    if(cached){apply(cached);setLoading(false);setError("");}else setLoading(true);
+    if(cachedCurrency)setCurrencyConfig(cachedCurrency.config);
+    if(cached&&fresh&&cachedCurrency&&!options.force)return;
+    setRefreshing(Boolean(cached));
+    try{
+      const [pageResult,currencyResult]=await Promise.all([
+        cached&&fresh&&!options.force?Promise.resolve({entry:cached,token}):fetchProductPage(key,`/api/v1/products?${params}`,token),
+        fetchProductCurrencies(subject,token),
+      ]);
+      if(version!==loadVersion.current)return;
+      if(pageResult.token!==token)onToken(pageResult.token);else if(currencyResult.token!==token)onToken(currencyResult.token);
+      if(page>1&&!pageResult.entry.products.length){productPageCache.delete(key);setPage(page-1);return;}
+      apply(pageResult.entry);setCurrencyConfig(currencyResult.config);setError("");
+    }catch(reason){
+      if(version===loadVersion.current&&!cached)setError(reason instanceof Error?reason.message:"产品库加载失败");
+    }finally{if(version===loadVersion.current){setLoading(false);setRefreshing(false);}}
+  },[token,onToken,page,pageSize,query,currency,category,brand,tag]);
   const collageRequest=useCallback(async(path:string,init?:RequestInit)=>{const result=await authorizedFetch(path,token,init);if(result.token!==token)onToken(result.token);return result;},[token,onToken]);
   useEffect(()=>{const timer=window.setTimeout(()=>void load(),query?250:0);return()=>window.clearTimeout(timer);},[load,query]);
   const pageCount=Math.max(1,Math.ceil(total/pageSize)),pageItems=productPaginationItems(page,pageCount),visible=products;
+  useEffect(()=>{
+    if(loading||error)return;
+    const timer=window.setTimeout(()=>{
+      const subject=tokenSubject(token)||"unknown",adjacentPages=[page-1,page+1].filter(value=>value>=1&&value<=pageCount);
+      for(const targetPage of adjacentPages){
+        const input={page:targetPage,pageSize,query:query.trim(),currency,category,brand,tag},key=productCacheKey(subject,input);
+        if(productPageCache.has(key)||productPageFlights.has(key))continue;
+        const params=new URLSearchParams({limit:String(pageSize),offset:String((targetPage-1)*pageSize)});
+        if(input.query)params.set("q",input.query);if(currency)params.set("currency",currency);if(category)params.set("category",category);if(brand)params.set("brand",brand);if(tag)params.set("tag",tag);
+        void fetchProductPage(key,`/api/v1/products?${params}`,token).then(result=>{if(result.token!==token)onToken(result.token);}).catch(()=>{});
+      }
+    },300);
+    return()=>window.clearTimeout(timer);
+  },[loading,error,token,onToken,page,pageCount,pageSize,query,currency,category,brand,tag]);
   const allPageSelected=Boolean(visible.length)&&visible.every(product=>selected.includes(product.id));
   function jumpToPage(){if(!/^\d+$/.test(jumpPage))return;setPage(Math.min(pageCount,Math.max(1,Number(jumpPage))));setJumpPage("");}
   function toggleSelected(id:string){setSelected(ids=>ids.includes(id)?ids.filter(item=>item!==id):[...ids,id]);}
   function togglePage(){const pageIds=visible.map(product=>product.id);setSelected(ids=>allPageSelected?ids.filter(id=>!pageIds.includes(id)):[...new Set([...ids,...pageIds])]);}
-  async function remove(product:ProductItem){if(!await confirmAction(`产品“${product.name}”将从产品库移除，历史订单不会受到影响。`,{title:"删除产品？",confirmLabel:"删除"}))return;const result=await authorizedFetch(`/api/v1/products/${product.id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);if(!result.response.ok){onToast(result.response.status===403?"只有主管或管理员可以删除产品":`删除失败（HTTP ${result.response.status}）`);return;}onToast("产品已从产品库移除，历史订单保持不变");await load();}
-  return <section className="management-panel product-management"><header className="management-head"><div><span className="eyebrow">团队共享目录</span><h1>产品库</h1><p>集中维护产品 SKU、阶梯价格、图片和标签，创建订单或发送产品卡片时直接选用。</p></div><div><button className="secondary-action" onClick={()=>void load()}><RefreshCw size={15}/>刷新</button><button className="secondary-action" onClick={()=>setImporting(true)}><UploadCloud size={15}/>CSV 导入</button><button className="primary-action" onClick={()=>setEditing("new")}><Plus size={15}/>新增产品</button></div></header>
+  async function remove(product:ProductItem){if(!await confirmAction(`产品“${product.name}”将从产品库移除，历史订单不会受到影响。`,{title:"删除产品？",confirmLabel:"删除"}))return;const result=await authorizedFetch(`/api/v1/products/${product.id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);if(!result.response.ok){onToast(result.response.status===403?"只有主管或管理员可以删除产品":`删除失败（HTTP ${result.response.status}）`);return;}invalidateProductCache(tokenSubject(result.token)||"unknown");onToast("产品已从产品库移除，历史订单保持不变");await load({force:true});}
+  return <section className="management-panel product-management"><header className="management-head"><div><span className="eyebrow">团队共享目录</span><h1>产品库</h1><p>集中维护产品 SKU、阶梯价格、图片和标签，创建订单或发送产品卡片时直接选用。</p></div><div><button className="secondary-action" disabled={refreshing} onClick={()=>void load({force:true})}><RefreshCw className={refreshing?"spin":""} size={15}/>{refreshing?"刷新中…":"刷新"}</button><button className="secondary-action" onClick={()=>setImporting(true)}><UploadCloud size={15}/>CSV 导入</button><button className="primary-action" onClick={()=>setEditing("new")}><Plus size={15}/>新增产品</button></div></header>
     <div className="product-filters"><label><Search size={14}/><input value={query} onChange={event=>{setQuery(event.target.value);setPage(1);}} placeholder="搜索名称、SKU、描述、分类或品牌"/></label><select value={category} onChange={event=>{setCategory(event.target.value);setPage(1);}} aria-label="按分类筛选"><option value="">全部分类</option>{categoryNames.map(item=><option key={item}>{item}</option>)}</select><select value={brand} onChange={event=>{setBrand(event.target.value);setPage(1);}} aria-label="按品牌筛选"><option value="">全部品牌</option>{brandNames.map(item=><option key={item}>{item}</option>)}</select><select value={currency} onChange={event=>{setCurrency(event.target.value);setPage(1);}} aria-label="按币种筛选"><option value="">全部币种</option>{currencyConfig.currencies.map(item=><option key={item.code} value={item.code}>{item.code} · {item.name}</option>)}</select><select value={tag} onChange={event=>{setTag(event.target.value);setPage(1);}} aria-label="按标签筛选"><option value="">全部标签</option>{tagNames.map(item=><option key={item}>{item}</option>)}</select><div className="product-view-tools"><span>共 {total} 个产品</span><div role="group" aria-label="产品显示方式"><button className={view==="card"?"active":""} onClick={()=>setView("card")} aria-label="卡片视图" title="卡片视图"><LayoutGrid size={14}/></button><button className={view==="list"?"active":""} onClick={()=>setView("list")} aria-label="列表视图" title="列表视图"><List size={14}/></button></div></div></div>
     {!loading&&!error&&visible.length>0&&<div className="product-bulk-toolbar"><label><input type="checkbox" checked={allPageSelected} onChange={togglePage}/>全选本页（{visible.length}）</label><span>已选择 {selected.length} 个产品</span>{selected.length>0&&<><button className="secondary-action" onClick={()=>setSelected([])}>取消选择</button><button className="secondary-action" onClick={()=>setBulkEditing(true)}><Pencil size={14}/>批量编辑</button><button className="primary-action" onClick={()=>setGenerating(true)}><LayoutGrid size={14}/>生成素材</button></>}</div>}
     {loading?<EmptyState title="正在读取产品库" text="请稍候…"/>:error?<EmptyState title="产品库加载失败" text={error}/>:visible.length?<div className={`product-grid ${view}-view`}>{visible.map(product=>{const last=product.priceTiers.at(-1),isSelected=selected.includes(product.id);return <article className={`product-card ${isSelected?"selected":""}`} key={product.id}><label className="product-select"><input type="checkbox" checked={isSelected} onChange={()=>toggleSelected(product.id)}/><span>{isSelected?<Check size={13}/>:null}</span><i>选择</i></label><ProductImage className="product-library-image" mediaId={product.imageMediaId} token={token} onToken={onToken} alt={product.name}/><div className="product-card-copy"><header><span><b>{product.name}</b><small>{product.sku} · 更新于 {new Date(product.updatedAt).toLocaleDateString("zh-CN")}{product.weightAmount&&product.weightUnit?` · 重量 ${formatWeight(product.weightAmount,product.weightUnit)}`:""}</small></span><strong>{product.currency} {last&&last.unitAmount!==product.defaultUnitAmount?`${last.unitAmount.toFixed(2)}–${product.defaultUnitAmount.toFixed(2)}`:product.defaultUnitAmount.toFixed(2)}</strong></header>{(product.category||product.brand)&&<div className="product-card-taxonomy">{product.brand&&<span>品牌 · {product.brand}</span>}{product.category&&<span>分类 · {product.category}</span>}</div>}<p className={`product-card-description ${product.description?"":"empty"}`}>{product.description||"暂无描述"}</p><div className="product-tier-summary">{product.priceTiers.map(tier=><span key={tier.minQuantity}>{tier.minQuantity}+ · {product.currency} {tier.unitAmount.toFixed(2)}</span>)}</div><div className="product-card-tags">{product.tags.length?product.tags.map(item=><i key={item.id} style={{background:item.color}}>{item.name}</i>):<span>暂无标签</span>}</div><footer><button onClick={()=>setEditing(product)}><Pencil size={13}/>编辑</button>{["admin","supervisor"].includes(role)&&<button className="danger-text" onClick={()=>void remove(product)}><Trash2 size={13}/>删除</button>}</footer></div></article>;})}</div>:<EmptyState title="暂无匹配产品" text="新增产品，或调整搜索与筛选条件"/>}
     {!loading&&!error&&total>0&&<nav className="product-pagination" aria-label="产品分页"><label className="product-page-size">每页<select value={pageSize} onChange={event=>{setPageSize(Number(event.target.value));setPage(1);setJumpPage("");}} aria-label="每页产品数">{PRODUCT_PAGE_SIZES.map(size=><option key={size} value={size}>{size}</option>)}</select>个</label><button disabled={page<=1} onClick={()=>setPage(value=>Math.max(1,value-1))}>上一页</button><div className="product-page-numbers">{pageItems.map(item=>typeof item==="number"?<button key={item} className={item===page?"page-number active":"page-number"} aria-current={item===page?"page":undefined} aria-label={`第 ${item} 页`} onClick={()=>setPage(item)}>{item}</button>:<span className="product-pagination-ellipsis" key={item}>…</span>)}</div><button disabled={page>=pageCount} onClick={()=>setPage(value=>Math.min(pageCount,value+1))}>下一页</button><span className="product-pagination-summary">第 {page} / {pageCount} 页</span><form className="product-page-jump" onSubmit={event=>{event.preventDefault();jumpToPage();}}><label>跳至<input value={jumpPage} onChange={event=>setJumpPage(event.target.value.replace(/\D/g,"").slice(0,6))} inputMode="numeric" aria-label="跳转页码" placeholder={String(page)}/>页</label><button type="submit" disabled={!jumpPage}>跳转</button></form></nav>}
-    {editing&&<ProductEditorDialog product={editing==="new"?undefined:editing} products={products} categories={categoryNames} brands={brandNames} currencies={currencyConfig.currencies} baseCurrency={currencyConfig.baseCurrency} request={(path,init)=>authorizedFetch(path,token,init)} onToken={onToken} onClose={()=>setEditing(null)} onSaved={async text=>{setEditing(null);onToast(text);await load();}}/>}
-    {importing&&<ProductImportDialog currencies={currencyConfig.currencies} request={(path,init)=>authorizedFetch(path,token,init)} onToken={onToken} onClose={()=>setImporting(false)} onImported={async result=>{setImporting(false);onToast(`导入完成：新增 ${result.created} 个，更新名称 ${result.updated} 个`);await load();}}/>}
+    {editing&&<ProductEditorDialog product={editing==="new"?undefined:editing} products={products} categories={categoryNames} brands={brandNames} currencies={currencyConfig.currencies} baseCurrency={currencyConfig.baseCurrency} request={(path,init)=>authorizedFetch(path,token,init)} onToken={onToken} onClose={()=>setEditing(null)} onSaved={async text=>{setEditing(null);invalidateProductCache(tokenSubject(token)||"unknown");onToast(text);await load({force:true});}}/>}
+    {importing&&<ProductImportDialog currencies={currencyConfig.currencies} request={(path,init)=>authorizedFetch(path,token,init)} onToken={onToken} onClose={()=>setImporting(false)} onImported={async result=>{setImporting(false);invalidateProductCache(tokenSubject(token)||"unknown");onToast(`导入完成：新增 ${result.created} 个，更新名称 ${result.updated} 个`);await load({force:true});}}/>}
     {generating&&<CollageGenerateDialog productIds={selected} request={collageRequest} onClose={()=>setGenerating(false)} onGenerated={()=>{setGenerating(false);setSelected([]);onToast("拼图素材已生成");}}/>}
-    {bulkEditing&&<ProductBulkEditDialog count={selected.length} productIds={selected} token={token} onToken={onToken} onClose={()=>setBulkEditing(false)} onSaved={async text=>{setBulkEditing(false);setSelected([]);onToast(text);await load();}}/>}
+    {bulkEditing&&<ProductBulkEditDialog count={selected.length} productIds={selected} token={token} onToken={onToken} onClose={()=>setBulkEditing(false)} onSaved={async text=>{setBulkEditing(false);setSelected([]);invalidateProductCache(tokenSubject(token)||"unknown");onToast(text);await load({force:true});}}/>}
   </section>;
 }
 
@@ -5250,30 +5341,35 @@ function ProductImage({
   alt: string;
   className?: string;
 }) {
-  const [url, setUrl] = useState("");
+  const [loaded, setLoaded] = useState<{id:string;url:string}>({id:"",url:""});
+  const hostRef=useRef<HTMLDivElement>(null),tokenRef=useRef(token),onTokenRef=useRef(onToken);
+  const url=mediaId&&loaded.id===mediaId?loaded.url:"";
+  useEffect(()=>{tokenRef.current=token;},[token]);
+  useEffect(()=>{onTokenRef.current=onToken;},[onToken]);
   useEffect(() => {
-    if (!mediaId) {
-      const reset = window.setTimeout(() => setUrl(""), 0);
-      return () => window.clearTimeout(reset);
-    }
-    const controller = new AbortController();
-    let objectUrl = "";
-    void (async () => {
-      const result = await authorizedFetch(`/api/v1/media/${mediaId}`, token, {
-        signal: controller.signal,
-      });
-      if (result.token !== token) onToken(result.token);
-      if (!result.response.ok) return;
-      objectUrl = URL.createObjectURL(await result.response.blob());
-      setUrl(objectUrl);
-    })().catch(() => {});
-    return () => {
-      controller.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    if(!mediaId)return;
+    let cancelled=false,acquired=false;
+    let observer:IntersectionObserver|undefined;
+    const start=()=>{
+      if(acquired)return;
+      acquired=true;observer?.disconnect();
+      void acquireMedia(mediaId,async()=>{
+        const currentToken=tokenRef.current,result=await authorizedFetch(`/api/v1/media/${mediaId}`,currentToken);
+        if(result.token!==currentToken)onTokenRef.current(result.token);
+        if(!result.response.ok)throw new Error(`HTTP ${result.response.status}`);
+        return result.response.blob();
+      }).then(value=>{if(!cancelled)setLoaded({id:mediaId,url:value});}).catch(()=>{});
     };
-  }, [mediaId, token, onToken]);
+    const element=hostRef.current;
+    if(!element||typeof IntersectionObserver==="undefined")start();
+    else{
+      observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting))start();},{rootMargin:"500px 0px"});
+      observer.observe(element);
+    }
+    return()=>{cancelled=true;observer?.disconnect();if(acquired)releaseMedia(mediaId);};
+  }, [mediaId]);
   return (
-    <div className={`product-image ${className}`}>
+    <div ref={hostRef} className={`product-image ${className}`}>
       {url ? (
         <Image src={url} alt={alt} width={480} height={310} unoptimized />
       ) : (
