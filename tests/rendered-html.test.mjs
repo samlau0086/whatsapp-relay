@@ -435,3 +435,19 @@ test("failed and uncertain messages expose a manual resend action", async () => 
   assert.match(server,/app\.delete\("\/api\/v1\/conversations\/:id\/messages\/failed"/);
   assert.match(server,/status IN \('failed','uncertain'\)/);
 });
+
+test("status campaigns reuse the account media library for images and videos", async () => {
+  const [statusCenter,mediaDialog,css]=await Promise.all([
+    readFile(new URL("../app/status-center.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../app/product-image-media-dialog.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../app/globals.css",import.meta.url),"utf8"),
+  ]);
+  assert.match(statusCenter,/ProductImageMediaDialog/);
+  assert.match(statusCenter,/mediaId:item\.media\?\.id/);
+  assert.match(statusCenter,/acceptedMimeTypes=\{pickerItem\.type==="image"\?\["image\/jpeg","image\/png","image\/webp"\]:\["video\/mp4"\]\}/);
+  assert.doesNotMatch(statusCenter,/form\.append\("file",item\.file\)/);
+  assert.match(mediaDialog,/mimeType==="video\/mp4"\?<video/);
+  assert.match(mediaDialog,/"video\/mp4":"MP4"/);
+  assert.match(css,/\.status-media-picker\{z-index:1450\}/);
+  assert.match(css,/\.status-media-select\{/);
+});

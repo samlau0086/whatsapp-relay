@@ -1826,6 +1826,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           accounts={accounts}
           role={userRole}
           request={taskRequest}
+          onToken={setApiToken}
           onToast={setToast}
         />
       ) : view === "orders" ? (
