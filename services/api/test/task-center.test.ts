@@ -81,8 +81,15 @@ test("holiday plans can be arranged for every contact from task settings",async(
 });
 
 test("deleted tasks are cancelled and hidden from the default task list",async()=>{
-  const routes=await readFile(new URL("../src/task-routes.ts",import.meta.url),"utf8");
+  const [routes,migrator,indexes]=await Promise.all([
+    readFile(new URL("../src/task-routes.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../infra/postgres/migrations/046_task_reminder_indexes.sql",import.meta.url),"utf8"),
+  ]);
   assert.match(routes,/UPDATE tasks SET status='cancelled'/);
   assert.match(routes,/\(\$3::text IS NOT NULL OR t\.status<>'cancelled'\)/);
   assert.match(routes,/app\.delete\("\/api\/v1\/tasks\/:id"/);
+  assert.match(migrator,/046_task_reminder_indexes\.sql/);
+  assert.match(indexes,/tasks_assignee_conversation_due_idx/);
+  assert.match(indexes,/tasks_assignee_contact_due_idx/);
 });
