@@ -11,6 +11,7 @@ export interface AgentHello {
   agentVersion: string;
   platform: string;
   lastAckedCursor: number;
+  capabilities?: string[];
 }
 
 export interface AgentHeartbeat {
@@ -51,7 +52,7 @@ export interface AgentCommand {
   sequence: number;
   commandId: string;
   accountId: string;
-  command: "send_message" | "logout" | "request_snapshot";
+  command: "send_message" | "publish_status" | "logout" | "request_snapshot";
   payload: Record<string, unknown>;
   createdAt: string;
 }

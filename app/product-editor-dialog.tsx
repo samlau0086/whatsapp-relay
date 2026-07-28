@@ -25,6 +25,8 @@ type Product = {
   sku: string;
   name: string;
   description: string;
+  category: string;
+  brand: string;
   currency: string;
   weightAmount: number | null;
   weightUnit: WeightUnit | null;
@@ -55,6 +57,8 @@ export function ProductEditorDialog({
   const [name, setName] = useState(product?.name ?? ""),
     [sku, setSku] = useState(product?.sku ?? ""),
     [description, setDescription] = useState(product?.description ?? ""),
+    [category, setCategory] = useState(product?.category ?? ""),
+    [brand, setBrand] = useState(product?.brand ?? ""),
     [currency, setCurrency] = useState(product?.currency ?? baseCurrency),
     [weightAmount,setWeightAmount]=useState(product?.weightAmount?.toString()??""),
     [weightUnit,setWeightUnit]=useState<WeightUnit>(product?.weightUnit??"kg"),
@@ -181,6 +185,8 @@ export function ProductEditorDialog({
         name: name.trim(),
         sku: sku.trim(),
         description: description.trim(),
+        category: category.trim(),
+        brand: brand.trim(),
         currency,
         weightAmount:weightAmount===""?null:Number(weightAmount),
         weightUnit:weightAmount===""?null:weightUnit,
@@ -279,6 +285,26 @@ export function ProductEditorDialog({
               该 SKU 已被有效产品使用，无法保存。
             </span>
           )}
+          <div className="product-form-grid">
+            <label>
+              分类 · 可选
+              <input
+                value={category}
+                onChange={(event) => setCategory(event.target.value)}
+                maxLength={80}
+                placeholder="例如 香水、礼盒"
+              />
+            </label>
+            <label>
+              品牌 · 可选
+              <input
+                value={brand}
+                onChange={(event) => setBrand(event.target.value)}
+                maxLength={80}
+                placeholder="例如 Dior"
+              />
+            </label>
+          </div>
           <label>
             产品描述 · 可选
             <textarea

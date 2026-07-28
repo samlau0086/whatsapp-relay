@@ -268,6 +268,7 @@ function startCentral(baseUrl: string, agentId: string, credential: string): voi
     credential,
     app.getVersion(),
     PROTOCOL_VERSION,
+    ["publish_status_v1"],
     async (command) => {
       const worker = workers.get(command.accountId);
       if (!worker) throw new Error("Account worker unavailable");

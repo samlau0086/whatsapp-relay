@@ -194,13 +194,35 @@ test("product pagination includes nearby pages, boundary shortcuts, and direct j
   assert.match(component,/Math\.ceil\(total\/pageSize\)/);
 });
 
-test("product tags support searching existing labels and creating unmatched labels",async()=>{
+test("product tags support searching, creating, editing, and deleting labels",async()=>{
   const dialog=await readFile(new URL("../../../app/product-editor-dialog.tsx",import.meta.url),"utf8");
   assert.match(dialog,/role="combobox"/);
   assert.match(dialog,/role="listbox"/);
   assert.match(dialog,/搜索或创建标签/);
   assert.match(dialog,/创建“\{tagName\.trim\(\)\}”/);
   assert.match(dialog,/products\.flatMap\(\(item\) => item\.tags\)/);
+  assert.match(dialog,/setTags\(\(all\) =>\s*all\.map/);
+  assert.match(dialog,/setTags\(\(all\) =>\s*all\.filter/);
+});
+
+test("products persist category and brand and expose server-side filters",async()=>{
+  const [migration,schemas,server,component,dialog]=await Promise.all([
+    readFile(new URL("../../../infra/postgres/migrations/047_product_category_brand.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/schemas.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/product-editor-dialog.tsx",import.meta.url),"utf8"),
+  ]);
+  assert.match(migration,/ADD COLUMN IF NOT EXISTS category/);
+  assert.match(migration,/ADD COLUMN IF NOT EXISTS brand/);
+  assert.match(schemas,/category:z\.string\(\)\.trim\(\)\.max\(80\)/);
+  assert.match(schemas,/brand:z\.string\(\)\.trim\(\)\.max\(80\)/);
+  assert.match(server,/query\.category\?\.trim\(\)/);
+  assert.match(server,/query\.brand\?\.trim\(\)/);
+  assert.match(component,/aria-label="按分类筛选"/);
+  assert.match(component,/aria-label="按品牌筛选"/);
+  assert.match(dialog,/分类 · 可选/);
+  assert.match(dialog,/品牌 · 可选/);
 });
 
 test("API startup applies the latest product schema to persistent databases",async()=>{
@@ -208,4 +230,5 @@ test("API startup applies the latest product schema to persistent databases",asy
   assert.match(runner,/024_product_pricing_cards\.sql/);
   assert.match(runner,/025_currency_management\.sql/);
   assert.match(runner,/027_product_description\.sql/);
+  assert.match(runner,/047_product_category_brand\.sql/);
 });

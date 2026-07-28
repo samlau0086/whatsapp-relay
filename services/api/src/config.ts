@@ -15,6 +15,7 @@ const schema = z.object({
   S3_SECRET_KEY: z.string().default("relay-secret-change-me"),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
   META_GRAPH_API_VERSION: z.string().regex(/^v\d+\.\d+$/).optional(),
+  STATUS_MAX_RECIPIENTS: z.coerce.number().int().min(1).max(10000).default(1000),
 });
 
 const parsed=schema.parse(process.env);

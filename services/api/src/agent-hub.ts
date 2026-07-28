@@ -3,6 +3,7 @@ import type { WebSocket } from "ws";
 import { pool, transaction } from "./db.js";
 import { hashSecret } from "./security.js";
 import { enqueueInboundAgentWork } from "./agent-engine.js";
+import {processStatusCommandResult} from "./status-engine.js";
 
 const PROTOCOL_VERSION = 2;
 const HEARTBEAT_TIMEOUT_SECONDS = 45;
@@ -83,7 +84,8 @@ async function handleFrame(agentId: string, socket: WebSocket, raw: string): Pro
   const frame = JSON.parse(raw) as AgentFrame;
   if (frame.type === "hello") {
     if (frame.protocolVersion !== PROTOCOL_VERSION) { socket.send(JSON.stringify({ type:"incompatible", supportedVersion:PROTOCOL_VERSION })); socket.close(4002,"protocol_upgrade_required"); return; }
-    await pool.query("UPDATE agents SET version=$2,protocol_version=$3,platform=$4,last_seen_at=now() WHERE id=$1", [agentId, frame.agentVersion, frame.protocolVersion, frame.platform]);
+    const capabilities=Array.isArray(frame.capabilities)?frame.capabilities.map(String).filter(value=>value.length<=80).slice(0,20):[];
+    await pool.query("UPDATE agents SET version=$2,protocol_version=$3,platform=$4,capabilities=$5,last_seen_at=now() WHERE id=$1", [agentId, frame.agentVersion, frame.protocolVersion, frame.platform,capabilities]);
     await dispatchPending(agentId, socket);
     return;
   }
@@ -217,6 +219,8 @@ export async function createWebhookEvent(client: import("pg").PoolClient, eventT
 }
 
 async function processCommandResult(agentId: string, frame: AgentFrame): Promise<void> {
+  const statusCommand=await pool.query("SELECT id,status_post_id,state FROM outbound_commands WHERE id=$1 AND agent_id=$2 AND status_post_id IS NOT NULL",[frame.commandId,agentId]);
+  if(statusCommand.rowCount){await processStatusCommandResult(agentId,frame as unknown as Record<string,unknown>,statusCommand.rows[0]);return;}
   await transaction(async (client) => {
     const outcome=String(frame.outcome);
     if(outcome==="deferred"){

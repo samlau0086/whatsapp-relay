@@ -5,6 +5,7 @@ const WORKSPACE_VIEWS = new Set([
   "inbox",
   "contacts",
   "tasks",
+  "statuses",
   "orders",
   "products",
   "agents",
@@ -12,7 +13,7 @@ const WORKSPACE_VIEWS = new Set([
   "help",
 ] as const);
 
-type WorkspaceView = "inbox"|"contacts"|"tasks"|"orders"|"products"|"agents"|"settings"|"help";
+type WorkspaceView = "inbox"|"contacts"|"tasks"|"statuses"|"orders"|"products"|"agents"|"settings"|"help";
 
 export default async function WorkspacePage({params}:{params:Promise<{view:string}>}) {
   const {view}=await params;

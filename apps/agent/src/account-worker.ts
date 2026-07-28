@@ -8,7 +8,7 @@ import { ProxyAgent as UndiciProxyAgent } from "undici";
 import { centralMediaAuthorizationError, describeSendError, isCentralMediaAuthorizationError, isSendConfirmationTimeout, isTransientSendConnectionError, waitForSendConfirmation } from "./send-errors.js";
 
 type Init = {type:"init";accountId:string;dataDir:string;masterKey:string;baseUrl:string;credential:string;proxyUrl?:string};
-type Command = {type:"command";sequence:number;commandId:string;payload:Record<string,unknown>};
+type Command = {type:"command";sequence:number;commandId:string;command:string;payload:Record<string,unknown>};
 type Control = {type:"shutdown";logout?:boolean}|{type:"reconnect"};
 let socket:ReturnType<typeof makeWASocket>|undefined;let init:Init|undefined;let sendChain=Promise.resolve();let reconnectAttempt=0;let reconnectTimer:NodeJS.Timeout|undefined;let connectionOpen=false;let connectionGeneration=0;let mediaProxyAgent:UndiciProxyAgent|undefined;let messageCache:Awaited<ReturnType<typeof encryptedAuthState>>|undefined;
 const emit=(message:unknown):void=>{process.send?.(message);};
@@ -111,10 +111,19 @@ async function uploadInboundMedia(options:Init,bytes:Buffer,mime:string,fileName
 }
 
 async function execute(command:Command):Promise<void>{
-  if(!socket||!init||!connectionOpen){emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"deferred",errorCode:"account_offline",errorMessage:"WhatsApp account is offline; command remains queued",completedAt:new Date().toISOString()});return;}const toJid=String(command.payload.toJid??"");if(!toJid)throw new Error("Missing destination JID");
+  if(!socket||!init||!connectionOpen){emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"deferred",errorCode:"account_offline",errorMessage:"WhatsApp account is offline; command remains queued",completedAt:new Date().toISOString()});return;}
   try{
     const type=String(command.payload.type??"text");let content:AnyMessageContent;
     if(type==="text")content={text:String(command.payload.text??"")};else{const media=await downloadOutboundMedia(init,String(command.payload.mediaId??""));const caption=command.payload.text?String(command.payload.text):undefined;if(type==="image")content={image:media.bytes,mimetype:media.mime,caption};else if(type==="video")content={video:media.bytes,mimetype:media.mime,caption};else if(type==="audio")content={audio:media.bytes,mimetype:media.mime,ptt:true};else content={document:media.bytes,mimetype:media.mime,fileName:media.name,caption};}
+    if(command.command==="publish_status"){
+      const statusJidList=Array.isArray(command.payload.audienceJids)?[...new Set(command.payload.audienceJids.map(String).filter(jid=>/^\d{7,15}@s\.whatsapp\.net$/.test(jid)))]:[];
+      if(!statusJidList.length)throw new Error("Missing status audience");
+      const sent=await waitForSendConfirmation(socket.sendMessage("status@broadcast",content,{broadcast:true,statusJidList,backgroundColor:command.payload.backgroundColor?String(command.payload.backgroundColor):undefined,font:command.payload.font===undefined?undefined:Number(command.payload.font)}),60_000);
+      if(sent?.key.id&&sent.message)await messageCache?.saveMessage(sent.key.id,sent.message);
+      emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",whatsappMessageId:sent?.key.id,completedAt:new Date().toISOString()});
+      return;
+    }
+    const toJid=String(command.payload.toJid??"");if(!toJid)throw new Error("Missing destination JID");
     const quotedId=String(command.payload.quotedWhatsappMessageId??"");
     const quotedMessage=quotedId?(await messageCache?.getMessage(quotedId))??{conversation:String(command.payload.quotedText??"[message]")}:undefined;
     const quoted=quotedMessage?{key:{remoteJid:toJid,id:quotedId,fromMe:command.payload.quotedDirection==="out"},message:quotedMessage}:undefined;

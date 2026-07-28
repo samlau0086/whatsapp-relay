@@ -98,6 +98,14 @@ test("inbound WhatsApp replies are normalized before entering the durable outbox
   assert.match(client,/cursor: event\.cursor/);
 });
 
+test("status publishing uses the stories JID, a recipient snapshot, and broadcast mode",()=>{
+  const worker=readFileSync(new URL("../dist/account-worker.js",import.meta.url),"utf8");
+  const client=readFileSync(new URL("../dist/central-client.js",import.meta.url),"utf8");
+  assert.match(worker,/command\.command\s*===\s*"publish_status"/);
+  assert.match(worker,/sendMessage\("status@broadcast",\s*content,\s*\{\s*broadcast:\s*true,\s*statusJidList/);
+  assert.match(client,/capabilities:\s*this\.capabilities/);
+});
+
 test("stale WhatsApp sockets and stale renderer refreshes cannot overwrite current status", () => {
   const main=readFileSync(new URL("../dist/main.js",import.meta.url),"utf8");
   const worker=readFileSync(new URL("../dist/account-worker.js",import.meta.url),"utf8");
