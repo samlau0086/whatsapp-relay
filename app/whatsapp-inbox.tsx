@@ -23,6 +23,7 @@ import { CollageGenerateDialog, ProductWorkspace } from "./collage-materials";
 import { MaterialLibrarySendDialog } from "./material-library-send-dialog";
 import { TaskCenter } from "./task-center";
 import {StatusCenter} from "./status-center";
+import {LanguagePicker,languageName} from "./language-picker";
 import { conversationCountsPath, conversationListPath, conversationSummaryPath, type ConversationDateFilter, type ConversationListFilter } from "./conversation-date-filter";
 import { confirmAction, ConfirmationHost, promptAction, PromptHost } from "./confirmation-ui";
 import {useConversationFeed} from "./use-conversation-feed";
@@ -3682,26 +3683,12 @@ function AccessPortal({loading,onLogin}:{loading:boolean;onLogin:()=>void}){
   </main>;
 }
 
-const LANGUAGES=[
-  ["zh-CN","简体中文"],["zh-TW","繁體中文"],["en","English"],["en-US","English (US)"],["en-GB","English (UK)"],
-  ["ms","Bahasa Melayu"],["id","Bahasa Indonesia"],["th","ไทย"],["vi","Tiếng Việt"],["ja","日本語"],["ko","한국어"],
-  ["es","Español"],["fr","Français"],["de","Deutsch"],["it","Italiano"],["pt-BR","Português (Brasil)"],["ru","Русский"],
-  ["ar","العربية"],["hi","हिन्दी"],["tr","Türkçe"],["nl","Nederlands"],["pl","Polski"],
-] as const;
-
-function languageName(code:string){return LANGUAGES.find(item=>item[0]===code)?.[1]??code;}
 const DETECTED_LANGUAGE_NAMES:Record<string,string>={zh:"中文",en:"英语",es:"西班牙语",fr:"法语",de:"德语",it:"意大利语",pt:"葡萄牙语",ru:"俄语",ar:"阿拉伯语",hi:"印地语",tr:"土耳其语",nl:"荷兰语",pl:"波兰语",ms:"马来语",id:"印度尼西亚语",th:"泰语",vi:"越南语",ja:"日语",ko:"韩语"};
 function detectedLanguageName(code?:string){if(!code)return"未知语种";if(/^zh-CN$/i.test(code))return"简体中文";if(/^zh-(?:TW|HK|Hant)$/i.test(code))return"繁体中文";return DETECTED_LANGUAGE_NAMES[code.split("-")[0].toLowerCase()]??languageName(code);}
 function isEnglishLanguage(code:string){return /^en(?:-|$)/i.test(code);}
 
 function TranslationMenu({preference,configured,ready,onChange,onClose}:{preference:TranslationPreference;configured:boolean;ready:boolean;onChange:(value:TranslationPreference)=>void;onClose:()=>void}){
   return <section className="translation-menu" role="dialog" aria-label="AI 翻译设置"><header><span><Languages size={16}/><b>当前会话 · AI 双向翻译</b></span><button onClick={onClose} aria-label="关闭翻译设置"><X size={15}/></button></header><label className="translation-toggle"><span><b>为当前会话启用</b><small>{!ready?"正在读取会话配置…":configured?"此会话偏好会跨浏览器同步":"管理员尚未配置翻译 Provider"}</small></span><input type="checkbox" checked={preference.enabled} disabled={!ready||(!configured&&!preference.enabled)} onChange={event=>onChange({...preference,enabled:event.target.checked})}/></label><div className="translation-language-grid"><label><span>收到消息译为</span><LanguagePicker value={preference.agentLanguage} onChange={agentLanguage=>onChange({...preference,agentLanguage})}/></label><label><span>发送消息译为</span><LanguagePicker value={preference.customerLanguage} onChange={customerLanguage=>onChange({...preference,customerLanguage})}/></label></div><p><Info size={13}/>设置只影响当前会话；发送前会显示可编辑预览。</p></section>;
-}
-
-function LanguagePicker({value,onChange}:{value:string;onChange:(value:string)=>void}){
-  const [open,setOpen]=useState(false),[query,setQuery]=useState("");
-  const visible=LANGUAGES.filter(([code,name])=>`${code} ${name}`.toLowerCase().includes(query.toLowerCase()));
-  return <div className="language-picker"><input type="search" value={open?query:languageName(value)} onFocus={()=>{setOpen(true);setQuery("");}} onChange={event=>{setOpen(true);setQuery(event.target.value);}} onBlur={()=>window.setTimeout(()=>setOpen(false),120)} aria-label="搜索并选择语言" autoComplete="off"/>{open&&<div className="language-options" role="listbox">{visible.length?visible.map(([code,name])=><button type="button" role="option" aria-selected={code===value} className={code===value?"selected":""} key={code} onMouseDown={event=>event.preventDefault()} onClick={()=>{onChange(code);setOpen(false);setQuery("");}}><span>{name}</span><small>{code}</small></button>):<span className="language-empty">没有匹配语言</span>}</div>}</div>;
 }
 
 const FALLBACK_TIMEZONES=["UTC","Asia/Shanghai","Asia/Hong_Kong","Asia/Tokyo","Asia/Singapore","Asia/Dubai","Europe/London","Europe/Paris","America/New_York","America/Chicago","America/Denver","America/Los_Angeles","Australia/Sydney"];

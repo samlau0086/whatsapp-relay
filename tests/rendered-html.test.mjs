@@ -456,5 +456,23 @@ test("status campaigns reuse the account media library for images and videos", a
   assert.match(statusCenter,/\/api\/v1\/translations\/preview/);
   assert.match(statusCenter,/translationSourceText:item\.sourceText/);
   assert.match(statusCenter,/function TranslationTools/);
+  assert.match(statusCenter,/<LanguagePicker value=\{item\.targetLanguage\}/);
+  assert.doesNotMatch(statusCenter,/aria-label="动态目标语言" value=\{item\.targetLanguage\}/);
   assert.match(css,/\.status-translation-tools\{/);
+});
+
+test("translation language picker supports search and keyboard selection", async () => {
+  const [picker,inbox,statusCenter]=await Promise.all([
+    readFile(new URL("../app/language-picker.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../app/status-center.tsx",import.meta.url),"utf8"),
+  ]);
+  assert.match(picker,/type="search"/);
+  assert.match(picker,/role="combobox"/);
+  assert.match(picker,/\$\{name\} \$\{code\}/);
+  assert.match(picker,/event\.key==="ArrowDown"/);
+  assert.match(picker,/event\.key==="Enter"/);
+  assert.match(picker,/没有匹配语言/);
+  assert.match(inbox,/import \{LanguagePicker,languageName\} from "\.\/language-picker"/);
+  assert.match(statusCenter,/import \{LanguagePicker,languageName\} from "\.\/language-picker"/);
 });
