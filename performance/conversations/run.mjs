@@ -43,6 +43,7 @@ results.push(await benchmark("mine","/api/v1/conversations?filter=mine&limit=40"
 results.push(await benchmark("favorite","/api/v1/conversations?filter=favorite&limit=40"));
 results.push(await benchmark("contact_search","/api/v1/conversations?q=Contact%209999&limit=40"));
 results.push(await benchmark("summary_search","/api/v1/conversations?q=summary%209999&limit=40"));
+await warmup("/api/v1/conversations/counts",10);
 results.push(await benchmark("counts","/api/v1/conversations/counts"));
 
 const first=await timed("/api/v1/conversations?limit=1");

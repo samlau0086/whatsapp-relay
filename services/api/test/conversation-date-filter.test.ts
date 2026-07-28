@@ -76,11 +76,12 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.ok(conversationRoute.indexOf("LIMIT $13")<conversationRoute.indexOf("FROM candidates JOIN conversations"),"candidate pagination must happen before detail hydration");
   assert.match(server,/request\.principal\?\.accountIds/);
   const countsRoute=server.slice(server.indexOf('app.get("/api/v1/conversations/counts"'),server.indexOf('app.get("/api/v1/conversations/:id/summary"'));
-  assert.match(countsRoute,/WITH base AS MATERIALIZED/);
-  assert.match(countsRoute,/reminder_conversations AS/);
-  assert.match(countsRoute,/JOIN base b ON b\.id=task\.conversation_id/);
-  assert.match(countsRoute,/JOIN base b ON b\.contact_id=task\.contact_id/);
+  assert.match(countsRoute,/const \[result,reminderResult,dueReminderResult\]=await Promise\.all/);
+  assert.match(countsRoute,/JOIN conversations c ON c\.id=task\.conversation_id/);
+  assert.match(countsRoute,/JOIN conversations c ON c\.contact_id=task\.contact_id/);
+  assert.match(countsRoute,/\) reminder_conversations/);
   assert.doesNotMatch(countsRoute,/LEFT JOIN LATERAL \(\s*SELECT task\.due_at/);
+  assert.doesNotMatch(countsRoute,/WITH base AS MATERIALIZED/);
 });
 
 test("performance reports retain representative HTTP failure details",async()=>{
@@ -90,7 +91,9 @@ test("performance reports retain representative HTTP failure details",async()=>{
   assert.match(runner,/\{status:result\.status,body:result\.body\}/);
   assert.match(runner,/const warmup=async\(path,samples=30\)/);
   assert.match(runner,/await warmup\("\/api\/v1\/conversations\?limit=40"\)/);
+  assert.match(runner,/await warmup\("\/api\/v1\/conversations\/counts",10\)/);
   assert.ok(runner.indexOf('await warmup("/api/v1/conversations?limit=40")')<runner.indexOf('benchmark("first_page"'),"concurrent warmup must finish before measured first-page samples");
+  assert.ok(runner.indexOf('await warmup("/api/v1/conversations/counts",10)')<runner.indexOf('benchmark("counts"'),"concurrent warmup must finish before measured counts samples");
   assert.match(runner,/if\(failure\)throw new Error\(`warmup failed:/);
   assert.match(runner,/Performance gate failed:/);
   assert.match(runner,/counts p95 .* exceeds 800ms/);
