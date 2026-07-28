@@ -6,6 +6,9 @@ JOIN contacts co ON co.id=c.contact_id
 WHERE c.account_id=perf_uuid('account-1')
 ORDER BY COALESCE(c.last_message_at,c.created_at) DESC,c.id DESC LIMIT 40;
 EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON)
+SELECT c.id,c.last_message_text FROM conversations c
+ORDER BY COALESCE(c.last_message_at,c.created_at) DESC,c.id DESC LIMIT 40;
+EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON)
 SELECT c.id FROM conversations c
 WHERE c.id IN (
   SELECT search_conversation.id FROM conversations search_conversation WHERE search_conversation.last_message_text ILIKE '%summary 9999%'

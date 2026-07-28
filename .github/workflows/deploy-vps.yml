@@ -94,6 +94,7 @@ jobs:
             psql -U relay_perf -d relay_perf < performance/conversations/explain.sql \
             > performance-artifacts/explain.jsonl
           grep -q 'conversations_account_summary_sort_idx' performance-artifacts/explain.jsonl
+          grep -q 'conversations_summary_sort_idx' performance-artifacts/explain.jsonl
           grep -Eq 'contacts_display_name_trgm_idx|conversations_summary_text_trgm_idx' performance-artifacts/explain.jsonl
       - name: Upload performance artifacts
         if: always()

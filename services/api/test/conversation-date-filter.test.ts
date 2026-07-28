@@ -65,6 +65,8 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.match(conversationRoute,/search_ids AS MATERIALIZED/);
   assert.match(conversationRoute,/candidates AS MATERIALIZED/);
   assert.match(conversationRoute,/const searchCte=keyword/);
+  assert.match(conversationRoute,/const latestSort="COALESCE\(c\.last_message_at,c\.created_at\)"/);
+  assert.doesNotMatch(conversationRoute,/const latestSort=.*summary_updated_at/);
   assert.match(conversationRoute,/task\.assigned_user_id=\$9::uuid/);
   assert.match(conversationRoute,/task\.status NOT IN \('completed','cancelled','failed'\)/);
   assert.match(conversationRoute,/task\.due_at<now\(\)\+interval '3 days'/);
@@ -100,16 +102,19 @@ test("performance reports retain representative HTTP failure details",async()=>{
 });
 
 test("conversation summaries, events, and startup runner are wired",async()=>{
-  const [migration,migrator,events]=await Promise.all([
+  const [migration,migrator,events,backfill]=await Promise.all([
     readFile(new URL("../../../infra/postgres/migrations/040_conversation_summaries_events.sql",import.meta.url),"utf8"),
     readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
     readFile(new URL("../src/browser-events.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/backfill-conversation-summaries.ts",import.meta.url),"utf8"),
   ]);
   assert.match(migration,/REFERENCING NEW TABLE AS new_messages/);
   assert.match(migration,/relay_conversation_changes/);
   assert.match(migrator,/040_conversation_summaries_events\.sql/);
   assert.match(events,/\/api\/v1\/events\/ticket/);
   assert.match(events,/LISTEN/);
+  assert.match(backfill,/conversations_summary_sort_idx ON conversations\(\(COALESCE\(last_message_at,created_at\)\) DESC,id DESC\)/);
+  assert.match(backfill,/Number\(indexes\.rows\[0\]\?\.count\)!==3/);
 });
 
 test("inbox uses debounced search, cursor loading, realtime reconciliation, and virtualization",async()=>{

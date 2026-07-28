@@ -24,12 +24,13 @@ try{
     if((result.rowCount??0)<batchSize)break;
   }
   await db.query("UPDATE conversations c SET summary_updated_at=now(),last_message_at=NULL WHERE c.summary_updated_at IS NULL AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=c.id)");
+  await db.query("CREATE INDEX CONCURRENTLY IF NOT EXISTS conversations_summary_sort_idx ON conversations((COALESCE(last_message_at,created_at)) DESC,id DESC)");
   await db.query("CREATE INDEX CONCURRENTLY IF NOT EXISTS conversations_account_summary_sort_idx ON conversations(account_id,(COALESCE(last_message_at,created_at)) DESC,id DESC)");
   await db.query("CREATE INDEX CONCURRENTLY IF NOT EXISTS conversations_summary_text_trgm_idx ON conversations USING gin(last_message_text gin_trgm_ops)");
   await db.query("DROP INDEX CONCURRENTLY IF EXISTS messages_text_content_trgm_idx");
   const indexes=await db.query(`SELECT count(*)::int count FROM pg_class c JOIN pg_index i ON i.indexrelid=c.oid
-    WHERE c.relname=ANY($1::text[]) AND i.indisvalid AND i.indisready`,[["conversations_account_summary_sort_idx","conversations_summary_text_trgm_idx"]]);
-  if(Number(indexes.rows[0]?.count)!==2)throw new Error("conversation_summary_indexes_invalid");
+    WHERE c.relname=ANY($1::text[]) AND i.indisvalid AND i.indisready`,[["conversations_summary_sort_idx","conversations_account_summary_sort_idx","conversations_summary_text_trgm_idx"]]);
+  if(Number(indexes.rows[0]?.count)!==3)throw new Error("conversation_summary_indexes_invalid");
   const missing=await db.query("SELECT count(*)::int count FROM conversations WHERE summary_updated_at IS NULL");
   if(Number(missing.rows[0]?.count))throw new Error(`conversation_summary_backfill_incomplete:${missing.rows[0].count}`);
   console.log(JSON.stringify({status:"ok",updated,missing:0}));

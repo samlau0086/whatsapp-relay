@@ -326,7 +326,10 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
   const keyword=query.q?.trim()||null;if(keyword&&keyword.length>100)return reply.code(400).send({error:"conversation_query_too_long"});
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null,accountIds=request.principal?.accountIds??null,filter=query.filter??null;
   const reminderMode=filter==="reminders";
-  const latestSort="COALESCE(CASE WHEN c.summary_updated_at IS NOT NULL THEN c.last_message_at ELSE m.occurred_at END,c.created_at)";
+  // Deployments finish the summary backfill before serving traffic. Keeping the
+  // candidate sort on summary columns lets global and per-account keyset
+  // pagination use their indexes; the detail query retains the legacy fallback.
+  const latestSort="COALESCE(c.last_message_at,c.created_at)";
   const searchCte=keyword?`search_ids AS MATERIALIZED (
     SELECT search_conversation.id FROM conversations search_conversation
     WHERE search_conversation.last_message_text ILIKE '%'||$4||'%'
