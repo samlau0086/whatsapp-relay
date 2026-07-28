@@ -104,7 +104,7 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   );
   assert.doesNotMatch(component, /scrollMessagesToEnd\("smooth"\)/);
   assert.match(component, /container\.scrollTop=container\.scrollHeight/);
-  assert.match(component, /onLoad=\{onReady\}/);
+  assert.match(component, /onLoad=\{\(\)=>onReadyRef\.current\(\)\}/);
   assert.match(
     css,
     /\.messages \{ flex:1 1 auto; min-height:0; overflow-y:auto/,
@@ -344,7 +344,9 @@ test("task requests stay stable and the realtime feed is scoped to inbox", async
   assert.match(component, /enabled:view==="inbox"&&Boolean\(apiToken\)/);
   assert.match(feed, /60_000/);
   assert.doesNotMatch(component, /setInterval\(\(\)=>void loadConversations\(apiToken/);
-  assert.match(component, /if\(view!=="inbox"\|\|!apiToken\|\|!effectiveActiveId\)return;const initial=/);
+  assert.match(component, /if\(view!=="inbox"\|\|!apiToken\|\|!effectiveActiveId\)return;/);
+  assert.match(component, /const key=`\$\{tokenSubject\(apiToken\)\}\|\$\{effectiveActiveId\}`;/);
+  assert.match(component, /if\(messageInitialLoadKeyRef\.current===key\)return;\s*messageInitialLoadKeyRef\.current=key;\s*const initial=/);
 });
 
 test("agent provider reload selects the enabled provider", async () => {
