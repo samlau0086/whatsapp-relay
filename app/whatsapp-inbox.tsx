@@ -35,6 +35,62 @@ const API_URL = (process.env.NEXT_PUBLIC_RELAY_API_URL ?? "").replace(/\/$/, "")
 const COLORS = ["#6b4f3a", "#305f72", "#9b5f72", "#477a62", "#705b86"];
 const PRODUCT_PAGE_SIZES = [24,32,36,48,64] as const;
 let refreshPromise:Promise<string>|null=null;
+const MESSAGE_PAGE_SIZE=50;
+const MEDIA_DOWNLOAD_CONCURRENCY=4;
+const MEDIA_CACHE_LIMIT=80;
+
+type MediaCacheEntry={url:string;promise:Promise<string>;references:number;lastUsed:number};
+const mediaCache=new Map<string,MediaCacheEntry>();
+const mediaQueue:Array<()=>void>=[];
+let activeMediaDownloads=0;
+
+function scheduleMediaDownload<T>(task:()=>Promise<T>):Promise<T>{
+  return new Promise<T>((resolve,reject)=>{
+    const run=()=>{
+      activeMediaDownloads++;
+      void task().then(resolve,reject).finally(()=>{
+        activeMediaDownloads--;
+        mediaQueue.shift()?.();
+      });
+    };
+    if(activeMediaDownloads<MEDIA_DOWNLOAD_CONCURRENCY)run();else mediaQueue.push(run);
+  });
+}
+
+function pruneMediaCache(){
+  if(mediaCache.size<=MEDIA_CACHE_LIMIT)return;
+  const removable=[...mediaCache.entries()]
+    .filter(([,entry])=>entry.references===0&&Boolean(entry.url))
+    .sort((a,b)=>a[1].lastUsed-b[1].lastUsed);
+  while(mediaCache.size>MEDIA_CACHE_LIMIT&&removable.length){
+    const [id,entry]=removable.shift()!;
+    if(mediaCache.get(id)!==entry)continue;
+    URL.revokeObjectURL(entry.url);
+    mediaCache.delete(id);
+  }
+}
+
+function acquireMedia(id:string,load:()=>Promise<Blob>):Promise<string>{
+  const cached=mediaCache.get(id);
+  if(cached){cached.references++;cached.lastUsed=Date.now();return cached.promise;}
+  const entry:MediaCacheEntry={url:"",references:1,lastUsed:Date.now(),promise:Promise.resolve("")};
+  entry.promise=scheduleMediaDownload(load).then(blob=>{
+    entry.url=URL.createObjectURL(blob);
+    entry.lastUsed=Date.now();
+    pruneMediaCache();
+    return entry.url;
+  }).catch(error=>{if(mediaCache.get(id)===entry)mediaCache.delete(id);throw error;});
+  mediaCache.set(id,entry);
+  return entry.promise;
+}
+
+function releaseMedia(id:string){
+  const entry=mediaCache.get(id);
+  if(!entry)return;
+  entry.references=Math.max(0,entry.references-1);
+  entry.lastUsed=Date.now();
+  pruneMediaCache();
+}
 
 type Account = { id:string; name:string; phone:string; status:string; reason:string; transport:"web"|"cloud"; webhookStatus?:string; credentialsStatus?:string; lastEvent?:string };
 type ProductPriceTier={minQuantity:number;unitAmount:number};
@@ -150,6 +206,9 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [accounts,setAccounts]=useState<Account[]>([]);
   const [conversations,setConversations]=useState<Conversation[]>([]);
   const [messages,setMessages]=useState<Record<string,ChatMessage[]>>({});
+  const [messageCursors,setMessageCursors]=useState<Record<string,string|null>>({});
+  const [loadingOlderConversationId,setLoadingOlderConversationId]=useState("");
+  const [olderMessageErrors,setOlderMessageErrors]=useState<Record<string,string>>({});
   const [failedMessageCounts,setFailedMessageCounts]=useState<Record<string,number>>({});
   const [emailActivities,setEmailActivities]=useState<Record<string,EmailActivity[]>>({});
   const [activeId,setActiveId]=useState("");
@@ -211,6 +270,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const conversationLoadSentinelRef=useRef<HTMLDivElement>(null);
   const conversationAbortRef=useRef<AbortController|null>(null);
   const conversationCursorRef=useRef<string|null>(null);
+  const messageCursorsRef=useRef<Record<string,string|null>>({});
+  const accountsLoadedForRef=useRef("");
+  const conversationLoadKeyRef=useRef("");
+  const messageInitialLoadKeyRef=useRef("");
+  const messagePaginationDepthRef=useRef(new Map<string,number>());
+  const messageStickToBottomRef=useRef(true);
   const translationLoadSequence=useRef(0);
   const workspaceLoadSequence=useRef(0);
   const dateFilterRef=useRef<ConversationDateFilter>("all");
@@ -239,6 +304,13 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       const container=messagesRef.current;
       if(container)container.scrollTo({top:container.scrollHeight,behavior:"smooth"});
     });
+  },[]);
+  const keepMessagesAtEnd=useCallback(()=>{
+    if(messageStickToBottomRef.current)scrollMessagesToEnd();
+  },[scrollMessagesToEnd]);
+  const setMessageCursor=useCallback((conversationId:string,cursor:string|null)=>{
+    messageCursorsRef.current={...messageCursorsRef.current,[conversationId]:cursor};
+    setMessageCursors(messageCursorsRef.current);
   },[]);
 
   const playNotificationSound=useCallback(()=>{
@@ -278,11 +350,11 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   useLayoutEffect(()=>{
     if(!effectiveActiveId)return;
     const container=messagesRef.current;
-    if(container)container.scrollTop=container.scrollHeight;
-  },[effectiveActiveId,latestMessageId]);
+    if(container){messageStickToBottomRef.current=true;container.scrollTop=container.scrollHeight;}
+  },[effectiveActiveId]);
 
   useEffect(()=>{
-    if(latestMessageId)scrollMessagesToEnd();
+    if(latestMessageId&&messageStickToBottomRef.current)scrollMessagesToEnd();
   },[latestMessageId,scrollMessagesToEnd]);
 
   useEffect(()=>{
@@ -320,8 +392,9 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     sessionStorage.removeItem("relayAccessToken");sessionStorage.removeItem("relayUser");
     conversationDetailsCache.clear();
     conversationAbortRef.current?.abort();conversationCursorRef.current=null;
+    accountsLoadedForRef.current="";conversationLoadKeyRef.current="";messageInitialLoadKeyRef.current="";messageCursorsRef.current={};messagePaginationDepthRef.current.clear();messageStickToBottomRef.current=true;
     notificationBaseline.current.clear();notificationBaselineReady.current=false;
-    dateFilterRef.current="all";setDateFilter("all");setApiToken("");setUser(null);setAccounts([]);setConversations([]);setConversationCounts(EMPTY_CONVERSATION_COUNTS);setNextConversationCursor(null);setMessages({});setFailedMessageCounts({});setEmailActivities({});setMessageTranslations({});setTranslationPreferences({});setTranslationReadyConversationId("");setActiveId("");setSelectedTag("");setContextTags([]);setAuthOpen(false);setSessionReady(true);setLoading(false);
+    dateFilterRef.current="all";setDateFilter("all");setApiToken("");setUser(null);setAccounts([]);setConversations([]);setConversationCounts(EMPTY_CONVERSATION_COUNTS);setNextConversationCursor(null);setMessages({});setMessageCursors({});setLoadingOlderConversationId("");setOlderMessageErrors({});setFailedMessageCounts({});setEmailActivities({});setMessageTranslations({});setTranslationPreferences({});setTranslationReadyConversationId("");setActiveId("");setSelectedTag("");setContextTags([]);setAuthOpen(false);setSessionReady(true);setLoading(false);
   },[]);
 
   const loadAccounts=useCallback(async(token:string)=>{
@@ -416,21 +489,46 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     tabs[target]?.focus();tabs[target]?.click();
   };
 
-  const loadMessages=useCallback(async(token:string,conversationId:string,markRead=false)=>{
+  const loadMessages=useCallback(async(token:string,conversationId:string,markRead=false,options:{older?:boolean}={})=>{
+    const older=Boolean(options.older),cursor=messageCursorsRef.current[conversationId];
+    if(older&&!cursor)return;
+    const container=older&&conversationId===effectiveActiveId?messagesRef.current:null;
+    const previousScrollHeight=container?.scrollHeight??0,previousScrollTop=container?.scrollTop??0;
+    if(older){setLoadingOlderConversationId(conversationId);setOlderMessageErrors(all=>({...all,[conversationId]:""}));messageStickToBottomRef.current=false;}
     try{
-      const [result,emailResult]=await Promise.all([authorizedFetch(`/api/v1/conversations/${conversationId}/messages?limit=100`,token),authorizedFetch(`/api/v1/conversations/${conversationId}/email-activities`,token)]);
+      const params=new URLSearchParams({limit:String(MESSAGE_PAGE_SIZE)});
+      if(older&&cursor)params.set("cursor",cursor);
+      const messageRequest=authorizedFetch(`/api/v1/conversations/${conversationId}/messages?${params}`,token);
+      const emailRequest=older?Promise.resolve(null):authorizedFetch(`/api/v1/conversations/${conversationId}/email-activities`,token);
+      const [result,emailResult]=await Promise.all([messageRequest,emailRequest]);
       const response=result.response;if(result.token!==token)setApiToken(result.token);
       if(response.status===401){logout();return;}if(!response.ok)throw new Error(`HTTP ${response.status}`);
-      const body=await response.json() as {data:Array<Record<string,unknown>>;failedCount?:number};
+      const body=await response.json() as {data:Array<Record<string,unknown>>;nextCursor?:string|null;failedCount?:number};
       const loadedMessages=body.data.map(mapMessage);
-      setMessages(all=>({...all,[conversationId]:loadedMessages}));
+      setMessages(all=>{
+        const current=all[conversationId]??[];
+        if(older){
+          const existingIds=new Set(current.map(message=>message.id));
+          return{...all,[conversationId]:[...loadedMessages.filter(message=>!existingIds.has(message.id)),...current]};
+        }
+        const oldestFresh=loadedMessages[0]?.occurredAt;
+        const olderExisting=oldestFresh?current.filter(message=>message.occurredAt&&message.occurredAt<oldestFresh):[];
+        const freshIds=new Set(loadedMessages.map(message=>message.id));
+        return{...all,[conversationId]:[...olderExisting.filter(message=>!freshIds.has(message.id)),...loadedMessages]};
+      });
+      if(older)messagePaginationDepthRef.current.set(conversationId,(messagePaginationDepthRef.current.get(conversationId)??0)+1);
+      if(older||(messagePaginationDepthRef.current.get(conversationId)??0)===0)setMessageCursor(conversationId,body.nextCursor??null);
       setFailedMessageCounts(all=>({...all,[conversationId]:Number(body.failedCount??0)}));
       const cachedTranslations=Object.fromEntries(loadedMessages.filter(message=>message.cachedTranslationText&&message.cachedTranslationSourceLanguage).map(message=>[message.id,{status:"translated" as const,text:message.cachedTranslationText,sourceText:message.cachedTranscriptionText,sourceLanguage:message.cachedTranslationSourceLanguage}]));
       if(Object.keys(cachedTranslations).length)setMessageTranslations(all=>({...cachedTranslations,...all}));
-      if(emailResult.response.ok){const emailBody=await emailResult.response.json() as {data:Array<Record<string,unknown>>};setEmailActivities(all=>({...all,[conversationId]:emailBody.data.map(mapEmailActivity)}));}
+      if(emailResult?.response.ok){const emailBody=await emailResult.response.json() as {data:Array<Record<string,unknown>>};setEmailActivities(all=>({...all,[conversationId]:emailBody.data.map(mapEmailActivity)}));}
       if(markRead)await authorizedFetch(`/api/v1/conversations/${conversationId}`,result.token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({read:true})});
-    }catch{setToast("消息加载失败，正在等待下次同步");}
-  },[logout]);
+      if(older&&container)window.requestAnimationFrame(()=>{container.scrollTop=previousScrollTop+(container.scrollHeight-previousScrollHeight);});
+    }catch(reason){
+      if(older)setOlderMessageErrors(all=>({...all,[conversationId]:reason instanceof Error?reason.message:"历史消息加载失败"}));
+      else setToast("消息加载失败，正在等待下次同步");
+    }finally{if(older)setLoadingOlderConversationId(current=>current===conversationId?"":current);}
+  },[effectiveActiveId,logout,setMessageCursor]);
 
   const getConversationEventUrl=useCallback(async()=>{
     const result=await authorizedFetch("/api/v1/events/ticket",apiToken,{method:"POST"});
@@ -493,7 +591,6 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     enabled:view==="inbox"&&Boolean(apiToken),
     getWebSocketUrl:getConversationEventUrl,
     onConversationIds:applyConversationEvents,
-    onConnected:reconcileConversationFeed,
     onReconcile:reconcileConversationFeed,
   });
 
@@ -532,8 +629,21 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     return()=>window.clearTimeout(timer);
   },[]);
   useEffect(()=>{const timer=window.setTimeout(()=>setDebouncedQuery(query.trim()),300);return()=>window.clearTimeout(timer);},[query]);
-  useEffect(()=>{if(!apiToken)return;void loadAccounts(apiToken);},[apiToken,loadAccounts]);
-  useEffect(()=>{if(view!=="inbox"||!apiToken)return;conversationCursorRef.current=null;setNextConversationCursor(null);conversationListRef.current?.scrollTo({top:0});void Promise.all([loadConversations(apiToken),loadConversationCounts(apiToken)]);},[view,apiToken,loadConversations,loadConversationCounts]);
+  useEffect(()=>{
+    if(!apiToken)return;
+    const subject=tokenSubject(apiToken);
+    if(!subject||accountsLoadedForRef.current===subject)return;
+    accountsLoadedForRef.current=subject;
+    void loadAccounts(apiToken);
+  },[apiToken,loadAccounts]);
+  useEffect(()=>{
+    if(view!=="inbox"||!apiToken)return;
+    const key=[tokenSubject(apiToken),view,dateFilter,filter,selectedAccount,debouncedQuery,selectedTag].join("|");
+    if(conversationLoadKeyRef.current===key)return;
+    conversationLoadKeyRef.current=key;
+    conversationCursorRef.current=null;setNextConversationCursor(null);conversationListRef.current?.scrollTo({top:0});
+    void Promise.all([loadConversations(apiToken),loadConversationCounts(apiToken)]);
+  },[view,apiToken,dateFilter,filter,selectedAccount,debouncedQuery,selectedTag,loadConversations,loadConversationCounts]);
   useEffect(()=>{const timer=window.setTimeout(()=>{if(window.matchMedia("(max-width: 1280px)").matches)setDetailsOpen(false);},0);return()=>window.clearTimeout(timer);},[]);
 
   useEffect(()=>{
@@ -542,7 +652,14 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     const observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting))void loadConversations(apiToken,{append:true});},{root,rootMargin:"240px"});
     observer.observe(target);return()=>observer.disconnect();
   },[apiToken,nextConversationCursor,loadingMoreConversations,loadConversations]);
-  useEffect(()=>{if(view!=="inbox"||!apiToken||!effectiveActiveId)return;const initial=window.setTimeout(()=>void loadMessages(apiToken,effectiveActiveId,true),0);return()=>window.clearTimeout(initial);},[view,apiToken,effectiveActiveId,loadMessages]);
+  useEffect(()=>{
+    if(view!=="inbox"||!apiToken||!effectiveActiveId)return;
+    const key=`${tokenSubject(apiToken)}|${effectiveActiveId}`;
+    if(messageInitialLoadKeyRef.current===key)return;
+    messageInitialLoadKeyRef.current=key;
+    const initial=window.setTimeout(()=>void loadMessages(apiToken,effectiveActiveId,true),0);
+    return()=>window.clearTimeout(initial);
+  },[view,apiToken,effectiveActiveId,loadMessages]);
   useEffect(()=>{if(view!=="inbox"||!apiToken||!effectiveActiveId)return;const timer=window.setTimeout(()=>void loadTranslationSettings(apiToken,effectiveActiveId),0);return()=>window.clearTimeout(timer);},[view,apiToken,effectiveActiveId,loadTranslationSettings]);
   useEffect(()=>{const timer=window.setTimeout(()=>setMessageTranslations({}),0);return()=>window.clearTimeout(timer);},[translationPreference.agentLanguage]);
   useEffect(()=>{
@@ -948,7 +1065,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     router.push(WORKSPACE_PATHS[nextView]);
   };
   const openInbox=(nextFilter="全部会话")=>{navigate("inbox");setFilter(nextFilter);};
-  const completeLogin=(token:string,nextUser:User)=>{conversationDetailsCache.clear();sessionStorage.setItem("relayAccessToken",token);sessionStorage.setItem("relayUser",JSON.stringify(nextUser));setApiToken(token);setUser(nextUser);setAuthOpen(false);setSessionReady(true);void loadWorkspace(token);};
+  const completeLogin=(token:string,nextUser:User)=>{conversationDetailsCache.clear();accountsLoadedForRef.current="";conversationLoadKeyRef.current="";messageInitialLoadKeyRef.current="";sessionStorage.setItem("relayAccessToken",token);sessionStorage.setItem("relayUser",JSON.stringify(nextUser));setApiToken(token);setUser(nextUser);setAuthOpen(false);setSessionReady(true);};
 
   if(!sessionReady)return <AccessPortal loading onLogin={()=>{}}/>;
   if(!apiToken)return <><AccessPortal loading={false} onLogin={()=>setAuthOpen(true)}/>{authOpen&&<LoginDialog connected={false} token="" canClose onClose={()=>setAuthOpen(false)} onLogin={completeLogin} onLogout={logout}/>}</>;
@@ -1352,7 +1469,28 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                     ))}
                   </div>
                 )}
-                <div ref={messagesRef} className="messages" aria-live="polite">
+                <div
+                  ref={messagesRef}
+                  className="messages"
+                  aria-live="polite"
+                  onScroll={(event)=>{
+                    const element=event.currentTarget;
+                    messageStickToBottomRef.current=element.scrollHeight-element.scrollTop-element.clientHeight<120;
+                  }}
+                >
+                  {messageCursors[active.id]&&(
+                    <div className="message-history-loader">
+                      <button
+                        type="button"
+                        disabled={loadingOlderConversationId===active.id}
+                        onClick={()=>void loadMessages(apiToken,active.id,false,{older:true})}
+                      >
+                        <RefreshCw className={loadingOlderConversationId===active.id?"spin":""} size={13}/>
+                        {loadingOlderConversationId===active.id?"正在加载更早消息…":"加载更早消息"}
+                      </button>
+                      {olderMessageErrors[active.id]&&<small>{olderMessageErrors[active.id]}</small>}
+                    </div>
+                  )}
                   <div className="day-separator">
                     <span>真实消息记录</span>
                   </div>
@@ -1455,7 +1593,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                               attachment={message.attachment}
                               token={apiToken}
                               onToken={setApiToken}
-                              onReady={scrollMessagesToEnd}
+                              onReady={keepMessagesAtEnd}
                             />
                           )}{" "}
                           {translationPreference.enabled &&
@@ -3802,7 +3940,7 @@ function MediaDialog({accountId,token,initialCaption,onToken,onToast,onClose,onS
 function mapMediaAsset(item:Record<string,unknown>):MediaAsset{return{id:String(item.id),fileName:String(item.file_name??"未命名文件"),mimeType:String(item.mime_type??"application/octet-stream"),size:Number(item.byte_size??0),sha256:String(item.sha256??""),createdAt:String(item.created_at??""),usageCount:Number(item.usage_count??0)};}
 function mediaKind(mime:string){return mime.startsWith("image/")?"image":mime.startsWith("video/")?"video":mime.startsWith("audio/")?"audio":"document";}
 
-function mapConversation(item:Record<string,unknown>,index:number):Conversation {const name=String(item.display_name??item.phone_e164??"未知联系人"),methods=Array.isArray(item.contact_methods)?item.contact_methods.map(mapContactMethod):[],lastDirection=item.last_message_direction==="in"||item.last_message_direction==="out"?item.last_message_direction:null,lastMessageStatus=["received","queued","dispatching","sent","delivered","read","failed","uncertain"].includes(String(item.last_message_status))?item.last_message_status as ChatMessage["status"]:null,lastMessageAt=item.last_message_at?String(item.last_message_at):null;return{id:String(item.id),name,initials:name.slice(0,2).toUpperCase(),color:COLORS[index%COLORS.length],account:String(item.account_name??"未知账号"),accountId:String(item.account_id),phone:String(item.phone_e164??""),contactId:String(item.contact_id??""),alias:String(item.alias??""),contactName:String(item.contact_name??item.phone_e164??""),primaryEmail:String(item.primary_email??""),contactMethods:methods,preview:String(item.last_message??kindText(String(item.last_message_kind??""))),lastDirection,lastMessageStatus,lastMessageAt,time:lastMessageAt?formatTime(new Date(lastMessageAt)):"",unread:Number(item.unread_count??0),accountStatus:String(item.account_status??"offline"),assignedUserId:item.assigned_user_id?String(item.assigned_user_id):null,favorite:Boolean(item.favorite),conversationStatus:String(item.status??"open"),customerStage:String(item.customer_stage??"new"),tags:Array.isArray(item.tags)?item.tags.map(mapTag):[],remindAt:item.remind_at?String(item.remind_at):null,transport:String(item.transport??"web") as "web"|"cloud",serviceWindowExpiresAt:item.service_window_expires_at?String(item.service_window_expires_at):null};}
+function mapConversation(item:Record<string,unknown>,index:number):Conversation {const name=String(item.display_name??item.phone_e164??"未知联系人"),methods=Array.isArray(item.contact_methods)?item.contact_methods.map(mapContactMethod):[],lastDirection=item.last_message_direction==="in"||item.last_message_direction==="out"?item.last_message_direction:null,lastMessageStatus:Conversation["lastMessageStatus"]=["received","queued","dispatching","sent","delivered","read","failed","uncertain"].includes(String(item.last_message_status))?item.last_message_status as NonNullable<Conversation["lastMessageStatus"]>:null,lastMessageAt=item.last_message_at?String(item.last_message_at):null;return{id:String(item.id),name,initials:name.slice(0,2).toUpperCase(),color:COLORS[index%COLORS.length],account:String(item.account_name??"未知账号"),accountId:String(item.account_id),phone:String(item.phone_e164??""),contactId:String(item.contact_id??""),alias:String(item.alias??""),contactName:String(item.contact_name??item.phone_e164??""),primaryEmail:String(item.primary_email??""),contactMethods:methods,preview:String(item.last_message??kindText(String(item.last_message_kind??""))),lastDirection,lastMessageStatus,lastMessageAt,time:lastMessageAt?formatTime(new Date(lastMessageAt)):"",unread:Number(item.unread_count??0),accountStatus:String(item.account_status??"offline"),assignedUserId:item.assigned_user_id?String(item.assigned_user_id):null,favorite:Boolean(item.favorite),conversationStatus:String(item.status??"open"),customerStage:String(item.customer_stage??"new"),tags:Array.isArray(item.tags)?item.tags.map(mapTag):[],remindAt:item.remind_at?String(item.remind_at):null,transport:String(item.transport??"web") as "web"|"cloud",serviceWindowExpiresAt:item.service_window_expires_at?String(item.service_window_expires_at):null};}
 function mapContactMethod(item:Record<string,unknown>):ContactMethod{return{id:item.id?String(item.id):undefined,type:String(item.type??"other") as ContactMethodType,label:String(item.label??""),value:String(item.value??"")};}
 function mapContactProfile(item:Record<string,unknown>):ContactProfile{const emails=Array.isArray(item.emails)?item.emails.map(email=>{const value=email as Record<string,unknown>;return{id:value.id?String(value.id):undefined,label:String(value.label??""),email:String(value.email??""),isPrimary:Boolean(value.isPrimary??value.is_primary)};}):[],methods=Array.isArray(item.methods)?item.methods.map(method=>mapContactMethod(method as Record<string,unknown>)):[],addresses=Array.isArray(item.addresses)?item.addresses.map(address=>mapCustomerAddress(address as Record<string,unknown>)):[],birthday=item.birthday&&typeof item.birthday==="object"?item.birthday as ContactDate:null,specialDates=Array.isArray(item.specialDates)?item.specialDates as ContactSpecialDate[]:[],conversationId=item.conversationId?String(item.conversationId):item.conversation_id?String(item.conversation_id):null;return{id:String(item.id),accountId:String(item.accountId??item.account_id??""),accountName:String(item.accountName??item.account_name??""),alias:String(item.alias??""),contactName:String(item.contactName??item.contact_name??""),name:String(item.name??item.alias??item.contactName??item.phone??"未知联系人"),phone:String(item.phone??item.phone_e164??""),avatarUrl:item.avatarUrl?String(item.avatarUrl):item.avatar_url?String(item.avatar_url):null,note:String(item.note??""),timezone:item.timezone?String(item.timezone):null,effectiveTimezone:String(item.effectiveTimezone??item.effective_timezone??"UTC"),timezoneSource:(item.timezoneSource??item.timezone_source??"fallback") as ContactProfile["timezoneSource"],inferredCountry:item.inferredCountry?String(item.inferredCountry):item.inferred_country?String(item.inferred_country):null,birthday,specialDates,emails,primaryEmail:item.primaryEmail?String(item.primaryEmail):emails.find(email=>email.isPrimary)?.email??null,methods,addresses,conversationId,hasConversation:Boolean(item.hasConversation??conversationId),lastMessageAt:item.lastMessageAt?String(item.lastMessageAt):item.last_message_at?String(item.last_message_at):null,updatedAt:String(item.updatedAt??item.updated_at??"")};}
 
@@ -3875,12 +4013,37 @@ function QuotedMessage({quote,customerName}:{quote:NonNullable<ChatMessage["quot
 
 function MessageMedia({attachment,token,onToken,onReady}:{attachment:{id:string;name:string;size:string;mime:string};token:string;onToken:(token:string)=>void;onReady:()=>void}){
   const [url,setUrl]=useState("");const [error,setError]=useState("");
-  useEffect(()=>{const controller=new AbortController();let objectUrl="";void (async()=>{try{const result=await authorizedFetch(`/api/v1/media/${attachment.id}`,token,{signal:controller.signal});if(result.token!==token)onToken(result.token);if(!result.response.ok)throw new Error(`HTTP ${result.response.status}`);objectUrl=URL.createObjectURL(await result.response.blob());setUrl(objectUrl);setError("");}catch(reason){if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:"媒体加载失败");}})();return()=>{controller.abort();if(objectUrl)URL.revokeObjectURL(objectUrl);};},[attachment.id,token,onToken]);
-  if(error)return <div className="message-media message-media-error">媒体加载失败 · {error}</div>;if(!url)return <div className="message-media message-media-loading">正在加载媒体…</div>;
-  if(attachment.mime.startsWith("image/"))return <div className="message-media"><button className="message-media-preview" onClick={()=>window.open(url,"_blank","noopener,noreferrer")} aria-label={`查看图片 ${attachment.name}`}><Image src={url} alt={attachment.name} width={440} height={440} unoptimized onLoad={onReady}/></button></div>;
-  if(attachment.mime.startsWith("video/"))return <div className="message-media"><video src={url} controls preload="metadata" aria-label={attachment.name} onLoadedMetadata={onReady}/></div>;
-  if(attachment.mime.startsWith("audio/"))return <div className="message-media"><audio src={url} controls preload="metadata" aria-label={attachment.name} onLoadedMetadata={onReady}/></div>;
-  return <button className="attachment-card" onClick={()=>{const link=document.createElement("a");link.href=url;link.download=attachment.name;link.click();}}><span><FileText size={20}/></span><span><b>{attachment.name}</b><small>{attachment.mime} · {attachment.size}</small></span></button>;
+  const hostRef=useRef<HTMLDivElement>(null),tokenRef=useRef(token),onTokenRef=useRef(onToken),onReadyRef=useRef(onReady);
+  useEffect(()=>{tokenRef.current=token;},[token]);
+  useEffect(()=>{onTokenRef.current=onToken;},[onToken]);
+  useEffect(()=>{onReadyRef.current=onReady;},[onReady]);
+  useEffect(()=>{
+    let cancelled=false,acquired=false;
+    let observer:IntersectionObserver|undefined;
+    const start=()=>{
+      if(acquired)return;
+      acquired=true;observer?.disconnect();
+      void acquireMedia(attachment.id,async()=>{
+        const currentToken=tokenRef.current;
+        const result=await authorizedFetch(`/api/v1/media/${attachment.id}`,currentToken);
+        if(result.token!==currentToken)onTokenRef.current(result.token);
+        if(!result.response.ok)throw new Error(`HTTP ${result.response.status}`);
+        return result.response.blob();
+      }).then(value=>{if(!cancelled){setUrl(value);setError("");}}).catch(reason=>{if(!cancelled)setError(reason instanceof Error?reason.message:"媒体加载失败");});
+    };
+    const element=hostRef.current;
+    if(!element||typeof IntersectionObserver==="undefined")start();
+    else{
+      observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting))start();},{root:element.closest(".messages"),rootMargin:"600px 0px"});
+      observer.observe(element);
+    }
+    return()=>{cancelled=true;observer?.disconnect();if(acquired)releaseMedia(attachment.id);};
+  },[attachment.id]);
+  if(error)return <div ref={hostRef} className="message-media message-media-error">媒体加载失败 · {error}</div>;if(!url)return <div ref={hostRef} className="message-media message-media-loading">正在加载媒体…</div>;
+  if(attachment.mime.startsWith("image/"))return <div ref={hostRef} className="message-media"><button className="message-media-preview" onClick={()=>window.open(url,"_blank","noopener,noreferrer")} aria-label={`查看图片 ${attachment.name}`}><Image src={url} alt={attachment.name} width={440} height={440} unoptimized onLoad={()=>onReadyRef.current()}/></button></div>;
+  if(attachment.mime.startsWith("video/"))return <div ref={hostRef} className="message-media"><video src={url} controls preload="metadata" aria-label={attachment.name} onLoadedMetadata={()=>onReadyRef.current()}/></div>;
+  if(attachment.mime.startsWith("audio/"))return <div ref={hostRef} className="message-media"><audio src={url} controls preload="metadata" aria-label={attachment.name} onLoadedMetadata={()=>onReadyRef.current()}/></div>;
+  return <div ref={hostRef} className="message-media"><button className="attachment-card" onClick={()=>{const link=document.createElement("a");link.href=url;link.download=attachment.name;link.click();}}><span><FileText size={20}/></span><span><b>{attachment.name}</b><small>{attachment.mime} · {attachment.size}</small></span></button></div>;
 }
 
 function AgentConversationBar({conversationId,token,refreshKey,onToken,onToast,onUseDraft,onSent}:{conversationId:string;token:string;refreshKey:string;onToken:(token:string)=>void;onToast:(text:string)=>void;onUseDraft:(text:string)=>void;onSent:()=>void}){
@@ -5056,7 +5219,7 @@ function ProductManagement({token,role,onToken,onToast}:{token:string;role:strin
     {!loading&&!error&&visible.length>0&&<div className="product-bulk-toolbar"><label><input type="checkbox" checked={allPageSelected} onChange={togglePage}/>全选本页（{visible.length}）</label><span>已选择 {selected.length} 个产品</span>{selected.length>0&&<><button className="secondary-action" onClick={()=>setSelected([])}>取消选择</button><button className="secondary-action" onClick={()=>setBulkEditing(true)}><Pencil size={14}/>批量编辑</button><button className="primary-action" onClick={()=>setGenerating(true)}><LayoutGrid size={14}/>生成素材</button></>}</div>}
     {loading?<EmptyState title="正在读取产品库" text="请稍候…"/>:error?<EmptyState title="产品库加载失败" text={error}/>:visible.length?<div className={`product-grid ${view}-view`}>{visible.map(product=>{const last=product.priceTiers.at(-1),isSelected=selected.includes(product.id);return <article className={`product-card ${isSelected?"selected":""}`} key={product.id}><label className="product-select"><input type="checkbox" checked={isSelected} onChange={()=>toggleSelected(product.id)}/><span>{isSelected?<Check size={13}/>:null}</span><i>选择</i></label><ProductImage className="product-library-image" mediaId={product.imageMediaId} token={token} onToken={onToken} alt={product.name}/><div className="product-card-copy"><header><span><b>{product.name}</b><small>{product.sku} · 更新于 {new Date(product.updatedAt).toLocaleDateString("zh-CN")}{product.weightAmount&&product.weightUnit?` · 重量 ${formatWeight(product.weightAmount,product.weightUnit)}`:""}</small></span><strong>{product.currency} {last&&last.unitAmount!==product.defaultUnitAmount?`${last.unitAmount.toFixed(2)}–${product.defaultUnitAmount.toFixed(2)}`:product.defaultUnitAmount.toFixed(2)}</strong></header>{(product.category||product.brand)&&<div className="product-card-taxonomy">{product.brand&&<span>品牌 · {product.brand}</span>}{product.category&&<span>分类 · {product.category}</span>}</div>}<p className={`product-card-description ${product.description?"":"empty"}`}>{product.description||"暂无描述"}</p><div className="product-tier-summary">{product.priceTiers.map(tier=><span key={tier.minQuantity}>{tier.minQuantity}+ · {product.currency} {tier.unitAmount.toFixed(2)}</span>)}</div><div className="product-card-tags">{product.tags.length?product.tags.map(item=><i key={item.id} style={{background:item.color}}>{item.name}</i>):<span>暂无标签</span>}</div><footer><button onClick={()=>setEditing(product)}><Pencil size={13}/>编辑</button>{["admin","supervisor"].includes(role)&&<button className="danger-text" onClick={()=>void remove(product)}><Trash2 size={13}/>删除</button>}</footer></div></article>;})}</div>:<EmptyState title="暂无匹配产品" text="新增产品，或调整搜索与筛选条件"/>}
     {!loading&&!error&&total>0&&<nav className="product-pagination" aria-label="产品分页"><label className="product-page-size">每页<select value={pageSize} onChange={event=>{setPageSize(Number(event.target.value));setPage(1);setJumpPage("");}} aria-label="每页产品数">{PRODUCT_PAGE_SIZES.map(size=><option key={size} value={size}>{size}</option>)}</select>个</label><button disabled={page<=1} onClick={()=>setPage(value=>Math.max(1,value-1))}>上一页</button><div className="product-page-numbers">{pageItems.map(item=>typeof item==="number"?<button key={item} className={item===page?"page-number active":"page-number"} aria-current={item===page?"page":undefined} aria-label={`第 ${item} 页`} onClick={()=>setPage(item)}>{item}</button>:<span className="product-pagination-ellipsis" key={item}>…</span>)}</div><button disabled={page>=pageCount} onClick={()=>setPage(value=>Math.min(pageCount,value+1))}>下一页</button><span className="product-pagination-summary">第 {page} / {pageCount} 页</span><form className="product-page-jump" onSubmit={event=>{event.preventDefault();jumpToPage();}}><label>跳至<input value={jumpPage} onChange={event=>setJumpPage(event.target.value.replace(/\D/g,"").slice(0,6))} inputMode="numeric" aria-label="跳转页码" placeholder={String(page)}/>页</label><button type="submit" disabled={!jumpPage}>跳转</button></form></nav>}
-    {editing&&<ProductEditorDialog product={editing==="new"?undefined:editing} products={products} currencies={currencyConfig.currencies} baseCurrency={currencyConfig.baseCurrency} request={(path,init)=>authorizedFetch(path,token,init)} onToken={onToken} onClose={()=>setEditing(null)} onSaved={async text=>{setEditing(null);onToast(text);await load();}}/>}
+    {editing&&<ProductEditorDialog product={editing==="new"?undefined:editing} products={products} categories={categoryNames} brands={brandNames} currencies={currencyConfig.currencies} baseCurrency={currencyConfig.baseCurrency} request={(path,init)=>authorizedFetch(path,token,init)} onToken={onToken} onClose={()=>setEditing(null)} onSaved={async text=>{setEditing(null);onToast(text);await load();}}/>}
     {importing&&<ProductImportDialog currencies={currencyConfig.currencies} request={(path,init)=>authorizedFetch(path,token,init)} onToken={onToken} onClose={()=>setImporting(false)} onImported={async result=>{setImporting(false);onToast(`导入完成：新增 ${result.created} 个，更新名称 ${result.updated} 个`);await load();}}/>}
     {generating&&<CollageGenerateDialog productIds={selected} request={collageRequest} onClose={()=>setGenerating(false)} onGenerated={()=>{setGenerating(false);setSelected([]);onToast("拼图素材已生成");}}/>}
     {bulkEditing&&<ProductBulkEditDialog count={selected.length} productIds={selected} token={token} onToken={onToken} onClose={()=>setBulkEditing(false)} onSaved={async text=>{setBulkEditing(false);setSelected([]);onToast(text);await load();}}/>}

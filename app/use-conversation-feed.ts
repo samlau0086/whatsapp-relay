@@ -7,17 +7,15 @@ export function useConversationFeed({
   enabled,
   getWebSocketUrl,
   onConversationIds,
-  onConnected,
   onReconcile,
 }:{
   enabled:boolean;
   getWebSocketUrl:()=>Promise<string>;
   onConversationIds:(ids:string[])=>void|Promise<void>;
-  onConnected:()=>void|Promise<void>;
   onReconcile:()=>void|Promise<void>;
 }):void{
-  const callbacks=useRef({getWebSocketUrl,onConversationIds,onConnected,onReconcile});
-  useEffect(()=>{callbacks.current={getWebSocketUrl,onConversationIds,onConnected,onReconcile};});
+  const callbacks=useRef({getWebSocketUrl,onConversationIds,onReconcile});
+  useEffect(()=>{callbacks.current={getWebSocketUrl,onConversationIds,onReconcile};});
   useEffect(()=>{
     if(!enabled)return;
     let stopped=false;
@@ -41,7 +39,7 @@ export function useConversationFeed({
         const url=await callbacks.current.getWebSocketUrl();
         if(stopped)return;
         socket=new WebSocket(url);
-        socket.addEventListener("open",()=>{attempt=0;void callbacks.current.onConnected();});
+        socket.addEventListener("open",()=>{attempt=0;});
         socket.addEventListener("message",event=>{
           try{
             const frame=JSON.parse(String(event.data)) as Partial<ConversationChangedEvent>;

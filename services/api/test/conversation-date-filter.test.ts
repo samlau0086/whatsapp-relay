@@ -130,3 +130,21 @@ test("inbox uses debounced search, cursor loading, realtime reconciliation, and 
   assert.match(feed,/100/);
   assert.match(pkg,/@tanstack\/react-virtual/);
 });
+
+test("inbox bounds media downloads, avoids reconnect reloads, and pages message history",async()=>{
+  const [ui,feed,server]=await Promise.all([
+    readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/use-conversation-feed.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(ui,/const MEDIA_DOWNLOAD_CONCURRENCY=4/);
+  assert.match(ui,/const MEDIA_CACHE_LIMIT=80/);
+  assert.match(ui,/rootMargin:"600px 0px"/);
+  assert.match(ui,/const MESSAGE_PAGE_SIZE=50/);
+  assert.match(ui,/params\.set\("cursor",cursor\)/);
+  assert.match(ui,/加载更早消息/);
+  assert.doesNotMatch(feed,/onConnected/);
+  assert.match(server,/invalid_message_cursor/);
+  assert.match(server,/msg\.occurred_at=\$2 AND msg\.id<\$3::uuid/);
+  assert.match(server,/Buffer\.from\(JSON\.stringify\(\{occurredAt:/);
+});

@@ -1203,16 +1203,30 @@ app.post("/api/v1/conversations", {preHandler:authenticate}, async(request,reply
 });
 
 app.get("/api/v1/conversations/:id/messages", { preHandler:authenticate }, async (request, reply) => {
-  const { id } = request.params as {id:string}; const query = request.query as { before?:string; limit?:string };
+  const { id } = request.params as {id:string}; const query = request.query as { before?:string; cursor?:string; limit?:string };
   const conversation = await pool.query("SELECT account_id FROM conversations WHERE id=$1",[id]);
   if (!conversation.rowCount || !canAccessAccount(request.principal,conversation.rows[0].account_id)) return reply.code(404).send({error:"not_found"});
   const limit=Math.min(100,Math.max(1,Number(query.limit??50)));
+  let cursor:{occurredAt:string;id:string}|null=null;
+  if(query.cursor){
+    try{
+      const decoded=JSON.parse(Buffer.from(query.cursor,"base64url").toString("utf8")) as {occurredAt?:string;id?:string};
+      if(!decoded.occurredAt||Number.isNaN(Date.parse(decoded.occurredAt))||!decoded.id||!isPostgresUuid(decoded.id))throw new Error("invalid");
+      cursor={occurredAt:new Date(decoded.occurredAt).toISOString(),id:decoded.id};
+    }catch{return reply.code(400).send({error:"invalid_message_cursor"});}
+  }else if(query.before){
+    const before=new Date(query.before);
+    if(Number.isNaN(before.getTime()))return reply.code(400).send({error:"invalid_message_cursor"});
+    cursor={occurredAt:before.toISOString(),id:"ffffffff-ffff-ffff-ffff-ffffffffffff"};
+  }
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null;
   const [result,failed]=await Promise.all([
-    pool.query("SELECT msg.id,msg.direction,msg.kind,msg.text_content,msg.translation_source_text,msg.translation_target_language,msg.status,msg.failure_code,msg.failure_message,msg.whatsapp_message_id,msg.media_id,msg.quoted_message_id,msg.occurred_at,media.file_name,media.mime_type,media.byte_size,quoted.direction quoted_direction,quoted.kind quoted_kind,quoted.text_content quoted_text_content,quoted_media.file_name quoted_file_name,preference.agent_language cached_translation_language,translation.translated_text cached_translation_text,translation.source_language cached_translation_source_language,transcription.transcript_text cached_transcription_text,command.id command_id,command.state command_state,command.attempt command_attempt,command.last_error command_last_error,command.available_at command_available_at,command.claimed_at command_claimed_at,command.created_at command_created_at,account.status account_status,agent.status agent_status,agent.last_seen_at agent_last_seen_at FROM messages msg LEFT JOIN media ON media.id=msg.media_id LEFT JOIN messages quoted ON quoted.id=msg.quoted_message_id LEFT JOIN media quoted_media ON quoted_media.id=quoted.media_id LEFT JOIN conversation_translation_preferences preference ON preference.conversation_id=msg.conversation_id AND preference.user_id=$4::uuid LEFT JOIN message_translations translation ON translation.message_id=msg.id AND translation.target_language=preference.agent_language LEFT JOIN message_transcriptions transcription ON transcription.message_id=msg.id LEFT JOIN whatsapp_accounts account ON account.id=msg.account_id LEFT JOIN agents agent ON agent.id=account.agent_id LEFT JOIN LATERAL (SELECT oc.id,oc.state,oc.attempt,oc.last_error,oc.available_at,oc.claimed_at,oc.created_at FROM outbound_commands oc WHERE oc.message_id=msg.id ORDER BY oc.sequence DESC LIMIT 1) command ON true WHERE msg.conversation_id=$1 AND ($2::timestamptz IS NULL OR msg.occurred_at<$2) ORDER BY msg.occurred_at DESC,msg.id DESC LIMIT $3",[id,query.before??null,limit,principalUserId]),
+    pool.query("SELECT msg.id,msg.direction,msg.kind,msg.text_content,msg.translation_source_text,msg.translation_target_language,msg.status,msg.failure_code,msg.failure_message,msg.whatsapp_message_id,msg.media_id,msg.quoted_message_id,msg.occurred_at,media.file_name,media.mime_type,media.byte_size,quoted.direction quoted_direction,quoted.kind quoted_kind,quoted.text_content quoted_text_content,quoted_media.file_name quoted_file_name,preference.agent_language cached_translation_language,translation.translated_text cached_translation_text,translation.source_language cached_translation_source_language,transcription.transcript_text cached_transcription_text,command.id command_id,command.state command_state,command.attempt command_attempt,command.last_error command_last_error,command.available_at command_available_at,command.claimed_at command_claimed_at,command.created_at command_created_at,account.status account_status,agent.status agent_status,agent.last_seen_at agent_last_seen_at FROM messages msg LEFT JOIN media ON media.id=msg.media_id LEFT JOIN messages quoted ON quoted.id=msg.quoted_message_id LEFT JOIN media quoted_media ON quoted_media.id=quoted.media_id LEFT JOIN conversation_translation_preferences preference ON preference.conversation_id=msg.conversation_id AND preference.user_id=$5::uuid LEFT JOIN message_translations translation ON translation.message_id=msg.id AND translation.target_language=preference.agent_language LEFT JOIN message_transcriptions transcription ON transcription.message_id=msg.id LEFT JOIN whatsapp_accounts account ON account.id=msg.account_id LEFT JOIN agents agent ON agent.id=account.agent_id LEFT JOIN LATERAL (SELECT oc.id,oc.state,oc.attempt,oc.last_error,oc.available_at,oc.claimed_at,oc.created_at FROM outbound_commands oc WHERE oc.message_id=msg.id ORDER BY oc.sequence DESC LIMIT 1) command ON true WHERE msg.conversation_id=$1 AND ($2::timestamptz IS NULL OR msg.occurred_at<$2 OR (msg.occurred_at=$2 AND msg.id<$3::uuid)) ORDER BY msg.occurred_at DESC,msg.id DESC LIMIT $4",[id,cursor?.occurredAt??null,cursor?.id??null,limit,principalUserId]),
     pool.query("SELECT count(*)::int count FROM messages WHERE conversation_id=$1 AND direction='out' AND status IN ('failed','uncertain')",[id]),
   ]);
-  return {data:result.rows.reverse(),nextCursor:result.rows.length===limit?result.rows[result.rows.length-1]?.occurred_at:null,failedCount:Number(failed.rows[0]?.count??0)};
+  const oldest=result.rows[result.rows.length-1];
+  const nextCursor=result.rows.length===limit&&oldest?Buffer.from(JSON.stringify({occurredAt:new Date(oldest.occurred_at).toISOString(),id:oldest.id}),"utf8").toString("base64url"):null;
+  return {data:result.rows.reverse(),nextCursor,failedCount:Number(failed.rows[0]?.count??0)};
 });
 
 app.post("/api/v1/messages", { preHandler:authenticate }, async (request, reply) => {

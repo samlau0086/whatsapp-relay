@@ -35,9 +35,133 @@ type Product = {
   priceTiers: Tier[];
   tags: Tag[];
 };
+
+function uniqueValues(values: string[]) {
+  return [...new Map(values.map((value) => [value.trim().toLowerCase(), value.trim()])).values()]
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b, "zh-CN"));
+}
+
+function SearchableCreatableField({
+  id,
+  label,
+  value,
+  options,
+  placeholder,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  options: string[];
+  placeholder: string;
+  onChange: (value: string) => void;
+}) {
+  const [query, setQuery] = useState(value),
+    [open, setOpen] = useState(false),
+    [activeIndex, setActiveIndex] = useState(0);
+  const normalized = query.trim().toLowerCase(),
+    matches = options
+      .filter((option) => !normalized || option.toLowerCase().includes(normalized))
+      .slice(0, 8),
+    exact = options.some((option) => option.toLowerCase() === normalized),
+    canCreate = Boolean(query.trim()) && !exact,
+    choices = matches.length + (canCreate ? 1 : 0);
+  function choose(next: string) {
+    onChange(next.trim());
+    setQuery(next.trim());
+    setOpen(false);
+    setActiveIndex(0);
+  }
+  return (
+    <label className="product-taxonomy-field">
+      {label} · 可选
+      <div
+        className="product-taxonomy-combobox"
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) {
+            setOpen(false);
+            setQuery(value);
+          }
+        }}
+      >
+        <input
+          role="combobox"
+          aria-expanded={open}
+          aria-controls={`${id}-options`}
+          aria-autocomplete="list"
+          value={query}
+          maxLength={80}
+          placeholder={placeholder}
+          onFocus={() => setOpen(true)}
+          onChange={(event) => {
+            const next = event.target.value;
+            setQuery(next);
+            setOpen(true);
+            setActiveIndex(0);
+            if (!next) onChange("");
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              setOpen(true);
+              setActiveIndex((index) => Math.min(Math.max(0, choices - 1), index + 1));
+            } else if (event.key === "ArrowUp") {
+              event.preventDefault();
+              setActiveIndex((index) => Math.max(0, index - 1));
+            } else if (event.key === "Enter" && open && choices) {
+              event.preventDefault();
+              if (activeIndex < matches.length) choose(matches[activeIndex]);
+              else choose(query);
+            } else if (event.key === "Escape") {
+              event.stopPropagation();
+              setOpen(false);
+              setQuery(value);
+            }
+          }}
+        />
+        {open && (
+          <div id={`${id}-options`} className="product-taxonomy-options" role="listbox">
+            {matches.map((option, index) => (
+              <button
+                type="button"
+                role="option"
+                aria-selected={option.toLowerCase() === value.toLowerCase()}
+                className={index === activeIndex ? "active" : ""}
+                key={option}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => choose(option)}
+              >
+                <span>{option}</span>
+                {option.toLowerCase() === value.toLowerCase() && <small>已选择</small>}
+              </button>
+            ))}
+            {canCreate && (
+              <button
+                type="button"
+                role="option"
+                aria-selected={false}
+                className={activeIndex === matches.length ? "active create" : "create"}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => choose(query)}
+              >
+                <Plus size={14} />
+                <span>创建“{query.trim()}”</span>
+              </button>
+            )}
+            {!choices && <p>没有匹配项，请输入新名称</p>}
+          </div>
+        )}
+      </div>
+    </label>
+  );
+}
+
 export function ProductEditorDialog({
   product,
   products,
+  categories,
+  brands,
   currencies,
   baseCurrency,
   request,
@@ -47,6 +171,8 @@ export function ProductEditorDialog({
 }: {
   product?: Product;
   products: Product[];
+  categories: string[];
+  brands: string[];
   currencies: Array<{ code: string; name: string }>;
   baseCurrency: string;
   request: (path: string, init?: RequestInit) => Promise<RequestResult>;
@@ -85,6 +211,14 @@ export function ProductEditorDialog({
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const CURRENCIES = currencies.map((item) => item.code);
+  const categoryOptions = useMemo(
+      () => uniqueValues([...categories, ...products.map((item) => item.category)]),
+      [categories, products],
+    ),
+    brandOptions = useMemo(
+      () => uniqueValues([...brands, ...products.map((item) => item.brand)]),
+      [brands, products],
+    );
   const duplicateName = products.some(
       (item) =>
         item.id !== product?.id &&
@@ -286,24 +420,22 @@ export function ProductEditorDialog({
             </span>
           )}
           <div className="product-form-grid">
-            <label>
-              分类 · 可选
-              <input
-                value={category}
-                onChange={(event) => setCategory(event.target.value)}
-                maxLength={80}
-                placeholder="例如 香水、礼盒"
-              />
-            </label>
-            <label>
-              品牌 · 可选
-              <input
-                value={brand}
-                onChange={(event) => setBrand(event.target.value)}
-                maxLength={80}
-                placeholder="例如 Dior"
-              />
-            </label>
+            <SearchableCreatableField
+              id="product-category"
+              label="分类"
+              value={category}
+              options={categoryOptions}
+              placeholder="搜索或创建分类"
+              onChange={setCategory}
+            />
+            <SearchableCreatableField
+              id="product-brand"
+              label="品牌"
+              value={brand}
+              options={brandOptions}
+              placeholder="搜索或创建品牌"
+              onChange={setBrand}
+            />
           </div>
           <label>
             产品描述 · 可选

@@ -222,8 +222,13 @@ test("products persist category and brand and expose server-side filters",async(
   assert.match(server,/query\.brand\?\.trim\(\)/);
   assert.match(component,/aria-label="按分类筛选"/);
   assert.match(component,/aria-label="按品牌筛选"/);
-  assert.match(dialog,/分类 · 可选/);
-  assert.match(dialog,/品牌 · 可选/);
+  assert.match(dialog,/label="分类"/);
+  assert.match(dialog,/label="品牌"/);
+  assert.match(dialog,/function SearchableCreatableField/);
+  assert.match(dialog,/role="combobox"/);
+  assert.match(dialog,/创建“\{query\.trim\(\)\}”/);
+  assert.match(dialog,/products\.map\(\(item\) => item\.category\)/);
+  assert.match(dialog,/products\.map\(\(item\) => item\.brand\)/);
 });
 
 test("API startup applies the latest product schema to persistent databases",async()=>{
