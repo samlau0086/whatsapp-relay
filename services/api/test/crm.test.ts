@@ -79,6 +79,20 @@ test("customer addresses are reusable while orders retain an address snapshot",a
   assert.match(migration,/ADD COLUMN IF NOT EXISTS shipping_address_snapshot jsonb/);
 });
 
+test("structured contact names and one default shipping address are migrated",async()=>{
+  const [migration,migrator,server,inbox]=await Promise.all([
+    readFile(new URL("../../../infra/postgres/migrations/052_contact_names_default_address.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+  ]);
+  assert.match(migration,/ADD COLUMN IF NOT EXISTS first_name text/);
+  assert.match(migration,/contact_addresses_one_default_unique/);
+  assert.match(migrator,/052_contact_names_default_address\.sql/);
+  assert.match(server,/firstName:String\(row\.first_name/);
+  assert.match(inbox,/next\.find\(item=>item\.isDefault\)/);
+});
+
 test("contact aliases stay independent from synchronized WhatsApp names",async()=>{
   const [server,hub,migration,migrator]=await Promise.all([
     readFile(new URL("../src/server.ts",import.meta.url),"utf8"),

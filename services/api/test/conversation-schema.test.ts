@@ -87,9 +87,12 @@ test("CRM schemas enforce stages, tags, notes, and reminder dates",()=>{
   assert.equal(reminderSchema.safeParse({remindAt:new Date(Date.now()-60_000).toISOString()}).success,false);
 });
 
-test("contact profiles normalize email and select a single primary address",()=>{
-  const profile=contactUpdateSchema.parse({alias:" Alice ",note:" Follow up ",preferredLanguage:"es",emails:[{label:"Work",email:" ALICE@EXAMPLE.COM ",isPrimary:false}],methods:[{type:"telegram",label:"Sales",value:" @alice "},{type:"linkedin",label:"Professional",value:"alice"}]});
+test("contact profiles normalize names, email, and select one default address",()=>{
+  const profile=contactUpdateSchema.parse({alias:" Alice ",firstName:" Alice ",middleName:" Beth ",lastName:" Smith ",note:" Follow up ",preferredLanguage:"es",emails:[{label:"Work",email:" ALICE@EXAMPLE.COM ",isPrimary:false}],methods:[{type:"telegram",label:"Sales",value:" @alice "},{type:"linkedin",label:"Professional",value:"alice"}]});
   assert.equal(profile.alias,"Alice");
+  assert.equal(profile.firstName,"Alice");
+  assert.equal(profile.middleName,"Beth");
+  assert.equal(profile.lastName,"Smith");
   assert.equal(profile.preferredLanguage,"es");
   assert.equal(profile.emails[0].email,"alice@example.com");
   assert.equal(profile.emails[0].isPrimary,true);
@@ -97,6 +100,8 @@ test("contact profiles normalize email and select a single primary address",()=>
   assert.equal(profile.methods[1].type,"linkedin");
   const withAddress=contactUpdateSchema.parse({...profile,addresses:[{label:"Office",recipientName:"Alice",phone:"+8613800000000",address:"Shanghai"}]});
   assert.equal(withAddress.addresses[0].label,"Office");
+  assert.equal(withAddress.addresses[0].isDefault,true);
+  assert.equal(contactUpdateSchema.safeParse({...profile,addresses:[{label:"Office",address:"Shanghai",isDefault:true},{label:"Home",address:"Shenzhen",isDefault:true}]}).success,false);
   assert.equal(contactUpdateSchema.safeParse({...profile,addresses:[{label:"",address:""}]}).success,false);
   assert.equal(contactUpdateSchema.safeParse({...profile,emails:[profile.emails[0],{...profile.emails[0],isPrimary:false}]}).success,false);
   assert.equal(contactUpdateSchema.safeParse({...profile,emails:[profile.emails[0],{label:"Home",email:"other@example.com",isPrimary:true}]}).success,false);

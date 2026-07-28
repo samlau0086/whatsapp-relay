@@ -29,6 +29,9 @@ export function formatOrderSummary(orderNumber:string|number,items:OrderSummaryI
 type Queryable={query:(text:string,values?:unknown[])=>Promise<unknown>};
 
 export async function ensureCrmTables(db:Queryable):Promise<void>{
+  await db.query("ALTER TABLE contacts ADD COLUMN IF NOT EXISTS first_name text");
+  await db.query("ALTER TABLE contacts ADD COLUMN IF NOT EXISTS middle_name text");
+  await db.query("ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_name text");
   await db.query("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS customer_stage text NOT NULL DEFAULT 'new'");
   await db.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='conversations_customer_stage_check') THEN ALTER TABLE conversations ADD CONSTRAINT conversations_customer_stage_check CHECK (customer_stage IN ('new','considering','qualified','won','lost')); END IF; END $$`);
   await db.query("ALTER TABLE notes ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()");
@@ -45,6 +48,9 @@ export async function ensureCrmTables(db:Queryable):Promise<void>{
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS rendered_media_id uuid REFERENCES media(id) ON DELETE SET NULL");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS deleted_at timestamptz");
   await db.query(`CREATE TABLE IF NOT EXISTS contact_addresses (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),contact_id uuid NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,label text NOT NULL,recipient_name text,phone text,address text NOT NULL,created_by uuid REFERENCES users(id) ON DELETE SET NULL,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now())`);
+  await db.query("ALTER TABLE contact_addresses ADD COLUMN IF NOT EXISTS is_default boolean NOT NULL DEFAULT false");
+  await db.query(`UPDATE contact_addresses address SET is_default=true WHERE address.id=(SELECT candidate.id FROM contact_addresses candidate WHERE candidate.contact_id=address.contact_id ORDER BY candidate.is_default DESC,candidate.created_at,candidate.id LIMIT 1) AND NOT EXISTS(SELECT 1 FROM contact_addresses current_default WHERE current_default.contact_id=address.contact_id AND current_default.is_default)`);
+  await db.query(`WITH ranked AS (SELECT id,row_number() OVER(PARTITION BY contact_id ORDER BY updated_at DESC,id) position FROM contact_addresses WHERE is_default) UPDATE contact_addresses address SET is_default=false FROM ranked WHERE address.id=ranked.id AND ranked.position>1`);
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS address_id uuid REFERENCES contact_addresses(id) ON DELETE SET NULL");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_address_snapshot jsonb");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS display_order_number text");
@@ -99,6 +105,7 @@ export async function ensureCrmTables(db:Queryable):Promise<void>{
   await db.query("CREATE UNIQUE INDEX IF NOT EXISTS orders_display_number_unique ON orders(display_order_number)");
   await db.query("CREATE INDEX IF NOT EXISTS orders_management_created_idx ON orders(created_at DESC,id DESC) WHERE deleted_at IS NULL");
   await db.query("CREATE INDEX IF NOT EXISTS contact_addresses_contact_idx ON contact_addresses(contact_id,created_at DESC)");
+  await db.query("CREATE UNIQUE INDEX IF NOT EXISTS contact_addresses_one_default_unique ON contact_addresses(contact_id) WHERE is_default");
   await db.query(`CREATE TABLE IF NOT EXISTS paypal_settings (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),enabled boolean NOT NULL DEFAULT false,environment text NOT NULL DEFAULT 'sandbox' CHECK(environment IN ('sandbox','live')),client_id_encrypted text,client_secret_encrypted text,updated_by uuid REFERENCES users(id) ON DELETE SET NULL,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now())`);
   await db.query("ALTER TABLE paypal_settings ADD COLUMN IF NOT EXISTS reference_template text NOT NULL DEFAULT 'Order #{{orderNumber}}'");
   await db.query("ALTER TABLE paypal_settings ADD COLUMN IF NOT EXISTS note_template text NOT NULL DEFAULT '{{orderNotes}}'");

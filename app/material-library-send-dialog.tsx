@@ -38,11 +38,11 @@ export function MaterialLibrarySendDialog({accountId,conversationId,customerName
   const imageCacheDisposedRef=useRef(false);
 
   useEffect(()=>{requestRef.current=request;onTokenRef.current=onToken;},[request,onToken]);
-  useEffect(()=>()=>{imageCacheDisposedRef.current=true;for(const url of imageUrlsRef.current)URL.revokeObjectURL(url);imageUrlsRef.current.clear();imageCacheRef.current.clear();},[]);
+  useEffect(()=>{imageCacheDisposedRef.current=false;const imageUrls=imageUrlsRef.current,imageCache=imageCacheRef.current;return()=>{imageCacheDisposedRef.current=true;for(const url of imageUrls)URL.revokeObjectURL(url);imageUrls.clear();imageCache.clear();};},[]);
   const loadImage=useCallback((mediaId:string)=>{
     const cached=imageCacheRef.current.get(mediaId);
     if(cached)return cached;
-    const pending=requestRef.current(`/api/v1/media/${mediaId}`).then(async result=>{
+    const pending=requestRef.current(`/api/v1/media/${mediaId}?preview=1`).then(async result=>{
       onTokenRef.current(result.token);
       if(!result.response.ok)throw new Error(`素材预览加载失败（HTTP ${result.response.status}）`);
       const url=URL.createObjectURL(await result.response.blob());
@@ -173,7 +173,7 @@ export function MaterialLibrarySendDialog({accountId,conversationId,customerName
   return <div className="modal-backdrop material-send-backdrop" role="presentation"><section className="material-send-dialog" role="dialog" aria-modal="true" aria-labelledby="material-send-title">
     <header><div className="material-send-heading"><span><LayoutGrid size={20}/></span><div><h2 id="material-send-title">从素材库发送图片</h2><p>多选、拼接或逐张发送给 {customerName}</p></div></div><button className="material-send-close" onClick={onClose} disabled={busy} aria-label="关闭素材库"><X size={18}/></button></header>
     <div className="material-send-body">
-      <aside><label className="material-send-search"><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索素材名称或模板" autoFocus/></label><div className="material-send-batches">{loading?<Loading text="正在读取素材库…"/>:visible.length?visible.map(item=>{const selectedCount=selectedAssets.filter(asset=>asset.batchId===item.id).length;return <button key={item.id} className={selectedBatchId===item.id?"active":""} onClick={()=>setSelectedBatchId(item.id)}><MaterialImage mediaId={item.coverMediaId} loadImage={loadImage} lazy/><span><b>{item.name}</b><small>{item.templateName} · {item.pageCount} 张</small><small>{item.createdByName||"团队成员"} · {formatDate(item.createdAt)}</small></span>{selectedCount>0&&<em className="material-batch-selected-count">{selectedCount}</em>}</button>}):<div className="material-send-empty"><ImageIcon size={27}/><b>{query?"没有匹配的素材":"素材库还是空的"}</b><span>{query?"换个关键词试试":"请先在产品库生成素材"}</span></div>}</div></aside>
+      <aside><label className="material-send-search"><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索素材名称或模板" autoFocus/></label><div className="material-send-batches">{loading?<Loading text="正在读取素材库…"/>:visible.length?visible.map(item=>{const selectedCount=selectedAssets.filter(asset=>asset.batchId===item.id).length;return <button key={item.id} className={selectedBatchId===item.id?"active":""} onClick={()=>setSelectedBatchId(item.id)}><MaterialImage mediaId={item.coverMediaId} loadImage={loadImage} lazy delayMs={300}/><span><b>{item.name}</b><small>{item.templateName} · {item.pageCount} 张</small><small>{item.createdByName||"团队成员"} · {formatDate(item.createdAt)}</small></span>{selectedCount>0&&<em className="material-batch-selected-count">{selectedCount}</em>}</button>}):<div className="material-send-empty"><ImageIcon size={27}/><b>{query?"没有匹配的素材":"素材库还是空的"}</b><span>{query?"换个关键词试试":"请先在产品库生成素材"}</span></div>}</div></aside>
       <main>
         <div className="material-send-selection-head"><div><b>{selectedBatch?.name??"选择一个素材批次"}</b><span>{assets.length?`当前素材库共 ${assets.length} 张，可跨素材库选择最多 10 张`:""}</span></div><span className="material-selected-indicator"><Check size={13}/>已跨库选择 {selectedAssets.length} 张</span></div>
         <div className="material-send-options"><div role="group" aria-label="发送方式"><button className={mode==="stitched"?"active":""} onClick={()=>{setMode("stitched");pendingBatchRef.current=null}}><LayoutGrid size={14}/>拼接发送</button><button className={mode==="individual"?"active":""} onClick={()=>{setMode("individual");pendingBatchRef.current=null}}><Rows3 size={14}/>逐个发送</button></div>{mode==="stitched"&&<div role="group" aria-label="拼接方向"><span>拼接方向</span><button className={orientation==="vertical"?"active":""} onClick={()=>{setOrientation("vertical");pendingBatchRef.current=null}}>竖向</button><button className={orientation==="horizontal"?"active":""} onClick={()=>{setOrientation("horizontal");pendingBatchRef.current=null}}>横向</button></div>}<small>{mode==="stitched"?"按素材库顺序和页码无缝拼接":"按素材库顺序和页码逐张发送，说明仅附第一张"}</small></div>
@@ -196,7 +196,7 @@ function MaterialTranslationConfirm({source,translated,targetLanguageName,busy,o
   </section></div>;
 }
 
-function MaterialImage({mediaId,loadImage,lazy=false}:{mediaId:string|null;loadImage:(mediaId:string)=>Promise<string>;lazy?:boolean}){
+function MaterialImage({mediaId,loadImage,lazy=false,delayMs=0}:{mediaId:string|null;loadImage:(mediaId:string)=>Promise<string>;lazy?:boolean;delayMs?:number}){
   const [image,setImage]=useState<{mediaId:string;url:string}|null>(null);
   const [visible,setVisible]=useState(!lazy);
   const placeholderRef=useRef<HTMLSpanElement>(null);
@@ -204,11 +204,13 @@ function MaterialImage({mediaId,loadImage,lazy=false}:{mediaId:string|null;loadI
   useEffect(()=>{
     if(!lazy)return;
     const element=placeholderRef.current;
-    if(!element||typeof IntersectionObserver==="undefined"){const timer=window.setTimeout(()=>setVisible(true),0);return()=>window.clearTimeout(timer);}
-    const observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting)){setVisible(true);observer.disconnect();}},{rootMargin:"160px"});
+    let timer=0;
+    const reveal=()=>{timer=window.setTimeout(()=>setVisible(true),delayMs);};
+    if(!element||typeof IntersectionObserver==="undefined"){reveal();return()=>window.clearTimeout(timer);}
+    const observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting)){reveal();observer.disconnect();}},{rootMargin:"80px"});
     observer.observe(element);
-    return()=>observer.disconnect();
-  },[lazy,mediaId]);
+    return()=>{observer.disconnect();window.clearTimeout(timer);};
+  },[delayMs,lazy,mediaId]);
   useEffect(()=>{if(!mediaId||!visible)return;let active=true;void loadImage(mediaId).then(next=>{if(active)setImage({mediaId,url:next});}).catch(()=>{});return()=>{active=false;};},[loadImage,mediaId,visible]);
   return url?<img src={url} alt="素材预览"/>:<span ref={placeholderRef} className="material-image-placeholder"><ImageIcon size={20}/></span>;
 }
