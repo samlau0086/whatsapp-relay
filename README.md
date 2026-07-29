@@ -121,10 +121,48 @@ Cloud API 新会话必须通过已审核模板发起。客户回复后会开启 
 
 管理员可在“系统设置 → Messenger Pages”逐个填写 Page ID、Page Access Token 和 Meta App Secret。每个 Page 都会成为独立渠道账号，拥有独立联系人、会话、权限和回复窗口，但会与 WhatsApp 一起显示在统一收件箱。
 
-1. 添加 Page 后复制一次性显示的 Verify Token。
-2. 在对应 Meta App 中将 Callback URL 设置为 `https://你的域名/api/v1/meta/messenger/webhook`。
-3. 使用 Verify Token 完成 Webhook challenge，并为 Page 订阅 `messages`、`message_echoes`、`message_deliveries` 和 `message_reads`。
-4. 回到设置页测试凭据；收到首条客户消息后即可在 24 小时窗口内回复文本或媒体。
+#### 准备条件
+
+- 登录 [Meta for Developers](https://developers.facebook.com/apps/)，创建或选择一个已启用 Messenger 产品/用例的 Meta App。
+- 操作人必须拥有目标 Facebook Page 的管理权限，并能授权该 App 管理 Page 消息。
+- 生产接收普通客户消息前，App 需要切换到 Live 模式，并按 Meta 要求完成业务验证、隐私政策及 `pages_messaging` 等权限审核。Development 模式通常只允许 App 角色和测试人员使用。
+- RelayDesk API 必须能通过公网 HTTPS 访问；Meta 无法回调 `localhost`、内网地址或需要登录的 URL。
+
+#### 获取 Page 凭据
+
+1. **Page ID**
+   - 打开目标 Facebook Page，在 Page 的“关于/About”或“Page transparency/主页透明度”区域查找数字 Page ID。
+   - 也可以在 Meta App 的“Messenger → Messenger API Settings（Messenger API 设置）→ Access Tokens”区域连接 Page 后查看其 Page ID。
+   - Page ID 是纯数字标识，不是 Page 用户名，也不是浏览器地址中的自定义短名称。
+
+2. **Page Access Token**
+   - 在 [Meta App Dashboard](https://developers.facebook.com/apps/) 打开对应 App。
+   - 进入“Messenger → Messenger API Settings → Access Tokens”。
+   - 点击“Add or remove Pages”，选择目标 Page 并完成 Facebook 授权。
+   - 在目标 Page 行点击“Generate Token/生成 Token”，确认所需权限后立即复制生成的 **Page Access Token**。
+   - 不要填写普通 User Access Token、App Access Token 或 WhatsApp Token。若 Meta 只签发短期 Token，应按 [Meta Access Token 文档](https://developers.facebook.com/docs/facebook-login/guides/access-tokens/)换成长效凭据后再用于生产。
+
+3. **Meta App Secret**
+   - 在同一个 Meta App 中进入“App settings/应用设置 → Basic/基本”。
+   - 在“App Secret”旁点击“Show/显示”，通过账号验证后复制。
+   - 多个 Page 使用同一个 Meta App 时可以使用同一个 App Secret；它用于验证 `X-Hub-Signature-256`，不能使用 App ID 代替。
+
+4. **Webhook Verify Token**
+   - Verify Token 不是从 Meta 获取的凭证。登录 RelayDesk 后进入“系统设置 → Messenger Pages”，填写渠道显示名称、Page ID、Page Access Token 和 Meta App Secret，然后点击添加。
+   - RelayDesk 会生成并且只显示一次 Verify Token，请立即保存。遗失后可在该 Page 的管理项中重置，并同步更新 Meta Webhook 配置。
+
+#### 配置 Meta Webhook
+
+1. 在 RelayDesk 添加 Page 后，先点击“测试凭据”；确认 Page ID、Token 和 App Secret 属于同一 App/Page 配置。
+2. 回到 Meta App Dashboard，进入 Messenger 的 Webhooks 设置并选择 `Page` 对象。
+3. 填写以下内容：
+   - Callback URL：`https://你的 API 域名/api/v1/meta/messenger/webhook`
+   - Verify Token：RelayDesk 添加 Page 时一次性显示的 Verify Token
+4. 点击“Verify and Save/验证并保存”，然后订阅 `messages`、`message_echoes`、`message_deliveries` 和 `message_reads`。
+5. 确认目标 Page 已订阅到该 App；每个要接入的 Page 都需要授权、在 RelayDesk 中单独添加并完成 Page 订阅。
+6. 从非管理员/非测试账号向 Page 发送一条消息，确认 RelayDesk 的“最近 Webhook 时间”已更新且统一收件箱出现 `Facebook · Page 名称` 会话。
+
+凭据保存后 RelayDesk 不会通过 API 返回 Token 或 App Secret 明文。若 Page 管理员权限被移除、账号修改密码、App 权限被撤销或 Token 失效，请在 Meta 重新生成 Page Access Token，并在 RelayDesk 的 Page 设置中更新后再次测试。官方流程如有界面变化，以 [Messenger Platform 文档](https://developers.facebook.com/docs/messenger-platform/)和 [Meta Webhooks 文档](https://developers.facebook.com/docs/graph-api/webhooks/)为准。
 
 Messenger 不允许 RelayDesk 主动创建客户会话。首版支持文本、图片、视频、音频、文件、引用回复和送达/已读状态；不处理 quick reply、postback、reaction 或 referral。
 
