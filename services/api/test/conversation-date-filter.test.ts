@@ -147,7 +147,9 @@ test("inbox uses debounced search, cursor loading, realtime reconciliation, and 
   assert.match(ui,/conversationCursorRef/);
   assert.match(ui,/useConversationFeed/);
   assert.match(ui,/tagId:selectedTag/);
-  assert.match(panel,/aria-label="按标签筛选会话"/);
+  assert.match(panel,/aria-label="搜索并筛选会话标签"/);
+  assert.match(panel,/conversation-tag-chip/);
+  assert.match(panel,/移除标签/);
   assert.match(feed,/60_000/);
   assert.match(feed,/100/);
   assert.match(pkg,/@tanstack\/react-virtual/);
