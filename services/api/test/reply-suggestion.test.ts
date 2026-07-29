@@ -12,9 +12,16 @@ test("manual reply suggestion combines conversation context and assigned knowled
   assert.match(engine, /export async function generateSalesReplySuggestion/);
   assert.match(engine, /retrieveKnowledge\(\s*provider,\s*cfg\.account_id/);
   assert.match(engine, /customer_memory_facts/);
-  assert.match(engine, /recent chat context, CRM memory, orders, and relevant knowledge/);
+  assert.match(engine, /JOIN contacts co ON co\.id=c\.contact_id/);
+  assert.match(engine, /customerProfile/);
+  assert.match(engine, /including the known customer name/);
   assert.match(engine, /fake urgency, pressure, unsupported discounts/);
+  assert.match(engine, /auditable decision summary, not hidden chain-of-thought/);
+  assert.match(engine, /This is a rethink request/);
   assert.match(server, /\/api\/v1\/conversations\/:id\/reply-suggestion/);
   assert.match(ui, /回复建议 Agent/);
-  assert.match(ui, /setDraft\(body\.reply\)/);
+  assert.match(ui, /Agent 分析说明/);
+  assert.match(ui, /重新思考/);
+  assert.match(ui, /JSON\.stringify\(\{previousReply\}\)/);
+  assert.match(ui, /setDraft\(replySuggestion\.reply\)/);
 });

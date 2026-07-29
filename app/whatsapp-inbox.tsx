@@ -236,6 +236,7 @@ type CurrencyConfig={baseCurrency:string;currencies:CurrencyItem[];rateSource?:s
 type MessageTranslation={status:"idle"|"loading"|"translated"|"failed";text?:string;sourceText?:string;sourceLanguage?:string;targetLanguage?:string;message?:string};
 type KnowledgeBaseItem={id:string;name:string;description:string;document_count?:number;faq_count?:number};
 type AgentDraft={id:string;text_content:string;reply_zh:string|null;reason:string;citations:string[];created_at:string};
+type ReplySuggestion={conversationId:string;reply:string;replyZh:string;analysis:string;confidence:number;citations:string[];sources:Array<{id:string;source:string}>;customerName:string;contextUsed:string[]};
 const DEFAULT_TRANSLATION_PREFERENCE:TranslationPreference={enabled:false,agentLanguage:"zh-CN",customerLanguage:"en",updatedAt:null};
 const EMPTY_CONVERSATION_COUNTS:ConversationCounts={all:0,mine:0,unassigned:0,favorite:0,closed:0,archived:0,reminders:0};
 
@@ -322,6 +323,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [translatingDraft,setTranslatingDraft]=useState(false);
   const [translationError,setTranslationError]=useState("");
   const [replySuggestionBusy,setReplySuggestionBusy]=useState(false);
+  const [replySuggestion,setReplySuggestion]=useState<ReplySuggestion|null>(null);
   const [conversationMenu,setConversationMenu]=useState<ConversationContextState|null>(null);
   const [contextTags,setContextTags]=useState<TagItem[]>([]);
   const [contextBusy,setContextBusy]=useState(false);
@@ -843,19 +845,26 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     setTranslationPreview(null);
     setTranslationError("");
     try{
-      const result=await authorizedFetch(`/api/v1/conversations/${active.id}/reply-suggestion`,apiToken,{method:"POST"});
+      const previousReply=replySuggestion?.conversationId===active.id?replySuggestion.reply:"";
+      const result=await authorizedFetch(`/api/v1/conversations/${active.id}/reply-suggestion`,apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({previousReply})});
       if(result.token!==apiToken)setApiToken(result.token);
-      const body=await result.response.json().catch(()=>({})) as {reply?:string;sources?:Array<{id:string;source:string}>;error?:string};
+      const body=await result.response.json().catch(()=>({})) as Omit<ReplySuggestion,"conversationId">&{error?:string};
       if(!result.response.ok||!body.reply)throw new Error(body.error??"回复建议生成失败");
-      setDraft(body.reply);
+      setReplySuggestion({...body,conversationId:active.id});
       setQuickReplyOpen(false);
       setTranslationMenuOpen(false);
-      setToast(body.sources?.length?`回复建议已生成，参考了 ${body.sources.length} 条知识库内容`:"回复建议已根据聊天记录生成");
-      requestAnimationFrame(()=>textareaRef.current?.focus());
     }catch(reason){
       const message=reason instanceof Error?reason.message:"回复建议生成失败";
       setToast(message==="agent_provider_not_configured"?"请先在系统设置中配置 AI Provider":message==="conversation_has_no_messages"?"当前会话还没有可分析的聊天记录":"回复建议生成失败，请稍后重试");
     }finally{setReplySuggestionBusy(false);}
+  }
+
+  function confirmReplySuggestion(){
+    if(!replySuggestion||replySuggestion.conversationId!==active?.id)return;
+    setDraft(replySuggestion.reply);
+    setReplySuggestion(null);
+    setToast("回复建议已放入输入框，可继续编辑后发送");
+    requestAnimationFrame(()=>textareaRef.current?.focus());
   }
 
   async function sendMessage(){
@@ -2177,6 +2186,15 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             setActiveId(conversationId);
             setToast("新会话已创建，首条消息已进入发送队列");
           }}
+        />
+      )}
+      {replySuggestion&&active?.id===replySuggestion.conversationId&&(
+        <ReplySuggestionDialog
+          suggestion={replySuggestion}
+          busy={replySuggestionBusy}
+          onClose={()=>setReplySuggestion(null)}
+          onRethink={()=>void generateReplySuggestion()}
+          onConfirm={confirmReplySuggestion}
         />
       )}
       {mediaOpen && active && (
@@ -4241,6 +4259,37 @@ function MessageMedia({attachment,token,onToken,onReady}:{attachment:{id:string;
   if(attachment.mime.startsWith("video/"))return <div ref={hostRef} className="message-media"><video src={url} controls preload="metadata" aria-label={attachment.name} onLoadedMetadata={()=>onReadyRef.current()}/></div>;
   if(attachment.mime.startsWith("audio/"))return <div ref={hostRef} className="message-media"><audio src={url} controls preload="metadata" aria-label={attachment.name} onLoadedMetadata={()=>onReadyRef.current()}/></div>;
   return <div ref={hostRef} className="message-media"><button className="attachment-card" onClick={()=>{const link=document.createElement("a");link.href=url;link.download=attachment.name;link.click();}}><span><FileText size={20}/></span><span><b>{attachment.name}</b><small>{attachment.mime} · {attachment.size}</small></span></button></div>;
+}
+
+function ReplySuggestionDialog({suggestion,busy,onClose,onRethink,onConfirm}:{suggestion:ReplySuggestion;busy:boolean;onClose:()=>void;onRethink:()=>void;onConfirm:()=>void}){
+  const sources=[...new Set(suggestion.sources.map(item=>item.source))];
+  return <div className="modal-backdrop reply-suggestion-backdrop" role="presentation">
+    <section className="login-dialog reply-suggestion-dialog" role="dialog" aria-modal="true" aria-labelledby="reply-suggestion-title">
+      <button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭回复建议"><X size={17}/></button>
+      <header className="reply-suggestion-heading">
+        <span><Sparkles size={20}/></span>
+        <div><h2 id="reply-suggestion-title">回复建议 Agent</h2><p>{suggestion.customerName?`已结合 ${suggestion.customerName} 的客户资料与会话上下文`:"已结合客户资料与会话上下文"}</p></div>
+      </header>
+      <div className="reply-suggestion-context" aria-label="本次分析使用的资料">
+        {suggestion.contextUsed.map(item=><span key={item}><Check size={11}/>{item}</span>)}
+      </div>
+      <section className="reply-suggestion-analysis">
+        <header><Brain size={16}/><b>Agent 分析说明</b></header>
+        <p>{suggestion.analysis||"Agent 根据客户当前意图与可用业务资料，选择了最合适的下一步推进方式。"}</p>
+      </section>
+      <section className="reply-suggestion-copy">
+        <header><MessageCircle size={16}/><b>建议回复</b><small>确认后才会写入发送框</small></header>
+        <p>{suggestion.reply}</p>
+      </section>
+      {suggestion.replyZh&&suggestion.replyZh.trim()!==suggestion.reply.trim()&&<details className="reply-suggestion-translation"><summary>查看中文参考</summary><p>{suggestion.replyZh}</p></details>}
+      {sources.length>0&&<div className="reply-suggestion-sources"><BookOpen size={13}/><span>知识依据：{sources.join("、")}</span></div>}
+      <footer>
+        <button className="secondary-action" onClick={onClose} disabled={busy}>取消</button>
+        <button className="secondary-action rethink" onClick={onRethink} disabled={busy}><RefreshCw className={busy?"spin":""} size={14}/>{busy?"正在重新分析…":"重新思考"}</button>
+        <button className="primary-action" onClick={onConfirm} disabled={busy}><Check size={14}/>确认并放入输入框</button>
+      </footer>
+    </section>
+  </div>;
 }
 
 function AgentConversationBar({conversationId,token,refreshKey,onToken,onToast,onUseDraft,onSent}:{conversationId:string;token:string;refreshKey:string;onToken:(token:string)=>void;onToast:(text:string)=>void;onUseDraft:(text:string)=>void;onSent:()=>void}){

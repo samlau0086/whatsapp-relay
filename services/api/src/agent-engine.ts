@@ -894,17 +894,26 @@ async function retrieveKnowledge(
 
 export async function generateSalesReplySuggestion(
   conversationId: string,
+  previousReply = "",
 ): Promise<{
   reply: string;
   replyZh: string;
-  reason: string;
+  analysis: string;
   confidence: number;
   citations: string[];
   sources: Array<{ id: string; source: string }>;
+  customerName: string;
+  contextUsed: string[];
 }> {
   const context = await pool.query(
-    `SELECT c.id,c.account_id,COALESCE(s.persona,'You are a helpful, concise relationship assistant.') persona,COALESCE(s.reply_language,'auto') reply_language,COALESCE(mem.summary,'') summary
+    `SELECT c.id,c.account_id,c.customer_stage,
+            co.alias,co.display_name,co.first_name,co.middle_name,co.last_name,co.note,co.preferred_language,co.timezone,
+            co.birthday_month,co.birthday_day,co.birthday_year,
+            COALESCE(s.persona,'You are a helpful, concise relationship assistant.') persona,
+            COALESCE(s.reply_language,'auto') reply_language,COALESCE(mem.summary,'') summary,
+            COALESCE((SELECT json_agg(t.name ORDER BY lower(t.name)) FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id),'[]'::json) tags
      FROM conversations c
+     JOIN contacts co ON co.id=c.contact_id
      LEFT JOIN account_agent_settings s ON s.account_id=c.account_id
      LEFT JOIN conversation_memories mem ON mem.conversation_id=c.id
      WHERE c.id=$1`,
@@ -942,6 +951,33 @@ export async function generateSalesReplySuggestion(
     cfg.account_id,
     knowledgeQuery || String(cfg.summary),
   );
+  const customerName =
+    String(cfg.alias ?? "").trim() ||
+    [cfg.first_name, cfg.middle_name, cfg.last_name]
+      .map((item) => String(item ?? "").trim())
+      .filter(Boolean)
+      .join(" ") ||
+    String(cfg.display_name ?? "").trim();
+  const customerProfile = {
+    name: customerName || null,
+    alias: String(cfg.alias ?? "").trim() || null,
+    firstName: String(cfg.first_name ?? "").trim() || null,
+    middleName: String(cfg.middle_name ?? "").trim() || null,
+    lastName: String(cfg.last_name ?? "").trim() || null,
+    note: String(cfg.note ?? "").trim() || null,
+    preferredLanguage: cfg.preferred_language ?? null,
+    timezone: cfg.timezone ?? null,
+    birthday:
+      cfg.birthday_month && cfg.birthday_day
+        ? {
+            month: Number(cfg.birthday_month),
+            day: Number(cfg.birthday_day),
+            year: cfg.birthday_year ? Number(cfg.birthday_year) : null,
+          }
+        : null,
+    customerStage: cfg.customer_stage,
+    tags: cfg.tags,
+  };
   const run = await pool.query(
     "INSERT INTO agent_runs(conversation_id,source_message_id,kind) VALUES($1,$2,'reply') RETURNING id",
     [conversationId, latestInbound?.id ?? null],
@@ -958,6 +994,8 @@ export async function generateSalesReplySuggestion(
       orders: orders.rows,
       messages: ordered,
       chunks,
+      customerProfile,
+      previousReply: previousReply.trim().slice(0, 8_000),
     });
     if (!decision.reply.trim()) throw new Error("agent_provider_empty_suggestion");
     await finishRun(run.rows[0].id, { ...decision, decision: "draft" });
@@ -965,9 +1003,19 @@ export async function generateSalesReplySuggestion(
     return {
       reply: decision.reply.trim(),
       replyZh: decision.replyZh?.trim() ?? "",
-      reason: decision.reason,
+      analysis: decision.reason,
       confidence: decision.confidence,
       citations: decision.citations,
+      customerName,
+      contextUsed: [
+        customerName || customerProfile.note || customerProfile.preferredLanguage
+          ? "客户资料"
+          : "",
+        facts.rowCount || cfg.summary ? "客户记忆" : "",
+        ordered.length ? "聊天记录" : "",
+        orders.rowCount ? "订单记录" : "",
+        chunks.length ? "知识库" : "",
+      ].filter(Boolean),
       sources: chunks
         .filter((item) => cited.has(item.id))
         .map((item) => ({ id: item.id, source: item.source })),
@@ -996,6 +1044,8 @@ async function generateDecision(
     facts: unknown[];
     orders: unknown[];
     messages: unknown[];
+    customerProfile?: unknown;
+    previousReply?: string;
     chunks: Array<{
       id: string;
       content: string;
@@ -1006,7 +1056,7 @@ async function generateDecision(
 ): Promise<AgentDecision> {
   const salesGuidance =
     input.kind === "sales_suggestion"
-      ? "You are drafting a sales-assist suggestion for a human agent. Move the conversation toward the next reasonable buying step by addressing the customer's current need, reducing a real objection, and ending with one clear, low-pressure call to action. Prefer a useful question when intent, quantity, budget, timing, or product fit is unclear. Do not use fake urgency, pressure, unsupported discounts, or claims not grounded in the supplied context."
+      ? "You are drafting a sales-assist suggestion for a human agent. Personalize naturally with the supplied customer profile when relevant, including the known customer name; never awkwardly repeat the name or expose internal notes. Move the conversation toward the next reasonable buying step by addressing the customer's current need, reducing a real objection, and ending with one clear, low-pressure call to action. Prefer a useful question when intent, quantity, budget, timing, or product fit is unclear. Do not use fake urgency, pressure, unsupported discounts, or claims not grounded in the supplied context. For this task, reason must be a concise Simplified Chinese review note of 2-4 sentences explaining which customer, conversation, order, or knowledge signals shaped the reply and why the proposed next step is appropriate. Give an auditable decision summary, not hidden chain-of-thought."
       : "";
   const autonomy =
     input.mode === "full"
@@ -1063,11 +1113,13 @@ async function generateDecision(
             input.kind === "refresh_memory"
               ? "Rebuild the conversation memory from the supplied messages and orders. Return decision=ignore, empty reply and replyZh, a concise durable summary, and only stable customer facts. Resolve contradictions in favor of newer messages."
               : input.kind === "sales_suggestion"
-              ? "Draft one concise reply for human review that best advances this sales conversation toward a concrete next step. Use the latest customer message, full recent chat context, CRM memory, orders, and relevant knowledge. Return decision=draft."
+              ? `Draft one concise, personalized reply for human review that best advances this sales conversation toward a concrete next step. Use the customer profile, latest customer message, full recent chat context, CRM memory, orders, and relevant knowledge. Return decision=draft and provide the required Chinese review note in reason.${input.previousReply ? " This is a rethink request: use a materially different valid angle, wording, or next-step strategy from previousReply while remaining grounded." : ""}`
               : input.kind === "followup"
               ? "Write a natural, non-repetitive follow-up"
               : "Answer latestCustomerMessage only",
           latestCustomerMessage: input.sourceMessage,
+          customerProfile: input.customerProfile ?? null,
+          previousReply: input.previousReply || null,
           memorySummary: input.summary,
           facts: input.facts,
           conversationOrders: input.orders,
