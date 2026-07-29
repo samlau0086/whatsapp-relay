@@ -69,12 +69,12 @@ function ConversationTagFilter({tags,value,onChange,onOpen}:{tags:Array<{id:stri
     if(event.key==="Enter"&&open&&visible[activeIndex]){event.preventDefault();select(visible[activeIndex].id);}
   };
   return <div ref={rootRef} className={`conversation-tag-filter ${open?"open":""} ${selected?"has-value":""}`}>
-    <Tag size={14} className="conversation-tag-filter-icon"/>
-    {selected?<span className="conversation-tag-chip"><i style={{background:selected.color}}/><b>{selected.name}</b><button type="button" onClick={remove} aria-label={`移除标签 ${selected.name}`}><X size={12}/></button></span>:<input ref={inputRef} value={query} onFocus={show} onClick={show} onChange={event=>{setQuery(event.target.value);setActiveIndex(0);setOpen(true);}} onKeyDown={onKeyDown} role="combobox" aria-label="搜索并筛选会话标签" aria-expanded={open} aria-controls="conversation-tag-options" aria-autocomplete="list" placeholder="搜索标签"/>}
-    {!selected&&<ChevronDown size={13} className="conversation-tag-chevron" aria-hidden="true"/>}
+    <Tag size={15} className="conversation-tag-filter-icon"/>
+    {selected?<span className="conversation-tag-chip"><i style={{background:selected.color}}/><b>{selected.name}</b><button type="button" onClick={remove} aria-label={`移除标签 ${selected.name}`}><X size={13}/></button></span>:<input ref={inputRef} value={query} onFocus={show} onClick={show} onChange={event=>{setQuery(event.target.value);setActiveIndex(0);setOpen(true);}} onKeyDown={onKeyDown} role="combobox" aria-label="搜索并筛选会话标签" aria-expanded={open} aria-controls="conversation-tag-options" aria-autocomplete="list" placeholder="搜索标签"/>}
+    {!selected&&<ChevronDown size={14} className="conversation-tag-chevron" aria-hidden="true"/>}
     {open&&!selected&&<div id="conversation-tag-options" className="conversation-tag-options" role="listbox">
-      <button type="button" role="option" aria-selected={!value} className={!value?"active":""} onMouseDown={event=>event.preventDefault()} onClick={()=>select("")}><span className="conversation-tag-all"><Tag size={12}/></span><b>全部标签</b>{!value&&<Check size={13}/>}</button>
-      {visible.map((tag,index)=><button type="button" role="option" aria-selected={value===tag.id} className={index===activeIndex?"focused":""} key={tag.id} onMouseEnter={()=>setActiveIndex(index)} onMouseDown={event=>event.preventDefault()} onClick={()=>select(tag.id)}><i style={{background:tag.color}}/><b>{tag.name}</b>{value===tag.id&&<Check size={13}/>}</button>)}
+      <button type="button" role="option" aria-selected={!value} className={!value?"active":""} onMouseDown={event=>event.preventDefault()} onClick={()=>select("")}><span className="conversation-tag-all"><Tag size={14}/></span><b>全部标签</b>{!value&&<Check size={14}/>}</button>
+      {visible.map((tag,index)=><button type="button" role="option" aria-selected={value===tag.id} className={index===activeIndex?"focused":""} key={tag.id} onMouseEnter={()=>setActiveIndex(index)} onMouseDown={event=>event.preventDefault()} onClick={()=>select(tag.id)}><i style={{background:tag.color}}/><b>{tag.name}</b>{value===tag.id&&<Check size={14}/>}</button>)}
       {!visible.length&&<p>没有匹配的标签</p>}
     </div>}
   </div>;
