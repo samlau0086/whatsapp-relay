@@ -1,7 +1,7 @@
 "use client";
 
-import {Menu,RefreshCw,Search,Tag} from "lucide-react";
-import type {KeyboardEvent,MouseEvent,RefObject} from "react";
+import {Check,ChevronDown,Menu,RefreshCw,Search,Tag,X} from "lucide-react";
+import {useEffect,useMemo,useRef,useState,type KeyboardEvent,type MouseEvent,type RefObject} from "react";
 import {CONVERSATION_DATE_FILTERS,type ConversationDateFilter} from "./conversation-date-filter";
 import type {Conversation} from "./conversation-types";
 import {ConversationVirtualList} from "./conversation-virtual-list";
@@ -25,13 +25,7 @@ export function ConversationPanel({
       <button className="icon-button" onClick={onRefresh} aria-label="刷新"><RefreshCw size={17}/></button>
     </header>
     <label className="search-box"><Search size={15}/><input value={query} onChange={event=>onQuery(event.target.value)} maxLength={100} placeholder="搜索会话、联系人或号码"/></label>
-    <label className="conversation-tag-filter">
-      <Tag size={14}/>
-      <select value={tagId} onChange={event=>onTagId(event.target.value)} aria-label="按标签筛选会话">
-        <option value="">全部标签</option>
-        {tags.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}
-      </select>
-    </label>
+    <ConversationTagFilter tags={tags} value={tagId} onChange={onTagId}/>
     <div className="conversation-date-tabs" role="tablist" aria-label="按最后联系时间筛选会话">
       {CONVERSATION_DATE_FILTERS.map(item=><button key={item.value} type="button" role="tab" aria-selected={dateFilter===item.value} tabIndex={dateFilter===item.value?0:-1} className={dateFilter===item.value?"active":""} onClick={()=>onDateFilter(item.value)} onKeyDown={onDateKeyDown}>{item.label}</button>)}
     </div>
@@ -46,6 +40,44 @@ export function ConversationPanel({
       </>:<PanelEmpty title="暂无真实会话" text={hasAccounts?"当前筛选条件下暂无会话":"请先在 Windows Agent 绑定 WhatsApp 账号"}/>}
     </div>
   </section>;
+}
+
+function ConversationTagFilter({tags,value,onChange}:{tags:Array<{id:string;name:string;color:string}>;value:string;onChange:(value:string)=>void}){
+  const rootRef=useRef<HTMLDivElement>(null),inputRef=useRef<HTMLInputElement>(null);
+  const [open,setOpen]=useState(false),[query,setQuery]=useState(""),[activeIndex,setActiveIndex]=useState(0);
+  const selected=tags.find(tag=>tag.id===value);
+  const visible=useMemo(()=>{
+    const keyword=query.trim().toLocaleLowerCase();
+    return keyword?tags.filter(tag=>tag.name.toLocaleLowerCase().includes(keyword)):tags;
+  },[query,tags]);
+  useEffect(()=>setActiveIndex(0),[query]);
+  useEffect(()=>{
+    if(!open)return;
+    const close=(event:PointerEvent)=>{if(!rootRef.current?.contains(event.target as Node))setOpen(false);};
+    document.addEventListener("pointerdown",close);
+    return()=>document.removeEventListener("pointerdown",close);
+  },[open]);
+  const select=(id:string)=>{onChange(id);setQuery("");setOpen(false);};
+  const remove=()=>{onChange("");setQuery("");setOpen(false);window.requestAnimationFrame(()=>inputRef.current?.focus());};
+  const onKeyDown=(event:KeyboardEvent<HTMLInputElement>)=>{
+    if(event.key==="Escape"){setOpen(false);return;}
+    if(event.key==="ArrowDown"||event.key==="ArrowUp"){
+      event.preventDefault();setOpen(true);
+      setActiveIndex(index=>visible.length?(index+(event.key==="ArrowDown"?1:-1)+visible.length)%visible.length:0);
+      return;
+    }
+    if(event.key==="Enter"&&open&&visible[activeIndex]){event.preventDefault();select(visible[activeIndex].id);}
+  };
+  return <div ref={rootRef} className={`conversation-tag-filter ${open?"open":""} ${selected?"has-value":""}`}>
+    <Tag size={14} className="conversation-tag-filter-icon"/>
+    {selected?<span className="conversation-tag-chip"><i style={{background:selected.color}}/><b>{selected.name}</b><button type="button" onClick={remove} aria-label={`移除标签 ${selected.name}`}><X size={12}/></button></span>:<input ref={inputRef} value={query} onFocus={()=>setOpen(true)} onClick={()=>setOpen(true)} onChange={event=>{setQuery(event.target.value);setOpen(true);}} onKeyDown={onKeyDown} role="combobox" aria-label="搜索并筛选会话标签" aria-expanded={open} aria-controls="conversation-tag-options" aria-autocomplete="list" placeholder="搜索标签"/>}
+    {!selected&&<ChevronDown size={13} className="conversation-tag-chevron" aria-hidden="true"/>}
+    {open&&!selected&&<div id="conversation-tag-options" className="conversation-tag-options" role="listbox">
+      <button type="button" role="option" aria-selected={!value} className={!value?"active":""} onMouseDown={event=>event.preventDefault()} onClick={()=>select("")}><span className="conversation-tag-all"><Tag size={12}/></span><b>全部标签</b>{!value&&<Check size={13}/>}</button>
+      {visible.map((tag,index)=><button type="button" role="option" aria-selected={value===tag.id} className={index===activeIndex?"focused":""} key={tag.id} onMouseEnter={()=>setActiveIndex(index)} onMouseDown={event=>event.preventDefault()} onClick={()=>select(tag.id)}><i style={{background:tag.color}}/><b>{tag.name}</b>{value===tag.id&&<Check size={13}/>}</button>)}
+      {!visible.length&&<p>没有匹配的标签</p>}
+    </div>}
+  </div>;
 }
 
 function PanelEmpty({title,text}:{title:string;text:string}){return <div className="empty-state"><b>{title}</b><span>{text}</span></div>;}
