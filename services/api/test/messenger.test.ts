@@ -44,6 +44,20 @@ test("channel migration preserves WhatsApp data while adding Messenger tables",a
   assert.match(migration,/UNIQUE\(account_id,payload_hash\)/);
 });
 
+test("channel contact search keeps a Messenger-aware trigram index",async()=>{
+  const [migration,migrator,server]=await Promise.all([
+    readFile(new URL("../../../infra/postgres/migrations/056_channel_contact_search.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+  ]);
+  const searchExpression=/COALESCE\((?:search_contact\.)?alias,''\) \|\| ' ' \|\| COALESCE\((?:search_contact\.)?display_name,''\) \|\| ' ' \|\|\s*COALESCE\((?:search_contact\.)?phone_e164,''\) \|\| ' ' \|\| (?:search_contact\.)?provider_user_id/;
+  assert.match(migration,searchExpression);
+  assert.match(server,searchExpression);
+  assert.match(migration,/gin_trgm_ops/);
+  assert.match(migration,/conversations_last_message_text_trgm_idx[\s\S]*last_message_text gin_trgm_ops/);
+  assert.match(migrator,/"056_channel_contact_search\.sql"/);
+});
+
 test("Messenger routes split multi-Page webhooks and keep credentials redacted",async()=>{
   const [messenger,server]=await Promise.all([
     readFile(new URL("../src/messenger.ts",import.meta.url),"utf8"),
