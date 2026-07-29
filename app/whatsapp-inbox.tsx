@@ -672,12 +672,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     }catch{if(sequence===translationLoadSequence.current){setTranslationConfigured(false);setTranslationReadyConversationId(conversationId);}}
   },[]);
 
-  const loadIncomingTranslations=useCallback(async(token:string,messageIds:string[],targetLanguage:string,retry=false,generateAudio=false)=>{
+  const loadIncomingTranslations=useCallback(async(token:string,messageIds:string[],targetLanguage:string,sourceLanguage:string,retry=false,generateAudio=false)=>{
     const ids=messageIds.filter(id=>retry||!messageTranslations[id]);if(!ids.length)return;
     setMessageTranslations(all=>({...all,...Object.fromEntries(ids.map(id=>[id,{status:"loading" as const}]))}));
     let accessToken=token;
     for(let offset=0;offset<ids.length;offset+=50){const chunk=ids.slice(offset,offset+50);try{
-      const result=await authorizedFetch("/api/v1/translations/messages",accessToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({messageIds:chunk,targetLanguage,generateAudio})});accessToken=result.token;if(result.token!==token)setApiToken(result.token);
+      const result=await authorizedFetch("/api/v1/translations/messages",accessToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({messageIds:chunk,targetLanguage,sourceLanguage,generateAudio})});accessToken=result.token;if(result.token!==token)setApiToken(result.token);
       const body=await result.response.json().catch(()=>({})) as {data?:Array<{messageId:string;status:string;translatedText?:string;sourceText?:string;sourceLanguage?:string;message?:string}>;message?:string};
       if(!result.response.ok||!body.data){setMessageTranslations(all=>({...all,...Object.fromEntries(chunk.map(id=>[id,{status:"failed" as const,message:body.message??"翻译服务暂时不可用"}]))}));continue;}
       setMessageTranslations(all=>({...all,...Object.fromEntries(body.data!.map(item=>[item.messageId,item.status==="translated"?{status:"translated" as const,text:item.translatedText??"",sourceText:item.sourceText,sourceLanguage:item.sourceLanguage}:item.status==="skipped"?{status:"idle" as const}:{status:"failed" as const,message:item.message}]))}));
@@ -729,7 +729,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     return()=>window.clearTimeout(initial);
   },[view,apiToken,effectiveActiveId,loadMessages]);
   useEffect(()=>{if(view!=="inbox"||!apiToken||!effectiveActiveId)return;const timer=window.setTimeout(()=>void loadTranslationSettings(apiToken,effectiveActiveId),0);return()=>window.clearTimeout(timer);},[view,apiToken,effectiveActiveId,loadTranslationSettings]);
-  useEffect(()=>{const timer=window.setTimeout(()=>setMessageTranslations({}),0);return()=>window.clearTimeout(timer);},[translationPreference.agentLanguage]);
+  useEffect(()=>{const timer=window.setTimeout(()=>setMessageTranslations({}),0);return()=>window.clearTimeout(timer);},[translationPreference.agentLanguage,translationPreference.customerLanguage]);
   useEffect(()=>{
     const accountId=active?.accountId;
     const timer=window.setTimeout(()=>{
@@ -741,7 +741,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     },0);
     return()=>window.clearTimeout(timer);
   },[active?.accountId,userId]);
-  useEffect(()=>{if(!apiToken||!translationPreference.enabled||!translationConfigured)return;const ids=currentMessages.filter(message=>message.direction==="in"&&((message.kind==="text"&&message.text.trim())||(message.kind==="audio"&&message.attachment))&&!messageTranslations[message.id]).map(message=>message.id);if(!ids.length)return;const timer=window.setTimeout(()=>void loadIncomingTranslations(apiToken,ids,translationPreference.agentLanguage),0);return()=>window.clearTimeout(timer);},[apiToken,currentMessages,translationPreference.enabled,translationPreference.agentLanguage,translationConfigured,messageTranslations,loadIncomingTranslations]);
+  useEffect(()=>{if(!apiToken||!translationPreference.enabled||!translationConfigured)return;const ids=currentMessages.filter(message=>message.direction==="in"&&((message.kind==="text"&&message.text.trim())||(message.kind==="audio"&&message.attachment))&&!messageTranslations[message.id]).map(message=>message.id);if(!ids.length)return;const timer=window.setTimeout(()=>void loadIncomingTranslations(apiToken,ids,translationPreference.agentLanguage,translationPreference.customerLanguage),0);return()=>window.clearTimeout(timer);},[apiToken,currentMessages,translationPreference.enabled,translationPreference.agentLanguage,translationPreference.customerLanguage,translationConfigured,messageTranslations,loadIncomingTranslations]);
   useEffect(()=>{if(!toast)return;const timer=window.setTimeout(()=>setToast(""),3200);return()=>window.clearTimeout(timer);},[toast]);
   useEffect(()=>{const timer=window.setInterval(()=>setClock(Date.now()),30_000);return()=>window.clearInterval(timer);},[]);
   async function updateConversation(change:Record<string,unknown>,conversationId=active?.id){
@@ -1651,6 +1651,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                                     apiToken,
                                     [message.id],
                                     translationPreference.agentLanguage,
+                                    translationPreference.customerLanguage,
                                     true,
                                   )
                                 }
@@ -1676,6 +1677,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                                     apiToken,
                                     [message.id],
                                     translationPreference.agentLanguage,
+                                    translationPreference.customerLanguage,
                                     true,
                                     true,
                                   )
@@ -3907,7 +3909,7 @@ function detectedLanguageName(code?:string){if(!code)return"未知语种";if(/^z
 function isEnglishLanguage(code:string){return /^en(?:-|$)/i.test(code);}
 
 function TranslationMenu({preference,configured,ready,onChange,onClose}:{preference:TranslationPreference;configured:boolean;ready:boolean;onChange:(value:TranslationPreference)=>void;onClose:()=>void}){
-  return <section className="translation-menu" role="dialog" aria-label="AI 翻译设置"><header><span><Languages size={16}/><b>当前会话 · AI 双向翻译</b></span><button onClick={onClose} aria-label="关闭翻译设置"><X size={15}/></button></header><label className="translation-toggle"><span><b>为当前会话启用</b><small>{!ready?"正在读取会话配置…":configured?"此会话偏好会跨浏览器同步":"管理员尚未配置翻译 Provider"}</small></span><input type="checkbox" checked={preference.enabled} disabled={!ready||(!configured&&!preference.enabled)} onChange={event=>onChange({...preference,enabled:event.target.checked})}/></label><div className="translation-language-grid"><label><span>收到消息译为</span><LanguagePicker value={preference.agentLanguage} onChange={agentLanguage=>onChange({...preference,agentLanguage})}/></label><label><span>发送消息译为</span><LanguagePicker value={preference.customerLanguage} onChange={customerLanguage=>onChange({...preference,customerLanguage})}/></label></div><p><Info size={13}/>设置只影响当前会话；发送前会显示可编辑预览。</p></section>;
+  return <section className="translation-menu" role="dialog" aria-label="AI 翻译设置"><header><span><Languages size={16}/><b>当前会话 · AI 双向翻译</b></span><button onClick={onClose} aria-label="关闭翻译设置"><X size={15}/></button></header><label className="translation-toggle"><span><b>为当前会话启用</b><small>{!ready?"正在读取会话配置…":configured?"此会话偏好会跨浏览器同步":"管理员尚未配置翻译 Provider"}</small></span><input type="checkbox" checked={preference.enabled} disabled={!ready||(!configured&&!preference.enabled)} onChange={event=>onChange({...preference,enabled:event.target.checked})}/></label><div className="translation-language-grid"><label><span>收到消息译为</span><LanguagePicker value={preference.agentLanguage} onChange={agentLanguage=>onChange({...preference,agentLanguage})}/></label><label><span>客户语种（含语音识别）</span><LanguagePicker value={preference.customerLanguage} onChange={customerLanguage=>onChange({...preference,customerLanguage})}/></label></div><p><Info size={13}/>客户语种会用于语音转写和双向翻译；发送前会显示可编辑预览。</p></section>;
 }
 
 const FALLBACK_TIMEZONES=["UTC","Asia/Shanghai","Asia/Hong_Kong","Asia/Tokyo","Asia/Singapore","Asia/Dubai","Europe/London","Europe/Paris","America/New_York","America/Chicago","America/Denver","America/Los_Angeles","Australia/Sydney"];

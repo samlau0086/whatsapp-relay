@@ -32,6 +32,18 @@ test("translation with detection returns a normalized BCP 47 source language",as
   }finally{globalThis.fetch=original;}
 });
 
+test("translation honors an explicitly supplied source language",async()=>{
+  const original=globalThis.fetch;let request:Request|undefined;
+  globalThis.fetch=async(input,init)=>{request=new Request(input,init);return Response.json({choices:[{message:{content:'{"translatedText":"这是萨米尔","sourceLanguage":"en"}'}}]});};
+  try{
+    const result=await translateTextWithDetection({provider:"openai",apiKey:"secret",...translationProviderDefaults("openai")},{text:"هذا سمير",sourceLanguage:"ar",targetLanguage:"zh-CN"});
+    assert.deepEqual(result,{translatedText:"这是萨米尔",sourceLanguage:"ar"});
+    const body=JSON.parse(await request!.text());
+    assert.match(body.messages[0].content,/do not auto-detect/);
+    assert.match(body.messages[1].content,/Source language \(BCP 47\): ar/);
+  }finally{globalThis.fetch=original;}
+});
+
 test("product name translation preserves order and requires a structured response",async()=>{
   const original=globalThis.fetch;let request:Request|undefined;
   globalThis.fetch=async(input,init)=>{request=new Request(input,init);return Response.json({choices:[{message:{content:'["AirPods Pro（第二代）","至尊典藏版"]'}}]});};
@@ -48,9 +60,9 @@ test("audio transcription uses the configured OpenAI-compatible endpoint and mod
   const original=globalThis.fetch;let request:Request|undefined;
   globalThis.fetch=async(input,init)=>{request=new Request(input,init);return Response.json({text:"Hello from the voice note"});};
   try{
-    const transcript=await transcribeAudio({provider:"openai",apiKey:"secret",...translationProviderDefaults("openai")},{bytes:Buffer.from("voice"),fileName:"voice.ogg",mimeType:"audio/ogg"});
+    const transcript=await transcribeAudio({provider:"openai",apiKey:"secret",...translationProviderDefaults("openai")},{bytes:Buffer.from("voice"),fileName:"voice.ogg",mimeType:"audio/ogg",sourceLanguage:"ar-SA"});
     assert.equal(transcript,"Hello from the voice note");assert.equal(request?.url,"https://api.openai.com/v1/audio/transcriptions");assert.equal(request?.headers.get("authorization"),"Bearer secret");
-    const form=await request!.formData();assert.equal(form.get("model"),"gpt-4o-mini-transcribe");assert.equal(form.get("response_format"),"json");assert.equal((form.get("file") as File).name,"voice.ogg");
+    const form=await request!.formData();assert.equal(form.get("model"),"gpt-4o-mini-transcribe");assert.equal(form.get("response_format"),"json");assert.equal(form.get("language"),"ar");assert.equal((form.get("file") as File).name,"voice.ogg");
   }finally{globalThis.fetch=original;}
 });
 

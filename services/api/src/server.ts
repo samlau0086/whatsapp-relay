@@ -1380,37 +1380,40 @@ app.post("/api/v1/translations/product-names/preview", {preHandler:authenticate}
 
 app.post("/api/v1/translations/messages", {preHandler:authenticate}, async(request,reply)=>{
   const parsed=messageTranslationsSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
-  const found=await pool.query("SELECT m.id,m.account_id,m.direction,m.kind,m.text_content,m.media_id,media.object_key,media.file_name,media.mime_type,media.byte_size,mt.translated_text,mt.source_language,transcription.transcript_text FROM messages m LEFT JOIN media ON media.id=m.media_id LEFT JOIN message_translations mt ON mt.message_id=m.id AND mt.target_language=$2 LEFT JOIN message_transcriptions transcription ON transcription.message_id=m.id WHERE m.id=ANY($1::uuid[])",[parsed.data.messageIds,parsed.data.targetLanguage]);
+  const found=await pool.query("SELECT m.id,m.account_id,m.direction,m.kind,m.text_content,m.media_id,media.object_key,media.file_name,media.mime_type,media.byte_size,mt.translated_text,mt.source_language,transcription.transcript_text,transcription.source_language transcription_source_language FROM messages m LEFT JOIN media ON media.id=m.media_id LEFT JOIN message_translations mt ON mt.message_id=m.id AND mt.target_language=$2 LEFT JOIN message_transcriptions transcription ON transcription.message_id=m.id WHERE m.id=ANY($1::uuid[])",[parsed.data.messageIds,parsed.data.targetLanguage]);
   if(found.rowCount!==new Set(parsed.data.messageIds).size||found.rows.some(row=>!canAccessAccount(request.principal,row.account_id)))return reply.code(404).send({error:"message_not_found"});
-  const eligible=found.rows.filter(row=>row.direction==="in"&&((row.kind==="text"&&String(row.text_content??"").trim())||(row.kind==="audio"&&row.media_id&&row.object_key&&(row.translated_text||parsed.data.generateAudio))));
-  const setting=eligible.some(row=>!row.translated_text||!row.source_language)?await activeTranslationSetting():null;
-  if(eligible.some(row=>!row.translated_text||!row.source_language)&&!setting)return reply.code(503).send({error:"translation_not_configured",message:"管理员尚未启用 AI 翻译 Provider"});
-  const generated=await mapWithConcurrency(eligible.filter(row=>!row.translated_text||!row.source_language),3,row=>singleFlight(messageTranslationFlights,`${row.id}:${parsed.data.targetLanguage}`,async()=>{
+  const requestedSourceLanguage=parsed.data.sourceLanguage;
+  const languageMatches=(cached:unknown)=>!requestedSourceLanguage||String(cached??"").toLowerCase()===requestedSourceLanguage.toLowerCase();
+  const hasCurrentTranslation=(row:Record<string,unknown>)=>Boolean(row.translated_text)&&languageMatches(row.source_language);
+  const hasCurrentTranscription=(row:Record<string,unknown>)=>Boolean(row.transcript_text)&&languageMatches(row.transcription_source_language);
+  const eligible=found.rows.filter(row=>row.direction==="in"&&((row.kind==="text"&&String(row.text_content??"").trim())||(row.kind==="audio"&&row.media_id&&row.object_key&&(hasCurrentTranslation(row)||parsed.data.generateAudio))));
+  const setting=eligible.some(row=>!hasCurrentTranslation(row))?await activeTranslationSetting():null;
+  if(eligible.some(row=>!hasCurrentTranslation(row))&&!setting)return reply.code(503).send({error:"translation_not_configured",message:"管理员尚未启用 AI 翻译 Provider"});
+  const generated=await mapWithConcurrency(eligible.filter(row=>!hasCurrentTranslation(row)),3,row=>singleFlight(messageTranslationFlights,`${row.id}:${parsed.data.targetLanguage}:${requestedSourceLanguage??"auto"}`,async()=>{
     try{
       let sourceText=String(row.text_content??"").trim();
       if(row.kind==="audio"){
-        sourceText=String(row.transcript_text??"").trim();
+        sourceText=hasCurrentTranscription(row)?String(row.transcript_text??"").trim():"";
         if(!sourceText){
-          sourceText=await singleFlight(transcriptionFlights,row.id,async()=>{
+          sourceText=await singleFlight(transcriptionFlights,`${row.id}:${requestedSourceLanguage??"auto"}`,async()=>{
             if(Number(row.byte_size)>25*1024*1024)throw new Error("audio_too_large");
             const object=await s3.send(new GetObjectCommand({Bucket:config.S3_BUCKET,Key:row.object_key}));
             if(!object.Body)throw new Error("audio_body_missing");
             const bytes=Buffer.from(await object.Body.transformToByteArray());
             const audio=await normalizeTranscriptionAudio({bytes,fileName:row.file_name??`voice-${row.id}.ogg`,mimeType:row.mime_type??"audio/ogg"});
-            const transcript=await transcribeAudio(setting!,audio);
-            await pool.query("INSERT INTO message_transcriptions(message_id,transcript_text,provider,model) VALUES($1,$2,$3,$4) ON CONFLICT(message_id) DO NOTHING",[row.id,transcript,setting!.provider,setting!.transcriptionModel]);
+            const transcript=await transcribeAudio(setting!,{...audio,sourceLanguage:requestedSourceLanguage});
+            await pool.query("INSERT INTO message_transcriptions(message_id,transcript_text,source_language,provider,model) VALUES($1,$2,$3,$4,$5) ON CONFLICT(message_id) DO UPDATE SET transcript_text=EXCLUDED.transcript_text,source_language=EXCLUDED.source_language,provider=EXCLUDED.provider,model=EXCLUDED.model,created_at=now()",[row.id,transcript,requestedSourceLanguage??null,setting!.provider,setting!.transcriptionModel]);
             return transcript;
           });
         }
       }
-      const detected=await translateTextWithDetection(setting!,{text:sourceText,targetLanguage:parsed.data.targetLanguage});
-      await pool.query("INSERT INTO message_translations(message_id,target_language,translated_text,source_language,provider,model) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(message_id,target_language) DO NOTHING",[row.id,parsed.data.targetLanguage,detected.translatedText,detected.sourceLanguage,setting!.provider,setting!.model]);
-      await pool.query("UPDATE message_translations SET source_language=COALESCE(source_language,$3) WHERE message_id=$1 AND target_language=$2",[row.id,parsed.data.targetLanguage,detected.sourceLanguage]);
-      return{id:row.id,translatedText:row.translated_text??detected.translatedText,sourceText,sourceLanguage:detected.sourceLanguage};
+      const detected=await translateTextWithDetection(setting!,{text:sourceText,targetLanguage:parsed.data.targetLanguage,sourceLanguage:requestedSourceLanguage});
+      await pool.query("INSERT INTO message_translations(message_id,target_language,translated_text,source_language,provider,model) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(message_id,target_language) DO UPDATE SET translated_text=EXCLUDED.translated_text,source_language=EXCLUDED.source_language,provider=EXCLUDED.provider,model=EXCLUDED.model,created_at=now()",[row.id,parsed.data.targetLanguage,detected.translatedText,detected.sourceLanguage,setting!.provider,setting!.model]);
+      return{id:row.id,translatedText:detected.translatedText,sourceText,sourceLanguage:detected.sourceLanguage};
     }catch(error){const failure=translationFailure(error);request.log.error({messageId:row.id,provider:setting?.provider,error:String(error),failure:failure.error},"Incoming message translation failed");return{id:row.id,...failure};}
   }));
   const generatedById=new Map(generated.map(item=>[item.id,item]));
-  return{data:parsed.data.messageIds.map(messageId=>{const row=found.rows.find(item=>item.id===messageId);const isText=row?.kind==="text"&&String(row.text_content??"").trim();const isAudio=row?.kind==="audio"&&row.media_id&&row.object_key;if(!row||row.direction!=="in"||(!isText&&!isAudio)||(isAudio&&!row.translated_text&&!parsed.data.generateAudio))return{messageId,status:"skipped"};const item=generatedById.get(messageId);if(item?.error)return{messageId,status:"failed",error:item.error,message:item.message};return{messageId,status:"translated",translatedText:row.translated_text??item?.translatedText,sourceLanguage:row.source_language??item?.sourceLanguage,...(isAudio?{sourceText:row.transcript_text??item?.sourceText}:{})};})};
+  return{data:parsed.data.messageIds.map(messageId=>{const row=found.rows.find(item=>item.id===messageId);const isText=row?.kind==="text"&&String(row.text_content??"").trim();const isAudio=row?.kind==="audio"&&row.media_id&&row.object_key;if(!row||row.direction!=="in"||(!isText&&!isAudio)||(isAudio&&!hasCurrentTranslation(row)&&!parsed.data.generateAudio))return{messageId,status:"skipped"};const item=generatedById.get(messageId);if(item?.error)return{messageId,status:"failed",error:item.error,message:item.message};return{messageId,status:"translated",translatedText:hasCurrentTranslation(row)?row.translated_text:item?.translatedText,sourceLanguage:hasCurrentTranslation(row)?row.source_language:item?.sourceLanguage,...(isAudio?{sourceText:hasCurrentTranscription(row)?row.transcript_text:item?.sourceText}:{})};})};
 });
 
 app.get("/api/v1/admin/translation-providers", {preHandler:authenticate}, async(request,reply)=>{
@@ -1708,10 +1711,12 @@ async function ensureTranslationTables():Promise<void>{
   await pool.query(`CREATE TABLE IF NOT EXISTS message_transcriptions (
     message_id uuid PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
     transcript_text text NOT NULL,
+    source_language text,
     provider text NOT NULL,
     model text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()
   )`);
+  await pool.query("ALTER TABLE message_transcriptions ADD COLUMN IF NOT EXISTS source_language text");
 }
 
 async function ensureTtsProviderSettingsTable():Promise<void>{

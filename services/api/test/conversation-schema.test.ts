@@ -60,6 +60,7 @@ test("translation inputs enforce text and batch limits",()=>{
   assert.equal(messageTranslationsSchema.safeParse({messageIds:Array.from({length:51},()=>accountId),targetLanguage:"zh-CN"}).success,false);
   assert.equal(messageTranslationsSchema.parse({messageIds:[accountId],targetLanguage:"zh-CN"}).generateAudio,false);
   assert.equal(messageTranslationsSchema.parse({messageIds:[accountId],targetLanguage:"zh-CN",generateAudio:true}).generateAudio,true);
+  assert.equal(messageTranslationsSchema.parse({messageIds:[accountId],targetLanguage:"zh-CN",sourceLanguage:"ar"}).sourceLanguage,"ar");
   assert.equal(translationProviderSettingsSchema.safeParse({enabled:true,baseUrl:"https://api.example.com/v1",model:"translator-1",transcriptionModel:"speech-1"}).success,true);
   assert.equal(translationProviderSettingsSchema.safeParse({enabled:true,baseUrl:"https://api.example.com/v1",model:"translator-1",transcriptionModel:""}).success,false);
   assert.equal(translationProviderSettingsSchema.safeParse({enabled:true,baseUrl:"invalid",model:""}).success,false);

@@ -20,7 +20,7 @@ export async function translateText(setting:TranslationProviderSetting,input:{te
   return requestTranslation(setting,input,"text") as Promise<string>;
 }
 
-export async function translateTextWithDetection(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string}):Promise<{translatedText:string;sourceLanguage:string}>{
+export async function translateTextWithDetection(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string;sourceLanguage?:string}):Promise<{translatedText:string;sourceLanguage:string}>{
   return requestTranslation(setting,input,"detected") as Promise<{translatedText:string;sourceLanguage:string}>;
 }
 
@@ -48,10 +48,10 @@ export async function translateProductNames(setting:TranslationProviderSetting,i
   }catch{throw new Error("translation_provider_invalid_product_names_response");}
 }
 
-async function requestTranslation(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string},mode:"text"):Promise<string>;
-async function requestTranslation(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string},mode:"detected"):Promise<{translatedText:string;sourceLanguage:string}>;
-async function requestTranslation(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string},mode:"text"|"detected"):Promise<string|{translatedText:string;sourceLanguage:string}>{
-  const detected=mode==="detected";
+async function requestTranslation(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string;sourceLanguage?:string},mode:"text"):Promise<string>;
+async function requestTranslation(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string;sourceLanguage?:string},mode:"detected"):Promise<{translatedText:string;sourceLanguage:string}>;
+async function requestTranslation(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string;sourceLanguage?:string},mode:"text"|"detected"):Promise<string|{translatedText:string;sourceLanguage:string}>{
+  const detected=mode==="detected",sourceLanguage=input.sourceLanguage?normalizeLanguageTag(input.sourceLanguage):undefined;
   const response=await fetch(`${trimSlash(setting.baseUrl)}/chat/completions`,{
     method:"POST",
     headers:{authorization:`Bearer ${setting.apiKey}`,"content-type":"application/json"},
@@ -59,9 +59,11 @@ async function requestTranslation(setting:TranslationProviderSetting,input:{text
       model:setting.model,
       messages:[
         {role:"system",content:detected
-          ?"You are a precise business-message translator and language detector. Detect the source language and translate only into the requested target language. Preserve names, phone numbers, URLs, emoji, line breaks, and formatting. Return only a JSON object with exactly these string fields: translatedText and sourceLanguage. sourceLanguage must be the most appropriate BCP 47 language tag (for example es, pt-BR, or zh-CN). Do not use a markdown fence."
+          ?sourceLanguage
+            ?"You are a precise business-message translator. The source language is explicitly supplied by the user; do not auto-detect or substitute another language. Translate only into the requested target language. Preserve names, phone numbers, URLs, emoji, line breaks, and formatting. Return only a JSON object with exactly these string fields: translatedText and sourceLanguage. Set sourceLanguage to the supplied BCP 47 source language exactly. Do not use a markdown fence."
+            :"You are a precise business-message translator and language detector. Detect the source language and translate only into the requested target language. Preserve names, phone numbers, URLs, emoji, line breaks, and formatting. Return only a JSON object with exactly these string fields: translatedText and sourceLanguage. sourceLanguage must be the most appropriate BCP 47 language tag (for example es, pt-BR, or zh-CN). Do not use a markdown fence."
           :"You are a precise business-message translator. Translate only into the requested target language. Preserve names, phone numbers, URLs, emoji, line breaks, and formatting. Return only the translated text with no explanation, label, markdown fence, or quotation marks."},
-        {role:"user",content:`Target language (BCP 47): ${input.targetLanguage}\n\nText to translate:\n${input.text}`},
+        {role:"user",content:`${sourceLanguage?`Source language (BCP 47): ${sourceLanguage}\n`:""}Target language (BCP 47): ${input.targetLanguage}\n\nText to translate:\n${input.text}`},
       ],
     }),
     signal:AbortSignal.timeout(45_000),
@@ -75,16 +77,18 @@ async function requestTranslation(setting:TranslationProviderSetting,input:{text
     try{
       const parsed=JSON.parse(translated.trim()) as {translatedText?:unknown;sourceLanguage?:unknown};
       if(typeof parsed.translatedText!=="string"||!parsed.translatedText.trim()||typeof parsed.sourceLanguage!=="string"||!parsed.sourceLanguage.trim())throw new Error("invalid");
-      return{translatedText:parsed.translatedText.trim(),sourceLanguage:normalizeLanguageTag(parsed.sourceLanguage)};
+      return{translatedText:parsed.translatedText.trim(),sourceLanguage:sourceLanguage??normalizeLanguageTag(parsed.sourceLanguage)};
     }catch{throw new Error("translation_provider_invalid_detection_response");}
   }
   return translated.trim();
 }
 
-export async function transcribeAudio(setting:TranslationProviderSetting,input:{bytes:Buffer;fileName:string;mimeType:string}):Promise<string>{
+export async function transcribeAudio(setting:TranslationProviderSetting,input:{bytes:Buffer;fileName:string;mimeType:string;sourceLanguage?:string}):Promise<string>{
   const form=new FormData();
   form.append("model",setting.transcriptionModel);
   form.append("response_format","json");
+  const speechLanguage=input.sourceLanguage?.split("-")[0].toLowerCase();
+  if(speechLanguage&&/^[a-z]{2}$/.test(speechLanguage))form.append("language",speechLanguage);
   form.append("file",new Blob([input.bytes],{type:input.mimeType}),input.fileName);
   const response=await fetch(`${trimSlash(setting.baseUrl)}/audio/transcriptions`,{
     method:"POST",

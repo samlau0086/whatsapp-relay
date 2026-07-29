@@ -22,12 +22,14 @@ test("translation routes enforce user preferences, admin-only credential access,
   assert.match(server,/canAccessAccount\(request\.principal,row\.account_id\)/);
   assert.match(server,/keyConfigured:Boolean\(row\?\.api_key_encrypted\)/);
   assert.match(server,/apiKey:row\?\.api_key_encrypted\?decryptAtRest/);
-  assert.match(server,/ON CONFLICT\(message_id,target_language\) DO NOTHING/);
-  assert.match(server,/ON CONFLICT\(message_id\) DO NOTHING/);
+  assert.match(server,/sourceLanguage:requestedSourceLanguage/);
+  assert.match(server,/ON CONFLICT\(message_id,target_language\) DO UPDATE/);
+  assert.match(server,/ON CONFLICT\(message_id\) DO UPDATE/);
+  assert.match(server,/transcription\.source_language transcription_source_language/);
   assert.match(server,/transcribeAudio/);
   assert.match(server,/normalizeTranscriptionAudio/);
   assert.match(server,/transcription_endpoint_missing/);
-  assert.match(server,/row\.translated_text\|\|parsed\.data\.generateAudio/);
+  assert.match(server,/hasCurrentTranslation\(row\)\|\|parsed\.data\.generateAudio/);
   assert.match(server,/translation_source_text/);
   assert.match(server,/delete outboundMessage\.translationSourceText/);
   assert.match(initialMigration,/PRIMARY KEY \(message_id,target_language\)/);

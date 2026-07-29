@@ -90,6 +90,7 @@ export const productNameTranslationPreviewSchema=z.object({
 export const messageTranslationsSchema=z.object({
   messageIds:z.array(z.string().uuid()).min(1).max(50),
   targetLanguage:languageCodeSchema,
+  sourceLanguage:languageCodeSchema.optional(),
   generateAudio:z.boolean().default(false),
 });
 
