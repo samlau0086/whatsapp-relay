@@ -149,8 +149,20 @@ jobs:
           install -d -m 700 ~/.ssh
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p "$VPS_PORT" -H "$VPS_HOST" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
+          known_hosts_file=$(mktemp)
+          for attempt in 1 2 3 4 5; do
+            if ssh-keyscan -T 20 -p "$VPS_PORT" -H "$VPS_HOST" > "$known_hosts_file" && test -s "$known_hosts_file"; then
+              break
+            fi
+            if [[ "$attempt" == 5 ]]; then
+              echo "Unable to collect the VPS SSH host key after $attempt attempts." >&2
+              exit 1
+            fi
+            echo "SSH host key scan attempt $attempt failed; retrying..." >&2
+            sleep $((attempt * 10))
+          done
+          install -m 600 "$known_hosts_file" ~/.ssh/known_hosts
+          rm -f "$known_hosts_file"
 
       - name: Package tracked source
         run: git archive --format=tar.gz --output=release.tar.gz "$GITHUB_SHA"
@@ -220,11 +232,32 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+          retry_network() {
+            local attempt=1
+            until "$@"; do
+              if (( attempt >= 5 )); then
+                echo "Network command failed after $attempt attempts." >&2
+                return 1
+              fi
+              echo "Network command attempt $attempt failed; retrying..." >&2
+              sleep $((attempt * 10))
+              attempt=$((attempt + 1))
+            done
+          }
+          ssh_options=(
+            -i ~/.ssh/id_ed25519
+            -o BatchMode=yes
+            -o StrictHostKeyChecking=yes
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=1
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=2
+          )
+          retry_network ssh "${ssh_options[@]}" -p "$VPS_PORT" \
             "$VPS_USER@$VPS_HOST" "mkdir -p '$VPS_DEPLOY_PATH/incoming'"
-          scp -i ~/.ssh/id_ed25519 -P "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+          retry_network scp "${ssh_options[@]}" -P "$VPS_PORT" \
             release.tar.gz "$VPS_USER@$VPS_HOST:$VPS_DEPLOY_PATH/incoming/$GITHUB_SHA.tar.gz"
-          scp -i ~/.ssh/id_ed25519 -P "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+          retry_network scp "${ssh_options[@]}" -P "$VPS_PORT" \
             production.env "$VPS_USER@$VPS_HOST:$VPS_DEPLOY_PATH/incoming/$GITHUB_SHA.env"
 
       - name: Activate release
