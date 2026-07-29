@@ -319,20 +319,21 @@ jobs:
           ln -sfn "$shared_env" "$release/.env"
           cd "$release"
           WEB_PORT="$web_port" docker compose -p relaydesk config --quiet
-          WEB_PORT="$web_port" docker compose -p relaydesk up --detach --build --remove-orphans --wait --wait-timeout 180
-          WEB_PORT="$web_port" docker compose -p relaydesk exec -T api npm run backfill:conversation-summaries
+          WEB_PORT="$web_port" docker compose -p relaydesk up --detach --build --remove-orphans
 
-          for attempt in $(seq 1 30); do
+          for attempt in $(seq 1 90); do
             if curl --fail --silent --show-error http://127.0.0.1:8080/health >/dev/null \
               && curl --fail --silent --show-error "http://127.0.0.1:$web_port/" >/dev/null; then
               break
             fi
-            if [ "$attempt" -eq 30 ]; then
+            if [ "$attempt" -eq 90 ]; then
               echo "Services did not pass their health checks." >&2
               false
             fi
             sleep 2
           done
+
+          WEB_PORT="$web_port" docker compose -p relaydesk exec -T api npm run backfill:conversation-summaries
 
           WEB_PORT="$web_port" docker compose -p relaydesk exec -T api node --input-type=module -e '
             const response = await fetch("http://gateway/api/v1/auth/login", {
