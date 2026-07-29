@@ -7,6 +7,10 @@ on:
         description: Optional WhatsApp account UUID for a TTS provider smoke test
         required: false
         type: string
+      translation_message_id:
+        description: Optional incoming audio message UUID to transcribe and translate
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -23,6 +27,7 @@ jobs:
       VPS_PORT: ${{ vars.VPS_PORT || '22' }}
       VPS_DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH || '/opt/relaydesk' }}
       TTS_ACCOUNT_ID: ${{ inputs.tts_account_id }}
+      TRANSLATION_MESSAGE_ID: ${{ inputs.translation_message_id }}
     steps:
       - name: Configure SSH
         shell: bash
@@ -36,6 +41,9 @@ jobs:
           if test -n "$TTS_ACCOUNT_ID"; then
             [[ "$TTS_ACCOUNT_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
           fi
+          if test -n "$TRANSLATION_MESSAGE_ID"; then
+            [[ "$TRANSLATION_MESSAGE_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+          fi
           install -d -m 700 ~/.ssh
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
@@ -46,10 +54,11 @@ jobs:
         run: |
           set -Eeuo pipefail
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            "$VPS_USER@$VPS_HOST" "bash -s -- '$VPS_DEPLOY_PATH' '$TTS_ACCOUNT_ID'" <<'REMOTE'
+            "$VPS_USER@$VPS_HOST" "bash -s -- '$VPS_DEPLOY_PATH' '$TTS_ACCOUNT_ID' '$TRANSLATION_MESSAGE_ID'" <<'REMOTE'
           set -Eeuo pipefail
           root=$1
           tts_account_id=${2:-}
+          translation_message_id=${3:-}
           cd "$root/current"
 
           echo "Current release: $(basename "$(readlink -f "$root/current")")"
@@ -102,9 +111,27 @@ jobs:
             console.log(responseText.slice(0, 2000));
             if (!response.ok) process.exitCode = 1;
           }
+          if (process.env.TRANSLATION_MESSAGE_ID) {
+            const response = await fetch("http://gateway/api/v1/translations/messages", {
+              method: "POST",
+              headers: { ...headers, "content-type": "application/json" },
+              body: JSON.stringify({
+                messageIds: [process.env.TRANSLATION_MESSAGE_ID],
+                targetLanguage: "zh-CN",
+                generateAudio: true,
+              }),
+            });
+            const body = await response.json().catch(() => ({}));
+            const item = body.data?.[0];
+            console.log(`/api/v1/translations/messages: HTTP ${response.status}; status=${item?.status ?? "missing"}; sourceLength=${item?.sourceText?.length ?? 0}; translationLength=${item?.translatedText?.length ?? 0}`);
+            if (!response.ok || item?.status !== "translated") {
+              console.error(JSON.stringify({ error: item?.error ?? body.error, message: item?.message ?? body.message }));
+              process.exitCode = 1;
+            }
+          }
           NODE
           )
-          if ! docker compose -p relaydesk exec -T -e TTS_ACCOUNT_ID="$tts_account_id" api node --input-type=module -e "$diagnostic" </dev/null
+          if ! docker compose -p relaydesk exec -T -e TTS_ACCOUNT_ID="$tts_account_id" -e TRANSLATION_MESSAGE_ID="$translation_message_id" api node --input-type=module -e "$diagnostic" </dev/null
           then
             docker compose -p relaydesk logs --since=15m --tail=300 api gateway
             docker compose -p relaydesk logs --tail=120 worker
