@@ -49,7 +49,9 @@ test("bulk product import validates batches and is capped at 500 rows",async()=>
   assert.match(schemas,/priceTiers:productPriceTiersSchema\.optional\(\)/);
   assert.match(server,/ON CONFLICT \(lower\(btrim\(sku\)\)\) WHERE deleted_at IS NULL DO UPDATE SET name=EXCLUDED\.name/);
   assert.match(server,/new_product_fields_required/);
-  assert.match(server,/fields:\["name"\]/);
+  assert.match(server,/fields:Object\.keys\(product\)/);
+  assert.match(server,/replaceProductPriceTiers\(client,productId,product\.priceTiers\)/);
+  assert.match(server,/replaceProductLabels\(client,productId,product\.tags\)/);
   assert.match(server,/return\{\.\.\.counts,products\}/);
   assert.doesNotMatch(server,/if\(existing\.rowCount\)return reply\.code\(409\)/);
   assert.match(dialog,/const updateOnly=!currency&&!price&&!tierText/);
