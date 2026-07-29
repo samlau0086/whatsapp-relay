@@ -147,6 +147,8 @@ test("inbox uses debounced search, cursor loading, realtime reconciliation, and 
   assert.match(ui,/conversationCursorRef/);
   assert.match(ui,/useConversationFeed/);
   assert.match(ui,/tagId:selectedTag/);
+  assert.match(ui,/onTagOpen=\{\(\)=>void loadConversationTags\(apiToken\)\}/);
+  assert.match(ui,/onTagCatalogChange=\{syncConversationTags\}/);
   assert.match(panel,/aria-label="搜索并筛选会话标签"/);
   assert.match(panel,/conversation-tag-chip/);
   assert.match(panel,/移除标签/);
