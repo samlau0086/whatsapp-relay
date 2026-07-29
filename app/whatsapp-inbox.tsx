@@ -2787,23 +2787,23 @@ function CrmDetailsPanel({
                   {details.orders.map((order) => (
                     <article key={order.id} className="order-summary-card">
                       <button className="order-summary-open" onClick={()=>setPaymentOrderTarget(order)} aria-label={`查看订单 #${order.orderNumber} 详情`}>
-                        <b>
-                          #{order.orderNumber} ·{" "}
-                          {order.items.length} 件商品
-                        </b>
-                        <small>
-                          {order.currency} {order.amount.toFixed(2)} ·{" "}
-                          {formatDateTime(order.createdAt)}
-                        </small>
-                        {order.sendFormat && (
-                          <small>
-                            {order.sendFormat === "image"
-                              ? "完整图片版"
-                              : order.sendFormat === "pdf"
-                                ? "PDF 版"
-                              : "文字版"}
-                          </small>
-                        )}
+                        <span className="order-summary-heading">
+                          <b>#{order.orderNumber}</b>
+                          <em>{order.items.length} 件商品</em>
+                        </span>
+                        <strong>{order.currency} {order.amount.toFixed(2)}</strong>
+                        <span className="order-summary-meta">
+                          <small>{formatDateTime(order.createdAt)}</small>
+                          {order.sendFormat && (
+                            <small>
+                              {order.sendFormat === "image"
+                                ? "完整图片版"
+                                : order.sendFormat === "pdf"
+                                  ? "PDF 版"
+                                : "文字版"}
+                            </small>
+                          )}
+                        </span>
                         {order.paymentRequest&&<small className={`payment-state ${order.paymentRequest.status.toLowerCase()}`}><CreditCard size={11}/>{paymentStatusText(order.paymentRequest.status)}</small>}
                       </button>
                       <div className="order-card-actions">
@@ -4215,7 +4215,32 @@ function AgentMemoryPanel({conversationId,token,onToken,onToast}:{conversationId
     }
   }
   const rebuildState=memory?.rebuild?.state;
-  return <div className="detail-section agent-memory"><div className="detail-title"><h4><Brain size={13}/>聊天记忆</h4><button disabled={busy} onClick={()=>void rebuild()}><RefreshCw className={busy?"spin":undefined} size={11}/>{busy?"整理中…":"重新整理"}</button></div><p className="memory-summary">{memory?.summary||"Agent 尚未生成会话摘要。"}</p>{!busy&&rebuildState==="failed"&&<p className="memory-rebuild-error">最近一次整理失败：{memory?.rebuild?.last_error||"未知错误"}</p>}{!busy&&rebuildState==="cancelled"&&<p className="memory-rebuild-error">最近一次整理已取消：{memory?.rebuild?.last_error||"未知原因"}</p>}{!busy&&(rebuildState==="pending"||rebuildState==="processing")&&<p className="memory-rebuild-pending"><RefreshCw className="spin" size={11}/>记忆仍在后台整理中</p>}<div className="memory-facts">{memory?.facts.map(fact=><span key={fact.id} title={fact.source_text||"来源消息已删除"}><b>{fact.fact_key}</b><em>{fact.fact_value}</em><i><button onClick={()=>void edit(fact)} aria-label={`编辑记忆 ${fact.fact_key}`}><Pencil size={10}/></button><button onClick={()=>void remove(fact.id)} aria-label={`删除记忆 ${fact.fact_key}`}><X size={10}/></button></i></span>)}</div></div>;
+  const factLabels:Record<string,string>={
+    expected_delivery_date:"预计送达",
+    expected_delivery:"预计送达",
+    item_quantities:"商品数量",
+    items_ordered:"订购商品",
+    shipping_address:"收货地址",
+    order_currency:"订单币种",
+    order_amount:"订单金额",
+    order_status:"订单状态",
+    order_number:"订单编号",
+  };
+  const factLabel=(key:string)=>factLabels[key.toLowerCase()]||key.replaceAll("_"," ");
+  return <div className="detail-section agent-memory">
+    <div className="detail-title">
+      <h4><Brain size={15}/>聊天记忆</h4>
+      <button disabled={busy} onClick={()=>void rebuild()}><RefreshCw className={busy?"spin":undefined} size={12}/>{busy?"整理中…":"重新整理"}</button>
+    </div>
+    <p className="memory-summary">{memory?.summary||"Agent 尚未生成会话摘要。"}</p>
+    {!busy&&rebuildState==="failed"&&<p className="memory-rebuild-error">最近一次整理失败：{memory?.rebuild?.last_error||"未知错误"}</p>}
+    {!busy&&rebuildState==="cancelled"&&<p className="memory-rebuild-error">最近一次整理已取消：{memory?.rebuild?.last_error||"未知原因"}</p>}
+    {!busy&&(rebuildState==="pending"||rebuildState==="processing")&&<p className="memory-rebuild-pending"><RefreshCw className="spin" size={11}/>记忆仍在后台整理中</p>}
+    {memory?.facts.length?<div className="memory-facts">{memory.facts.map(fact=><article key={fact.id} title={fact.source_text||"来源消息已删除"}>
+      <div><b>{factLabel(fact.fact_key)}</b><em>{fact.fact_value}</em></div>
+      <i><button onClick={()=>void edit(fact)} aria-label={`编辑记忆 ${fact.fact_key}`} title="编辑"><Pencil size={12}/></button><button onClick={()=>void remove(fact.id)} aria-label={`删除记忆 ${fact.fact_key}`} title="删除"><X size={12}/></button></i>
+    </article>)}</div>:<p className="memory-empty">暂无结构化记忆，重新整理后会自动提取。</p>}
+  </div>;
 }
 
 type CloudTemplate={name:string;language:string;category?:string;components:Array<{type:string;text?:string;format?:string}>};
