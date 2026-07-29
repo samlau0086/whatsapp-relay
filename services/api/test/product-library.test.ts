@@ -141,7 +141,9 @@ test("product card captions come from the template and are translated before Wha
   assert.match(editor,/\{\{productCount\}\}/);
   assert.match(dialog,/\/api\/v1\/product-card-template/);
   assert.match(dialog,/\/api\/v1\/translations\/preview/);
-  assert.match(dialog,/确认图片说明翻译/);
+  assert.match(dialog,/\/api\/v1\/translations\/product-names\/preview/);
+  assert.match(dialog,/确认产品卡片翻译/);
+  assert.match(dialog,/自动翻译产品名称/);
   assert.match(dialog,/translationSourceText/);
   assert.match(dialog,/translationTargetLanguage/);
   assert.match(server,/renderProductCardCaption/);
