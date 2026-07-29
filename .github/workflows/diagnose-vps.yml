@@ -2,6 +2,11 @@ name: Diagnose production CRM
 
 on:
   workflow_dispatch:
+    inputs:
+      tts_account_id:
+        description: Optional WhatsApp account UUID for a TTS provider smoke test
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -17,6 +22,7 @@ jobs:
       VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
       VPS_PORT: ${{ vars.VPS_PORT || '22' }}
       VPS_DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH || '/opt/relaydesk' }}
+      TTS_ACCOUNT_ID: ${{ inputs.tts_account_id }}
     steps:
       - name: Configure SSH
         shell: bash
@@ -27,6 +33,9 @@ jobs:
           test -n "$VPS_SSH_KEY"
           [[ "$VPS_PORT" =~ ^[0-9]+$ ]]
           [[ "$VPS_DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]]
+          if test -n "$TTS_ACCOUNT_ID"; then
+            [[ "$TTS_ACCOUNT_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+          fi
           install -d -m 700 ~/.ssh
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
@@ -37,9 +46,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            "$VPS_USER@$VPS_HOST" "bash -s -- '$VPS_DEPLOY_PATH'" <<'REMOTE'
+            "$VPS_USER@$VPS_HOST" "bash -s -- '$VPS_DEPLOY_PATH' '$TTS_ACCOUNT_ID'" <<'REMOTE'
           set -Eeuo pipefail
           root=$1
+          tts_account_id=${2:-}
           cd "$root/current"
 
           echo "Current release: $(basename "$(readlink -f "$root/current")")"
@@ -76,11 +86,27 @@ jobs:
               process.exitCode = 1;
             }
           }
+          if (process.env.TTS_ACCOUNT_ID) {
+            const response = await fetch("http://gateway/api/v1/text-to-speech", {
+              method: "POST",
+              headers: { ...headers, "content-type": "application/json" },
+              body: JSON.stringify({
+                accountId: process.env.TTS_ACCOUNT_ID,
+                text: "RelayDesk text to speech provider diagnostic",
+                speed: 1,
+                instructions: "Use a natural and friendly customer-service tone",
+              }),
+            });
+            console.log(`/api/v1/text-to-speech: HTTP ${response.status}`);
+            const responseText = await response.text();
+            console.log(responseText.slice(0, 2000));
+            if (!response.ok) process.exitCode = 1;
+          }
           NODE
           )
-          if ! docker compose -p relaydesk exec -T api node --input-type=module -e "$diagnostic" </dev/null
+          if ! docker compose -p relaydesk exec -T -e TTS_ACCOUNT_ID="$tts_account_id" api node --input-type=module -e "$diagnostic" </dev/null
           then
-            docker compose -p relaydesk logs --tail=200 api
+            docker compose -p relaydesk logs --since=15m --tail=300 api gateway
             docker compose -p relaydesk logs --tail=120 worker
             exit 1
           fi
