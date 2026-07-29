@@ -1,18 +1,21 @@
 import { z } from "zod";
 import { calculateOrderTotal, type OrderSummaryFee, type OrderSummaryItem } from "./crm.js";
+import { ORDER_BUSINESS_STATUSES } from "./schemas.js";
 
 export const ORDER_BLOCK_TYPES=["orderHeader","itemList","feeList","total","paymentSummary","shippingAddress","notes","divider","customText"] as const;
 export type OrderBlockType=typeof ORDER_BLOCK_TYPES[number];
 export type OrderTemplateFormat="text"|"image"|"pdf";
 export type OrderTemplateBlock={
   id:string;type:OrderBlockType;label?:string;text?:string;
+  statusLabels?:Partial<Record<OrderBusinessStatus,string>>;
   bold?:boolean;italic?:boolean;strikethrough?:boolean;monospace?:boolean;blankAfter?:boolean;
   fontSize?:"small"|"medium"|"large";textColor?:string;backgroundColor?:string;align?:"left"|"center"|"right";
   itemTemplate?:string;showProductImages?:boolean;imageSize?:"small"|"medium"|"large";
 };
 export type OrderTemplate={version:1;blocks:OrderTemplateBlock[]};
+export type OrderBusinessStatus=typeof ORDER_BUSINESS_STATUSES[number];
 export type OrderTemplateContext={
-  orderNumber:string;currency:string;customerName:string;customerPhone:string;description:string;
+  orderNumber:string;businessStatus:OrderBusinessStatus;currency:string;customerName:string;customerPhone:string;description:string;
   items:OrderSummaryItem[];fees:OrderSummaryFee[];
   address?:{label?:string;recipientName?:string;phone?:string;address?:string}|null;
   paymentProfile?:{summary?:string}|null;
@@ -21,9 +24,11 @@ export type SemanticOrderBlock={id:string;type:OrderBlockType;lines:string[]};
 
 const color=z.string().regex(/^#[0-9A-Fa-f]{6}$/);
 export const DEFAULT_ORDER_ITEM_TEMPLATE="{{index}}. {{title}} x {{quantity}} - {{price}} each - {{subtotal}}";
+export const DEFAULT_ORDER_STATUS_LABELS:Record<OrderBusinessStatus,string>={quotation:"Quotation",pending_confirmation:"Order",pending_payment:"Payment Due",paid:"Paid Order",processing:"Order",shipped:"Shipped Order",completed:"Completed Order",cancelled:"Cancelled Order"};
 const ORDER_ITEM_VARIABLES=new Set(["index","title","sku","quantity","price","subtotal"]);
 const blockSchema=z.object({
   id:z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/),type:z.enum(ORDER_BLOCK_TYPES),label:z.string().max(80).optional(),text:z.string().max(1000).optional(),
+  statusLabels:z.object(Object.fromEntries(ORDER_BUSINESS_STATUSES.map(status=>[status,z.string().trim().min(1).max(80)])) as Record<OrderBusinessStatus,z.ZodString>).partial().optional(),
   bold:z.boolean().optional(),italic:z.boolean().optional(),strikethrough:z.boolean().optional(),monospace:z.boolean().optional(),blankAfter:z.boolean().optional(),
   fontSize:z.enum(["small","medium","large"]).optional(),textColor:color.optional(),backgroundColor:color.optional(),align:z.enum(["left","center","right"]).optional(),
   itemTemplate:z.string().min(1).max(500).optional(),showProductImages:z.boolean().optional(),imageSize:z.enum(["small","medium","large"]).optional(),
@@ -55,7 +60,7 @@ export const orderTemplateSchema=z.object({version:z.literal(1),blocks:z.array(b
 export const orderTemplateUpdateSchema=orderTemplateSchema;
 
 export const DEFAULT_TEXT_ORDER_TEMPLATE:OrderTemplate={version:1,blocks:[
-  {id:"order-header",type:"orderHeader",label:"Order",bold:true,blankAfter:true},
+  {id:"order-header",type:"orderHeader",label:"Order",statusLabels:DEFAULT_ORDER_STATUS_LABELS,bold:true,blankAfter:true},
   {id:"items",type:"itemList",label:"Items:",itemTemplate:DEFAULT_ORDER_ITEM_TEMPLATE,blankAfter:true},
   {id:"fees",type:"feeList",label:"Additional fees:",blankAfter:true},
   {id:"total",type:"total",label:"Total:",bold:true},
@@ -64,7 +69,7 @@ export const DEFAULT_TEXT_ORDER_TEMPLATE:OrderTemplate={version:1,blocks:[
 ]};
 
 export const DEFAULT_IMAGE_ORDER_TEMPLATE:OrderTemplate={version:1,blocks:[
-  {id:"order-header",type:"orderHeader",label:"Order",fontSize:"large",textColor:"#FFFFFF",backgroundColor:"#153F2F",align:"left"},
+  {id:"order-header",type:"orderHeader",label:"Order",statusLabels:DEFAULT_ORDER_STATUS_LABELS,fontSize:"large",textColor:"#FFFFFF",backgroundColor:"#153F2F",align:"left"},
   {id:"items",type:"itemList",label:"Items:",itemTemplate:DEFAULT_ORDER_ITEM_TEMPLATE,fontSize:"medium",textColor:"#20372D",backgroundColor:"#F6F9F7",align:"left",showProductImages:true,imageSize:"medium"},
   {id:"fees",type:"feeList",label:"Additional fees:",fontSize:"small",textColor:"#20372D",backgroundColor:"#FAFCFB",align:"left"},
   {id:"total",type:"total",label:"Total:",fontSize:"large",textColor:"#FFFFFF",backgroundColor:"#153F2F",align:"left"},
@@ -81,7 +86,7 @@ export function parseOrderTemplate(value:unknown,format:OrderTemplateFormat):Ord
 function normalizeOrderTemplate(value:unknown,format:OrderTemplateFormat):unknown{
   if(!value||typeof value!=="object"||!Array.isArray((value as {blocks?:unknown}).blocks))return value;
   const template=value as {version?:unknown;blocks:Array<Record<string,unknown>>};
-  const blocks=template.blocks.map(block=>block.type==="itemList"&&block.itemTemplate===undefined?{...block,itemTemplate:DEFAULT_ORDER_ITEM_TEMPLATE}:block);
+  const blocks=template.blocks.map(block=>block.type==="itemList"&&block.itemTemplate===undefined?{...block,itemTemplate:DEFAULT_ORDER_ITEM_TEMPLATE}:block.type==="orderHeader"?{...block,statusLabels:{...DEFAULT_ORDER_STATUS_LABELS,...(block.statusLabels&&typeof block.statusLabels==="object"?block.statusLabels:{})}}:block);
   if(!blocks.some(block=>block.type==="paymentSummary")){
     const block=format==="text"
       ?{id:"payment-summary",type:"paymentSummary",label:"Payment:",blankAfter:true}
@@ -98,7 +103,7 @@ export function renderSemanticOrder(template:OrderTemplate,context:OrderTemplate
   const replace=(text:string)=>text.replace(/{{\s*([A-Za-z]+)\s*}}/g,(_,name:string)=>variables[name]??"");
   return template.blocks.flatMap(block=>{
     let lines:string[]=[];const label=block.label??defaultLabel(block.type);
-    if(block.type==="orderHeader")lines=[`${label}${label?" ":""}#${context.orderNumber}`];
+    if(block.type==="orderHeader"){const statusLabel=block.statusLabels?.[context.businessStatus]?.trim()||label;lines=[`${statusLabel}${statusLabel?" ":""}#${context.orderNumber}`];}
     else if(block.type==="itemList")lines=[...(label?[label]:[]),...context.items.map((item,index)=>renderOrderItem(block.itemTemplate,item,index,context.currency))];
     else if(block.type==="feeList"){if(!context.fees.length)return[];lines=[...(label?[label]:[]),...context.fees.map(fee=>`${fee.name} - ${context.currency} ${fee.amount.toFixed(2)}`)];}
     else if(block.type==="total")lines=[`${label}${label?" ":""}${total}`];

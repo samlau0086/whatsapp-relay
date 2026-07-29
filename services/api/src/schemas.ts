@@ -200,6 +200,8 @@ export const materialSendSchema=z.object({
 }).superRefine((value,ctx)=>{if(new Set(value.materialBatchIds).size!==value.materialBatchIds.length)ctx.addIssue({code:"custom",path:["materialBatchIds"],message:"material batch ids must be unique"});if(new Set(value.mediaIds).size!==value.mediaIds.length)ctx.addIssue({code:"custom",path:["mediaIds"],message:"media ids must be unique"});if(value.translationSourceText&&!value.caption?.trim())ctx.addIssue({code:"custom",path:["translationSourceText"],message:"translated material captions require a caption"});if(Boolean(value.translationSourceText)!==Boolean(value.translationTargetLanguage))ctx.addIssue({code:"custom",path:["translationTargetLanguage"],message:"translation source and target language must be provided together"});});
 const orderItemSchema=z.object({name:z.string().trim().min(1).max(120),sku:z.string().trim().min(1).max(80).optional(),quantity:z.coerce.number().int().min(1).max(9999),unitAmount:moneySchema,imageMediaId:z.string().uuid().optional(),productId:z.string().uuid().optional(),clientProductId:z.string().uuid().optional(),...optionalWeightFields}).superRefine((value,ctx)=>{validateWeightPair(value,ctx);if(value.productId&&value.clientProductId)ctx.addIssue({code:"custom",path:["productId"],message:"productId and clientProductId are mutually exclusive"});if(value.clientProductId&&!value.sku)ctx.addIssue({code:"custom",path:["sku"],message:"new products require a sku"});});
 const orderFeeSchema=z.object({name:z.string().trim().min(1).max(80),amount:moneySchema.refine(value=>value>0,"fee must be positive")});
+export const ORDER_BUSINESS_STATUSES=["quotation","pending_confirmation","pending_payment","paid","processing","shipped","completed","cancelled"] as const;
+export const orderBusinessStatusSchema=z.enum(ORDER_BUSINESS_STATUSES);
 export const customerAddressSchema=z.object({
   label:z.string().trim().min(1).max(40),
   recipientName:z.string().trim().max(80).optional().transform(value=>value||undefined),
@@ -208,6 +210,7 @@ export const customerAddressSchema=z.object({
 });
 const orderContentSchema=z.object({
   currency:currencySchema,
+  businessStatus:orderBusinessStatusSchema.default("quotation"),
   weightUnit:z.enum(WEIGHT_UNITS).default("kg"),
   paymentProfileId:z.string().uuid().nullable().optional(),
   description:z.string().trim().max(2000).optional().transform(value=>value||undefined),
@@ -220,6 +223,7 @@ const orderContentSchema=z.object({
 }).superRefine((value,ctx)=>{const total=value.items.reduce((sum,item)=>sum+item.quantity*item.unitAmount,0)+value.fees.reduce((sum,fee)=>sum+fee.amount,0);if(total<=0)ctx.addIssue({code:"custom",path:["items"],message:"order total must be positive"});if(value.translateOnSend&&!value.targetLanguage)ctx.addIssue({code:"custom",path:["targetLanguage"],message:"target language is required"});if(value.addressId&&value.newAddress)ctx.addIssue({code:"custom",path:["addressId"],message:"addressId and newAddress are mutually exclusive"});});
 export const orderSchema=z.object({clientOrderId:z.string().uuid()}).and(orderContentSchema);
 export const orderUpdateSchema=orderContentSchema;
+export const orderBusinessStatusUpdateSchema=z.object({businessStatus:orderBusinessStatusSchema});
 export const orderAddressSchema=z.object({addressId:z.string().uuid().nullable().optional(),newAddress:customerAddressSchema.optional()}).superRefine((value,ctx)=>{if(value.addressId&&value.newAddress)ctx.addIssue({code:"custom",path:["addressId"],message:"addressId and newAddress are mutually exclusive"});});
 export const orderSendSchema=z.object({format:z.enum(["text","image","pdf"]).default("text"),clientSendId:z.string().uuid().optional(),translate:z.boolean().optional(),targetLanguage:languageCodeSchema.optional()}).default({format:"text"}).superRefine((value,ctx)=>{if(value.translate===true&&!value.targetLanguage)ctx.addIssue({code:"custom",path:["targetLanguage"],message:"target language is required when translation is requested"});});
 const emailSubjectSchema=z.string().trim().min(1).max(200).refine(value=>!/[\r\n]/.test(value),"subject must not contain line breaks");

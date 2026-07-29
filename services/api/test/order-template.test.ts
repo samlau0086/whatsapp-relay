@@ -5,7 +5,7 @@ import { renderTemplateOrderImage } from "../src/order-image.js";
 import { renderTemplateOrderPdf } from "../src/order-pdf.js";
 import { DEFAULT_IMAGE_ORDER_TEMPLATE, DEFAULT_TEXT_ORDER_TEMPLATE, orderTemplateSchema, parseTranslatedSemanticOrder, renderSemanticOrder, renderTextOrder, serializeSemanticOrder } from "../src/order-template.js";
 
-const context={orderNumber:"20260720-001",currency:"USD",customerName:"Alex",customerPhone:"+8613800000000",description:"Handle *carefully*",items:[{name:"Perfume _limited_",sku:"PERFUME-001",quantity:2,unitAmount:49.75},{name:"Gift box",sku:"GIFT-001",quantity:1,unitAmount:8}],fees:[{name:"Shipping",amount:6.5}],address:{recipientName:"Alex",phone:"+8613800000000",address:"88 Market Street"}};
+const context={orderNumber:"20260720-001",businessStatus:"pending_confirmation" as const,currency:"USD",customerName:"Alex",customerPhone:"+8613800000000",description:"Handle *carefully*",items:[{name:"Perfume _limited_",sku:"PERFUME-001",quantity:2,unitAmount:49.75},{name:"Gift box",sku:"GIFT-001",quantity:1,unitAmount:8}],fees:[{name:"Shipping",amount:6.5}],address:{recipientName:"Alex",phone:"+8613800000000",address:"88 Market Street"}};
 
 test("template validation protects core blocks and variables",()=>{
   assert.equal(orderTemplateSchema.safeParse(DEFAULT_TEXT_ORDER_TEMPLATE).success,true);
@@ -22,6 +22,13 @@ test("item templates render every supported product variable",()=>{
   const block=renderSemanticOrder(template,context).find(item=>item.type==="itemList")!;
   assert.equal(block.lines[1],"1 | Perfume _limited_ | PERFUME-001 | 2 | USD 49.75 | USD 99.50");
   assert.equal(block.lines[2],"2 | Gift box | GIFT-001 | 1 | USD 8.00 | USD 8.00");
+});
+
+test("order headers use the configured label for each business status",()=>{
+  const template=structuredClone(DEFAULT_TEXT_ORDER_TEMPLATE),header=template.blocks.find(block=>block.type==="orderHeader")!;
+  header.statusLabels={...header.statusLabels,quotation:"Quote",paid:"Receipt"};
+  assert.equal(renderSemanticOrder(template,{...context,businessStatus:"quotation"})[0].lines[0],"Quote #20260720-001");
+  assert.equal(renderSemanticOrder(template,{...context,businessStatus:"paid"})[0].lines[0],"Receipt #20260720-001");
 });
 
 test("semantic and WhatsApp rendering follow order and hide empty optional blocks",()=>{

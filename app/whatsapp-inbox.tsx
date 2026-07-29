@@ -164,7 +164,13 @@ type PaymentMethodType="paypal"|"bank_transfer"|"western_union"|"wise"|"moneygra
 type PaymentPublicField={label:string;value:string};
 type PaymentProfile={id:string;profileId:string;name:string;profileName:string;methodId:string;methodType:PaymentMethodType;methodName:string;enabled:boolean;environment:"sandbox"|"live"|null;summary:string;publicFields:PaymentPublicField[];instructions:string;sandboxClientIdConfigured?:boolean;sandboxClientSecretConfigured?:boolean;liveClientIdConfigured?:boolean;liveClientSecretConfigured?:boolean;sandboxClientId?:string;sandboxClientSecret?:string;liveClientId?:string;liveClientSecret?:string;referenceTemplate?:string;noteTemplate?:string;itemNameTemplate?:string};
 type PaymentMethod={id:string;type:PaymentMethodType;name:string;enabled:boolean;sortOrder:number;profiles:PaymentProfile[]};
-type OrderItem={id:string;orderNumber:string;conversationId:string;accountId:string;accountName:string;customerName:string;customerPhone:string;amount:number;currency:string;weightUnit:WeightUnit;description:string;status:string;sendFormat:string;translateOnSend:boolean;targetLanguage:string;createdAt:string;createdByName:string;messageStatus:string;items:OrderProductItem[];fees:OrderFeeItem[];addressId:string|null;address:CustomerAddress|null;paymentProfileId:string|null;paymentProfile:PaymentProfile|null;paymentRequest:PaymentRequest|null};
+type OrderBusinessStatus="quotation"|"pending_confirmation"|"pending_payment"|"paid"|"processing"|"shipped"|"completed"|"cancelled";
+const ORDER_BUSINESS_STATUSES:Array<{value:OrderBusinessStatus;label:string}>=[
+  {value:"quotation",label:"报价"},{value:"pending_confirmation",label:"待确认"},{value:"pending_payment",label:"待付款"},{value:"paid",label:"已付款"},
+  {value:"processing",label:"处理中"},{value:"shipped",label:"已发货"},{value:"completed",label:"已完成"},{value:"cancelled",label:"已取消"},
+];
+function orderBusinessStatusText(value:string){return ORDER_BUSINESS_STATUSES.find(item=>item.value===value)?.label??"报价";}
+type OrderItem={id:string;orderNumber:string;conversationId:string;accountId:string;accountName:string;customerName:string;customerPhone:string;amount:number;currency:string;weightUnit:WeightUnit;description:string;status:string;businessStatus:OrderBusinessStatus;sendFormat:string;translateOnSend:boolean;targetLanguage:string;createdAt:string;createdByName:string;messageStatus:string;items:OrderProductItem[];fees:OrderFeeItem[];addressId:string|null;address:CustomerAddress|null;paymentProfileId:string|null;paymentProfile:PaymentProfile|null;paymentRequest:PaymentRequest|null};
 type OrderSendTarget={order:OrderItem};
 type ContactTaskSummary={id:string;title:string;kind:"general"|"message";status:string;dueAt:string;sendAt:string|null;assignedUserName:string|null};
 type ContactTaskDetail=ContactTaskSummary&{description:string;progress:number;startAt:string;sendMode:"approval"|"auto";accountName:string;source:string};
@@ -244,7 +250,7 @@ const DEFAULT_CURRENCY_CONFIG:CurrencyConfig={baseCurrency:"USD",currencies:[{co
 function convertCurrency(amount:number,from:string,to:string,config:CurrencyConfig):number{if(from===to)return amount;const source=config.currencies.find(item=>item.code===from)?.rate,target=config.currencies.find(item=>item.code===to)?.rate;if(!source||!target)return amount;return amount/source*target;}
 
 function mapOrder(item:Record<string,unknown>,defaults:Partial<OrderItem>={}):OrderItem{return{
-  id:String(item.id),orderNumber:String(item.display_order_number??item.order_number??""),conversationId:String(item.conversation_id??defaults.conversationId??""),accountId:String(item.account_id??defaults.accountId??""),accountName:String(item.account_name??defaults.accountName??""),customerName:String(item.customer_name??defaults.customerName??""),customerPhone:String(item.customer_phone??defaults.customerPhone??""),amount:Number(item.amount),currency:String(item.currency),weightUnit:(item.weight_unit??defaults.weightUnit??"kg") as WeightUnit,description:String(item.description??""),status:String(item.status??"draft"),sendFormat:String(item.send_format??""),translateOnSend:Boolean(item.translate_on_send),targetLanguage:String(item.target_language??""),createdAt:String(item.created_at),createdByName:String(item.created_by_name??"已离职坐席"),messageStatus:String(item.message_status??item.status??"draft"),items:Array.isArray(item.items)?(item.items as Array<Record<string,unknown>>).map(product=>({id:String(product.id),name:String(product.name),sku:String(product.sku??""),quantity:Number(product.quantity),unitAmount:Number(product.unitAmount),weightAmount:product.weightAmount===null||product.weightAmount===undefined?null:Number(product.weightAmount),weightUnit:product.weightUnit?String(product.weightUnit) as WeightUnit:null,imageMediaId:product.imageMediaId?String(product.imageMediaId):null,imageName:String(product.imageName??""),productId:product.productId?String(product.productId):null})):[],fees:Array.isArray(item.fees)?(item.fees as Array<Record<string,unknown>>).map(fee=>({id:String(fee.id),name:String(fee.name),amount:Number(fee.amount)})):[],addressId:item.address_id?String(item.address_id):null,address:item.shipping_address_snapshot?mapCustomerAddress(item.shipping_address_snapshot as Record<string,unknown>,item.address_id?String(item.address_id):""):null,paymentProfileId:item.payment_profile_id?String(item.payment_profile_id):null,paymentProfile:item.payment_profile_snapshot?mapPaymentProfile(item.payment_profile_snapshot as Record<string,unknown>):defaults.paymentProfile??null,paymentRequest:item.payment_request?mapPaymentRequest(item.payment_request as Record<string,unknown>):defaults.paymentRequest??null,
+  id:String(item.id),orderNumber:String(item.display_order_number??item.order_number??""),conversationId:String(item.conversation_id??defaults.conversationId??""),accountId:String(item.account_id??defaults.accountId??""),accountName:String(item.account_name??defaults.accountName??""),customerName:String(item.customer_name??defaults.customerName??""),customerPhone:String(item.customer_phone??defaults.customerPhone??""),amount:Number(item.amount),currency:String(item.currency),weightUnit:(item.weight_unit??defaults.weightUnit??"kg") as WeightUnit,description:String(item.description??""),status:String(item.status??"draft"),businessStatus:String(item.business_status??defaults.businessStatus??"quotation") as OrderBusinessStatus,sendFormat:String(item.send_format??""),translateOnSend:Boolean(item.translate_on_send),targetLanguage:String(item.target_language??""),createdAt:String(item.created_at),createdByName:String(item.created_by_name??"已离职坐席"),messageStatus:String(item.message_status??item.status??"draft"),items:Array.isArray(item.items)?(item.items as Array<Record<string,unknown>>).map(product=>({id:String(product.id),name:String(product.name),sku:String(product.sku??""),quantity:Number(product.quantity),unitAmount:Number(product.unitAmount),weightAmount:product.weightAmount===null||product.weightAmount===undefined?null:Number(product.weightAmount),weightUnit:product.weightUnit?String(product.weightUnit) as WeightUnit:null,imageMediaId:product.imageMediaId?String(product.imageMediaId):null,imageName:String(product.imageName??""),productId:product.productId?String(product.productId):null})):[],fees:Array.isArray(item.fees)?(item.fees as Array<Record<string,unknown>>).map(fee=>({id:String(fee.id),name:String(fee.name),amount:Number(fee.amount)})):[],addressId:item.address_id?String(item.address_id):null,address:item.shipping_address_snapshot?mapCustomerAddress(item.shipping_address_snapshot as Record<string,unknown>,item.address_id?String(item.address_id):""):null,paymentProfileId:item.payment_profile_id?String(item.payment_profile_id):null,paymentProfile:item.payment_profile_snapshot?mapPaymentProfile(item.payment_profile_snapshot as Record<string,unknown>):defaults.paymentProfile??null,paymentRequest:item.payment_request?mapPaymentRequest(item.payment_request as Record<string,unknown>):defaults.paymentRequest??null,
 };}
 
 function mapPaymentProfile(item:Record<string,unknown>):PaymentProfile{return{id:String(item.id??item.profileId),profileId:String(item.profileId??item.id),name:String(item.name??item.profileName),profileName:String(item.profileName??item.name),methodId:String(item.methodId),methodType:String(item.methodType) as PaymentMethodType,methodName:String(item.methodName),enabled:item.enabled===undefined?true:Boolean(item.enabled),environment:item.environment==="sandbox"||item.environment==="live"?item.environment:null,summary:String(item.summary??`${item.methodName} · ${item.profileName??item.name}`),publicFields:Array.isArray(item.publicFields)?item.publicFields.map(field=>({label:String((field as Record<string,unknown>).label),value:String((field as Record<string,unknown>).value)})):[],instructions:String(item.instructions??""),sandboxClientIdConfigured:Boolean(item.sandboxClientIdConfigured),sandboxClientSecretConfigured:Boolean(item.sandboxClientSecretConfigured),liveClientIdConfigured:Boolean(item.liveClientIdConfigured),liveClientSecretConfigured:Boolean(item.liveClientSecretConfigured),referenceTemplate:item.referenceTemplate?String(item.referenceTemplate):undefined,noteTemplate:item.noteTemplate?String(item.noteTemplate):undefined,itemNameTemplate:item.itemNameTemplate?String(item.itemNameTemplate):undefined};}
@@ -2411,6 +2417,7 @@ function CrmDetailsPanel({
     [editOrderTarget, setEditOrderTarget] = useState<OrderItem | null>(null),
     [sendOrderTarget, setSendOrderTarget] = useState<OrderSendTarget | null>(null),
     [paymentOrderTarget, setPaymentOrderTarget] = useState<OrderItem | null>(null),
+    [statusOrderId,setStatusOrderId]=useState(""),
     [contactEditing, setContactEditing] = useState(false),
     [addressEditing, setAddressEditing] = useState(false),
     [aliasEditing, setAliasEditing] = useState(false),
@@ -2636,6 +2643,19 @@ function CrmDetailsPanel({
     });
     if(ok){setTaskTitle("");setTaskDueAt(toDateTimeLocal(new Date(Date.now()+86400000).toISOString()));onToast(taskKind==="message"?"定时消息任务已创建":"任务已创建");}
   }
+  async function changeOrderStatus(order:OrderItem,businessStatus:OrderBusinessStatus){
+    if(order.businessStatus===businessStatus)return;
+    setStatusOrderId(order.id);setError("");
+    try{
+      const result=await authorizedFetch(`/api/v1/conversations/${active.id}/orders/${order.id}/status`,token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({businessStatus})});
+      if(result.token!==token)onToken(result.token);
+      if(!result.response.ok)throw new Error(`订单状态更新失败（HTTP ${result.response.status}）`);
+      setDetails(value=>value?{...value,orders:value.orders.map(item=>item.id===order.id?{...item,businessStatus}:item)}:value);
+      updateCachedConversationDetails(active.id,value=>({...value,orders:value.orders.map(item=>item.id===order.id?{...item,businessStatus}:item)}));
+      onToast(`订单 #${order.orderNumber} 已切换为${orderBusinessStatusText(businessStatus)}`);
+    }catch(reason){setError(reason instanceof Error?reason.message:"订单状态更新失败");}
+    finally{setStatusOrderId("");}
+  }
   async function sendOrder(order: OrderItem, format: "text" | "image" | "pdf", translate: boolean, targetLanguage?: string, email?:{recipientEmailIds:string[];subject:string;messageBody:string}) {
     setBusy(true);
     setError("");
@@ -2780,6 +2800,12 @@ function CrmDetailsPanel({
                         {order.paymentRequest&&<small className={`payment-state ${order.paymentRequest.status.toLowerCase()}`}><CreditCard size={11}/>{paymentStatusText(order.paymentRequest.status)}</small>}
                       </button>
                       <div className="order-card-actions">
+                        <label className={`order-business-status ${order.businessStatus}`}>
+                          <span className="sr-only">订单 #{order.orderNumber} 状态</span>
+                          <select value={order.businessStatus} disabled={busy||statusOrderId===order.id} onChange={event=>void changeOrderStatus(order,event.target.value as OrderBusinessStatus)} aria-label={`切换订单 #${order.orderNumber} 状态`}>
+                            {ORDER_BUSINESS_STATUSES.map(item=><option key={item.value} value={item.value}>{item.label}</option>)}
+                          </select>
+                        </label>
                         {order.status !== "draft" && (
                           <em
                             className={`delivery-state ${order.messageStatus}`}
@@ -3292,6 +3318,7 @@ function OrderDialog({
         : [],
     ),
     [currency, setCurrency] = useState(order?.currency ?? ""),
+    [businessStatus,setBusinessStatus]=useState<OrderBusinessStatus>(order?.businessStatus??"quotation"),
     [weightUnit,setWeightUnit]=useState<WeightUnit>(order?.weightUnit??"kg"),
     [paymentProfiles,setPaymentProfiles]=useState<PaymentProfile[]>(()=>order?.paymentProfile?[order.paymentProfile]:[]),
     [paymentProfileId,setPaymentProfileId]=useState(order?.paymentProfileId??""),
@@ -3455,6 +3482,7 @@ function OrderDialog({
         }));
       const payload = {
         currency,
+        businessStatus,
         weightUnit,
         paymentProfileId:paymentProfileId||null,
         description: description.trim() || undefined,
@@ -3483,6 +3511,7 @@ function OrderDialog({
       );
       if (saved.token !== token) onToken(saved.token);
       const body = (await saved.response.json().catch(() => ({}))) as {
+        orderId?: string;
         orderNumber?: string;
         message?: string;
         error?: string;
@@ -3493,6 +3522,12 @@ function OrderDialog({
             body.error ??
             `${order ? "更新" : "创建"}失败（HTTP ${saved.response.status}）`,
         );
+      const savedOrderId=order?.id??body.orderId;
+      if(savedOrderId){
+        const statusSaved=await authorizedFetch(`/api/v1/conversations/${active.id}/orders/${savedOrderId}/status`,saved.token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({businessStatus})});
+        if(statusSaved.token!==saved.token)onToken(statusSaved.token);
+        if(!statusSaved.response.ok)throw new Error("订单已保存，但订单状态更新失败，请重试");
+      }
       if(order){const addressSaved=await authorizedFetch(`/api/v1/conversations/${active.id}/orders/${order.id}/address`,saved.token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify(addingAddress?{newAddress:{label:addressDraft.label.trim(),recipientName:addressDraft.recipientName.trim()||undefined,phone:addressDraft.phone.trim()||undefined,address:addressDraft.address.trim()}}:{addressId:addressId||null})});if(addressSaved.token!==token)onToken(addressSaved.token);if(!addressSaved.response.ok)throw new Error("订单已更新，但地址保存失败，请重试");}
       await onCreated(body.orderNumber);
     } catch (reason) {
@@ -3535,6 +3570,12 @@ function OrderDialog({
         </p>
         <div className="order-builder-head">
           <b>Products</b>
+          <label>
+            订单状态
+            <select value={businessStatus} onChange={event=>setBusinessStatus(event.target.value as OrderBusinessStatus)}>
+              {ORDER_BUSINESS_STATUSES.map(item=><option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+          </label>
           <label>
             Currency
             <select
