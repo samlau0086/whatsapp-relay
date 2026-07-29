@@ -2185,6 +2185,9 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           accountId={active.accountId}
           token={apiToken}
           initialText={draft}
+          translationEnabled={translationPreference.enabled}
+          translationConfigured={translationConfigured}
+          targetLanguage={translationPreference.customerLanguage}
           onToken={setApiToken}
           onClose={() => setTtsOpen(false)}
           onSend={async (asset) => {
@@ -3989,19 +3992,36 @@ const EMOJI_TABS:Record<string,string>={"常用":"🕘","表情":"😀","手势"
 
 function EmojiPicker({category,onCategory,onSelect,onClose}:{category:string;onCategory:(value:string)=>void;onSelect:(emoji:string)=>void;onClose:()=>void}){return <section className="emoji-picker" role="dialog" aria-label="选择表情"><header><b>表情</b><button onClick={onClose} aria-label="关闭表情面板"><X size={15}/></button></header><nav>{Object.entries(EMOJI_TABS).map(([name,icon])=><button key={name} className={category===name?"active":""} onClick={()=>onCategory(name)} title={name} aria-label={name}>{icon}</button>)}</nav><div className="emoji-grid">{(EMOJI_GROUPS[category]??EMOJI_GROUPS["常用"]).map((emoji,index)=><button key={`${emoji}-${index}`} onClick={()=>onSelect(emoji)} aria-label={`插入 ${emoji}`}>{emoji}</button>)}</div></section>}
 
-function TextToSpeechDialog({accountId,token,initialText,onToken,onClose,onSend}:{accountId:string;token:string;initialText:string;onToken:(token:string)=>void;onClose:()=>void;onSend:(asset:MediaAsset)=>Promise<void>}){
-  const [text,setText]=useState(initialText),[speed,setSpeed]=useState(1),[instructions,setInstructions]=useState("用自然、友好、适合客户沟通的语气朗读"),[busy,setBusy]=useState(false),[error,setError]=useState(""),[provider,setProvider]=useState<string|null>(null),[configured,setConfigured]=useState<boolean|null>(null);
+function TextToSpeechDialog({accountId,token,initialText,translationEnabled,translationConfigured,targetLanguage,onToken,onClose,onSend}:{accountId:string;token:string;initialText:string;translationEnabled:boolean;translationConfigured:boolean;targetLanguage:string;onToken:(token:string)=>void;onClose:()=>void;onSend:(asset:MediaAsset)=>Promise<void>}){
+  const [text,setText]=useState(initialText),[translatedText,setTranslatedText]=useState(""),[translationSource,setTranslationSource]=useState(""),[speed,setSpeed]=useState(1),[instructions,setInstructions]=useState("用自然、友好、适合客户沟通的语气朗读"),[busy,setBusy]=useState<"translating"|"generating"|null>(null),[error,setError]=useState(""),[provider,setProvider]=useState<string|null>(null),[configured,setConfigured]=useState<boolean|null>(null);
   useEffect(()=>{void (async()=>{const result=await authorizedFetch("/api/v1/tts/status",token);if(result.token!==token)onToken(result.token);const body=await result.response.json().catch(()=>({})) as {configured?:boolean;provider?:string};setConfigured(Boolean(body.configured));setProvider(body.provider??null);})().catch(()=>setConfigured(false));},[token,onToken]);
-  async function generate(){
-    if(!text.trim()||busy)return;setBusy(true);setError("");
+  const translationPreviewReady=translationEnabled&&Boolean(translationSource)&&translationSource===text.trim();
+  async function previewTranslation(){
+    const source=text.trim();
+    if(!source||busy)return;
+    if(!translationConfigured){setError("AI 翻译暂不可用，请联系管理员配置 Provider");return;}
+    setBusy("translating");setError("");
     try{
-      const result=await authorizedFetch("/api/v1/text-to-speech",token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId,text:text.trim(),speed,instructions:instructions.trim()||undefined})});if(result.token!==token)onToken(result.token);
+      const result=await authorizedFetch("/api/v1/translations/preview",token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:source,targetLanguage})});if(result.token!==token)onToken(result.token);
+      const body=await result.response.json().catch(()=>({})) as {translatedText?:string;message?:string};
+      if(!result.response.ok||!body.translatedText)throw new Error(body.message??"翻译失败");
+      const translated=body.translatedText.trim();
+      if(translated.length>4096)throw new Error("译文超过 4096 个字符，请缩短原文后重试");
+      setTranslationSource(source);setTranslatedText(translated);
+    }catch(reason){setError(reason instanceof Error?reason.message:"AI 翻译失败，尚未生成语音");}
+    finally{setBusy(null);}
+  }
+  async function generate(){
+    const speechText=translationEnabled?translatedText.trim():text.trim();
+    if(!speechText||busy||(translationEnabled&&!translationPreviewReady))return;setBusy("generating");setError("");
+    try{
+      const result=await authorizedFetch("/api/v1/text-to-speech",token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId,text:speechText,speed,instructions:instructions.trim()||undefined})});if(result.token!==token)onToken(result.token);
       const body=await result.response.json().catch(()=>({})) as Record<string,unknown>;
       if(!result.response.ok)throw new Error(String(body.message??(body.error==="tts_not_configured"?"管理员尚未启用语音 Provider":`生成失败（HTTP ${result.response.status}）`)));
       await onSend({id:String(body.mediaId),fileName:String(body.fileName),mimeType:String(body.mimeType),size:Number(body.size),sha256:String(body.sha256),createdAt:new Date().toISOString(),usageCount:0});
-    }catch(reason){setError(reason instanceof Error?reason.message:"AI 语音生成失败，请稍后重试");setBusy(false);}
+    }catch(reason){setError(reason instanceof Error?reason.message:"AI 语音生成失败，请稍后重试");setBusy(null);}
   }
-  return <div className="modal-backdrop media-backdrop" role="presentation"><section className="login-dialog tts-dialog" role="dialog" aria-modal="true" aria-labelledby="tts-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><div className="login-logo"><Sparkles size={20}/></div><h2 id="tts-title">AI 文字转语音</h2><p>输入要发送的内容，生成后会作为 WhatsApp 语音消息直接排队发送。</p><label>朗读文字 <span className="tts-count">{text.length}/4096</span><textarea value={text} onChange={event=>setText(event.target.value)} maxLength={4096} autoFocus placeholder="输入需要朗读并发送的文字"/></label><label>语速 <span className="tts-speed">{speed.toFixed(2)}×</span><input type="range" min="0.75" max="1.5" step="0.05" value={speed} onChange={event=>setSpeed(Number(event.target.value))}/></label><label>语气要求（部分 Provider 支持）<input value={instructions} onChange={event=>setInstructions(event.target.value)} maxLength={500} placeholder="例如：专业、亲切，稍微放慢语速"/></label><div className={`tts-disclosure ${configured===false?"warning":""}`}><Info size={14}/><span>{configured===null?"正在读取 Provider 配置…":configured?`文字会发送给 ${providerName(provider)} 生成 AI 音频。`:`管理员尚未在系统设置中启用语音 Provider。`}</span></div>{error&&<span className="login-error">{error}</span>}<button className="login-submit" onClick={()=>void generate()} disabled={busy||!text.trim()||configured!==true}>{busy?<><RefreshCw className="spin" size={15}/>正在生成并发送…</>:<><Mic size={15}/>生成并发送语音</>}</button></section></div>;
+  return <div className="modal-backdrop media-backdrop" role="presentation"><section className="login-dialog tts-dialog" role="dialog" aria-modal="true" aria-labelledby="tts-title"><button className="login-close" onClick={onClose} disabled={Boolean(busy)} aria-label="关闭"><X size={17}/></button><div className="login-logo"><Sparkles size={20}/></div><h2 id="tts-title">AI 文字转语音</h2><p>{translationEnabled?`此会话已开启 AI 翻译。请先预览并确认 ${languageName(targetLanguage)} 译文，再生成语音并发送。`:"输入要发送的内容，生成后会作为 WhatsApp 语音消息直接排队发送。"}</p><label>{translationEnabled?"原文":"朗读文字"} <span className="tts-count">{text.length}/4096</span><textarea value={text} onChange={event=>{setText(event.target.value);setTranslationSource("");setTranslatedText("");setError("");}} maxLength={4096} readOnly={Boolean(busy)} autoFocus placeholder="输入需要朗读并发送的文字"/></label>{translationEnabled&&translationPreviewReady&&<label className="tts-translation-preview">将朗读的译文 <span className="tts-count">{translatedText.length}/4096</span><textarea value={translatedText} onChange={event=>setTranslatedText(event.target.value)} maxLength={4096} disabled={Boolean(busy)} autoFocus/><small><Languages size={12}/>目标语言：{languageName(targetLanguage)} · 发送前可修改译文</small></label>}<label>语速 <span className="tts-speed">{speed.toFixed(2)}×</span><input type="range" min="0.75" max="1.5" step="0.05" value={speed} disabled={Boolean(busy)} onChange={event=>setSpeed(Number(event.target.value))}/></label><label>语气要求（部分 Provider 支持）<input value={instructions} onChange={event=>setInstructions(event.target.value)} disabled={Boolean(busy)} maxLength={500} placeholder="例如：专业、亲切，稍微放慢语速"/></label>{translationEnabled&&<div className={`tts-disclosure ${translationConfigured?"":"warning"}`}><Languages size={14}/><span>{translationConfigured?`AI 会先将原文翻译为 ${languageName(targetLanguage)}；确认译文前不会生成或发送语音。`:"管理员尚未启用 AI 翻译 Provider。"}</span></div>}<div className={`tts-disclosure ${configured===false?"warning":""}`}><Info size={14}/><span>{configured===null?"正在读取 Provider 配置…":configured?`文字会发送给 ${providerName(provider)} 生成 AI 音频。`:`管理员尚未在系统设置中启用语音 Provider。`}</span></div>{error&&<span className="login-error">{error}</span>}<button className="login-submit" onClick={()=>void (translationEnabled&&!translationPreviewReady?previewTranslation():generate())} disabled={Boolean(busy)||!text.trim()||configured!==true||(translationEnabled&&!translationConfigured)||(translationPreviewReady&&!translatedText.trim())}>{busy==="translating"?<><RefreshCw className="spin" size={15}/>正在翻译…</>:busy==="generating"?<><RefreshCw className="spin" size={15}/>正在生成并发送…</>:translationEnabled&&!translationPreviewReady?<><Languages size={15}/>预览翻译</>:<><Mic size={15}/>{translationEnabled?"确认译文并生成发送":"生成并发送语音"}</>}</button></section></div>;
 }
 
 const MEDIA_PAGE_SIZE=24;

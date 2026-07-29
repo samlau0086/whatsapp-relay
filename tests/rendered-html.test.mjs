@@ -135,6 +135,9 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /conversationId/);
   assert.match(component, /\/api\/v1\/me\/translation-preferences/);
   assert.match(component, /\/api\/v1\/translations\/preview/);
+  assert.match(component, /translationEnabled&&!translationPreviewReady\?previewTranslation\(\):generate\(\)/);
+  assert.match(component, /确认译文前不会生成或发送语音/);
+  assert.match(component, /确认译文并生成发送/);
   assert.match(component, /\/api\/v1\/translations\/messages/);
   assert.match(component, /cached_translation_text/);
   assert.match(component, /cachedTranslations/);
