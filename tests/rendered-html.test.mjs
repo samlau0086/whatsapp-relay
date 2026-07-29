@@ -145,6 +145,9 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /\/api\/v1\/translations\/messages/);
   assert.match(component, /cached_translation_text/);
   assert.match(component, /cachedTranslations/);
+  assert.match(component, /targetLanguage:message\.cachedTranslationLanguage/);
+  assert.match(component, /value\.targetLanguage===translationPreference\.agentLanguage/);
+  assert.doesNotMatch(component, /setMessageTranslations\(\{\}\).*translationPreference\.customerLanguage/);
   assert.match(component, /Custom Provider/);
   assert.match(component, /gpt-5\.6-luna/);
   assert.match(css, /\.translation-menu/);
