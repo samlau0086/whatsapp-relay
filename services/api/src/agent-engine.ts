@@ -4,7 +4,7 @@ import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { decryptAtRest } from "./security.js";
 import { ensureOrderDetailsImage } from "./order-details-image.js";
-import { isTemplateRequiredError, queueWhatsAppCommand } from "./whatsapp-outbound.js";
+import { isTemplateRequiredError, queueChannelCommand } from "./whatsapp-outbound.js";
 
 const s3 = new S3Client({
   region: config.S3_REGION,
@@ -588,7 +588,7 @@ async function runConversationJob(job: Job): Promise<void> {
     job.kind === "refresh_memory" ||
     String(job.payload.memoryOnly ?? "") === "true";
   const context = await pool.query(
-    `SELECT c.id,c.status,c.customer_stage,c.account_id,a.status account_status,a.agent_id,s.enabled,COALESCE(s.persona,'You are a helpful, concise relationship assistant.') persona,COALESCE(s.reply_language,'auto') reply_language,s.timezone,s.business_days,s.business_start::text,s.business_end::text,COALESCE(s.confidence_threshold,0.8) confidence_threshold,s.followup_enabled,s.followup_delays_hours,COALESCE(st.mode,'human_paused') mode,COALESCE(st.followup_count,0) followup_count,mem.summary FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id LEFT JOIN account_agent_settings s ON s.account_id=c.account_id LEFT JOIN conversation_agent_state st ON st.conversation_id=c.id LEFT JOIN conversation_memories mem ON mem.conversation_id=c.id WHERE c.id=$1`,
+    `SELECT c.id,c.status,c.customer_stage,c.account_id,a.status account_status,a.agent_id,s.enabled,COALESCE(s.persona,'You are a helpful, concise relationship assistant.') persona,COALESCE(s.reply_language,'auto') reply_language,s.timezone,s.business_days,s.business_start::text,s.business_end::text,COALESCE(s.confidence_threshold,0.8) confidence_threshold,s.followup_enabled,s.followup_delays_hours,COALESCE(st.mode,'human_paused') mode,COALESCE(st.followup_count,0) followup_count,mem.summary FROM conversations c JOIN channel_accounts a ON a.id=c.account_id LEFT JOIN account_agent_settings s ON s.account_id=c.account_id LEFT JOIN conversation_agent_state st ON st.conversation_id=c.id LEFT JOIN conversation_memories mem ON mem.conversation_id=c.id WHERE c.id=$1`,
     [job.conversation_id],
   );
   if (!context.rowCount) return;
@@ -1175,7 +1175,7 @@ async function queueAiMessage(
     );
     if (!locked.rowCount) return;
     const account = await client.query(
-      "SELECT a.id,a.agent_id,a.transport,co.wa_jid,s.enabled,COALESCE(st.mode,'human_paused') mode FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id JOIN contacts co ON co.id=c.contact_id LEFT JOIN account_agent_settings s ON s.account_id=c.account_id LEFT JOIN conversation_agent_state st ON st.conversation_id=c.id WHERE c.id=$1",
+      "SELECT a.id,a.agent_id,a.transport,co.provider_user_id,s.enabled,COALESCE(st.mode,'human_paused') mode FROM conversations c JOIN channel_accounts a ON a.id=c.account_id JOIN contacts co ON co.id=c.contact_id LEFT JOIN account_agent_settings s ON s.account_id=c.account_id LEFT JOIN conversation_agent_state st ON st.conversation_id=c.id WHERE c.id=$1",
       [job.conversation_id],
     );
     if (
@@ -1226,7 +1226,7 @@ async function queueAiMessage(
         runId,
       ],
     );
-    await queueWhatsAppCommand(client, {
+    await queueChannelCommand(client, {
       accountId: account.rows[0].id,
       conversationId: String(job.conversation_id),
       messageId: message.rows[0].id,
@@ -1238,7 +1238,7 @@ async function queueAiMessage(
           text: decision.reply,
           ...(mediaId ? { mediaId } : {}),
           messageId: message.rows[0].id,
-          toJid: account.rows[0].wa_jid,
+          toJid: account.rows[0].provider_user_id,
       },
     });
     await client.query(

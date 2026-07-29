@@ -4,6 +4,7 @@ import { Client } from "pg";
 import type { WebSocket } from "ws";
 import { authenticate } from "./auth.js";
 import { config } from "./config.js";
+import {pool} from "./db.js";
 import { signToken, verifyToken } from "./security.js";
 
 const CHANNEL = "relay_conversation_changes";
@@ -12,7 +13,7 @@ const TICKET_TTL_SECONDS = 30;
 const HEARTBEAT_MS = 25_000;
 
 type LiveClient = { socket: WebSocket; accountIds?: Set<string>; alive: boolean };
-type ChangeEvent = { conversationId: string; accountId: string };
+type ChangeEvent = { conversationId: string; accountId: string; platform?:"whatsapp"|"messenger";pageId?:string|null };
 
 export async function registerBrowserEvents(app: FastifyInstance): Promise<void> {
   const clients = new Set<LiveClient>();
@@ -74,7 +75,11 @@ export async function registerBrowserEvents(app: FastifyInstance): Promise<void>
         if(message.channel!==CHANNEL||!message.payload)return;
         try{
           const event=JSON.parse(message.payload) as Partial<ChangeEvent>;
-          if(typeof event.conversationId==="string"&&typeof event.accountId==="string")broadcast(event as ChangeEvent);
+          if(typeof event.conversationId==="string"&&typeof event.accountId==="string"){
+            void pool.query("SELECT a.platform,p.page_id FROM channel_accounts a LEFT JOIN messenger_page_accounts p ON p.account_id=a.id WHERE a.id=$1",[event.accountId])
+              .then(result=>broadcast({...event as ChangeEvent,platform:result.rows[0]?.platform??"whatsapp",pageId:result.rows[0]?.page_id??null}))
+              .catch(error=>app.log.warn({error},"conversation event platform lookup failed"));
+          }
         }catch(error){app.log.warn({error},"ignored malformed conversation notification");}
       });
       const disconnected=(error?:Error)=>{

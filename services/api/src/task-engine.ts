@@ -2,7 +2,7 @@ import type { PoolClient } from "pg";
 import { pool, transaction } from "./db.js";
 import { dispatchPending } from "./agent-hub.js";
 import { generatePersonalizedTaskMessage } from "./agent-engine.js";
-import { queueWhatsAppCommand } from "./whatsapp-outbound.js";
+import { queueChannelCommand } from "./whatsapp-outbound.js";
 
 export const TASK_TOOLS = [
   "knowledge_search",
@@ -220,10 +220,10 @@ export async function processOneTaskCycle(): Promise<boolean> {
 
 async function ensureContactRulesAndTasks(): Promise<void> {
   await pool.query(
-    "INSERT INTO account_task_settings(account_id) SELECT id FROM whatsapp_accounts ON CONFLICT(account_id) DO NOTHING",
+    "INSERT INTO account_task_settings(account_id) SELECT id FROM channel_accounts ON CONFLICT(account_id) DO NOTHING",
   );
   const rows = await pool.query(
-    `SELECT co.id contact_id,co.account_id,co.birthday_month,co.birthday_day,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164) contact_name,a.display_name account_name,COALESCE(ts.timezone,'UTC') timezone,COALESCE(ts.default_lead_days,14) default_lead_days,COALESCE(ts.default_send_mode,'approval') default_send_mode,COALESCE(ts.leap_day_policy,'feb28') leap_day_policy FROM contacts co JOIN whatsapp_accounts a ON a.id=co.account_id LEFT JOIN account_task_settings ts ON ts.account_id=co.account_id WHERE co.birthday_month IS NOT NULL AND co.birthday_day IS NOT NULL`,
+    `SELECT co.id contact_id,co.account_id,co.birthday_month,co.birthday_day,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164) contact_name,a.display_name account_name,COALESCE(ts.timezone,'UTC') timezone,COALESCE(ts.default_lead_days,14) default_lead_days,COALESCE(ts.default_send_mode,'approval') default_send_mode,COALESCE(ts.leap_day_policy,'feb28') leap_day_policy FROM contacts co JOIN channel_accounts a ON a.id=co.account_id LEFT JOIN account_task_settings ts ON ts.account_id=co.account_id WHERE co.birthday_month IS NOT NULL AND co.birthday_day IS NOT NULL`,
   );
   for (const row of rows.rows)
     await ensureAnnualContactTask(
@@ -598,7 +598,7 @@ export async function dispatchTask(
 ): Promise<{ messageId: string; agentId: string | null } | null> {
   const result = await transaction(async (client) => {
     const found = await client.query(
-      `SELECT t.*,a.agent_id,co.wa_jid,COALESCE(ts.default_tools,'{}') default_tools FROM tasks t JOIN whatsapp_accounts a ON a.id=t.account_id JOIN contacts co ON co.id=t.contact_id LEFT JOIN account_task_settings ts ON ts.account_id=t.account_id WHERE t.id=$1 FOR UPDATE OF t`,
+      `SELECT t.*,a.agent_id,co.provider_user_id,COALESCE(ts.default_tools,'{}') default_tools FROM tasks t JOIN channel_accounts a ON a.id=t.account_id JOIN contacts co ON co.id=t.contact_id LEFT JOIN account_task_settings ts ON ts.account_id=t.account_id WHERE t.id=$1 FOR UPDATE OF t`,
       [taskId],
     );
     if (!found.rowCount) return null;
@@ -642,7 +642,7 @@ export async function dispatchTask(
         draft.rows[0].text_content,
       ],
     );
-    const queued = await queueWhatsAppCommand(client, {
+    const queued = await queueChannelCommand(client, {
       accountId: task.account_id,
       conversationId,
       messageId: message.rows[0].id,
@@ -653,7 +653,7 @@ export async function dispatchTask(
           type: "text",
           text: draft.rows[0].text_content,
           messageId: message.rows[0].id,
-          toJid: task.wa_jid,
+          toJid: task.provider_user_id,
       },
     });
     await client.query(

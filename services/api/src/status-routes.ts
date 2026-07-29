@@ -67,7 +67,7 @@ function validateSchedule(value:Record<string,unknown>):void{
 }
 async function campaignAccess(request:FastifyRequest,reply:FastifyReply,id:string,lock=false){
   const found=await pool.query(`SELECT c.*,a.display_name account_name,a.transport,a.status account_status,a.agent_id,g.status agent_status,g.capabilities
-    FROM status_campaigns c JOIN whatsapp_accounts a ON a.id=c.account_id LEFT JOIN agents g ON g.id=a.agent_id WHERE c.id=$1${lock?" FOR UPDATE OF c":""}`,[id]);
+    FROM status_campaigns c JOIN channel_accounts a ON a.id=c.account_id LEFT JOIN agents g ON g.id=a.agent_id WHERE c.id=$1${lock?" FOR UPDATE OF c":""}`,[id]);
   if(!found.rowCount||!await canRead(request.principal,String(found.rows[0].account_id))){await reply.code(404).send({error:"not_found"});return null;}
   return found.rows[0] as Record<string,unknown>;
 }
@@ -82,11 +82,11 @@ async function validateMedia(client:import("pg").PoolClient,accountId:string,ite
 async function snapshotAudience(client:import("pg").PoolClient,campaign:Record<string,unknown>):Promise<number>{
   const audience=(campaign.audience_filter??{mode:"all"}) as {mode?:string;contactIds?:string[];tagIds?:string[]};
   let rows;
-  if(audience.mode==="manual")rows=await client.query(`SELECT id,wa_jid,COALESCE(NULLIF(alias,''),display_name,phone_e164) display_name FROM contacts WHERE account_id=$1 AND id=ANY($2::uuid[])`,[campaign.account_id,audience.contactIds??[]]);
-  else if(audience.mode==="tags")rows=await client.query(`SELECT DISTINCT co.id,co.wa_jid,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164) display_name FROM contacts co JOIN conversations c ON c.contact_id=co.id JOIN conversation_tags ct ON ct.conversation_id=c.id WHERE co.account_id=$1 AND ct.tag_id=ANY($2::uuid[])`,[campaign.account_id,audience.tagIds??[]]);
-  else rows=await client.query("SELECT id,wa_jid,COALESCE(NULLIF(alias,''),display_name,phone_e164) display_name FROM contacts WHERE account_id=$1",[campaign.account_id]);
+  if(audience.mode==="manual")rows=await client.query(`SELECT id,provider_user_id,COALESCE(NULLIF(alias,''),display_name,phone_e164) display_name FROM contacts WHERE account_id=$1 AND id=ANY($2::uuid[])`,[campaign.account_id,audience.contactIds??[]]);
+  else if(audience.mode==="tags")rows=await client.query(`SELECT DISTINCT co.id,co.provider_user_id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164) display_name FROM contacts co JOIN conversations c ON c.contact_id=co.id JOIN conversation_tags ct ON ct.conversation_id=c.id WHERE co.account_id=$1 AND ct.tag_id=ANY($2::uuid[])`,[campaign.account_id,audience.tagIds??[]]);
+  else rows=await client.query("SELECT id,provider_user_id,COALESCE(NULLIF(alias,''),display_name,phone_e164) display_name FROM contacts WHERE account_id=$1",[campaign.account_id]);
   const recipients=new Map<string,{contactId:string;name:string}>();
-  for(const row of rows.rows){const jid=String(row.wa_jid??"").toLowerCase();if(/^\d{7,15}@s\.whatsapp\.net$/.test(jid))recipients.set(jid,{contactId:String(row.id),name:String(row.display_name??"")});}
+  for(const row of rows.rows){const jid=String(row.provider_user_id??"").toLowerCase();if(/^\d{7,15}@s\.whatsapp\.net$/.test(jid))recipients.set(jid,{contactId:String(row.id),name:String(row.display_name??"")});}
   if(!recipients.size)throw Object.assign(new Error("status_audience_empty"),{statusCode:409});
   if(recipients.size>config.STATUS_MAX_RECIPIENTS)throw Object.assign(new Error("status_audience_too_large"),{statusCode:409,count:recipients.size,max:config.STATUS_MAX_RECIPIENTS});
   await client.query("DELETE FROM status_campaign_recipients WHERE campaign_id=$1",[campaign.id]);
@@ -106,7 +106,7 @@ export async function registerStatusRoutes(app:FastifyInstance):Promise<void>{
       (SELECT count(*)::int FROM status_campaign_recipients r WHERE r.campaign_id=c.id) recipient_count,
       (SELECT count(*)::int FROM status_posts p WHERE p.campaign_id=c.id) post_count,
       (SELECT count(*)::int FROM status_posts p WHERE p.campaign_id=c.id AND p.status='published') published_count
-      FROM status_campaigns c JOIN whatsapp_accounts a ON a.id=c.account_id LEFT JOIN agents g ON g.id=a.agent_id
+      FROM status_campaigns c JOIN channel_accounts a ON a.id=c.account_id LEFT JOIN agents g ON g.id=a.agent_id
       WHERE ($1::uuid[] IS NULL OR c.account_id=ANY($1)) AND ($2::uuid IS NULL OR c.account_id=$2) AND ($3::text IS NULL OR c.status=$3) AND ($4::text IS NULL OR c.name ILIKE '%'||$4||'%')
       ORDER BY c.created_at DESC`,[accountIds,query.accountId??null,query.status??null,query.q?.trim()||null]);
     return{data:result.rows};
@@ -117,7 +117,7 @@ export async function registerStatusRoutes(app:FastifyInstance):Promise<void>{
     if(!await canRead(request.principal,parsed.data.accountId))return reply.code(403).send({error:"account_forbidden"});
     try{validateSchedule(parsed.data);}catch(error){return reply.code(400).send({error:(error as Error).message});}
     const created=await transaction(async client=>{
-      const account=await client.query("SELECT transport FROM whatsapp_accounts WHERE id=$1",[parsed.data.accountId]);if(!account.rowCount)throw Object.assign(new Error("account_not_found"),{statusCode:404});if(account.rows[0].transport!=="web")throw Object.assign(new Error("status_web_account_required"),{statusCode:409});
+      const account=await client.query("SELECT platform,transport FROM channel_accounts WHERE id=$1",[parsed.data.accountId]);if(!account.rowCount)throw Object.assign(new Error("account_not_found"),{statusCode:404});if(account.rows[0].platform!=="whatsapp"||account.rows[0].transport!=="web")throw Object.assign(new Error("status_web_account_required"),{statusCode:409});
       const existing=await client.query("SELECT * FROM status_campaigns WHERE client_campaign_id=$1",[parsed.data.clientCampaignId]);if(existing.rowCount)return existing.rows[0];
       const result=await client.query(`INSERT INTO status_campaigns(client_campaign_id,account_id,name,timezone,start_date,end_date,active_weekdays,daily_start,daily_end,interval_minutes,audience_filter,created_by)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,[parsed.data.clientCampaignId,parsed.data.accountId,parsed.data.name,parsed.data.timezone,parsed.data.startDate,parsed.data.endDate,parsed.data.activeWeekdays,parsed.data.dailyStart,parsed.data.dailyEnd,parsed.data.intervalMinutes,JSON.stringify(parsed.data.audience),request.principal!.id]);
@@ -160,7 +160,7 @@ export async function registerStatusRoutes(app:FastifyInstance):Promise<void>{
     const query=request.query as {accountId?:string;campaignId?:string;status?:string;from?:string;to?:string;q?:string},ids=await readableAccounts(request.principal);
     const result=await pool.query(`SELECT p.*,c.name campaign_name,c.timezone,c.start_date,c.end_date,c.daily_start,c.daily_end,c.status campaign_status,a.display_name account_name,m.file_name,m.mime_type,m.byte_size,
       (SELECT count(*)::int FROM status_campaign_recipients r WHERE r.campaign_id=c.id) recipient_count
-      FROM status_posts p JOIN status_campaigns c ON c.id=p.campaign_id JOIN whatsapp_accounts a ON a.id=p.account_id LEFT JOIN media m ON m.id=p.media_id
+      FROM status_posts p JOIN status_campaigns c ON c.id=p.campaign_id JOIN channel_accounts a ON a.id=p.account_id LEFT JOIN media m ON m.id=p.media_id
       WHERE ($1::uuid[] IS NULL OR p.account_id=ANY($1)) AND ($2::uuid IS NULL OR p.account_id=$2) AND ($3::uuid IS NULL OR p.campaign_id=$3) AND ($4::text IS NULL OR p.status=$4)
       AND ($5::timestamptz IS NULL OR p.scheduled_at>=$5) AND ($6::timestamptz IS NULL OR p.scheduled_at<=$6) AND ($7::text IS NULL OR c.name ILIKE '%'||$7||'%' OR p.text_content ILIKE '%'||$7||'%')
       ORDER BY COALESCE(p.scheduled_at,p.created_at),p.position`,[ids,query.accountId??null,query.campaignId??null,query.status??null,query.from??null,query.to??null,query.q?.trim()||null]);

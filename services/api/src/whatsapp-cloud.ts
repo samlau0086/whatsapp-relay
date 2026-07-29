@@ -79,7 +79,7 @@ export async function registerWhatsAppCloudRoutes(app:FastifyInstance):Promise<v
   app.get("/api/v1/admin/whatsapp-cloud/accounts",{preHandler:authenticate},async(request,reply)=>{
     if(request.principal?.kind!=="user"||request.principal.role!=="admin")return reply.code(403).send({error:"admin_required"});
     const result=await pool.query(`SELECT a.id,a.display_name,a.phone_e164,a.status,a.status_reason,a.last_event_at,c.waba_id,c.phone_number_id,c.enabled,c.credentials_verified_at,c.webhook_verified_at,c.last_template_sync_at,c.last_webhook_at
-      FROM whatsapp_accounts a JOIN whatsapp_cloud_accounts c ON c.account_id=a.id WHERE a.transport='cloud' ORDER BY a.display_name`);
+      FROM channel_accounts a JOIN whatsapp_cloud_accounts c ON c.account_id=a.id WHERE a.platform='whatsapp' AND a.transport='cloud' ORDER BY a.display_name`);
     return{data:result.rows.map(row=>({...row,transport:"cloud",credentialsStatus:row.credentials_verified_at?"verified":"unverified",webhookStatus:row.webhook_verified_at?"verified":"pending",accessTokenConfigured:true,appSecretConfigured:true}))};
   });
 
@@ -90,7 +90,7 @@ export async function registerWhatsAppCloudRoutes(app:FastifyInstance):Promise<v
     try{profile=await verifyCloudCredentials(parsed.data);}catch(error){return metaCredentialFailure(reply,error);}
     const verifyToken=`rdw_${randomBytes(32).toString("base64url")}`;
     const created=await transaction(async client=>{
-      const account=await client.query("INSERT INTO whatsapp_accounts(display_name,phone_e164,wa_jid,status,transport,last_connected_at) VALUES($1,$2,$3,$4,'cloud',now()) RETURNING id",[parsed.data.displayName,normalizeE164(profile.display_phone_number),normalizeE164(profile.display_phone_number)?`${normalizeE164(profile.display_phone_number)!.slice(1)}@s.whatsapp.net`:null,parsed.data.enabled?"online":"offline"]);
+      const account=await client.query("INSERT INTO channel_accounts(display_name,phone_e164,provider_user_id,status,transport,last_connected_at) VALUES($1,$2,$3,$4,'cloud',now()) RETURNING id",[parsed.data.displayName,normalizeE164(profile.display_phone_number),normalizeE164(profile.display_phone_number)?`${normalizeE164(profile.display_phone_number)!.slice(1)}@s.whatsapp.net`:null,parsed.data.enabled?"online":"offline"]);
       await client.query(`INSERT INTO whatsapp_cloud_accounts(account_id,waba_id,phone_number_id,access_token_encrypted,app_secret_encrypted,verify_token_hash,enabled,credentials_verified_at)
         VALUES($1,$2,$3,$4,$5,$6,$7,now())`,[account.rows[0].id,parsed.data.wabaId,parsed.data.phoneNumberId,encryptAtRest(parsed.data.accessToken,config.DATA_ENCRYPTION_KEY),encryptAtRest(parsed.data.appSecret,config.DATA_ENCRYPTION_KEY),hashSecret(verifyToken),parsed.data.enabled]);
       await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'cloud_account.create','whatsapp_account',$2,$3)",[request.principal!.id,account.rows[0].id,JSON.stringify({wabaId:parsed.data.wabaId,phoneNumberId:parsed.data.phoneNumberId})]);
@@ -104,13 +104,13 @@ export async function registerWhatsAppCloudRoutes(app:FastifyInstance):Promise<v
     if(request.principal?.kind!=="user"||request.principal.role!=="admin")return reply.code(403).send({error:"admin_required"});
     const parsed=cloudAccountUpdateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
     const {id}=request.params as {id:string};
-    const current=await pool.query("SELECT c.*,a.display_name FROM whatsapp_cloud_accounts c JOIN whatsapp_accounts a ON a.id=c.account_id WHERE c.account_id=$1",[id]);
+    const current=await pool.query("SELECT c.*,a.display_name FROM whatsapp_cloud_accounts c JOIN channel_accounts a ON a.id=c.account_id WHERE c.account_id=$1",[id]);
     if(!current.rowCount)return reply.code(404).send({error:"not_found"});
     const row=current.rows[0],accessToken=parsed.data.accessToken??decryptAtRest(row.access_token_encrypted,config.DATA_ENCRYPTION_KEY),phoneNumberId=parsed.data.phoneNumberId??row.phone_number_id;
     let profile:{display_phone_number?:string;verified_name?:string};
     try{profile=await verifyCloudCredentials({phoneNumberId,accessToken,wabaId:parsed.data.wabaId??row.waba_id});}catch(error){return metaCredentialFailure(reply,error);}
     await transaction(async client=>{
-      await client.query("UPDATE whatsapp_accounts SET display_name=$2,phone_e164=$3,wa_jid=$4,status=CASE WHEN $5 THEN 'online'::wa_account_status ELSE 'offline'::wa_account_status END,status_reason=CASE WHEN $5 THEN NULL ELSE 'cloud_disabled' END,last_connected_at=CASE WHEN $5 THEN now() ELSE last_connected_at END WHERE id=$1",[id,parsed.data.displayName??row.display_name,normalizeE164(profile.display_phone_number),normalizeE164(profile.display_phone_number)?`${normalizeE164(profile.display_phone_number)!.slice(1)}@s.whatsapp.net`:null,parsed.data.enabled??row.enabled]);
+      await client.query("UPDATE channel_accounts SET display_name=$2,phone_e164=$3,provider_user_id=$4,status=CASE WHEN $5 THEN 'online'::wa_account_status ELSE 'offline'::wa_account_status END,status_reason=CASE WHEN $5 THEN NULL ELSE 'cloud_disabled' END,last_connected_at=CASE WHEN $5 THEN now() ELSE last_connected_at END WHERE id=$1",[id,parsed.data.displayName??row.display_name,normalizeE164(profile.display_phone_number),normalizeE164(profile.display_phone_number)?`${normalizeE164(profile.display_phone_number)!.slice(1)}@s.whatsapp.net`:null,parsed.data.enabled??row.enabled]);
       await client.query(`UPDATE whatsapp_cloud_accounts SET waba_id=$2,phone_number_id=$3,access_token_encrypted=$4,app_secret_encrypted=$5,enabled=$6,credentials_verified_at=now(),updated_at=now() WHERE account_id=$1`,[id,parsed.data.wabaId??row.waba_id,phoneNumberId,encryptAtRest(accessToken,config.DATA_ENCRYPTION_KEY),parsed.data.appSecret?encryptAtRest(parsed.data.appSecret,config.DATA_ENCRYPTION_KEY):row.app_secret_encrypted,parsed.data.enabled??row.enabled]);
     });
     return{ok:true};
@@ -184,7 +184,7 @@ export function validMetaSignature(raw:Buffer,header:string,secret:string):boole
   return actual.length===expected.length&&timingSafeEqual(actual,expected);
 }
 async function cloudSetting(accountId:string):Promise<CloudSetting|null>{
-  const result=await pool.query("SELECT c.*,a.display_name,a.phone_e164,a.status FROM whatsapp_cloud_accounts c JOIN whatsapp_accounts a ON a.id=c.account_id WHERE c.account_id=$1 AND a.transport='cloud'",[accountId]);
+  const result=await pool.query("SELECT c.*,a.display_name,a.phone_e164,a.status FROM whatsapp_cloud_accounts c JOIN channel_accounts a ON a.id=c.account_id WHERE c.account_id=$1 AND a.platform='whatsapp' AND a.transport='cloud'",[accountId]);
   return result.rows[0]??null;
 }
 
@@ -253,8 +253,8 @@ function unixIso(value:unknown):string{const seconds=Number(value);return new Da
 export async function processOneCloudOutbound():Promise<boolean>{
   const command=await transaction(async client=>{
     const found=await client.query(`SELECT oc.*,c.phone_number_id,c.access_token_encrypted,c.enabled,a.status
-      FROM outbound_commands oc JOIN whatsapp_accounts a ON a.id=oc.account_id JOIN whatsapp_cloud_accounts c ON c.account_id=a.id
-      WHERE a.transport='cloud' AND oc.state='pending' AND oc.available_at<=now() ORDER BY oc.sequence FOR UPDATE OF oc SKIP LOCKED LIMIT 1`);
+      FROM outbound_commands oc JOIN channel_accounts a ON a.id=oc.account_id JOIN whatsapp_cloud_accounts c ON c.account_id=a.id
+      WHERE a.platform='whatsapp' AND a.transport='cloud' AND oc.state='pending' AND oc.available_at<=now() ORDER BY oc.sequence FOR UPDATE OF oc SKIP LOCKED LIMIT 1`);
     if(!found.rowCount)return null;
     await client.query("UPDATE outbound_commands SET state='dispatched',attempt=attempt+1,claimed_at=now(),last_error=NULL WHERE id=$1",[found.rows[0].id]);
     if(found.rows[0].message_id)await client.query("UPDATE messages SET status='dispatching' WHERE id=$1",[found.rows[0].message_id]);
@@ -271,7 +271,7 @@ export async function processOneCloudOutbound():Promise<boolean>{
     await transaction(async client=>{
       await client.query("UPDATE outbound_commands SET state='completed',completed_at=now(),last_error=NULL WHERE id=$1",[command.id]);
       if(command.message_id){
-        await client.query("UPDATE messages SET status='sent',whatsapp_message_id=$2,failure_code=NULL,failure_message=NULL WHERE id=$1",[command.message_id,wamid]);
+        await client.query("UPDATE messages SET status='sent',provider_message_id=$2,failure_code=NULL,failure_message=NULL WHERE id=$1",[command.message_id,wamid]);
         await client.query("INSERT INTO message_receipts(message_id,status,occurred_at) VALUES($1,'sent',now()) ON CONFLICT DO NOTHING",[command.message_id]);
       }
     });

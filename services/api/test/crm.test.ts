@@ -103,7 +103,7 @@ test("contact aliases stay independent from synchronized WhatsApp names",async()
   assert.match(migration,/ADD COLUMN IF NOT EXISTS alias text/);
   assert.match(migrator,/019_contact_aliases\.sql/);
   assert.match(server,/contact\.alias\.update/);
-  assert.match(server,/COALESCE\(NULLIF\(co\.alias,''\),co\.display_name,co\.phone_e164\)/);
+  assert.match(server,/COALESCE\(NULLIF\(co\.alias,''\),co\.display_name,co\.phone_e164,co\.provider_user_id\)/);
   assert.match(hub,/const bestAlias=/);
   assert.match(hub,/INSERT INTO contact_emails/);
   assert.match(hub,/INSERT INTO contact_methods/);

@@ -102,7 +102,7 @@ flowchart LR
 └─ https://relay.example.com
 ```
 
-RelayDesk 是一个自托管的 WhatsApp 多账号消息聚合平台。它由中心 Web/API、持久任务 Worker、PostgreSQL、Redis、对象存储以及运行在 Windows 上的本地 WhatsApp Agent 组成。
+RelayDesk 是一个自托管的 WhatsApp 与 Facebook Messenger 多账号消息聚合平台。它由中心 Web/API、持久任务 Worker、PostgreSQL、Redis、对象存储以及运行在 Windows 上的本地 WhatsApp Agent 组成。
 
 > RelayDesk 同时支持本地 WhatsApp Web 多设备账号和 Meta 官方 Cloud API 账号。请只用于获得授权的业务会话，不要发送垃圾消息或未经同意的营销内容。
 
@@ -116,6 +116,17 @@ RelayDesk 是一个自托管的 WhatsApp 多账号消息聚合平台。它由中
 4. 完成 Webhook challenge 后，在设置页测试凭据并同步已审核模板。
 
 Cloud API 新会话必须通过已审核模板发起。客户回复后会开启 24 小时服务窗口，窗口内可发送普通文本和媒体；窗口关闭后，RelayDesk 会在入队前阻止普通消息并引导坐席选择模板。
+
+### Facebook Messenger Pages
+
+管理员可在“系统设置 → Messenger Pages”逐个填写 Page ID、Page Access Token 和 Meta App Secret。每个 Page 都会成为独立渠道账号，拥有独立联系人、会话、权限和回复窗口，但会与 WhatsApp 一起显示在统一收件箱。
+
+1. 添加 Page 后复制一次性显示的 Verify Token。
+2. 在对应 Meta App 中将 Callback URL 设置为 `https://你的域名/api/v1/meta/messenger/webhook`。
+3. 使用 Verify Token 完成 Webhook challenge，并为 Page 订阅 `messages`、`message_echoes`、`message_deliveries` 和 `message_reads`。
+4. 回到设置页测试凭据；收到首条客户消息后即可在 24 小时窗口内回复文本或媒体。
+
+Messenger 不允许 RelayDesk 主动创建客户会话。首版支持文本、图片、视频、音频、文件、引用回复和送达/已读状态；不处理 quick reply、postback、reaction 或 referral。
 
 ## 已实现能力
 

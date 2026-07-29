@@ -22,7 +22,7 @@ ORDER BY COALESCE(c.last_message_at,c.created_at) DESC,c.id DESC LIMIT 40;
 EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON)
 WITH candidates AS MATERIALIZED (
   SELECT c.id,COALESCE(c.last_message_at,c.created_at) sort_at
-  FROM conversations c JOIN whatsapp_accounts a ON a.id=c.account_id
+  FROM conversations c JOIN channel_accounts a ON a.id=c.account_id
   WHERE a.transport='cloud' OR a.agent_id IS NOT NULL
   ORDER BY COALESCE(c.last_message_at,c.created_at) DESC,c.id DESC
   LIMIT 41

@@ -6,13 +6,13 @@ CREATE OR REPLACE FUNCTION perf_uuid(input_text text) RETURNS uuid
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$ SELECT overlay(overlay(md5(input_text) placing '4' from 13) placing '8' from 17)::uuid $$;
 SET session_replication_role=replica;
-TRUNCATE messages,reminders,conversation_tags,tags,conversations,contacts,whatsapp_accounts CASCADE;
+TRUNCATE messages,reminders,conversation_tags,tags,conversations,contacts,channel_accounts CASCADE;
 
-INSERT INTO whatsapp_accounts(id,display_name,phone_e164,wa_jid,status,transport)
+INSERT INTO channel_accounts(id,display_name,phone_e164,provider_user_id,status,transport)
 SELECT perf_uuid('account-'||n),'Perf Account '||n,'+1555000'||lpad(n::text,3,'0'),'1555000'||lpad(n::text,3,'0')||'@s.whatsapp.net','online','cloud'
 FROM generate_series(1,10)n;
 
-INSERT INTO contacts(id,account_id,wa_jid,phone_e164,display_name,alias)
+INSERT INTO contacts(id,account_id,provider_user_id,phone_e164,display_name,alias)
 SELECT perf_uuid('contact-'||n),perf_uuid('account-'||(1+(n-1)%10)),
   '1555'||lpad(n::text,8,'0')||'@s.whatsapp.net','+1555'||lpad(n::text,8,'0'),
   'Contact '||n,CASE WHEN n%7=0 THEN 'Alias '||n END
@@ -26,7 +26,7 @@ SELECT perf_uuid('conversation-'||n),perf_uuid('account-'||(1+(n-1)%10)),perf_uu
 FROM generate_series(1,100000)n;
 
 DROP INDEX IF EXISTS messages_text_content_trgm_idx;
-INSERT INTO messages(id,conversation_id,account_id,whatsapp_message_id,direction,kind,text_content,status,occurred_at)
+INSERT INTO messages(id,conversation_id,account_id,provider_message_id,direction,kind,text_content,status,occurred_at)
 SELECT perf_uuid('message-'||c||'-'||m),perf_uuid('conversation-'||c),perf_uuid('account-'||(1+(c-1)%10)),
   'perf-'||c||'-'||m,CASE WHEN m%2=0 THEN 'in'::message_direction ELSE 'out'::message_direction END,
   'text','summary '||c||' message '||m,CASE WHEN m%2=0 THEN 'received'::delivery_status ELSE 'delivered'::delivery_status END,

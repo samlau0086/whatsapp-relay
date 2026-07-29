@@ -64,7 +64,7 @@ export async function processOneStatusCycle():Promise<boolean>{
   return transaction(async client=>{
     const due=await client.query(`SELECT p.id,p.campaign_id,p.account_id,p.content_type,p.text_content,p.media_id,p.background_color,p.font,
       c.status campaign_status,a.status account_status,a.agent_id,g.status agent_status,g.capabilities
-      FROM status_posts p JOIN status_campaigns c ON c.id=p.campaign_id JOIN whatsapp_accounts a ON a.id=p.account_id
+      FROM status_posts p JOIN status_campaigns c ON c.id=p.campaign_id JOIN channel_accounts a ON a.id=p.account_id
       LEFT JOIN agents g ON g.id=a.agent_id
       WHERE p.status='scheduled' AND p.scheduled_at<=now() AND c.status='active'
       ORDER BY p.scheduled_at,p.position FOR UPDATE OF p SKIP LOCKED LIMIT 1`);
@@ -105,7 +105,7 @@ export async function processStatusCommandResult(agentId:string,frame:Record<str
     await client.query("UPDATE outbound_commands SET state=$3,completed_at=now(),last_error=$4 WHERE id=$1 AND agent_id=$2",[command.id,agentId,state,error]);
     if(outcome==="succeeded"){
       const publishedAt=new Date();
-      await client.query("UPDATE status_posts SET status='published',published_at=$2,expires_at=$2+interval '24 hours',whatsapp_message_id=$3,last_error=NULL,updated_at=now() WHERE id=$1",[command.status_post_id,publishedAt,frame.whatsappMessageId??null]);
+      await client.query("UPDATE status_posts SET status='published',published_at=$2,expires_at=$2+interval '24 hours',provider_message_id=$3,last_error=NULL,updated_at=now() WHERE id=$1",[command.status_post_id,publishedAt,frame.whatsappMessageId??null]);
       await statusWebhook(client,"status.published",command.status_post_id,{statusPostId:command.status_post_id,campaignId:post.rows[0].campaign_id,whatsappMessageId:frame.whatsappMessageId??null,publishedAt:publishedAt.toISOString(),expiresAt:new Date(publishedAt.getTime()+86_400_000).toISOString()});
     }else if(outcome==="uncertain"){
       await client.query("UPDATE status_posts SET status='uncertain',last_error=$2,updated_at=now() WHERE id=$1",[command.status_post_id,error]);

@@ -6,6 +6,7 @@ import { processOneAgentJob } from "./agent-engine.js";
 import { processOneEmail } from "./email.js";
 import { processOneTaskCycle } from "./task-engine.js";
 import {processOneCloudOutbound,processOneCloudWebhook,syncDueCloudTemplates} from "./whatsapp-cloud.js";
+import {processOneMessengerOutbound,processOneMessengerWebhook} from "./messenger.js";
 import {processOneStatusCycle,recoverStaleStatusCommands} from "./status-engine.js";
 
 let stopping=false;
@@ -20,9 +21,11 @@ while(!stopping){
   const statusWork=await processOneStatusCycle();
   const cloudOutbound=await processOneCloudOutbound();
   const cloudInbound=await processOneCloudWebhook();
+  const messengerOutbound=await processOneMessengerOutbound();
+  const messengerInbound=await processOneMessengerWebhook();
   const templateSync=await syncDueCloudTemplates();
   const delivery=await claimWebhook();
-  if(delivery)await deliverWebhook(delivery);else if(!agentWork&&!emailWork&&!taskWork&&!statusWork&&!cloudOutbound&&!cloudInbound&&!templateSync)await sleep(750);
+  if(delivery)await deliverWebhook(delivery);else if(!agentWork&&!emailWork&&!taskWork&&!statusWork&&!cloudOutbound&&!cloudInbound&&!messengerOutbound&&!messengerInbound&&!templateSync)await sleep(750);
   await requeueCommands();
   await recoverStaleStatusCommands();
   await enforceRetention();
@@ -64,20 +67,24 @@ async function requeueCommands():Promise<void>{
   await transaction(async client=>{
     await client.query(`WITH requeued AS (
       UPDATE outbound_commands oc SET state='pending',available_at=now()+interval '5 seconds',claimed_at=NULL,last_error='Agent disconnected before confirmation'
-      FROM whatsapp_accounts a WHERE a.id=oc.account_id AND a.transport='web' AND oc.status_post_id IS NULL AND oc.state='dispatched' AND oc.claimed_at<now()-interval '2 minutes' AND oc.attempt<5 RETURNING oc.message_id
+      FROM channel_accounts a WHERE a.id=oc.account_id AND a.transport='web' AND oc.status_post_id IS NULL AND oc.state='dispatched' AND oc.claimed_at<now()-interval '2 minutes' AND oc.attempt<5 RETURNING oc.message_id
     ) UPDATE messages SET status='queued' WHERE id IN (SELECT message_id FROM requeued WHERE message_id IS NOT NULL) AND status='dispatching'`);
     await client.query(`WITH stopped AS (
       UPDATE outbound_commands oc SET state='uncertain',completed_at=now(),last_error='No execution confirmation; automatic retry stopped to prevent duplicates'
-      FROM whatsapp_accounts a WHERE a.id=oc.account_id AND a.transport='web' AND oc.status_post_id IS NULL AND oc.state='dispatched' AND oc.claimed_at<now()-interval '2 minutes' AND oc.attempt>=5 RETURNING oc.message_id
+      FROM channel_accounts a WHERE a.id=oc.account_id AND a.transport='web' AND oc.status_post_id IS NULL AND oc.state='dispatched' AND oc.claimed_at<now()-interval '2 minutes' AND oc.attempt>=5 RETURNING oc.message_id
     ) UPDATE messages SET status='uncertain' WHERE id IN (SELECT message_id FROM stopped WHERE message_id IS NOT NULL) AND status='dispatching'`);
     await client.query(`WITH stopped AS (
       UPDATE outbound_commands oc SET state='uncertain',completed_at=now(),last_error='Cloud API execution confirmation was interrupted; automatic retry stopped to prevent duplicates'
-      FROM whatsapp_accounts a WHERE a.id=oc.account_id AND a.transport='cloud' AND oc.state='dispatched' AND oc.claimed_at<now()-interval '2 minutes' RETURNING oc.message_id
+      FROM channel_accounts a WHERE a.id=oc.account_id AND a.platform='whatsapp' AND a.transport='cloud' AND oc.state='dispatched' AND oc.claimed_at<now()-interval '2 minutes' RETURNING oc.message_id
     ) UPDATE messages SET status='uncertain',failure_code='cloud_send_uncertain',failure_message='Cloud API execution confirmation was interrupted' WHERE id IN (SELECT message_id FROM stopped WHERE message_id IS NOT NULL) AND status='dispatching'`);
+    await client.query(`WITH stopped AS (
+      UPDATE outbound_commands oc SET state='uncertain',completed_at=now(),last_error='Messenger API execution confirmation was interrupted; automatic retry stopped to prevent duplicates'
+      FROM channel_accounts a WHERE a.id=oc.account_id AND a.platform='messenger' AND oc.state='dispatched' AND oc.claimed_at<now()-interval '2 minutes' RETURNING oc.message_id
+    ) UPDATE messages SET status='uncertain',failure_code='messenger_send_uncertain',failure_message='Messenger API execution confirmation was interrupted' WHERE id IN (SELECT message_id FROM stopped WHERE message_id IS NOT NULL) AND status='dispatching'`);
   });
 }
 
 async function enforceRetention():Promise<void>{
   if(Date.now()-lastRetention<60*60_000)return;lastRetention=Date.now();
-  await pool.query("UPDATE media m SET delete_after=COALESCE(delete_after,m.created_at+(a.retention_days||' days')::interval) FROM whatsapp_accounts a WHERE m.account_id=a.id AND a.retention_days IS NOT NULL AND m.delete_after IS NULL");
+  await pool.query("UPDATE media m SET delete_after=COALESCE(delete_after,m.created_at+(a.retention_days||' days')::interval) FROM channel_accounts a WHERE m.account_id=a.id AND a.retention_days IS NOT NULL AND m.delete_after IS NULL");
 }

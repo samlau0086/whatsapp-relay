@@ -443,7 +443,7 @@ test("failed and uncertain messages expose a manual resend action", async () => 
   assert.match(component,/function QueueDiagnostic/);
   assert.match(server,/LEFT JOIN LATERAL \(SELECT oc\.id,oc\.state,oc\.attempt,oc\.last_error/);
   assert.match(server,/app\.post\("\/api\/v1\/messages\/:id\/retry"/);
-  assert.match(server,/UPDATE messages SET status='queued',failure_code=NULL,failure_message=NULL,whatsapp_message_id=NULL/);
+  assert.match(server,/UPDATE messages SET status='queued',failure_code=NULL,failure_message=NULL,provider_message_id=NULL/);
   assert.match(server,/messageId:id,status:"queued"/);
   assert.doesNotMatch(server,/retryOfMessageId/);
   assert.match(component,/className="clear-failed-messages-button"/);

@@ -3,7 +3,7 @@ import {createHmac} from "node:crypto";
 import {readFile} from "node:fs/promises";
 import test from "node:test";
 import {cloudOutboundBody,validMetaSignature,webhookPhoneNumberId} from "../src/whatsapp-cloud.js";
-import {queueWhatsAppCommand,TemplateRequiredError} from "../src/whatsapp-outbound.js";
+import {queueChannelCommand,TemplateRequiredError} from "../src/whatsapp-outbound.js";
 
 test("Meta webhook signature validates the exact raw request body",()=>{
   const raw=Buffer.from('{"entry":[{"changes":[]}]}'),secret="meta-app-secret";
@@ -40,7 +40,8 @@ test("reply context is normalized, persisted, and resolved before dispatch",asyn
   assert.match(cloud,/quotedWhatsappMessageId:context\.id/);
   assert.match(hub,/payload\.quotedWhatsappMessageId/);
   assert.match(server,/conversation_id=\$3/);
-  assert.match(server,/quotedWhatsappMessageId:String\(row\.whatsapp_message_id\)/);
+  assert.match(server,/quotedProviderMessageId:String\(row\.provider_message_id\)/);
+  assert.match(server,/quotedWhatsappMessageId:conversation\.rows\[0\]\.platform==="whatsapp"\?String\(row\.provider_message_id\):undefined/);
   assert.match(agent,/context=>context\?\.stanzaId/);
   assert.match(agent,/socket\.sendMessage\(toJid,content,quoted\?\{quoted\}:undefined\)/);
 });
@@ -68,7 +69,7 @@ test("all outbound command inserts pass through the shared transport guard",asyn
   const files=["server.ts","agent-engine.ts","task-engine.ts"];
   for(const file of files){
     const source=await readFile(new URL(`../src/${file}`,import.meta.url),"utf8");
-    assert.doesNotMatch(source,/INSERT INTO outbound_commands/,`${file} bypasses queueWhatsAppCommand`);
+    assert.doesNotMatch(source,/INSERT INTO outbound_commands/,`${file} bypasses queueChannelCommand`);
   }
 });
 
@@ -79,7 +80,7 @@ test("the shared queue enforces Cloud service windows without changing Web behav
       calls,
       client:{query:async(sql:string)=>{
         calls.push(sql);
-        if(sql.includes("FROM whatsapp_accounts"))return{rowCount:1,rows:[row]};
+        if(sql.includes("FROM channel_accounts"))return{rowCount:1,rows:[row]};
         if(sql.includes("FROM whatsapp_message_templates"))return{rowCount:approved?1:0,rows:approved?[{exists:1}]:[]};
         if(sql.includes("INSERT INTO outbound_commands"))return{rowCount:1,rows:[{id:"command-1",sequence:4}]};
         throw new Error(`unexpected query: ${sql}`);
@@ -88,16 +89,16 @@ test("the shared queue enforces Cloud service windows without changing Web behav
   }
   const input={accountId:"account-1",conversationId:"conversation-1",messageId:"message-1",payload:{accountId:"account-1",conversationId:"conversation-1",messageId:"message-1",clientMessageId:"client-1",toJid:"8613800138000@s.whatsapp.net",type:"text",text:"hello"}};
   const expired=clientFor({transport:"cloud",agent_id:null,service_window_expires_at:new Date(Date.now()-1).toISOString()});
-  await assert.rejects(()=>queueWhatsAppCommand(expired.client as never,input),TemplateRequiredError);
+  await assert.rejects(()=>queueChannelCommand(expired.client as never,input),TemplateRequiredError);
   assert.equal(expired.calls.some(sql=>sql.includes("INSERT INTO outbound_commands")),false);
 
   const open=clientFor({transport:"cloud",agent_id:null,service_window_expires_at:new Date(Date.now()+60_000).toISOString()});
-  const cloudQueued=await queueWhatsAppCommand(open.client as never,input);
+  const cloudQueued=await queueChannelCommand(open.client as never,input);
   assert.equal(cloudQueued.transport,"cloud");
   assert.equal(cloudQueued.agentId,null);
 
   const web=clientFor({transport:"web",agent_id:"agent-1",service_window_expires_at:null});
-  const webQueued=await queueWhatsAppCommand(web.client as never,input);
+  const webQueued=await queueChannelCommand(web.client as never,input);
   assert.equal(webQueued.transport,"web");
   assert.equal(webQueued.agentId,"agent-1");
 });
@@ -106,12 +107,12 @@ test("approved templates may open a Cloud conversation outside the service windo
   const queries:string[]=[];
   const client={query:async(sql:string)=>{
     queries.push(sql);
-    if(sql.includes("FROM whatsapp_accounts"))return{rowCount:1,rows:[{transport:"cloud",agent_id:null,service_window_expires_at:null}]};
+    if(sql.includes("FROM channel_accounts"))return{rowCount:1,rows:[{transport:"cloud",agent_id:null,service_window_expires_at:null}]};
     if(sql.includes("FROM whatsapp_message_templates"))return{rowCount:1,rows:[{exists:1}]};
     if(sql.includes("INSERT INTO outbound_commands"))return{rowCount:1,rows:[{id:"command-2",sequence:5}]};
     throw new Error(`unexpected query: ${sql}`);
   }};
-  const queued=await queueWhatsAppCommand(client as never,{accountId:"account-1",conversationId:"conversation-1",messageId:"message-1",payload:{accountId:"account-1",conversationId:"conversation-1",messageId:"message-1",clientMessageId:"client-1",toJid:"8613800138000@s.whatsapp.net",type:"template",template:{name:"welcome",language:"en_US",components:[]}}});
+  const queued=await queueChannelCommand(client as never,{accountId:"account-1",conversationId:"conversation-1",messageId:"message-1",payload:{accountId:"account-1",conversationId:"conversation-1",messageId:"message-1",clientMessageId:"client-1",toJid:"8613800138000@s.whatsapp.net",type:"template",template:{name:"welcome",language:"en_US",components:[]}}});
   assert.equal(queued.transport,"cloud");
   assert.ok(queries.some(sql=>sql.includes("whatsapp_message_templates")));
 });
