@@ -55,7 +55,9 @@ test("Cloud credentials are encrypted, redacted, and never returned by account r
   assert.match(cloud,/encryptAtRest\(parsed\.data\.appSecret/);
   const adminRead=cloud.slice(cloud.indexOf('app.get("/api/v1/admin/whatsapp-cloud/accounts"'),cloud.indexOf('app.post("/api/v1/admin/whatsapp-cloud/accounts"'));
   assert.doesNotMatch(adminRead,/decryptAtRest|access_token_encrypted|app_secret_encrypted/);
-  assert.match(server,/"req\.body\.accessToken","req\.body\.appSecret"/);
+  for(const secretField of ["accessToken","pageAccessToken","appSecret"]){
+    assert.match(server,new RegExp(`"req\\.body\\.${secretField}"`));
+  }
 });
 
 test("production deployment supplies the required Graph API version",async()=>{
