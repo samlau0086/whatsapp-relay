@@ -24,6 +24,30 @@ export async function translateTextWithDetection(setting:TranslationProviderSett
   return requestTranslation(setting,input,"detected") as Promise<{translatedText:string;sourceLanguage:string}>;
 }
 
+export async function translateProductNames(setting:TranslationProviderSetting,input:{names:string[];targetLanguage:string}):Promise<string[]>{
+  const response=await fetch(`${trimSlash(setting.baseUrl)}/chat/completions`,{
+    method:"POST",
+    headers:{authorization:`Bearer ${setting.apiKey}`,"content-type":"application/json"},
+    body:JSON.stringify({
+      model:setting.model,
+      messages:[
+        {role:"system",content:"You translate ecommerce product titles into the requested target language. Translate descriptive words, but preserve brand names, model identifiers, SKUs, quantities, and symbols. Return only a valid JSON array of translated strings in exactly the same order and with exactly the same number of items. Do not use a markdown fence or add explanations."},
+        {role:"user",content:`Target language (BCP 47): ${input.targetLanguage}\n\nProduct titles as JSON:\n${JSON.stringify(input.names)}`},
+      ],
+    }),
+    signal:AbortSignal.timeout(45_000),
+  });
+  if(!response.ok)throw new Error(`translation_provider_http_${response.status}:${(await response.text()).slice(0,300)}`);
+  const body=await response.json() as {choices?:Array<{message?:{content?:string|Array<{type?:string;text?:string}>}}>};
+  const content=body.choices?.[0]?.message?.content,translated=typeof content==="string"?content:content?.map(item=>item.text??"").join("");
+  if(!translated?.trim())throw new Error("translation_provider_empty_response");
+  try{
+    const names=JSON.parse(translated.trim()) as unknown;
+    if(!Array.isArray(names)||names.length!==input.names.length||names.some(name=>typeof name!=="string"||!name.trim()||name.trim().length>120))throw new Error("invalid");
+    return names.map(name=>(name as string).trim());
+  }catch{throw new Error("translation_provider_invalid_product_names_response");}
+}
+
 async function requestTranslation(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string},mode:"text"):Promise<string>;
 async function requestTranslation(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string},mode:"detected"):Promise<{translatedText:string;sourceLanguage:string}>;
 async function requestTranslation(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string},mode:"text"|"detected"):Promise<string|{translatedText:string;sourceLanguage:string}>{

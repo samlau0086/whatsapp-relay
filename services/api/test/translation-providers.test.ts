@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { transcribeAudio, translateText, translateTextWithDetection, translationProviderDefaults } from "../src/translation-providers.js";
+import { transcribeAudio, translateProductNames, translateText, translateTextWithDetection, translationProviderDefaults } from "../src/translation-providers.js";
 
 test("OpenAI translation provider sends a constrained chat-completions request",async()=>{
   const original=globalThis.fetch;let request:Request|undefined;
@@ -29,6 +29,18 @@ test("translation with detection returns a normalized BCP 47 source language",as
     const body=JSON.parse(await request!.text());
     assert.match(body.messages[0].content,/sourceLanguage/);
     assert.match(body.messages[0].content,/BCP 47/);
+  }finally{globalThis.fetch=original;}
+});
+
+test("product name translation preserves order and requires a structured response",async()=>{
+  const original=globalThis.fetch;let request:Request|undefined;
+  globalThis.fetch=async(input,init)=>{request=new Request(input,init);return Response.json({choices:[{message:{content:'["AirPods Pro（第二代）","至尊典藏版"]'}}]});};
+  try{
+    const names=await translateProductNames({provider:"openai",apiKey:"secret",...translationProviderDefaults("openai")},{names:["AirPods Pro (2nd generation)","Supremacy Collector's Edition"],targetLanguage:"zh-CN"});
+    assert.deepEqual(names,["AirPods Pro（第二代）","至尊典藏版"]);
+    const body=JSON.parse(await request!.text());assert.match(body.messages[0].content,/ecommerce product titles/);assert.match(body.messages[1].content,/Product titles as JSON/);
+    globalThis.fetch=async()=>Response.json({choices:[{message:{content:'["only one"]'}}]});
+    await assert.rejects(()=>translateProductNames({provider:"openai",apiKey:"secret",...translationProviderDefaults("openai")},{names:["A","B"],targetLanguage:"zh-CN"}),/invalid_product_names_response/);
   }finally{globalThis.fetch=original;}
 });
 
