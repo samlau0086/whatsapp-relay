@@ -15,3 +15,12 @@ test("already supported transcription formats are preserved",async()=>{
   const normalized=await normalizeTranscriptionAudio(original,async()=>{throw new Error("converter should not run");});
   assert.deepEqual(normalized,original);
 });
+
+test("supported audio content receives a provider-readable file extension",async()=>{
+  assert.equal(needsTranscriptionConversion("message.audio","audio/mpeg"),false);
+  const original={bytes:Buffer.from("mp3"),fileName:"message.audio",mimeType:"audio/mpeg"};
+  const normalized=await normalizeTranscriptionAudio(original,async()=>{throw new Error("converter should not run");});
+  assert.equal(normalized.fileName,"message.mp3");
+  assert.equal(normalized.mimeType,"audio/mpeg");
+  assert.equal(normalized.bytes,original.bytes);
+});

@@ -7,13 +7,15 @@ const SUPPORTED_EXTENSIONS=new Set(["mp3","mp4","mpeg","mpga","m4a","wav","webm"
 
 export function needsTranscriptionConversion(fileName:string,mimeType:string):boolean{
   const extension=fileName.toLowerCase().split(".").pop()??"";
-  if(SUPPORTED_EXTENSIONS.has(extension))return false;
   const mime=mimeType.toLowerCase().split(";",1)[0].trim();
-  return !new Set(["audio/mpeg","audio/mp4","audio/x-m4a","audio/wav","audio/wave","audio/webm","video/mp4","video/webm"]).has(mime);
+  return !transcriptionExtension(mime)&&!SUPPORTED_EXTENSIONS.has(extension);
 }
 
 export async function normalizeTranscriptionAudio(input:TranscriptionAudio,convert:AudioConverter=convertToMp3):Promise<TranscriptionAudio>{
-  if(!needsTranscriptionConversion(input.fileName,input.mimeType))return input;
+  if(!needsTranscriptionConversion(input.fileName,input.mimeType)){
+    const extension=transcriptionExtension(input.mimeType);
+    return extension&&!input.fileName.toLowerCase().endsWith(`.${extension}`)?{...input,fileName:replaceExtension(input.fileName,extension)}:input;
+  }
   return{bytes:await convert(input.bytes),fileName:replaceExtension(input.fileName,"mp3"),mimeType:"audio/mpeg"};
 }
 
@@ -31,4 +33,9 @@ async function convertToMp3(bytes:Buffer):Promise<Buffer>{
 
 function replaceExtension(fileName:string,extension:string):string{
   const base=fileName.replace(/\.[^.]+$/u,"").trim()||"voice";return`${base}.${extension}`;
+}
+
+function transcriptionExtension(mimeType:string):string|null{
+  const mime=mimeType.toLowerCase().split(";",1)[0].trim();
+  return mime==="audio/mpeg"?"mp3":mime==="audio/mp4"||mime==="audio/x-m4a"?"m4a":mime==="audio/wav"||mime==="audio/wave"?"wav":mime==="audio/webm"||mime==="video/webm"?"webm":mime==="video/mp4"?"mp4":null;
 }

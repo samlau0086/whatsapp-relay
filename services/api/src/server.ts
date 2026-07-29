@@ -1655,6 +1655,7 @@ function translationFailure(error:unknown):{error:string;message:string}{
   if(/transcription_provider_http_(401|403)/.test(detail))return{error:"transcription_auth_failed",message:"语音转写 Provider 鉴权失败，请联系管理员"};
   if(detail.includes("transcription_provider_http_404"))return{error:"transcription_endpoint_missing",message:"当前 Provider 不支持语音转写接口"};
   if(detail.includes("transcription_provider_http_429"))return{error:"transcription_rate_limited",message:"语音转写请求过于频繁，请稍后重试"};
+  if(detail.includes("unsupported audio format"))return{error:"transcription_format_unsupported",message:"语音文件格式无法识别，请重试或联系管理员"};
   if(detail.includes("transcription_provider_http_400"))return{error:"transcription_rejected",message:"转写 Provider 拒绝了音频，请检查转写模型配置"};
   if(detail.includes("transcription_provider_"))return{error:"transcription_failed",message:"语音转写失败，请检查 Provider 配置"};
   return{error:"translation_failed",message:"译文生成失败，请稍后重试"};
