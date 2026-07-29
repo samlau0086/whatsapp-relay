@@ -319,7 +319,17 @@ jobs:
           ln -sfn "$shared_env" "$release/.env"
           cd "$release"
           WEB_PORT="$web_port" docker compose -p relaydesk config --quiet
-          WEB_PORT="$web_port" docker compose -p relaydesk up --detach --build --remove-orphans
+          for attempt in 1 2 3 4 5; do
+            if WEB_PORT="$web_port" docker compose -p relaydesk up --detach --build --remove-orphans; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "Unable to build and start the production stack after $attempt attempts." >&2
+              false
+            fi
+            echo "Production stack attempt $attempt failed; retrying..." >&2
+            sleep $((attempt * 15))
+          done
 
           for attempt in $(seq 1 90); do
             if curl --fail --silent --show-error http://127.0.0.1:8080/health >/dev/null \
