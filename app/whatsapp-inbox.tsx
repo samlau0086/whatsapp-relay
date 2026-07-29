@@ -469,16 +469,19 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     setAccounts(body.data.map(item=>({id:String(item.id),name:String(item.display_name),phone:String(item.phone_e164??""),status:String(item.status),reason:String(item.status_reason??""),transport:String(item.transport??"web") as "web"|"cloud",webhookStatus:item.webhook_status?String(item.webhook_status):undefined,credentialsStatus:item.credentials_status?String(item.credentials_status):undefined,lastEvent:item.last_event_at?String(item.last_event_at):undefined})));
   },[logout]);
 
+  const syncConversationTags=useCallback((tags:TagItem[])=>{
+    setContextTags(tags);
+    setSelectedTag(current=>current&&tags.every(tag=>tag.id!==current)?"":current);
+  },[]);
+
   const loadConversationTags=useCallback(async(token:string)=>{
     const result=await authorizedFetch("/api/v1/tags",token);
     if(result.token!==token)setApiToken(result.token);
     if(result.response.status===401){logout();return;}
     if(!result.response.ok)return;
     const body=await result.response.json() as {data:Array<Record<string,unknown>>};
-    const tags=body.data.map(mapTag);
-    setContextTags(tags);
-    setSelectedTag(current=>current&&tags.every(tag=>tag.id!==current)?"":current);
-  },[logout]);
+    syncConversationTags(body.data.map(mapTag));
+  },[logout,syncConversationTags]);
 
   const loadConversationCounts=useCallback(async(token:string)=>{
     const result=await authorizedFetch(conversationCountsPath(dateFilter,new Date(),selectedAccount),token);
@@ -1403,7 +1406,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             </section>
           </aside>
 
-          <ConversationPanel filter={filter} subtitle={debouncedQuery||selectedTag?`已加载 ${visible.length} 条结果`:`${counts[conversationFilterKey(filter)]} 个真实会话`} query={query} onQuery={setQuery} tags={contextTags} tagId={selectedTag} onTagId={setSelectedTag} onOpenSidebar={()=>setSidebarOpen(true)} onRefresh={()=>void loadWorkspace(apiToken)} dateFilter={dateFilter} onDateFilter={selectDateFilter} onDateKeyDown={handleDateFilterKeyDown} listRef={conversationListRef} sentinelRef={conversationLoadSentinelRef} items={visible} rows={conversationVirtualizer.getVirtualItems()} totalSize={conversationVirtualizer.getTotalSize()} measure={conversationVirtualizer.measureElement} effectiveActiveId={effectiveActiveId} clock={clock} markingUnreadId={markingUnreadId} onSelect={setActiveId} onMenu={openConversationMenu} onMarkUnread={id=>void markConversationUnread(id)} loading={loading} loadError={loadError} hasAccounts={Boolean(accounts.length)} loadingMore={loadingMoreConversations} loadMoreError={loadMoreError} hasMore={Boolean(nextConversationCursor)} onLoadMore={()=>void loadConversations(apiToken,{append:true})}/>
+          <ConversationPanel filter={filter} subtitle={debouncedQuery||selectedTag?`已加载 ${visible.length} 条结果`:`${counts[conversationFilterKey(filter)]} 个真实会话`} query={query} onQuery={setQuery} tags={contextTags} tagId={selectedTag} onTagId={setSelectedTag} onTagOpen={()=>void loadConversationTags(apiToken)} onOpenSidebar={()=>setSidebarOpen(true)} onRefresh={()=>void loadWorkspace(apiToken)} dateFilter={dateFilter} onDateFilter={selectDateFilter} onDateKeyDown={handleDateFilterKeyDown} listRef={conversationListRef} sentinelRef={conversationLoadSentinelRef} items={visible} rows={conversationVirtualizer.getVirtualItems()} totalSize={conversationVirtualizer.getTotalSize()} measure={conversationVirtualizer.measureElement} effectiveActiveId={effectiveActiveId} clock={clock} markingUnreadId={markingUnreadId} onSelect={setActiveId} onMenu={openConversationMenu} onMarkUnread={id=>void markConversationUnread(id)} loading={loading} loadError={loadError} hasAccounts={Boolean(accounts.length)} loadingMore={loadingMoreConversations} loadMoreError={loadMoreError} hasMore={Boolean(nextConversationCursor)} onLoadMore={()=>void loadConversations(apiToken,{append:true})}/>
 
           <section className="chat-panel">
             {active ? (
@@ -1978,6 +1981,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
               onToken={setApiToken}
               onClose={() => setDetailsOpen(false)}
               onToast={setToast}
+              onTagCatalogChange={syncConversationTags}
               onConversationChange={async (change) => {
                 await updateConversation(change);
               }}
@@ -2382,6 +2386,7 @@ function CrmDetailsPanel({
   onToken,
   onClose,
   onToast,
+  onTagCatalogChange,
   onConversationChange,
   onChanged,
   onDeleted,
@@ -2394,6 +2399,7 @@ function CrmDetailsPanel({
   onToken: (token: string) => void;
   onClose: () => void;
   onToast: (text: string) => void;
+  onTagCatalogChange: (tags: TagItem[]) => void;
   onConversationChange: (change: Record<string, unknown>) => Promise<void>;
   onChanged: () => Promise<void>;
   onDeleted: () => Promise<void>;
@@ -2470,6 +2476,7 @@ function CrmDetailsPanel({
       const nextContactTasks:ContactTaskSummary[]=(taskBody.data??[]).map(item=>({id:String(item.id),title:String(item.title??""),kind:item.kind==="message"?"message":"general",status:String(item.status??"planned"),dueAt:String(item.due_at),sendAt:item.send_at?String(item.send_at):null,assignedUserName:item.assigned_user_name?String(item.assigned_user_name):null}));
       setDetails(nextDetails);
       setCatalog(nextCatalog);
+      onTagCatalogChange(nextCatalog);
       setContactTasks(nextContactTasks);
       cacheConversationDetails(active.id,{details:nextDetails,catalog:nextCatalog,contactTasks:nextContactTasks});
     } catch (reason) {
@@ -2477,7 +2484,7 @@ function CrmDetailsPanel({
     } finally {
       if(!signal?.aborted)setLoading(false);
     }
-  }, [active.id, active.contactId, active.customerStage, active.accountId, active.account, active.name, active.phone, token, onToken]);
+  }, [active.id, active.contactId, active.customerStage, active.accountId, active.account, active.name, active.phone, token, onToken, onTagCatalogChange]);
   useEffect(() => {
     if(conversationDetailsCache.has(active.id))return;
     const controller=new AbortController(),timer = window.setTimeout(() => void load(controller.signal), 0);
