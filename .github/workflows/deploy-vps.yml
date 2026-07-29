@@ -252,6 +252,9 @@ jobs:
             -o ConnectionAttempts=1
             -o ServerAliveInterval=15
             -o ServerAliveCountMax=2
+            -o ControlMaster=auto
+            -o ControlPersist=10m
+            -o "ControlPath=$HOME/.ssh/relaydesk-%C"
           )
           retry_network ssh "${ssh_options[@]}" -p "$VPS_PORT" \
             "$VPS_USER@$VPS_HOST" "mkdir -p '$VPS_DEPLOY_PATH/incoming'"
@@ -265,6 +268,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 -o ConnectionAttempts=1 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+            -o ControlMaster=auto -o ControlPersist=10m -o "ControlPath=$HOME/.ssh/relaydesk-%C" \
             "$VPS_USER@$VPS_HOST" "bash -s -- '$VPS_DEPLOY_PATH' '$GITHUB_SHA' '$WEB_PORT'" <<'REMOTE'
           set -Eeuo pipefail
 
