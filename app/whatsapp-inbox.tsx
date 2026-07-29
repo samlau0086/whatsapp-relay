@@ -321,6 +321,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [translationPreview,setTranslationPreview]=useState<{source:string;translated:string;targetLanguage:string}|null>(null);
   const [translatingDraft,setTranslatingDraft]=useState(false);
   const [translationError,setTranslationError]=useState("");
+  const [replySuggestionBusy,setReplySuggestionBusy]=useState(false);
   const [conversationMenu,setConversationMenu]=useState<ConversationContextState|null>(null);
   const [contextTags,setContextTags]=useState<TagItem[]>([]);
   const [contextBusy,setContextBusy]=useState(false);
@@ -834,6 +835,27 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     const result=await authorizedFetch("/api/v1/me/translation-preferences",apiToken,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({conversationId,enabled:next.enabled,agentLanguage:next.agentLanguage,customerLanguage:next.customerLanguage})});if(result.token!==apiToken)setApiToken(result.token);
     if(!result.response.ok){setTranslationPreferences(all=>({...all,[conversationId]:previous}));const body=await result.response.json().catch(()=>({})) as {message?:string};setToast(body.message??"该会话的翻译偏好保存失败");return;}
     const body=await result.response.json() as TranslationPreference;setTranslationPreferences(all=>({...all,[conversationId]:body}));
+  }
+
+  async function generateReplySuggestion(){
+    if(!active||!apiToken||replySuggestionBusy)return;
+    setReplySuggestionBusy(true);
+    setTranslationPreview(null);
+    setTranslationError("");
+    try{
+      const result=await authorizedFetch(`/api/v1/conversations/${active.id}/reply-suggestion`,apiToken,{method:"POST"});
+      if(result.token!==apiToken)setApiToken(result.token);
+      const body=await result.response.json().catch(()=>({})) as {reply?:string;sources?:Array<{id:string;source:string}>;error?:string};
+      if(!result.response.ok||!body.reply)throw new Error(body.error??"回复建议生成失败");
+      setDraft(body.reply);
+      setQuickReplyOpen(false);
+      setTranslationMenuOpen(false);
+      setToast(body.sources?.length?`回复建议已生成，参考了 ${body.sources.length} 条知识库内容`:"回复建议已根据聊天记录生成");
+      requestAnimationFrame(()=>textareaRef.current?.focus());
+    }catch(reason){
+      const message=reason instanceof Error?reason.message:"回复建议生成失败";
+      setToast(message==="agent_provider_not_configured"?"请先在系统设置中配置 AI Provider":message==="conversation_has_no_messages"?"当前会话还没有可分析的聊天记录":"回复建议生成失败，请稍后重试");
+    }finally{setReplySuggestionBusy(false);}
   }
 
   async function sendMessage(){
@@ -1774,6 +1796,16 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                           void sendQuickReplyMedia(asset, caption)
                         }
                       />
+                      <button
+                        className="reply-suggestion-trigger"
+                        disabled={replySuggestionBusy||translatingDraft}
+                        onClick={()=>void generateReplySuggestion()}
+                        aria-label="生成推进成交的回复建议"
+                        title="结合知识库和聊天记录生成回复建议"
+                      >
+                        <Sparkles className={replySuggestionBusy?"spin":""} size={15}/>
+                        <span>{replySuggestionBusy?"生成中…":"回复建议 Agent"}</span>
+                      </button>
                       <button
                         onClick={() => setMediaOpen(true)}
                         aria-label="打开媒体与附件"

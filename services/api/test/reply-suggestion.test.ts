@@ -1,0 +1,20 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+test("manual reply suggestion combines conversation context and assigned knowledge", async () => {
+  const [engine, server, ui] = await Promise.all([
+    readFile(new URL("../src/agent-engine.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/server.ts", import.meta.url), "utf8"),
+    readFile(new URL("../../../app/whatsapp-inbox.tsx", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(engine, /export async function generateSalesReplySuggestion/);
+  assert.match(engine, /retrieveKnowledge\(\s*provider,\s*cfg\.account_id/);
+  assert.match(engine, /customer_memory_facts/);
+  assert.match(engine, /recent chat context, CRM memory, orders, and relevant knowledge/);
+  assert.match(engine, /fake urgency, pressure, unsupported discounts/);
+  assert.match(server, /\/api\/v1\/conversations\/:id\/reply-suggestion/);
+  assert.match(ui, /回复建议 Agent/);
+  assert.match(ui, /setDraft\(body\.reply\)/);
+});
