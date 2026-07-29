@@ -39,7 +39,13 @@ async function connect(options:Init):Promise<void>{
   messageCache=auth;
   for(const mapping of await auth.listLidMappings())emitIdentity(options.accountId,mapping.lid,mapping.pn);
   const proxyAgent=options.proxyUrl?new HttpsProxyAgent(options.proxyUrl):undefined;
-  const {version}=await fetchLatestBaileysVersion();
+  // The version lookup is hosted on GitHub, which may be unreachable directly
+  // on networks where WhatsApp itself also requires the configured proxy. If it
+  // silently falls back to the version bundled with Baileys, WhatsApp can reject
+  // every account with a 405 once that bundled protocol version becomes stale.
+  const {version}=await fetchLatestBaileysVersion(
+    mediaProxyAgent ? ({dispatcher:mediaProxyAgent} as unknown as RequestInit) : undefined,
+  );
   const logger=pino({level:"warn"});
   if(generation!==connectionGeneration)return;
   const activeSocket=makeWASocket({version,auth:auth.state,logger,browser:Browsers.windows("RelayDesk Agent"),connectTimeoutMs:60_000,syncFullHistory:false,markOnlineOnConnect:false,generateHighQualityLinkPreview:false,agent:proxyAgent,fetchAgent:proxyAgent,getMessage:async key=>key.id?auth.getMessage(key.id):undefined});

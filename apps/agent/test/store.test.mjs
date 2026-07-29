@@ -141,6 +141,11 @@ test("offline accounts can reconnect without clearing their saved session", () =
   assert.match(renderer,/重新连接/);
 });
 
+test("WhatsApp version discovery uses the configured proxy", () => {
+  const worker=readFileSync(new URL("../dist/account-worker.js",import.meta.url),"utf8");
+  assert.match(worker,/fetchLatestBaileysVersion\(\s*mediaProxyAgent\s*\?\s*\{\s*dispatcher:\s*mediaProxyAgent\s*\}/);
+});
+
 test("an enrolled agent can change its central URL without replacing credentials", () => {
   const main=readFileSync(new URL("../dist/main.js",import.meta.url),"utf8");
   const preload=readFileSync(new URL("../dist/preload.cjs",import.meta.url),"utf8");
