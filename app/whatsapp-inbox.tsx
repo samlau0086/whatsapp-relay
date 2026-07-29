@@ -232,7 +232,7 @@ type ConversationContextState={conversation:Conversation;x:number;y:number;secti
 type ConversationCounts={all:number;mine:number;unassigned:number;favorite:number;closed:number;archived:number;reminders:number};
 type CurrencyItem={code:string;name:string;rate:number};
 type CurrencyConfig={baseCurrency:string;currencies:CurrencyItem[];rateSource?:string|null;rateDate?:string|null;rateUpdatedAt?:string|null};
-type MessageTranslation={status:"idle"|"loading"|"translated"|"failed";text?:string;sourceText?:string;sourceLanguage?:string;message?:string};
+type MessageTranslation={status:"idle"|"loading"|"translated"|"failed";text?:string;sourceText?:string;sourceLanguage?:string;targetLanguage?:string;message?:string};
 type KnowledgeBaseItem={id:string;name:string;description:string;document_count?:number;faq_count?:number};
 type AgentDraft={id:string;text_content:string;reply_zh:string|null;reason:string;citations:string[];created_at:string};
 const DEFAULT_TRANSLATION_PREFERENCE:TranslationPreference={enabled:false,agentLanguage:"zh-CN",customerLanguage:"en",updatedAt:null};
@@ -341,6 +341,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const messagePaginationDepthRef=useRef(new Map<string,number>());
   const messageStickToBottomRef=useRef(true);
   const translationLoadSequence=useRef(0);
+  const previousTranslationTargetLanguageRef=useRef<string|null>(null);
   const workspaceLoadSequence=useRef(0);
   const dateFilterRef=useRef<ConversationDateFilter>("all");
   const notifiedReminders=useRef(new Set<string>());
@@ -587,7 +588,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       if(older)messagePaginationDepthRef.current.set(conversationId,(messagePaginationDepthRef.current.get(conversationId)??0)+1);
       if(older||(messagePaginationDepthRef.current.get(conversationId)??0)===0)setMessageCursor(conversationId,body.nextCursor??null);
       setFailedMessageCounts(all=>({...all,[conversationId]:Number(body.failedCount??0)}));
-      const cachedTranslations=Object.fromEntries(loadedMessages.filter(message=>message.cachedTranslationText&&message.cachedTranslationSourceLanguage).map(message=>[message.id,{status:"translated" as const,text:message.cachedTranslationText,sourceText:message.cachedTranscriptionText,sourceLanguage:message.cachedTranslationSourceLanguage}]));
+      const cachedTranslations=Object.fromEntries(loadedMessages.filter(message=>message.cachedTranslationText&&message.cachedTranslationSourceLanguage&&message.cachedTranslationLanguage).map(message=>[message.id,{status:"translated" as const,text:message.cachedTranslationText,sourceText:message.cachedTranscriptionText,sourceLanguage:message.cachedTranslationSourceLanguage,targetLanguage:message.cachedTranslationLanguage}]));
       if(Object.keys(cachedTranslations).length)setMessageTranslations(all=>({...cachedTranslations,...all}));
       if(emailResult?.response.ok){const emailBody=await emailResult.response.json() as {data:Array<Record<string,unknown>>};setEmailActivities(all=>({...all,[conversationId]:emailBody.data.map(mapEmailActivity)}));}
       if(markRead)await authorizedFetch(`/api/v1/conversations/${conversationId}`,result.token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({read:true})});
@@ -676,14 +677,14 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
 
   const loadIncomingTranslations=useCallback(async(token:string,messageIds:string[],targetLanguage:string,sourceLanguage:string,retry=false,generateAudio=false)=>{
     const ids=messageIds.filter(id=>retry||!messageTranslations[id]);if(!ids.length)return;
-    setMessageTranslations(all=>({...all,...Object.fromEntries(ids.map(id=>[id,{status:"loading" as const,sourceLanguage}]))}));
+    setMessageTranslations(all=>({...all,...Object.fromEntries(ids.map(id=>[id,{status:"loading" as const,sourceLanguage,targetLanguage}]))}));
     let accessToken=token;
     for(let offset=0;offset<ids.length;offset+=50){const chunk=ids.slice(offset,offset+50);try{
       const result=await authorizedFetch("/api/v1/translations/messages",accessToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({messageIds:chunk,targetLanguage,sourceLanguage,generateAudio})});accessToken=result.token;if(result.token!==token)setApiToken(result.token);
       const body=await result.response.json().catch(()=>({})) as {data?:Array<{messageId:string;status:string;translatedText?:string;sourceText?:string;sourceLanguage?:string;message?:string}>;message?:string};
-      if(!result.response.ok||!body.data){setMessageTranslations(all=>({...all,...Object.fromEntries(chunk.map(id=>[id,{status:"failed" as const,sourceLanguage,message:body.message??"翻译服务暂时不可用"}]))}));continue;}
-      setMessageTranslations(all=>({...all,...Object.fromEntries(body.data!.map(item=>[item.messageId,item.status==="translated"?{status:"translated" as const,text:item.translatedText??"",sourceText:item.sourceText,sourceLanguage:item.sourceLanguage??sourceLanguage}:item.status==="skipped"?{status:"idle" as const,sourceLanguage}:{status:"failed" as const,sourceLanguage,message:item.message}]))}));
-    }catch{setMessageTranslations(all=>({...all,...Object.fromEntries(chunk.map(id=>[id,{status:"failed" as const,sourceLanguage}]))}));}}
+      if(!result.response.ok||!body.data){setMessageTranslations(all=>({...all,...Object.fromEntries(chunk.map(id=>[id,{status:"failed" as const,sourceLanguage,targetLanguage,message:body.message??"翻译服务暂时不可用"}]))}));continue;}
+      setMessageTranslations(all=>({...all,...Object.fromEntries(body.data!.map(item=>[item.messageId,item.status==="translated"?{status:"translated" as const,text:item.translatedText??"",sourceText:item.sourceText,sourceLanguage:item.sourceLanguage??sourceLanguage,targetLanguage}:item.status==="skipped"?{status:"idle" as const,sourceLanguage,targetLanguage}:{status:"failed" as const,sourceLanguage,targetLanguage,message:item.message}]))}));
+    }catch{setMessageTranslations(all=>({...all,...Object.fromEntries(chunk.map(id=>[id,{status:"failed" as const,sourceLanguage,targetLanguage}]))}));}}
   },[messageTranslations]);
 
   useEffect(()=>{
@@ -731,7 +732,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     return()=>window.clearTimeout(initial);
   },[view,apiToken,effectiveActiveId,loadMessages]);
   useEffect(()=>{if(view!=="inbox"||!apiToken||!effectiveActiveId)return;const timer=window.setTimeout(()=>void loadTranslationSettings(apiToken,effectiveActiveId),0);return()=>window.clearTimeout(timer);},[view,apiToken,effectiveActiveId,loadTranslationSettings]);
-  useEffect(()=>{const timer=window.setTimeout(()=>setMessageTranslations({}),0);return()=>window.clearTimeout(timer);},[translationPreference.agentLanguage,translationPreference.customerLanguage]);
+  useEffect(()=>{
+    if(previousTranslationTargetLanguageRef.current===null){previousTranslationTargetLanguageRef.current=translationPreference.agentLanguage;return;}
+    previousTranslationTargetLanguageRef.current=translationPreference.agentLanguage;
+    const timer=window.setTimeout(()=>setMessageTranslations(all=>Object.fromEntries(Object.entries(all).filter(([,value])=>value.targetLanguage===translationPreference.agentLanguage))),0);
+    return()=>window.clearTimeout(timer);
+  },[translationPreference.agentLanguage]);
   useEffect(()=>{
     const accountId=active?.accountId;
     const timer=window.setTimeout(()=>{
