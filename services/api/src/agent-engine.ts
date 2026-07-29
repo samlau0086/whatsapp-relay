@@ -998,12 +998,19 @@ export async function generateSalesReplySuggestion(
       previousReply: previousReply.trim().slice(0, 8_000),
     });
     if (!decision.reply.trim()) throw new Error("agent_provider_empty_suggestion");
-    await finishRun(run.rows[0].id, { ...decision, decision: "draft" });
+    const analysis = isPredominantlyChinese(decision.reason)
+      ? decision.reason.trim()
+      : await translateReviewAnalysisToChinese(provider, decision.reason);
+    const reviewedDecision = { ...decision, reason: analysis };
+    await finishRun(run.rows[0].id, {
+      ...reviewedDecision,
+      decision: "draft",
+    });
     const cited = new Set(decision.citations);
     return {
       reply: decision.reply.trim(),
       replyZh: decision.replyZh?.trim() ?? "",
-      analysis: decision.reason,
+      analysis,
       confidence: decision.confidence,
       citations: decision.citations,
       customerName,
@@ -1029,6 +1036,80 @@ export async function generateSalesReplySuggestion(
       ],
     );
     throw error;
+  }
+}
+
+export function isPredominantlyChinese(input: string): boolean {
+  const han = input.match(/[\u3400-\u9fff]/g)?.length ?? 0;
+  const latin = input.match(/[A-Za-z]/g)?.length ?? 0;
+  return han >= 4 && han * 3 >= latin;
+}
+
+async function translateReviewAnalysisToChinese(
+  provider: Provider,
+  analysis: string,
+): Promise<string> {
+  const fallback =
+    "Agent 根据客户当前表达的需求、客户资料与最近会话内容，选择了一个自然且低压力的推进方式。建议先确认客户的下一步意向，便于继续提供准确的信息并推动成交。";
+  if (!analysis.trim()) return fallback;
+  try {
+    const response = await fetch(
+      `${trimSlash(provider.base_url)}/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${providerKey(provider)}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: provider.model,
+          messages: [
+            {
+              role: "system",
+              content:
+                "Translate the supplied internal sales reply review note into concise, natural Simplified Chinese. Preserve its meaning and factual uncertainty. Do not add new facts, hidden reasoning, headings, or commentary. Return JSON only.",
+            },
+            {
+              role: "user",
+              content: JSON.stringify({ reviewNote: analysis.slice(0, 4_000) }),
+            },
+          ],
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "chinese_review_analysis",
+              strict: true,
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                required: ["analysis"],
+                properties: {
+                  analysis: {
+                    type: "string",
+                    description: "Simplified Chinese only",
+                  },
+                },
+              },
+            },
+          },
+        }),
+        signal: AbortSignal.timeout(60_000),
+      },
+    );
+    if (!response.ok) return fallback;
+    const body = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const raw = body.choices?.[0]?.message?.content?.trim();
+    if (!raw) return fallback;
+    const translated = String(
+      (JSON.parse(raw.replace(/^```json\s*|\s*```$/g, "")) as {
+        analysis?: unknown;
+      }).analysis ?? "",
+    ).trim();
+    return isPredominantlyChinese(translated) ? translated : fallback;
+  } catch {
+    return fallback;
   }
 }
 
@@ -1085,7 +1166,13 @@ async function generateDecision(
       replyZh: { type: "string" },
       confidence: { type: "number", minimum: 0, maximum: 1 },
       citations: { type: "array", items: { type: "string" } },
-      reason: { type: "string" },
+      reason: {
+        type: "string",
+        description:
+          input.kind === "sales_suggestion"
+            ? "A concise review explanation written only in Simplified Chinese"
+            : "A concise explanation of the decision",
+      },
       summary: { type: "string" },
       facts: {
         type: "array",

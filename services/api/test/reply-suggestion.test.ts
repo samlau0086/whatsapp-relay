@@ -17,6 +17,8 @@ test("manual reply suggestion combines conversation context and assigned knowled
   assert.match(engine, /including the known customer name/);
   assert.match(engine, /fake urgency, pressure, unsupported discounts/);
   assert.match(engine, /auditable decision summary, not hidden chain-of-thought/);
+  assert.match(engine, /translateReviewAnalysisToChinese/);
+  assert.match(engine, /Simplified Chinese only/);
   assert.match(engine, /This is a rethink request/);
   assert.match(server, /\/api\/v1\/conversations\/:id\/reply-suggestion/);
   assert.match(ui, /回复建议 Agent/);

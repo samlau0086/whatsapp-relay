@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { agentRunKind, captionOrderDetailsImage, chunkText, compactMemoryMessages, detectOrderDetailsLanguage, groundOrderDetailsImageReply, groundOrderNumberReply, isConversationAgentActive, isConversationJobEligible, isReplySourceCurrent, isWithinBusinessHours, passesAutoReplyGate, resolveOrderDetailsImage, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
+import { agentRunKind, captionOrderDetailsImage, chunkText, compactMemoryMessages, detectOrderDetailsLanguage, groundOrderDetailsImageReply, groundOrderNumberReply, isConversationAgentActive, isConversationJobEligible, isPredominantlyChinese, isReplySourceCurrent, isWithinBusinessHours, passesAutoReplyGate, resolveOrderDetailsImage, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
 
 test("chunkText creates bounded overlapping chunks",()=>{
   const input=("A paragraph with useful knowledge. ").repeat(120);
@@ -59,6 +59,12 @@ test("full takeover sends useful replies without the cautious evidence gate",()=
 test("agent decisions can carry a Chinese review translation",()=>{
   const decision:AgentDecision={decision:"draft",reply:"How can I help?",replyZh:"请问有什么可以帮助您？",confidence:.5,citations:[],reason:"review"};
   assert.equal(decision.replyZh,"请问有什么可以帮助您？");
+});
+
+test("reply suggestion analysis requires predominantly Chinese text",()=>{
+  assert.equal(isPredominantlyChinese("客户已经确认了产品兴趣，建议下一步询问数量并推进报价。"),true);
+  assert.equal(isPredominantlyChinese("The customer is interested and should be asked for order details."),false);
+  assert.equal(isPredominantlyChinese("客户 ok, next step is order details and confirmation"),false);
 });
 
 test("late reply jobs cannot answer a newer customer message",()=>{
