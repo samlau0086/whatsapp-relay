@@ -130,6 +130,10 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /detectedLanguageName\(value\.sourceLanguage\)/);
   assert.match(component, /VoiceTranslation/);
   assert.match(component, /AI 翻译语音为/);
+  assert.match(component, /MessageSourceLanguageControl/);
+  assert.match(component, /指定这条消息的原语言/);
+  assert.match(component, /按此语种转写并翻译/);
+  assert.match(component, /defaultSourceLanguage=\{translationPreference\.customerLanguage\}/);
   assert.match(component, /翻译服务暂时不可用/);
   assert.match(component, /gpt-4o-mini-transcribe/);
   assert.match(component, /conversationId/);
@@ -146,6 +150,7 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(css, /\.translation-menu/);
   assert.match(css, /\.incoming-translation/);
   assert.match(css, /\.voice-translate-action/);
+  assert.match(css, /\.message-language-override/);
   assert.match(css, /\.settings-tabs/);
   assert.match(component, /原文（仅坐席可见）→/);
   assert.match(component, /translationSourceText/);

@@ -674,14 +674,14 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
 
   const loadIncomingTranslations=useCallback(async(token:string,messageIds:string[],targetLanguage:string,sourceLanguage:string,retry=false,generateAudio=false)=>{
     const ids=messageIds.filter(id=>retry||!messageTranslations[id]);if(!ids.length)return;
-    setMessageTranslations(all=>({...all,...Object.fromEntries(ids.map(id=>[id,{status:"loading" as const}]))}));
+    setMessageTranslations(all=>({...all,...Object.fromEntries(ids.map(id=>[id,{status:"loading" as const,sourceLanguage}]))}));
     let accessToken=token;
     for(let offset=0;offset<ids.length;offset+=50){const chunk=ids.slice(offset,offset+50);try{
       const result=await authorizedFetch("/api/v1/translations/messages",accessToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({messageIds:chunk,targetLanguage,sourceLanguage,generateAudio})});accessToken=result.token;if(result.token!==token)setApiToken(result.token);
       const body=await result.response.json().catch(()=>({})) as {data?:Array<{messageId:string;status:string;translatedText?:string;sourceText?:string;sourceLanguage?:string;message?:string}>;message?:string};
-      if(!result.response.ok||!body.data){setMessageTranslations(all=>({...all,...Object.fromEntries(chunk.map(id=>[id,{status:"failed" as const,message:body.message??"翻译服务暂时不可用"}]))}));continue;}
-      setMessageTranslations(all=>({...all,...Object.fromEntries(body.data!.map(item=>[item.messageId,item.status==="translated"?{status:"translated" as const,text:item.translatedText??"",sourceText:item.sourceText,sourceLanguage:item.sourceLanguage}:item.status==="skipped"?{status:"idle" as const}:{status:"failed" as const,message:item.message}]))}));
-    }catch{setMessageTranslations(all=>({...all,...Object.fromEntries(chunk.map(id=>[id,{status:"failed" as const}]))}));}}
+      if(!result.response.ok||!body.data){setMessageTranslations(all=>({...all,...Object.fromEntries(chunk.map(id=>[id,{status:"failed" as const,sourceLanguage,message:body.message??"翻译服务暂时不可用"}]))}));continue;}
+      setMessageTranslations(all=>({...all,...Object.fromEntries(body.data!.map(item=>[item.messageId,item.status==="translated"?{status:"translated" as const,text:item.translatedText??"",sourceText:item.sourceText,sourceLanguage:item.sourceLanguage??sourceLanguage}:item.status==="skipped"?{status:"idle" as const,sourceLanguage}:{status:"failed" as const,sourceLanguage,message:item.message}]))}));
+    }catch{setMessageTranslations(all=>({...all,...Object.fromEntries(chunk.map(id=>[id,{status:"failed" as const,sourceLanguage}]))}));}}
   },[messageTranslations]);
 
   useEffect(()=>{
@@ -1646,12 +1646,13 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                               <IncomingTranslation
                                 value={messageTranslations[message.id]}
                                 language={translationPreference.agentLanguage}
-                                onRetry={() =>
+                                defaultSourceLanguage={translationPreference.customerLanguage}
+                                onTranslate={sourceLanguage =>
                                   void loadIncomingTranslations(
                                     apiToken,
                                     [message.id],
                                     translationPreference.agentLanguage,
-                                    translationPreference.customerLanguage,
+                                    sourceLanguage,
                                     true,
                                   )
                                 }
@@ -1671,13 +1672,14 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                               <VoiceTranslation
                                 value={messageTranslations[message.id]}
                                 language={translationPreference.agentLanguage}
+                                defaultSourceLanguage={translationPreference.customerLanguage}
                                 configured={translationConfigured}
-                                onTranslate={() =>
+                                onTranslate={sourceLanguage =>
                                   void loadIncomingTranslations(
                                     apiToken,
                                     [message.id],
                                     translationPreference.agentLanguage,
-                                    translationPreference.customerLanguage,
+                                    sourceLanguage,
                                     true,
                                     true,
                                   )
@@ -3920,18 +3922,26 @@ function TimezoneSearchDropdown({value,onChange,label="搜索并选择时区"}:{
   return <div className="timezone-picker"><div className="timezone-search-field"><Search size={14}/><input type="search" value={open?query:value} onFocus={()=>{setOpen(true);setQuery("");}} onChange={event=>{setOpen(true);setQuery(event.target.value);}} onBlur={()=>window.setTimeout(()=>setOpen(false),120)} aria-label={label} role="combobox" aria-controls="timezone-search-options" aria-expanded={open} aria-autocomplete="list" autoComplete="off"/><ChevronDown size={14}/></div>{open&&<div id="timezone-search-options" className="timezone-options" role="listbox">{visible.length?visible.map(zone=><button type="button" role="option" aria-selected={zone===value} className={zone===value?"selected":""} key={zone} onMouseDown={event=>event.preventDefault()} onClick={()=>{onChange(zone);setOpen(false);setQuery("");}}>{zone}</button>):<span className="timezone-empty">没有匹配时区</span>}</div>}</div>;
 }
 
-function IncomingTranslation({value,language,onRetry}:{value?:MessageTranslation;language:string;onRetry:()=>void}){
-  if(value?.status==="idle")return null;
-  if(!value||value.status==="loading")return <div className="incoming-translation loading"><RefreshCw className="spin" size={12}/>正在翻译为 {languageName(language)}…</div>;
-  if(value.status==="failed")return <div className="incoming-translation failed"><span>{value.message??"译文加载失败"}</span><button onClick={onRetry}>重试</button></div>;
-  return <div className="incoming-translation"><span><Languages size={12}/>{detectedLanguageName(value.sourceLanguage)} → {languageName(language)}</span><p>{value.text}</p></div>;
+function MessageSourceLanguageControl({language,busy=false,actionLabel,onApply}:{language:string;busy?:boolean;actionLabel:string;onApply:(language:string)=>void}){
+  const [editing,setEditing]=useState(false),[selected,setSelected]=useState(language);
+  if(!editing)return <button type="button" className="message-source-language" disabled={busy} onClick={()=>{setSelected(language);setEditing(true);}} title="仅修改这条消息的原语言"><Pencil size={11}/>原语言：{languageName(language)}</button>;
+  return <div className="message-language-override"><span>指定这条消息的原语言</span><LanguagePicker value={selected} onChange={setSelected} label="搜索并指定这条消息的原语言"/><div><button type="button" onClick={()=>setEditing(false)}>取消</button><button type="button" className="apply" disabled={busy} onClick={()=>{setEditing(false);onApply(selected);}}>{actionLabel}</button></div></div>;
 }
 
-function VoiceTranslation({value,language,configured,onTranslate}:{value?:MessageTranslation;language:string;configured:boolean;onTranslate:()=>void}){
-  if(!value||value.status==="idle")return <button className="voice-translate-action" disabled={!configured} onClick={onTranslate}><Languages size={12}/>{configured?`AI 翻译语音为 ${languageName(language)}`:"管理员尚未配置翻译 Provider"}</button>;
+function IncomingTranslation({value,language,defaultSourceLanguage,onTranslate}:{value?:MessageTranslation;language:string;defaultSourceLanguage:string;onTranslate:(sourceLanguage:string)=>void}){
+  const sourceLanguage=value?.sourceLanguage??defaultSourceLanguage;
+  if(value?.status==="idle")return null;
+  if(!value||value.status==="loading")return <div className="incoming-translation loading"><RefreshCw className="spin" size={12}/>正在翻译为 {languageName(language)}…</div>;
+  if(value.status==="failed")return <div className="incoming-translation"><div className="translation-failure-row"><span>{value.message??"译文加载失败"}</span><button onClick={()=>onTranslate(sourceLanguage)}>重试</button></div><MessageSourceLanguageControl language={sourceLanguage} actionLabel="按此语种重新翻译" onApply={onTranslate}/></div>;
+  return <div className="incoming-translation"><span><Languages size={12}/>{detectedLanguageName(value.sourceLanguage)} → {languageName(language)}</span><p>{value.text}</p><MessageSourceLanguageControl language={sourceLanguage} actionLabel="按此语种重新翻译" onApply={onTranslate}/></div>;
+}
+
+function VoiceTranslation({value,language,defaultSourceLanguage,configured,onTranslate}:{value?:MessageTranslation;language:string;defaultSourceLanguage:string;configured:boolean;onTranslate:(sourceLanguage:string)=>void}){
+  const sourceLanguage=value?.sourceLanguage??defaultSourceLanguage;
+  if(!value||value.status==="idle")return <div className="voice-translation-actions"><MessageSourceLanguageControl language={sourceLanguage} busy={!configured} actionLabel="按此语种转写并翻译" onApply={onTranslate}/><button className="voice-translate-action" disabled={!configured} onClick={()=>onTranslate(sourceLanguage)}><Languages size={12}/>{configured?`AI 翻译语音为 ${languageName(language)}`:"管理员尚未配置翻译 Provider"}</button></div>;
   if(value.status==="loading")return <div className="incoming-translation loading"><RefreshCw className="spin" size={12}/>正在转写并翻译语音…</div>;
-  if(value.status==="failed")return <div className="incoming-translation failed"><span>{value.message??"语音翻译失败"}</span><button onClick={onTranslate}>重试</button></div>;
-  return <div className="incoming-translation voice-translation">{value.sourceText&&<><span><Mic size={12}/>语音原文</span><p>{value.sourceText}</p></>}<span><Languages size={12}/>{detectedLanguageName(value.sourceLanguage)} → {languageName(language)}</span><p>{value.text}</p></div>;
+  if(value.status==="failed")return <div className="incoming-translation"><div className="translation-failure-row"><span>{value.message??"语音翻译失败"}</span><button onClick={()=>onTranslate(sourceLanguage)}>重试</button></div><MessageSourceLanguageControl language={sourceLanguage} busy={!configured} actionLabel="按此语种转写并翻译" onApply={onTranslate}/></div>;
+  return <div className="incoming-translation voice-translation">{value.sourceText&&<><span><Mic size={12}/>语音原文</span><p>{value.sourceText}</p></>}<span><Languages size={12}/>{detectedLanguageName(value.sourceLanguage)} → {languageName(language)}</span><p>{value.text}</p><MessageSourceLanguageControl language={sourceLanguage} busy={!configured} actionLabel="按此语种转写并翻译" onApply={onTranslate}/></div>;
 }
 
 const QUICK_REPLY_TEXTS=[
