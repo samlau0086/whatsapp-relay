@@ -1,4 +1,4 @@
-const TRANSIENT_CODES=new Set([1006,1011,408,425,428,429,502,503,504]);
+const TRANSIENT_CODES=new Set([23,1006,1011,408,425,428,429,502,503,504]);
 const SEND_CONFIRMATION_TIMEOUT="SEND_CONFIRMATION_TIMEOUT";
 const CENTRAL_MEDIA_AUTHORIZATION_ERROR="CENTRAL_MEDIA_AUTHORIZATION_ERROR";
 
@@ -22,12 +22,14 @@ export function isCentralMediaAuthorizationError(error:unknown):boolean {
 }
 
 export function isTransientSendConnectionError(error:unknown):boolean {
-  const value=error as {message?:unknown;code?:unknown;statusCode?:unknown;output?:{statusCode?:unknown};cause?:{code?:unknown;message?:unknown}}|undefined;
+  const value=error as {name?:unknown;message?:unknown;code?:unknown;statusCode?:unknown;output?:{statusCode?:unknown};cause?:{name?:unknown;code?:unknown;message?:unknown}}|undefined;
   const values=[value?.code,value?.statusCode,value?.output?.statusCode,value?.cause?.code];
   if(values.some(item=>TRANSIENT_CODES.has(Number(item))))return true;
+  const names=[value?.name,value?.cause?.name].map(item=>String(item??"").toLowerCase());
+  if(names.includes("timeouterror"))return true;
   const message=[value?.message,value?.cause?.message,error].map(item=>String(item??"")).join(" ").toLowerCase();
   if([...TRANSIENT_CODES].some(code=>new RegExp(`(^|\\D)${code}(\\D|$)`).test(message)))return true;
-  return /fetch failed|connection (?:closed|terminated|lost)|socket (?:closed|hang up)|econnreset|econnrefused|etimedout|epipe|network timeout|connect timeout|headers timeout|body timeout/.test(message);
+  return /fetch failed|connection (?:closed|terminated|lost)|socket (?:closed|hang up)|econnreset|econnrefused|etimedout|epipe|network timeout|connect timeout|headers timeout|body timeout|aborted due to timeout/.test(message);
 }
 
 export function describeSendError(error:unknown):string {

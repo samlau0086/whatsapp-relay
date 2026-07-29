@@ -11,6 +11,7 @@ test("temporary WhatsApp disconnects remain queued instead of becoming permanent
   assert.equal(isTransientSendConnectionError({output:{statusCode:428},message:"Connection Terminated"}),true);
   assert.equal(isTransientSendConnectionError(Object.assign(new Error("socket hang up"),{code:"ECONNRESET"})),true);
   assert.equal(isTransientSendConnectionError(Object.assign(new TypeError("fetch failed"),{cause:{code:"UND_ERR_CONNECT_TIMEOUT"}})),true);
+  assert.equal(isTransientSendConnectionError(new DOMException("The operation was aborted due to timeout","TimeoutError")),true);
   assert.equal(describeSendError(Object.assign(new TypeError("fetch failed"),{cause:{code:"UND_ERR_CONNECT_TIMEOUT"}})),"fetch failed; UND_ERR_CONNECT_TIMEOUT");
   assert.equal(isTransientSendConnectionError(new Error("not-authorized")),false);
 });
@@ -90,7 +91,7 @@ test("inbound WhatsApp replies are normalized before entering the durable outbox
   assert.match(worker,/attempt < 5/);
   assert.match(worker,/AbortSignal\.timeout\(120_000\)/);
   assert.match(worker,/downloadOutboundMedia/);
-  assert.match(worker,/AbortSignal\.timeout\(12_000\)/);
+  assert.match(worker,/AbortSignal\.timeout\(60_000\)/);
   assert.match(worker,/fetch\(new URL\(`\/agent\/media\/\$\{encodeURIComponent\(mediaId\)\}`/);
   assert.doesNotMatch(worker,/downloadOutboundMedia[\s\S]*?dispatcher: mediaProxyAgent[\s\S]*?function messageTime/);
   assert.match(worker,/UndiciProxyAgent/);
