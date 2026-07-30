@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {createHmac} from "node:crypto";
 import {readFile} from "node:fs/promises";
 import test from "node:test";
-import {messengerOutboundBody,validMessengerSignature} from "../src/messenger.js";
+import {messengerOutboundBody,validMessengerSignature,verifyMessengerPage} from "../src/messenger.js";
 import {MessengerReplyWindowClosedError,queueChannelCommand} from "../src/whatsapp-outbound.js";
 
 test("Messenger webhook signature validates the exact raw body",()=>{
@@ -20,6 +20,20 @@ test("Messenger outbound text and reply use Send API wire shapes",async()=>{
   assert.deepEqual(await messengerOutboundBody({destinationId:"psid-1",type:"text",text:"reply",quotedProviderMessageId:"mid.quoted"},"token","page-1"),{
     recipient:{id:"psid-1"},messaging_type:"RESPONSE",message:{text:"reply",reply_to:{mid:"mid.quoted"}},
   });
+});
+
+test("Messenger credential verification resolves the Page from its token without deprecated picture fields",async()=>{
+  const originalFetch=globalThis.fetch;
+  globalThis.fetch=async(input,init)=>{
+    assert.match(String(input),/\/me\?fields=id,name$/);
+    assert.equal((init?.headers as Record<string,string>).authorization,"Bearer page-token");
+    return new Response(JSON.stringify({id:"61577368201478",name:"Maes'Vanti Wholesale"}),{status:200,headers:{"content-type":"application/json"}});
+  };
+  try{
+    assert.deepEqual(await verifyMessengerPage({pageId:"61577368201478",pageAccessToken:"page-token"}),{id:"61577368201478",name:"Maes'Vanti Wholesale"});
+  }finally{
+    globalThis.fetch=originalFetch;
+  }
 });
 
 test("channel queue enforces the Messenger reply window",async()=>{

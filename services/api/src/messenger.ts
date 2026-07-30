@@ -42,10 +42,10 @@ async function graphRequest<T>(path:string,token:string,init:RequestInit={}):Pro
   return body as T;
 }
 
-export async function verifyMessengerPage(input:{pageId:string;pageAccessToken:string}):Promise<{id:string;name?:string;picture?:unknown}>{
-  const page=await graphRequest<{id?:string;name?:string;picture?:unknown}>(`${input.pageId}?fields=id,name,picture`,input.pageAccessToken);
+export async function verifyMessengerPage(input:{pageId:string;pageAccessToken:string}):Promise<{id:string;name?:string}>{
+  const page=await graphRequest<{id?:string;name?:string}>("me?fields=id,name",input.pageAccessToken);
   if(page.id!==input.pageId)throw new MessengerApiError(400,"page_mismatch","Page access token does not belong to the configured Page");
-  return{id:page.id,name:page.name,picture:page.picture};
+  return{id:page.id,name:page.name};
 }
 
 export function validMessengerSignature(raw:Buffer,header:string,secret:string):boolean{
