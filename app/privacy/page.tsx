@@ -1,4 +1,5 @@
 import type {Metadata} from "next";
+import Link from "next/link";
 import {LegalDocument,LegalSection} from "../legal-document";
 
 export const metadata:Metadata={
@@ -36,7 +37,7 @@ export default function PrivacyPage(){
       <p>我们使用 HTTPS 传输、凭据加密、基于角色的账号权限、账号级数据隔离、审计日志和受限运维访问等措施。任何系统都无法保证绝对安全，请勿通过聊天发送不必要的敏感信息。</p>
     </LegalSection>
     <LegalSection title="6. 你的权利" enTitle="Your choices and rights">
-      <p>依适用法律，你可以请求访问、更正、导出、限制处理、反对处理或删除个人数据，也可以撤回同意。最可靠的身份验证方式是从原 Facebook Page 或 WhatsApp 会话提交请求。详细步骤见 <a href="/data-deletion">用户数据删除说明</a>。</p>
+      <p>依适用法律，你可以请求访问、更正、导出、限制处理、反对处理或删除个人数据，也可以撤回同意。最可靠的身份验证方式是从原 Facebook Page 或 WhatsApp 会话提交请求。详细步骤见 <Link href="/data-deletion">用户数据删除说明</Link>。</p>
       <p>你也可以在 Facebook 或 WhatsApp 中停止发送消息、删除本地会话或屏蔽相应商家；这些平台操作不会自动删除商家已依法保存的副本，因此如需完整删除，请另行提交删除请求。</p>
     </LegalSection>
     <LegalSection title="7. 国际传输、未成年人及变更" enTitle="Transfers, children and changes">
