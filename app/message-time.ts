@@ -11,7 +11,7 @@ export function formatMessageTime(value: Date | string, now = new Date()): strin
   if (dayDifference === 1) return `昨天 ${formatClockTime(date)}`;
   if (dayDifference === 2) return `前天 ${formatClockTime(date)}`;
 
-  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${formatClockTime(date)}`;
+  return `${pad(date.getFullYear() % 100)}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${formatClockTime(date)}`;
 }
 
 export function formatMessageTimeTitle(value: Date | string): string {
