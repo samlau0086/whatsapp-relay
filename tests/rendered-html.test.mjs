@@ -413,6 +413,10 @@ test("inbox quick replies support search, media types, and conversation translat
   assert.match(component,/savedReplies=\{savedQuickReplies\}/);
   assert.match(component,/item\.sourceMessageId!==message\.id/);
   assert.match(component,/function QuickReplyEditorDialog/);
+  assert.match(component,/QUICK_REPLY_VARIABLES/);
+  assert.match(component,/resolveQuickReplyText/);
+  assert.match(component,/quickReplyVariableLabel/);
+  assert.match(component,/客户资料缺少/);
   assert.match(component,/aria-label="新增快捷回复"/);
   assert.match(component,/编辑 \$\{item\.title\}/);
   assert.match(component,/删除 \$\{item\.title\}/);
@@ -428,6 +432,7 @@ test("inbox quick replies support search, media types, and conversation translat
   assert.match(css,/\.message-save-quick-reply/);
   assert.match(css,/\.quick-reply-item-actions\{/);
   assert.match(css,/\.quick-reply-editor-dialog\{/);
+  assert.match(css,/\.quick-reply-variable-buttons\{/);
 });
 
 test("failed and uncertain messages expose a manual resend action", async () => {

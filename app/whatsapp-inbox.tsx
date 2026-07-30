@@ -27,6 +27,7 @@ import { TaskCenter } from "./task-center";
 import {StatusCenter} from "./status-center";
 import {LanguagePicker,languageFlag,languageName,languageShortCode} from "./language-picker";
 import { conversationCountsPath, conversationListPath, conversationSummaryPath, type ConversationDateFilter, type ConversationListFilter } from "./conversation-date-filter";
+import { QUICK_REPLY_VARIABLES, quickReplyVariableNames, renderQuickReplyVariables, type QuickReplyVariable, type QuickReplyVariableValues } from "./quick-reply-variables";
 import { confirmAction, ConfirmationHost, promptAction, PromptHost } from "./confirmation-ui";
 import {formatMessageTime,formatMessageTimeTitle} from "./message-time";
 import {useConversationFeed} from "./use-conversation-feed";
@@ -161,6 +162,8 @@ type ContactProfile={id:string;accountId:string;accountName:string;alias:string;
 type OrderProductItem={id:string;name:string;sku:string;quantity:number;unitAmount:number;weightAmount:number|null;weightUnit:WeightUnit|null;imageMediaId:string|null;imageName:string;productId:string|null};
 type OrderFeeItem={id:string;name:string;amount:number};
 type CustomerAddress={id:string;label:string;recipientName:string;phone:string;address:string;isDefault:boolean};
+const QUICK_REPLY_VARIABLE_LABELS:Record<QuickReplyVariable,string>={first_name:"First name",middle_name:"Middle name",last_name:"Last name",shipping_address:"默认收货地址",email:"Primary Email",mobile:"Mobile",whatsapp:"WhatsApp"};
+function quickReplyVariableLabel(variable:QuickReplyVariable){return QUICK_REPLY_VARIABLE_LABELS[variable];}
 type PaymentRequest={id:string;invoiceId:string|null;url:string|null;status:string;amount:number;currency:string;environment:string;createdAt:string;lastSyncedAt:string|null};
 type PaymentMethodType="paypal"|"bank_transfer"|"western_union"|"wise"|"moneygram"|"stripe_payment_link"|"custom";
 type PaymentPublicField={label:string;value:string};
@@ -313,6 +316,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [quickReplyOpen,setQuickReplyOpen]=useState(false);
   const [savedQuickReplies,setSavedQuickReplies]=useState<SavedQuickReply[]>([]);
   const [quickReplyEditor,setQuickReplyEditor]=useState<SavedQuickReply|null|undefined>(undefined);
+  const [quickReplyResolving,setQuickReplyResolving]=useState(false);
   const [emojiCategory,setEmojiCategory]=useState("常用");
   const [translationPreferences,setTranslationPreferences]=useState<Record<string,TranslationPreference>>({});
   const [translationConfigured,setTranslationConfigured]=useState(false);
@@ -868,8 +872,10 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   }
 
   async function sendMessage(){
-    if(!active||!apiToken||!draft.trim()||translatingDraft||composerImageBusy)return;
-    const source=draft.trim();
+    if(!active||!apiToken||!draft.trim()||translatingDraft||composerImageBusy||quickReplyResolving)return;
+    const resolvedSource=await resolveQuickReplyText(draft.trim());
+    if(resolvedSource===null)return;
+    const source=resolvedSource.trim();
     if(translationPreference.enabled){
       if(!translationConfigured){setToast("AI 翻译暂不可用，请联系管理员配置 Provider");return;}
       setTranslatingDraft(true);setTranslationError("");
@@ -1120,8 +1126,47 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     void uploadComposerImages(event.dataTransfer.files);
   }
 
+  async function resolveQuickReplyText(template:string):Promise<string|null>{
+    const variableNames=quickReplyVariableNames(template);
+    if(!variableNames.length)return template;
+    const supported=new Set<string>(QUICK_REPLY_VARIABLES),unsupported=variableNames.filter(name=>!supported.has(name));
+    if(unsupported.length){setToast(`快捷回复包含不支持的变量：${[...new Set(unsupported)].map(name=>`{{${name}}}`).join("、")}`);return null;}
+    if(!active){setToast("请先选择客户会话");return null;}
+    setQuickReplyResolving(true);
+    try{
+      const result=await authorizedFetch(`/api/v1/contacts/${active.contactId}`,apiToken);
+      if(result.token!==apiToken)setApiToken(result.token);
+      if(!result.response.ok)throw new Error(`客户资料读取失败（HTTP ${result.response.status}）`);
+      const profile=mapContactProfile(await result.response.json() as Record<string,unknown>);
+      const defaultAddress=profile.addresses.find(item=>item.isDefault)??null;
+      const phoneMethods=profile.methods.filter(item=>item.type==="phone");
+      const preferredMobile=phoneMethods.find(item=>/(mobile|cell|手机|移动)/i.test(item.label))??phoneMethods[0];
+      const values:QuickReplyVariableValues={
+        first_name:profile.firstName,
+        middle_name:profile.middleName,
+        last_name:profile.lastName,
+        shipping_address:defaultAddress?[defaultAddress.recipientName,defaultAddress.phone,defaultAddress.address].filter(Boolean).join("\n"):"",
+        email:profile.primaryEmail??"",
+        mobile:preferredMobile?.value??profile.phone,
+        whatsapp:profile.phone,
+      };
+      const rendered=renderQuickReplyVariables(template,values);
+      if(rendered.missing.length){setToast(`客户资料缺少：${rendered.missing.map(quickReplyVariableLabel).join("、")}；快捷回复未应用`);return null;}
+      return rendered.text;
+    }catch(reason){setToast(reason instanceof Error?reason.message:"快捷回复变量解析失败");return null;}
+    finally{setQuickReplyResolving(false);}
+  }
+
+  async function applyQuickReplyText(template:string){
+    const text=await resolveQuickReplyText(template);
+    if(text===null)return;
+    setDraft(text);setQuickReplyOpen(false);
+    requestAnimationFrame(()=>textareaRef.current?.focus());
+  }
+
   async function sendQuickReplyMedia(asset:MediaAsset,captionOverride?:string){
     let caption=asset.mimeType.startsWith("audio/")?"":(captionOverride??draft).trim();
+    if(caption){const rendered=await resolveQuickReplyText(caption);if(rendered===null)return;caption=rendered.trim();}
     if(caption&&translationPreference.enabled){
       if(!translationConfigured){setToast("AI 翻译暂不可用，请联系管理员配置 Provider");return;}
       setTranslatingDraft(true);setTranslationError("");
@@ -1781,7 +1826,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                     <div className="composer-tool-actions">
                       <QuickReplyDropdown
                         open={quickReplyOpen}
-                        disabled={cloudWindowClosed || translatingDraft}
+                        disabled={cloudWindowClosed || translatingDraft || quickReplyResolving}
                         translationEnabled={translationPreference.enabled}
                         savedReplies={savedQuickReplies}
                         onOpenChange={handleQuickReplyOpen}
@@ -1794,13 +1839,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                           setQuickReplyEditor(item);
                         }}
                         onDelete={deleteQuickReply}
-                        onText={(text) => {
-                          setDraft(text);
-                          setQuickReplyOpen(false);
-                          requestAnimationFrame(() =>
-                            textareaRef.current?.focus(),
-                          );
-                        }}
+                        onText={(text) => void applyQuickReplyText(text)}
                         onMedia={(asset, caption) =>
                           void sendQuickReplyMedia(asset, caption)
                         }
@@ -1984,9 +2023,9 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                               ? "翻译并预览"
                               : "发送"
                           }
-                          disabled={translatingDraft || composerImageBusy}
+                          disabled={translatingDraft || composerImageBusy || quickReplyResolving}
                         >
-                          {translatingDraft || composerImageBusy ? (
+                          {translatingDraft || composerImageBusy || quickReplyResolving ? (
                             <RefreshCw className="spin" size={18} />
                           ) : (
                             <Send size={18} />
@@ -4047,7 +4086,7 @@ function QuickReplyEditorDialog({accountId,token,item,onToken,onClose,onSave}:{a
   useEffect(()=>{const controller=new AbortController();void (async()=>{setLoading(true);try{const result=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(accountId)}&limit=100`,token,{signal:controller.signal});if(result.token!==token)onToken(result.token);const body=await result.response.json().catch(()=>({data:[]})) as {data?:Array<Record<string,unknown>>};if(!result.response.ok)throw new Error(`HTTP ${result.response.status}`);setAssets((body.data??[]).map(mapMediaAsset));}catch(reason){if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:"媒体库加载失败");}finally{if(!controller.signal.aborted)setLoading(false);}})();return()=>controller.abort();},[accountId,token,onToken]);
   const mediaOptions=assets.filter(asset=>mediaKind(asset.mimeType)===kind),selected=assets.find(asset=>asset.id===mediaId)??item?.attachment;
   function submit(){if(!title.trim()||(kind==="text"&&!text.trim())||(kind!=="text"&&!selected))return;onSave({id:item?.id??crypto.randomUUID(),sourceMessageId:item?.sourceMessageId??`manual:${crypto.randomUUID()}`,title:title.trim(),text:text.trim(),tags:tags.trim(),kind,createdAt:item?.createdAt??new Date().toISOString(),attachment:kind==="text"?undefined:selected});}
-  return <div className="modal-backdrop quick-reply-editor-backdrop" role="presentation"><section className="login-dialog quick-reply-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="quick-reply-editor-title"><button className="login-close" onClick={onClose} aria-label="关闭"><X size={17}/></button><span className="login-logo"><Zap size={20}/></span><h2 id="quick-reply-editor-title">{item?"编辑快捷回复":"新增快捷回复"}</h2><p>快捷回复按当前坐席和 WhatsApp 账号保存。</p><label>标题<input value={title} onChange={event=>setTitle(event.target.value)} maxLength={40} autoFocus placeholder="例如：报价后跟进"/></label><label>消息类型<select value={kind} onChange={event=>{setKind(event.target.value);setMediaId("");}}>{[["text","文本"],["image","图片"],["audio","语音"],["video","视频"],["document","文件"]].map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label>{kind!=="text"&&<label>媒体文件<select value={mediaId} onChange={event=>setMediaId(event.target.value)} disabled={loading}><option value="">{loading?"正在读取媒体库…":"请选择媒体文件"}</option>{mediaOptions.map(asset=><option value={asset.id} key={asset.id}>{asset.fileName} · {formatBytes(asset.size)}</option>)}</select><small>如需新文件，请先通过“媒体与附件”上传。</small></label>}<label>{kind==="text"?"回复内容":"附件说明（可选）"}<textarea value={text} onChange={event=>setText(event.target.value)} maxLength={65536} placeholder={kind==="text"?"输入快捷回复内容":"随媒体发送的文字说明"}/></label><label>搜索标签（可选）<input value={tags} onChange={event=>setTags(event.target.value)} maxLength={200} placeholder="例如：报价 售后 英文"/></label>{error&&<span className="login-error">{error}</span>}<div className="quick-reply-editor-actions"><button className="secondary-action" onClick={onClose}>取消</button><button className="primary-action" onClick={submit} disabled={!title.trim()||(kind==="text"&&!text.trim())||(kind!=="text"&&!selected)}><Check size={14}/>{item?"保存修改":"新增快捷回复"}</button></div></section></div>;
+  return <div className="modal-backdrop quick-reply-editor-backdrop" role="presentation"><section className="login-dialog quick-reply-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="quick-reply-editor-title"><button className="login-close" onClick={onClose} aria-label="关闭"><X size={17}/></button><span className="login-logo"><Zap size={20}/></span><h2 id="quick-reply-editor-title">{item?"编辑快捷回复":"新增快捷回复"}</h2><p>快捷回复按当前坐席和 WhatsApp 账号保存；客户变量会在使用时替换。</p><label>标题<input value={title} onChange={event=>setTitle(event.target.value)} maxLength={40} autoFocus placeholder="例如：报价后跟进"/></label><label>消息类型<select value={kind} onChange={event=>{setKind(event.target.value);setMediaId("");}}>{[["text","文本"],["image","图片"],["audio","语音"],["video","视频"],["document","文件"]].map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label>{kind!=="text"&&<label>媒体文件<select value={mediaId} onChange={event=>setMediaId(event.target.value)} disabled={loading}><option value="">{loading?"正在读取媒体库…":"请选择媒体文件"}</option>{mediaOptions.map(asset=><option value={asset.id} key={asset.id}>{asset.fileName} · {formatBytes(asset.size)}</option>)}</select><small>如需新文件，请先通过“媒体与附件”上传。</small></label>}<label>{kind==="text"?"回复内容":"附件说明（可选）"}<textarea value={text} onChange={event=>setText(event.target.value)} maxLength={65536} placeholder={kind==="text"?"输入快捷回复内容":"随媒体发送的文字说明"}/></label><div className="quick-reply-variable-buttons" aria-label="插入客户变量">{QUICK_REPLY_VARIABLES.map(variable=><button type="button" key={variable} title={`插入 {{${variable}}}`} onClick={()=>setText(value=>`${value}{{${variable}}}`)}><Plus size={11}/>{quickReplyVariableLabel(variable)}</button>)}</div><small className="quick-reply-variable-help">缺少对应客户资料时会阻止发送，避免占位符原样发出。</small><label>搜索标签（可选）<input value={tags} onChange={event=>setTags(event.target.value)} maxLength={200} placeholder="例如：报价 售后 英文"/></label>{error&&<span className="login-error">{error}</span>}<div className="quick-reply-editor-actions"><button className="secondary-action" onClick={onClose}>取消</button><button className="primary-action" onClick={submit} disabled={!title.trim()||(kind==="text"&&!text.trim())||(kind!=="text"&&!selected)}><Check size={14}/>{item?"保存修改":"新增快捷回复"}</button></div></section></div>;
 }
 
 function TranslationPreviewDialog({source,translated,targetLanguage,onClose,onConfirm}:{source:string;translated:string;targetLanguage:string;onClose:()=>void;onConfirm:(text:string)=>void}){
