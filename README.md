@@ -119,16 +119,46 @@ Cloud API 新会话必须通过已审核模板发起。客户回复后会开启 
 
 ### Facebook Messenger Pages
 
-管理员可在“系统设置 → Messenger Pages”逐个填写 Page ID、Page Access Token 和 Meta App Secret。每个 Page 都会成为独立渠道账号，拥有独立联系人、会话、权限和回复窗口，但会与 WhatsApp 一起显示在统一收件箱。
+推荐使用“系统设置 → Messenger Pages → 使用 Facebook 连接 Pages”的 OAuth 流程。管理员登录 Facebook 后可一次勾选多个 Page；RelayDesk 会读取并加密保存对应 Page Token、验证 Page 身份，并自动调用 `/{PAGE_ID}/subscribed_apps` 订阅消息事件。每个 Page 仍会成为独立渠道账号，拥有独立联系人、会话、权限和回复窗口，但会与 WhatsApp 一起显示在统一收件箱。
 
 #### 准备条件
 
-- 登录 [Meta for Developers](https://developers.facebook.com/apps/)，创建或选择一个已启用 Messenger 产品/用例的 Meta App。
+- 登录 [Meta for Developers](https://developers.facebook.com/apps/)，创建或选择一个已启用 Messenger 与 Facebook Login for Business 的 Meta App。
 - 操作人必须拥有目标 Facebook Page 的管理权限，并能授权该 App 管理 Page 消息。
 - 生产接收普通客户消息前，App 需要切换到 Live 模式，并按 Meta 要求完成业务验证、隐私政策及 `pages_messaging` 等权限审核。Development 模式通常只允许 App 角色和测试人员使用。
 - RelayDesk API 必须能通过公网 HTTPS 访问；Meta 无法回调 `localhost`、内网地址或需要登录的 URL。
 
-#### 获取 Page 凭据
+#### 首次配置 Facebook OAuth
+
+1. 在 Meta App Dashboard 添加 **Facebook Login for Business**，创建一个 Login Configuration。
+2. 在该 Configuration 中请求以下权限：
+   - `pages_show_list`
+   - `pages_messaging`
+   - `pages_manage_metadata`
+   - `pages_read_engagement`
+3. 在 Facebook Login for Business 的 Valid OAuth Redirect URIs 中添加 RelayDesk 设置页显示的 OAuth Redirect URI，例如：
+   - `https://你的 API 域名/api/v1/meta/messenger/oauth/callback`
+4. 在 Meta App 的 Messenger Webhooks 中选择 `Page` 对象，填写 RelayDesk 显示的：
+   - Callback URL：`https://你的 API 域名/api/v1/meta/messenger/webhook`
+   - Verify Token：保存 OAuth 应用配置时 RelayDesk 一次性显示的值
+5. 在 RelayDesk 的“系统设置 → Messenger Pages”填写：
+   - **Meta App ID**：来自“App settings → Basic”
+   - **Meta App Secret**：同一页面点击 Show 后取得
+   - **Login for Business Configuration ID**：来自 Facebook Login for Business 的 Configuration
+6. 保存后点击“使用 Facebook 连接 Pages”，使用拥有目标 Page 管理权限的 Facebook 账号登录，勾选一个或多个 Page，再在 RelayDesk 确认连接。
+
+OAuth 回调只短暂使用 User Access Token 来读取 `/me/accounts`，不会长期保存它。候选 Page Token 在短期授权会话中加密保存，选定后才写入渠道账号；授权会话会过期并被清理。Page echo 通过 `messages` 字段返回，因此自动订阅的字段是 `messages`、`message_deliveries` 和 `message_reads`，不需要单独订阅已不适用的 `message_echoes` 字段。
+
+#### Meta App 审核与上线
+
+- App 处于 Development 模式时，通常只有 App 角色、测试人员及其可管理 Page 能完成授权和测试。
+- 对外上线前，将 App 切换到 Live，完成 Meta 要求的业务验证、数据处理说明、隐私政策、服务条款和用户数据删除页面。
+- 为上述 Page 权限申请 Advanced Access/App Review，并在审核说明中展示“Facebook 登录 → 选择 Page → 收发 Messenger 消息”的完整录屏。
+- OAuth 不能替你在 Meta Dashboard 首次登记 Webhook Callback URL 和 Verify Token；这是 App 级别的一次性配置。后续新增 Page 会由 RelayDesk 自动完成 Page 订阅。
+
+#### 手动凭据（仅作兼容回退）
+
+如果 Meta App 暂时无法启用 Facebook Login for Business，可展开设置页中的“高级：手动添加 Page 凭据”，按以下方法逐 Page 添加。
 
 1. **Page ID**
    - 打开目标 Facebook Page，在 Page 的“关于/About”或“Page transparency/主页透明度”区域查找数字 Page ID。
@@ -148,7 +178,7 @@ Cloud API 新会话必须通过已审核模板发起。客户回复后会开启 
    - 多个 Page 使用同一个 Meta App 时可以使用同一个 App Secret；它用于验证 `X-Hub-Signature-256`，不能使用 App ID 代替。
 
 4. **Webhook Verify Token**
-   - Verify Token 不是从 Meta 获取的凭证。登录 RelayDesk 后进入“系统设置 → Messenger Pages”，填写渠道显示名称、Page ID、Page Access Token 和 Meta App Secret，然后点击添加。
+   - Verify Token 不是从 Meta 获取的凭证。登录 RelayDesk 后进入“系统设置 → Messenger Pages → 高级：手动添加 Page 凭据”，填写渠道显示名称、Page ID、Page Access Token 和 Meta App Secret，然后点击添加。
    - RelayDesk 会生成并且只显示一次 Verify Token，请立即保存。遗失后可在该 Page 的管理项中重置，并同步更新 Meta Webhook 配置。
 
 #### 配置 Meta Webhook
@@ -158,7 +188,7 @@ Cloud API 新会话必须通过已审核模板发起。客户回复后会开启 
 3. 填写以下内容：
    - Callback URL：`https://你的 API 域名/api/v1/meta/messenger/webhook`
    - Verify Token：RelayDesk 添加 Page 时一次性显示的 Verify Token
-4. 点击“Verify and Save/验证并保存”，然后订阅 `messages`、`message_echoes`、`message_deliveries` 和 `message_reads`。
+4. 点击“Verify and Save/验证并保存”，然后订阅 `messages`、`message_deliveries` 和 `message_reads`；message echo 会作为 `messages` 事件中的 `message.is_echo` 返回。
 5. 确认目标 Page 已订阅到该 App；每个要接入的 Page 都需要授权、在 RelayDesk 中单独添加并完成 Page 订阅。
 6. 从非管理员/非测试账号向 Page 发送一条消息，确认 RelayDesk 的“最近 Webhook 时间”已更新且统一收件箱出现 `Facebook · Page 名称` 会话。
 

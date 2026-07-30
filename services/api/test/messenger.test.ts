@@ -3,6 +3,7 @@ import {createHmac} from "node:crypto";
 import {readFile} from "node:fs/promises";
 import test from "node:test";
 import {messengerOutboundBody,validMessengerSignature,verifyMessengerPage} from "../src/messenger.js";
+import {messengerOAuthAuthorizationUrl,messengerOAuthCallbackHtml} from "../src/messenger-oauth.js";
 import {MessengerReplyWindowClosedError,queueChannelCommand} from "../src/whatsapp-outbound.js";
 
 test("Messenger webhook signature validates the exact raw body",()=>{
@@ -93,4 +94,34 @@ test("Messenger processing covers echo, delivery, read watermarks, and Page-scop
   assert.match(messenger,/occurred_at<=to_timestamp\(\$2\/1000\.0\)/);
   assert.match(messenger,/ON CONFLICT\(account_id,provider_user_id\)/);
   assert.match(messenger,/platform:"messenger"/);
+});
+
+test("Messenger OAuth uses Login for Business authorization-code flow and a strict callback target",()=>{
+  const url=new URL(messengerOAuthAuthorizationUrl({appId:"123456789",configurationId:"987654321",state:"opaque-state"}));
+  assert.equal(url.hostname,"www.facebook.com");
+  assert.equal(url.searchParams.get("client_id"),"123456789");
+  assert.equal(url.searchParams.get("config_id"),"987654321");
+  assert.equal(url.searchParams.get("response_type"),"code");
+  assert.equal(url.searchParams.get("state"),"opaque-state");
+  assert.match(url.searchParams.get("redirect_uri")??"",/\/api\/v1\/meta\/messenger\/oauth\/callback$/);
+  const html=messengerOAuthCallbackHtml({sessionId:"00000000-0000-4000-8000-000000000057"});
+  assert.match(html,/relaydesk:messenger-oauth/);
+  assert.match(html,/window\.opener\.postMessage/);
+  assert.doesNotMatch(html,/access_token|page_access_token/);
+});
+
+test("Messenger OAuth migration stores only encrypted candidate tokens and tracks Page subscriptions",async()=>{
+  const [migration,migrator,oauth]=await Promise.all([
+    readFile(new URL("../../../infra/postgres/migrations/057_messenger_oauth.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/messenger-oauth.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(migration,/CREATE TABLE IF NOT EXISTS messenger_oauth_sessions/);
+  assert.match(migration,/page_access_token_encrypted text NOT NULL/);
+  assert.match(migration,/subscription_status/);
+  assert.match(migrator,/"057_messenger_oauth\.sql"/);
+  assert.match(oauth,/encryptAtRest\(page\.access_token/);
+  assert.match(oauth,/subscribed_apps/);
+  assert.match(oauth,/\["messages","message_deliveries","message_reads"\]/);
+  assert.doesNotMatch(oauth,/INSERT INTO messenger_oauth_sessions[^;]*access_token/i);
 });

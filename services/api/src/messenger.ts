@@ -7,6 +7,7 @@ import {config} from "./config.js";
 import {pool,transaction} from "./db.js";
 import {createWebhookEvent} from "./agent-hub.js";
 import {decryptAtRest,encryptAtRest,hashSecret} from "./security.js";
+import {registerMessengerOAuthRoutes} from "./messenger-oauth.js";
 
 const graphBase=`https://graph.facebook.com/${config.META_GRAPH_API_VERSION}`;
 const s3=new S3Client({region:config.S3_REGION,endpoint:config.S3_ENDPOINT,forcePathStyle:true,credentials:{accessKeyId:config.S3_ACCESS_KEY,secretAccessKey:config.S3_SECRET_KEY}});
@@ -57,9 +58,11 @@ export function validMessengerSignature(raw:Buffer,header:string,secret:string):
 }
 
 export async function registerMessengerRoutes(app:FastifyInstance):Promise<void>{
+  await registerMessengerOAuthRoutes(app);
   app.get("/api/v1/admin/messenger/pages",{preHandler:authenticate},async(request,reply)=>{
     if(request.principal?.kind!=="user"||request.principal.role!=="admin")return reply.code(403).send({error:"admin_required"});
-    const result=await pool.query(`SELECT a.id,a.display_name,a.status,p.page_id,p.enabled,p.credentials_verified_at,p.webhook_verified_at,p.last_webhook_at
+    const result=await pool.query(`SELECT a.id,a.display_name,a.status,p.page_id,p.enabled,p.credentials_verified_at,p.webhook_verified_at,p.last_webhook_at,
+      p.auth_source,p.token_refreshed_at,p.subscription_status,p.subscription_error
       FROM channel_accounts a JOIN messenger_page_accounts p ON p.account_id=a.id
       WHERE a.platform='messenger' ORDER BY a.display_name`);
     return{data:result.rows.map(row=>({...row,platform:"messenger",credentialsStatus:row.credentials_verified_at?"verified":"unverified",webhookStatus:row.webhook_verified_at?"verified":"pending",pageAccessTokenConfigured:true,appSecretConfigured:true}))};
@@ -129,8 +132,10 @@ export async function registerMessengerRoutes(app:FastifyInstance):Promise<void>
     webhook.get("/api/v1/meta/messenger/webhook",async(request,reply)=>{
       const query=request.query as Record<string,string|undefined>;
       if(query["hub.mode"]!=="subscribe"||!query["hub.verify_token"])return reply.code(403).send("Forbidden");
-      const found=await pool.query("UPDATE messenger_page_accounts SET webhook_verified_at=now(),updated_at=now() WHERE verify_token_hash=$1 AND enabled RETURNING account_id",[hashSecret(query["hub.verify_token"])]);
-      if(!found.rowCount)return reply.code(403).send("Forbidden");
+      const tokenHash=hashSecret(query["hub.verify_token"]);
+      const global=await pool.query("SELECT singleton FROM messenger_oauth_settings WHERE singleton=true AND enabled AND verify_token_hash=$1",[tokenHash]);
+      const found=await pool.query("UPDATE messenger_page_accounts SET webhook_verified_at=now(),updated_at=now() WHERE verify_token_hash=$1 AND enabled RETURNING account_id",[tokenHash]);
+      if(!global.rowCount&&!found.rowCount)return reply.code(403).send("Forbidden");
       return reply.type("text/plain").send(query["hub.challenge"]??"");
     });
     webhook.post("/api/v1/meta/messenger/webhook",async(request,reply)=>{
