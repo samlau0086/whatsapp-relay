@@ -58,6 +58,7 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   const materialSendDialog = await readFile(new URL("../app/material-library-send-dialog.tsx", import.meta.url), "utf8");
   assert.match(materialSendDialog, /拼接发送/);
   assert.match(materialSendDialog, /逐个发送/);
+  assert.match(materialSendDialog, /useState<SendMode>\("individual"\)/);
   assert.match(materialSendDialog, /竖向/);
   assert.match(materialSendDialog, /横向/);
   assert.match(materialSendDialog, /一次最多选择 10 张素材图片/);

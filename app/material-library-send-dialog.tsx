@@ -17,7 +17,7 @@ export function MaterialLibrarySendDialog({accountId,conversationId,customerName
   const [assets,setAssets]=useState<MaterialAsset[]>([]);
   const [selectedMediaIds,setSelectedMediaIds]=useState<string[]>([]);
   const [assetCache,setAssetCache]=useState<Record<string,SelectedMaterialAsset>>({});
-  const [mode,setMode]=useState<SendMode>("stitched");
+  const [mode,setMode]=useState<SendMode>("individual");
   const [orientation,setOrientation]=useState<StitchOrientation>("vertical");
   const [query,setQuery]=useState("");
   const [caption,setCaption]=useState(initialCaption);
