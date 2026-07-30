@@ -746,7 +746,7 @@ app.patch("/api/v1/products/:id",{preHandler:authenticate},async(request,reply)=
 app.patch("/api/v1/products/bulk-edit",{preHandler:authenticate},async(request,reply)=>{
   if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const principal=request.principal,parsed=productBulkEditSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",issues:parsed.error.issues});
   const {productIds,operation}=parsed.data;
-  try{const products=await transaction(async client=>{const found=await client.query("SELECT id,name FROM products WHERE id=ANY($1::uuid[]) AND deleted_at IS NULL FOR UPDATE",[productIds]);if(found.rowCount!==productIds.length)throw Object.assign(new Error("product_unavailable"),{statusCode:409});
+  try{const products=await transaction(async client=>{const found=await client.query("SELECT id,name,sku FROM products WHERE id=ANY($1::uuid[]) AND deleted_at IS NULL FOR UPDATE",[productIds]);if(found.rowCount!==productIds.length)throw Object.assign(new Error("product_unavailable"),{statusCode:409});
     if(operation.field==="price"){
       const factor=operation.mode==="percentIncrease"?1+operation.value/100:operation.mode==="percentDecrease"?1-operation.value/100:null;
       const tiers=await client.query("SELECT product_id,unit_amount FROM product_price_tiers WHERE product_id=ANY($1::uuid[]) FOR UPDATE",[productIds]);
@@ -759,10 +759,20 @@ app.patch("/api/v1/products/bulk-edit",{preHandler:authenticate},async(request,r
       else for(const productId of productIds)for(const tag of uniqueProductLabels(operation.tags))await client.query("INSERT INTO product_labels(product_id,name,color) VALUES($1,$2,$3) ON CONFLICT(product_id,lower(name)) DO UPDATE SET color=EXCLUDED.color",[productId,tag.name,tag.color]);
       await client.query("UPDATE products SET updated_at=now() WHERE id=ANY($1::uuid[])",[productIds]);
     }else{
-      for(const row of found.rows){const current=String(row.name);let next:string;if(operation.mode==="set")next=operation.value;else if(operation.mode==="prefix")next=operation.value+current;else if(operation.mode==="suffix")next=current+operation.value;else if("search" in operation)next=current.replaceAll(operation.search,operation.value);else throw new Error("invalid_title_operation");if(!next.trim()||next.length>120)throw Object.assign(new Error("invalid_resulting_title"),{statusCode:400});await client.query("UPDATE products SET name=$2,updated_at=now() WHERE id=$1",[row.id,next]);}
+      const column=operation.field==="sku"?"sku":"name",maxLength=operation.field==="sku"?80:120,invalidResult=operation.field==="sku"?"invalid_resulting_sku":"invalid_resulting_title";
+      const updates=found.rows.map(row=>{const current=String(row[column]);let next:string;if(operation.mode==="set")next=operation.value;else if(operation.mode==="prefix")next=operation.value+current;else if(operation.mode==="suffix")next=current+operation.value;else if("search" in operation)next=current.replaceAll(operation.search,operation.value);else throw new Error("invalid_text_operation");if(!next.trim()||next.length>maxLength)throw Object.assign(new Error(invalidResult),{statusCode:400});return{id:String(row.id),next};});
+      if(operation.field==="sku"){
+        const normalized=updates.map(item=>item.next.trim().toLocaleLowerCase());
+        if(new Set(normalized).size!==normalized.length)throw Object.assign(new Error("sku_exists"),{statusCode:409});
+        const conflicting=await client.query("SELECT id FROM products WHERE deleted_at IS NULL AND NOT(id=ANY($1::uuid[])) AND lower(btrim(sku))=ANY($2::text[]) LIMIT 1",[productIds,normalized]);
+        if(conflicting.rowCount)throw Object.assign(new Error("sku_exists"),{statusCode:409});
+        const temporaryPrefix=`__bulk_sku_${randomBytes(16).toString("hex")}_`;
+        for(const [index,item] of updates.entries())await client.query("UPDATE products SET sku=$2 WHERE id=$1",[item.id,`${temporaryPrefix}${index}`]);
+        for(const item of updates)await client.query("UPDATE products SET sku=$2,updated_at=now() WHERE id=$1",[item.id,item.next]);
+      }else for(const item of updates)await client.query("UPDATE products SET name=$2,updated_at=now() WHERE id=$1",[item.id,item.next]);
     }
     await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'product.bulk_update','product',NULL,$2)",[principal.id,JSON.stringify({productIds,operation})]);return Promise.all(productIds.map(id=>productById(client,id)));});return{updated:products.length,products};
-  }catch(error){const status=(error as {statusCode?:number}).statusCode;if(status)return reply.code(status).send({error:(error as Error).message});throw error;}
+  }catch(error){const status=(error as {statusCode?:number}).statusCode;if(status)return reply.code(status).send({error:(error as Error).message});if((error as {code?:string}).code==="23505")return reply.code(409).send({error:"sku_exists"});throw error;}
 });
 
 app.delete("/api/v1/products/:id",{preHandler:authenticate},async(request,reply)=>{
