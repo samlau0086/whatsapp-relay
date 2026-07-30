@@ -1,4 +1,4 @@
-export type ConversationDateFilter="all"|"today"|"yesterday"|"last7"|"last15"|"unreplied";
+export type ConversationDateFilter="all"|"today"|"yesterday"|"day3"|"day5"|"day7"|"day15plus"|"unreplied";
 export type ConversationListFilter="all"|"mine"|"unassigned"|"favorite"|"closed"|"archived"|"reminders";
 export type ConversationListOptions={filter?:ConversationListFilter;accountId?:string;q?:string;tagId?:string;cursor?:string;limit?:number};
 
@@ -6,8 +6,10 @@ export const CONVERSATION_DATE_FILTERS:Array<{value:ConversationDateFilter;label
   {value:"all",label:"全部"},
   {value:"today",label:"今天"},
   {value:"yesterday",label:"昨天"},
-  {value:"last7",label:"最近7天"},
-  {value:"last15",label:"最近15天"},
+  {value:"day3",label:"3天"},
+  {value:"day5",label:"5天"},
+  {value:"day7",label:"7天"},
+  {value:"day15plus",label:"15天及以上"},
   {value:"unreplied",label:"未回复"},
 ];
 
@@ -15,11 +17,15 @@ export function conversationDateRange(filter:ConversationDateFilter,now=new Date
   if(filter==="all"||filter==="unreplied")return{};
   const today=new Date(now.getFullYear(),now.getMonth(),now.getDate());
   const tomorrow=new Date(today);tomorrow.setDate(today.getDate()+1);
-  const from=new Date(today);
-  if(filter==="yesterday")from.setDate(today.getDate()-1);
-  if(filter==="last7")from.setDate(today.getDate()-6);
-  if(filter==="last15")from.setDate(today.getDate()-14);
-  return{from:from.toISOString(),before:(filter==="yesterday"?today:tomorrow).toISOString()};
+  if(filter==="today")return{from:today.toISOString(),before:tomorrow.toISOString()};
+  if(filter==="yesterday"){
+    const yesterday=new Date(today);yesterday.setDate(today.getDate()-1);
+    return{from:yesterday.toISOString(),before:today.toISOString()};
+  }
+  const days=filter==="day3"?3:filter==="day5"?5:filter==="day7"?7:15;
+  const from=new Date(today);from.setDate(today.getDate()-days);
+  const before=new Date(from);before.setDate(from.getDate()+1);
+  return filter==="day15plus"?{before:before.toISOString()}:{from:from.toISOString(),before:before.toISOString()};
 }
 
 export function conversationListPath(filter:ConversationDateFilter,now=new Date(),options:ConversationListOptions={}):string{

@@ -12,6 +12,7 @@ const PROTOCOL_VERSION = 2;
 const DEFAULT_CENTRAL_URL = "https://wsdesk.geekmt.com";
 const STABLE_USER_DATA = join(app.getPath("appData"), "@relaydesk", "windows-agent");
 const APP_ICON_PATH = join(import.meta.dirname, "assets", "icon.ico");
+const ATTENTION_ICON_PATH = join(import.meta.dirname, "assets", "icon-attention.ico");
 if(process.platform==="win32")app.setAppUserModelId("com.relaydesk.agent");
 mkdirSync(STABLE_USER_DATA,{recursive:true});
 app.setPath("userData", STABLE_USER_DATA);
@@ -19,6 +20,7 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 let window: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let trayIcon: Electron.NativeImage | undefined;
+let trayAttentionIcon: Electron.NativeImage | undefined;
 let trayFlashTimer: NodeJS.Timeout | undefined;
 const attentionKeys=new Set<string>();
 const messageNotifications=new Map<string,Notification>();
@@ -30,6 +32,7 @@ const workers = new Map<string, ChildProcess>();
 const intentionalRestarts = new Set<string>();
 const removedWorkers = new Set<string>();
 const repairWorkers = new Set<string>();
+const unresponsiveWorkers = new Set<string>();
 const qrCodes = new Map<string,{dataUrl:string;generatedAt:number}>();
 
 if (!hasSingleInstanceLock) {
@@ -83,7 +86,10 @@ function createWindow(): void {
 function createTray(): void {
   const icon = nativeImage.createFromPath(APP_ICON_PATH);
   if (icon.isEmpty()) throw new Error(`Tray icon could not be loaded: ${APP_ICON_PATH}`);
+  const attentionIcon = nativeImage.createFromPath(ATTENTION_ICON_PATH);
+  if (attentionIcon.isEmpty()) throw new Error(`Tray attention icon could not be loaded: ${ATTENTION_ICON_PATH}`);
   trayIcon=icon;
+  trayAttentionIcon=attentionIcon;
   tray = new Tray(icon);
   tray.setToolTip(`RelayDesk WhatsApp Agent v${app.getVersion()}`);
   tray.setContextMenu(Menu.buildFromTemplate([
@@ -104,11 +110,11 @@ function startAttention(key:string):void{
   if(!window||window.isFocused())return;
   attentionKeys.add(key);
   window.flashFrame(true);
-  if(trayFlashTimer||!tray||!trayIcon)return;
-  let visible=true;
+  if(trayFlashTimer||!tray||!trayIcon||!trayAttentionIcon)return;
+  let attentionVisible=false;
   trayFlashTimer=setInterval(()=>{
-    visible=!visible;
-    tray?.setImage(visible?trayIcon!:nativeImage.createEmpty());
+    attentionVisible=!attentionVisible;
+    tray?.setImage(attentionVisible?trayAttentionIcon!:trayIcon!);
   },500);
 }
 
@@ -269,22 +275,7 @@ function startCentral(baseUrl: string, agentId: string, credential: string): voi
     app.getVersion(),
     PROTOCOL_VERSION,
     ["publish_status_v1"],
-    async (command) => {
-      const worker = workers.get(command.accountId);
-      if (!worker) throw new Error("Account worker unavailable");
-      return await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error("Command timed out after 90 seconds")), 90_000);
-        const handler = (message: Record<string, unknown>) => {
-          if (message.type === "command_result" && message.commandId === command.commandId) {
-            clearTimeout(timeout);
-            worker.off("message", handler);
-            resolve(message);
-          }
-        };
-        worker.on("message", handler);
-        worker.send({ type: "command", ...command });
-      });
-    },
+    executeWorkerCommand,
     (status) => {
       if (client !== nextClient) return;
       store.set("connection", status);
@@ -294,6 +285,72 @@ function startCentral(baseUrl: string, agentId: string, credential: string): voi
   );
   client = nextClient;
   nextClient.start();
+}
+
+async function executeWorkerCommand(command:{sequence:number;commandId:string;accountId:string;command:string;payload:Record<string,unknown>}):Promise<Record<string,unknown>> {
+  const worker = workers.get(command.accountId);
+  if (!worker) return deferredCommand(command, "account_worker_unavailable", "Account worker is restarting; command remains queued");
+  return await new Promise((resolve) => {
+    let settled=false;
+    let started=false;
+    let executionTimer:NodeJS.Timeout|undefined;
+    const acceptanceTimer=setTimeout(()=>{
+      finish(deferredCommand(command,"account_worker_unresponsive","Account worker did not accept the command; it is being restarted"));
+      restartUnresponsiveWorker(command.accountId,worker,"命令执行器无响应，正在自动重新连接");
+    },5_000);
+    const cleanup=()=>{
+      clearTimeout(acceptanceTimer);
+      if(executionTimer)clearTimeout(executionTimer);
+      worker.off("message",onMessage);
+      worker.off("exit",onExit);
+    };
+    const finish=(result:Record<string,unknown>)=>{
+      if(settled)return;
+      settled=true;
+      cleanup();
+      resolve(result);
+    };
+    const onMessage=(message:Record<string,unknown>)=>{
+      if(message.commandId!==command.commandId)return;
+      if(message.type==="command_accepted")clearTimeout(acceptanceTimer);
+      if(message.type==="command_started"&&!started){
+        started=true;
+        clearTimeout(acceptanceTimer);
+        executionTimer=setTimeout(()=>{
+          finish(uncertainCommand(command,"account_worker_stalled","Account worker stopped responding during send; the connection is being rebuilt"));
+          restartUnresponsiveWorker(command.accountId,worker,"发送执行超时，正在自动重新连接");
+        },70_000);
+      }
+      if(message.type==="command_result")finish(message);
+    };
+    const onExit=()=>finish(started
+      ? uncertainCommand(command,"account_worker_restarted","Account worker restarted while sending; delivery could not be confirmed")
+      : deferredCommand(command,"account_worker_restarted","Account worker restarted before sending; command remains queued"));
+    worker.on("message",onMessage);
+    worker.once("exit",onExit);
+    worker.send({type:"command",...command},error=>{
+      if(error)finish(deferredCommand(command,"account_worker_ipc_failed",`Could not dispatch command to account worker: ${error.message}`));
+    });
+  });
+}
+
+function deferredCommand(command:{sequence:number;commandId:string},errorCode:string,errorMessage:string):Record<string,unknown>{
+  return {type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"deferred",errorCode,errorMessage,completedAt:new Date().toISOString()};
+}
+
+function uncertainCommand(command:{sequence:number;commandId:string},errorCode:string,errorMessage:string):Record<string,unknown>{
+  return {type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"uncertain",errorCode,errorMessage,completedAt:new Date().toISOString()};
+}
+
+function restartUnresponsiveWorker(accountId:string,worker:ChildProcess,reason:string):void{
+  if(workers.get(accountId)!==worker||unresponsiveWorkers.has(accountId))return;
+  unresponsiveWorkers.add(accountId);
+  const eventId=`status:${accountId}:${Date.now()}`;
+  store.setAccountStatus(accountId,"offline",reason);
+  store.enqueueEvent(eventId,"account_status",{eventId,accountId,status:"offline",reason,at:new Date().toISOString()});
+  client?.flush();
+  window?.webContents.send("agent:event",{type:"status",accountId,status:"offline",reason});
+  worker.kill();
 }
 
 function normalizeCentralUrl(value: string): string {
@@ -317,7 +374,12 @@ async function startAccount(accountId: string, name: string, dataDir: string): P
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   workers.set(accountId, worker);
+  let lastWorkerHeartbeat=Date.now();
+  const workerWatchdog=setInterval(()=>{
+    if(Date.now()-lastWorkerHeartbeat>30_000)restartUnresponsiveWorker(accountId,worker,"账号执行器心跳超时，正在自动重新连接");
+  },10_000);
   worker.on("message", (message: Record<string, unknown>) => {
+    if(message.type==="worker_heartbeat"){lastWorkerHeartbeat=Date.now();return;}
     if (message.type === "event") {
       const payload = message.payload as Record<string, unknown>;
       const eventId=String(payload.eventId),isNew=!store.hasEvent(eventId);
@@ -346,6 +408,7 @@ async function startAccount(accountId: string, name: string, dataDir: string): P
     window?.webContents.send("agent:event", message);
   });
   worker.on("exit", () => {
+    clearInterval(workerWatchdog);
     workers.delete(accountId);
     if (removedWorkers.delete(accountId)) {
       void rm(join(dataDir,"accounts",accountId),{recursive:true,force:true});
@@ -357,6 +420,10 @@ async function startAccount(accountId: string, name: string, dataDir: string): P
     }
     if (intentionalRestarts.delete(accountId)) {
       store.setAccountStatus(accountId, "offline", "正在应用代理设置");
+      setTimeout(() => void startAccount(accountId, name, dataDir), 500);
+      return;
+    }
+    if (unresponsiveWorkers.delete(accountId)) {
       setTimeout(() => void startAccount(accountId, name, dataDir), 500);
       return;
     }

@@ -5,21 +5,24 @@ import {CONVERSATION_DATE_FILTERS,conversationCountsPath,conversationDateRange,c
 import {isPostgresUuid} from "../src/conversation-cursor.js";
 
 test("conversation date filters expose the requested tabs and default all range",()=>{
-  assert.deepEqual(CONVERSATION_DATE_FILTERS.map(item=>item.label),["全部","今天","昨天","最近7天","最近15天","未回复"]);
+  assert.deepEqual(CONVERSATION_DATE_FILTERS.map(item=>item.label),["全部","今天","昨天","3天","5天","7天","15天及以上","未回复"]);
   assert.deepEqual(conversationDateRange("all",new Date(2026,6,26,12)),{});
 });
 
-test("conversation date ranges use inclusive local calendar-day starts and exclusive ends",()=>{
+test("conversation date ranges use exact local calendar days and a 15-day-or-older bucket",()=>{
   const now=new Date(2026,6,26,15,30);
   const today=new Date(2026,6,26).toISOString(),tomorrow=new Date(2026,6,27).toISOString();
   assert.deepEqual(conversationDateRange("today",now),{from:today,before:tomorrow});
   assert.deepEqual(conversationDateRange("yesterday",now),{from:new Date(2026,6,25).toISOString(),before:today});
-  assert.deepEqual(conversationDateRange("last7",now),{from:new Date(2026,6,20).toISOString(),before:tomorrow});
-  assert.deepEqual(conversationDateRange("last15",now),{from:new Date(2026,6,12).toISOString(),before:tomorrow});
+  assert.deepEqual(conversationDateRange("day3",now),{from:new Date(2026,6,23).toISOString(),before:new Date(2026,6,24).toISOString()});
+  assert.deepEqual(conversationDateRange("day5",now),{from:new Date(2026,6,21).toISOString(),before:new Date(2026,6,22).toISOString()});
+  assert.deepEqual(conversationDateRange("day7",now),{from:new Date(2026,6,19).toISOString(),before:new Date(2026,6,20).toISOString()});
+  assert.deepEqual(conversationDateRange("day15plus",now),{before:new Date(2026,6,12).toISOString()});
 });
 
 test("conversation date ranges cross month and year boundaries using calendar arithmetic",()=>{
-  assert.deepEqual(conversationDateRange("last7",new Date(2026,0,3,9)),{from:new Date(2025,11,28).toISOString(),before:new Date(2026,0,4).toISOString()});
+  assert.deepEqual(conversationDateRange("day7",new Date(2026,0,3,9)),{from:new Date(2025,11,27).toISOString(),before:new Date(2025,11,28).toISOString()});
+  assert.deepEqual(conversationDateRange("day15plus",new Date(2026,0,3,9)),{before:new Date(2025,11,20).toISOString()});
   assert.deepEqual(conversationDateRange("yesterday",new Date(2026,2,1,9)),{from:new Date(2026,1,28).toISOString(),before:new Date(2026,2,1).toISOString()});
 });
 
@@ -29,6 +32,9 @@ test("conversation list path only adds date parameters for an active date filter
   const path=conversationListPath("today",new Date(2026,6,26,12));
   assert.match(path,/limit=40&lastMessageFrom=/);
   assert.match(path,/&lastMessageBefore=/);
+  const olderPath=conversationListPath("day15plus",new Date(2026,6,26,12));
+  assert.doesNotMatch(olderPath,/lastMessageFrom=/);
+  assert.match(olderPath,/lastMessageBefore=/);
 });
 
 test("cursor IDs accept every PostgreSQL UUID, not only RFC-versioned UUIDs",()=>{

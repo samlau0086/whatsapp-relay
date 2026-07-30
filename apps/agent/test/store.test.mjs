@@ -29,9 +29,26 @@ test("a hung WhatsApp send becomes uncertain before the parent executor timeout"
   const never=new Promise(()=>{});
   await assert.rejects(waitForSendConfirmation(never,5),error=>isSendConfirmationTimeout(error));
   const worker=readFileSync(new URL("../dist/account-worker.js",import.meta.url),"utf8");
+  const main=readFileSync(new URL("../dist/main.js",import.meta.url),"utf8");
   assert.match(worker,/waitForSendConfirmation\(socket\.sendMessage/);
   assert.match(worker,/send_confirmation_timeout_reconnecting/);
   assert.match(worker,/outcome:\s*"uncertain"/);
+  assert.match(worker,/void connect\(options\)/);
+  assert.match(worker,/command_accepted/);
+  assert.match(worker,/command_started/);
+  assert.match(worker,/worker_heartbeat/);
+  assert.match(main,/account_worker_unresponsive/);
+  assert.match(main,/account_worker_stalled/);
+  assert.match(main,/restartUnresponsiveWorker/);
+  assert.match(main,/lastWorkerHeartbeat/);
+  assert.doesNotMatch(main,/Command timed out after 90 seconds/);
+});
+
+test("transient WhatsApp send failures mark the account offline and rebuild the socket",()=>{
+  const worker=readFileSync(new URL("../dist/account-worker.js",import.meta.url),"utf8");
+  assert.match(worker,/send_deferred_after_transient_error/);
+  assert.match(worker,/status:\s*"offline"/);
+  assert.match(worker,/command remains queued while the connection is rebuilt/);
   assert.match(worker,/void connect\(options\)/);
 });
 

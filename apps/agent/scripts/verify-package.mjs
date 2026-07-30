@@ -14,6 +14,7 @@ const renderer=await readFile(join(directory,"dist","renderer","index.html"),"ut
 const main=await readFile(join(directory,"dist","main.js"),"utf8");
 const preload=await readFile(join(directory,"dist","preload.cjs"),"utf8");
 const icon=await stat(join(directory,"dist","assets","icon.ico"));
+const attentionIcon=await stat(join(directory,"dist","assets","icon-attention.ico"));
 const worker=await readFile(join(releaseRoot,"win-unpacked","resources","app.asar.unpacked","dist","account-worker.js"),"utf8");
 
 if(packaged.version!==expected.version)throw new Error(`Packaged version ${packaged.version} does not match ${expected.version}`);
@@ -25,9 +26,15 @@ if(!renderer.includes(".ui-confirm-backdrop.hidden{display:none}"))throw new Err
 if(!main.includes("@relaydesk")||!main.includes("windows-agent"))throw new Error("Stable user data path is missing");
 if(!main.includes("agent:update-central-url"))throw new Error("Packaged main process is missing central URL updates");
 if(!main.includes("assets")||!main.includes("icon.ico")||icon.size<1000)throw new Error("Packaged Windows icon is missing or invalid");
+if(!main.includes("icon-attention.ico")||attentionIcon.size<1000)throw new Error("Packaged tray attention icon is missing or invalid");
+if(main.includes("nativeImage.createEmpty()"))throw new Error("Tray attention must not remove the icon from the Windows notification area");
+for(const marker of ["worker_heartbeat","command_accepted","command_started","account_worker_unresponsive","account_worker_stalled","restartUnresponsiveWorker"]){
+  if(!main.includes(marker)&&!worker.includes(marker))throw new Error(`Packaged worker supervision is missing ${marker}`);
+}
+if(main.includes("Command timed out after 90 seconds"))throw new Error("Packaged main process still contains the unbounded stale-worker timeout");
 if(!main.includes("intentionalRestarts.add(input.id)"))throw new Error("Packaged main process is missing proxy-refreshing account reconnects");
 if(!preload.includes("agent:state")||!preload.includes("account:add")||!preload.includes("updateCentralUrl"))throw new Error("Packaged preload bridge is incomplete");
-for(const marker of ["downloadOutboundMedia","AbortSignal.timeout(12_000)","send_deferred_after_transient_error","connectTimeoutMs: 60_000","quotedMessageId","quotedWhatsappMessageId"]){
+for(const marker of ["downloadOutboundMedia","AbortSignal.timeout(60_000)","send_deferred_after_transient_error","connectTimeoutMs: 60_000","quotedMessageId","quotedWhatsappMessageId"]){
   if(!worker.includes(marker))throw new Error(`Packaged account worker is missing ${marker}`);
 }
 await rm(directory,{recursive:true,force:true});
