@@ -55,3 +55,13 @@ test("shipping settings exposes import, export, preview, and both import modes",
   assert.match(component,/追加到当前规则/);
   assert.match(component,/shipping-csv-preview/);
 });
+
+test("shipping template deletion requires confirmation before the delete request",async()=>{
+  const component=await readFile(new URL("../../../app/shipping-settings.tsx",import.meta.url),"utf8");
+  const confirmation=component.indexOf("await confirmAction(");
+  const cancellationGuard=component.indexOf("if(!confirmed)return;",confirmation);
+  const deletionRequest=component.indexOf('method:"DELETE"',confirmation);
+  assert.ok(confirmation>=0);
+  assert.ok(cancellationGuard>confirmation);
+  assert.ok(deletionRequest>cancellationGuard);
+});

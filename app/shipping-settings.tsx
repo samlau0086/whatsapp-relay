@@ -2,6 +2,7 @@
 
 import { Check, Download, FileSpreadsheet, Plus, RefreshCw, Trash2, UploadCloud, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { confirmAction } from "./confirmation-ui";
 import { dateFileSuffix, downloadCsv } from "./csv-transfer";
 import { parseShippingRuleCsv, SHIPPING_RULE_CSV_HEADERS, shippingRuleCsvKey, shippingRuleCsvRows, validateShippingRuleCsvImport, type ShippingRuleCsvPreview, type ShippingRuleCsvRule } from "./shipping-rule-csv";
 import { WEIGHT_UNITS, type WeightUnit } from "./weight";
@@ -213,10 +214,16 @@ export function ShippingSettings({request,onToken,onToast}:{request:(path:string
   }
   async function remove(){
     if(!draft?.id||draft.isDefault)return;
+    const templateId=draft.id,templateName=draft.name.trim()||"未命名模板";
+    const confirmed=await confirmAction(
+      `确定要删除运费模板“${templateName}”吗？\n模板中的所有地区、Shipping class 和计费规则将一并删除，且无法恢复。`,
+      {title:"删除运费模板",confirmLabel:"删除模板",cancelLabel:"取消",tone:"danger"},
+    );
+    if(!confirmed)return;
     setBusy(true);
-    const result=await request(`/api/v1/admin/shipping-templates/${draft.id}`,{method:"DELETE"});
+    const result=await request(`/api/v1/admin/shipping-templates/${templateId}`,{method:"DELETE"});
     onToken(result.token);setBusy(false);
-    if(result.response.ok){setDraft(null);await load();}else setError("无法删除默认模板");
+    if(result.response.ok){setDraft(null);await load();onToast(`已删除运费模板“${templateName}”`);}else setError("删除运费模板失败");
   }
 
   if(loading)return <p>正在读取运费设置…</p>;
