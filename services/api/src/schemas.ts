@@ -170,10 +170,10 @@ function validateWeightPair(value:{weightAmount?:number|null;weightUnit?:typeof 
   if(hasAmount!==hasUnit)ctx.addIssue({code:"custom",path:[hasAmount?"weightUnit":"weightAmount"],message:"weight amount and unit must be provided together"});
 }
 const productPriceTiersSchema=z.array(productPriceTierSchema).min(1).max(50).superRefine((tiers,ctx)=>{if(tiers[0]?.minQuantity!==1)ctx.addIssue({code:"custom",path:[0,"minQuantity"],message:"first tier must start at quantity 1"});for(let index=1;index<tiers.length;index++)if(tiers[index].minQuantity<=tiers[index-1].minQuantity)ctx.addIssue({code:"custom",path:[index,"minQuantity"],message:"tier quantities must be strictly increasing"});});
-const productContentFields={name:z.string().trim().min(1).max(120),sku:z.string().trim().min(1).max(80),description:z.string().trim().max(2000).default(""),category:z.string().trim().max(80).default(""),brand:z.string().trim().max(80).default(""),priceTiers:productPriceTiersSchema,currency:currencySchema,imageMediaId:z.string().uuid().nullable().optional(),tags:z.array(productLabelSchema).max(30).default([]),...optionalWeightFields};
+const productContentFields={name:z.string().trim().min(1).max(120),sku:z.string().trim().min(1).max(80),description:z.string().trim().max(2000).default(""),category:z.string().trim().max(80).default(""),brand:z.string().trim().max(80).default(""),priceTiers:productPriceTiersSchema,currency:currencySchema,imageMediaId:z.string().uuid().nullable().optional(),shippingClassId:z.string().uuid().nullable().optional(),tags:z.array(productLabelSchema).max(30).default([]),...optionalWeightFields};
 const productContentSchema=z.object(productContentFields).superRefine(validateWeightPair);
 export const productCreateSchema=z.object({clientProductId:z.string().uuid()}).and(productContentSchema);
-const productBulkImportItemSchema=z.object({clientProductId:z.string().uuid(),sku:z.string().trim().min(1).max(80),name:z.string().trim().min(1).max(120),description:z.string().trim().max(2000).optional(),category:z.string().trim().max(80).optional(),brand:z.string().trim().max(80).optional(),priceTiers:productPriceTiersSchema.optional(),currency:currencySchema.optional(),imageMediaId:z.string().uuid().nullable().optional(),tags:z.array(productLabelSchema).max(30).optional(),...optionalWeightFields}).superRefine(validateWeightPair);
+const productBulkImportItemSchema=z.object({clientProductId:z.string().uuid(),sku:z.string().trim().min(1).max(80),name:z.string().trim().min(1).max(120),description:z.string().trim().max(2000).optional(),category:z.string().trim().max(80).optional(),brand:z.string().trim().max(80).optional(),priceTiers:productPriceTiersSchema.optional(),currency:currencySchema.optional(),imageMediaId:z.string().uuid().nullable().optional(),shippingClassId:z.string().uuid().nullable().optional(),tags:z.array(productLabelSchema).max(30).optional(),...optionalWeightFields}).superRefine(validateWeightPair);
 export const productBulkImportSchema=z.object({products:z.array(productBulkImportItemSchema).min(1).max(500)}).superRefine((value,ctx)=>{const seen=new Set<string>();for(const [index,product] of value.products.entries()){const key=product.sku.trim().toLocaleLowerCase();if(seen.has(key))ctx.addIssue({code:"custom",path:["products",index,"sku"],message:"duplicate sku in import"});seen.add(key);}});
 export const productUpdateSchema=z.object(productContentFields).partial().superRefine((value,ctx)=>{if(!Object.keys(value).length)ctx.addIssue({code:"custom",message:"at least one field is required"});validateWeightPair(value,ctx);});
 export const productSkuQuerySchema=z.object({skus:z.array(z.string().trim().min(1).max(80)).min(1).max(500)}).superRefine((value,ctx)=>{const seen=new Set<string>();for(const [index,sku] of value.skus.entries()){const key=sku.toLocaleLowerCase();if(seen.has(key))ctx.addIssue({code:"custom",path:["skus",index],message:"product skus must be unique"});seen.add(key);}});
@@ -208,7 +208,7 @@ export const materialSendSchema=z.object({
   translationSourceText:z.string().trim().min(1).max(65536).optional(),
   translationTargetLanguage:languageCodeSchema.optional(),
 }).superRefine((value,ctx)=>{if(new Set(value.materialBatchIds).size!==value.materialBatchIds.length)ctx.addIssue({code:"custom",path:["materialBatchIds"],message:"material batch ids must be unique"});if(new Set(value.mediaIds).size!==value.mediaIds.length)ctx.addIssue({code:"custom",path:["mediaIds"],message:"media ids must be unique"});if(value.translationSourceText&&!value.caption?.trim())ctx.addIssue({code:"custom",path:["translationSourceText"],message:"translated material captions require a caption"});if(Boolean(value.translationSourceText)!==Boolean(value.translationTargetLanguage))ctx.addIssue({code:"custom",path:["translationTargetLanguage"],message:"translation source and target language must be provided together"});});
-const orderItemSchema=z.object({name:z.string().trim().min(1).max(120),sku:z.string().trim().min(1).max(80).optional(),quantity:z.coerce.number().int().min(1).max(9999),unitAmount:moneySchema,imageMediaId:z.string().uuid().optional(),productId:z.string().uuid().optional(),clientProductId:z.string().uuid().optional(),...optionalWeightFields}).superRefine((value,ctx)=>{validateWeightPair(value,ctx);if(value.productId&&value.clientProductId)ctx.addIssue({code:"custom",path:["productId"],message:"productId and clientProductId are mutually exclusive"});if(value.clientProductId&&!value.sku)ctx.addIssue({code:"custom",path:["sku"],message:"new products require a sku"});});
+const orderItemSchema=z.object({name:z.string().trim().min(1).max(120),sku:z.string().trim().min(1).max(80).optional(),quantity:z.coerce.number().int().min(1).max(9999),unitAmount:moneySchema,imageMediaId:z.string().uuid().optional(),productId:z.string().uuid().optional(),clientProductId:z.string().uuid().optional(),shippingClassId:z.string().uuid().nullable().optional(),...optionalWeightFields}).superRefine((value,ctx)=>{validateWeightPair(value,ctx);if(value.productId&&value.clientProductId)ctx.addIssue({code:"custom",path:["productId"],message:"productId and clientProductId are mutually exclusive"});if(value.clientProductId&&!value.sku)ctx.addIssue({code:"custom",path:["sku"],message:"new products require a sku"});});
 const orderFeeSchema=z.object({name:z.string().trim().min(1).max(80),amount:moneySchema.refine(value=>value>0,"fee must be positive")});
 export const ORDER_BUSINESS_STATUSES=["quotation","pending_confirmation","pending_payment","paid","processing","shipped","completed","cancelled"] as const;
 export const orderBusinessStatusSchema=z.enum(ORDER_BUSINESS_STATUSES);
@@ -228,9 +228,12 @@ const orderContentSchema=z.object({
   targetLanguage:languageCodeSchema.optional(),
   items:z.array(orderItemSchema).min(1).max(50),
   fees:z.array(orderFeeSchema).max(20).default([]),
+  shippingAmount:moneySchema.nullable().optional(),
+  shippingTemplateId:z.string().uuid().nullable().optional(),
+  acceptCalculatedShipping:z.boolean().default(false),
   addressId:z.string().uuid().nullable().optional(),
   newAddress:customerAddressSchema.optional(),
-}).superRefine((value,ctx)=>{const total=value.items.reduce((sum,item)=>sum+item.quantity*item.unitAmount,0)+value.fees.reduce((sum,fee)=>sum+fee.amount,0);if(total<=0)ctx.addIssue({code:"custom",path:["items"],message:"order total must be positive"});if(value.translateOnSend&&!value.targetLanguage)ctx.addIssue({code:"custom",path:["targetLanguage"],message:"target language is required"});if(value.addressId&&value.newAddress)ctx.addIssue({code:"custom",path:["addressId"],message:"addressId and newAddress are mutually exclusive"});});
+}).superRefine((value,ctx)=>{const total=value.items.reduce((sum,item)=>sum+item.quantity*item.unitAmount,0)+value.fees.reduce((sum,fee)=>sum+fee.amount,0)+(value.shippingAmount??0);if(total<=0)ctx.addIssue({code:"custom",path:["items"],message:"order total must be positive"});if(value.acceptCalculatedShipping&&!value.shippingTemplateId)ctx.addIssue({code:"custom",path:["shippingTemplateId"],message:"shipping template is required when accepting a quote"});if(value.translateOnSend&&!value.targetLanguage)ctx.addIssue({code:"custom",path:["targetLanguage"],message:"target language is required"});if(value.addressId&&value.newAddress)ctx.addIssue({code:"custom",path:["addressId"],message:"addressId and newAddress are mutually exclusive"});});
 export const orderSchema=z.object({clientOrderId:z.string().uuid()}).and(orderContentSchema);
 export const orderUpdateSchema=orderContentSchema;
 export const orderBusinessStatusUpdateSchema=z.object({businessStatus:orderBusinessStatusSchema});
@@ -247,6 +250,26 @@ const emailOrderContent=z.object({type:z.literal("order"),orderId:z.string().uui
 const emailProductContent=z.object({type:z.literal("product_cards"),productIds:z.array(z.string().uuid()).min(1).max(50),mode:z.enum(["individual","combined"]),showPrice:z.boolean()});
 export const emailSendSchema=emailCommon.and(z.object({content:z.discriminatedUnion("type",[emailOrderContent,emailProductContent])})).superRefine((value,ctx)=>{if(value.content.type==="order"&&value.content.translate&&!value.content.targetLanguage)ctx.addIssue({code:"custom",path:["content","targetLanguage"],message:"target language is required"});if(value.content.type==="product_cards"){if(new Set(value.content.productIds).size!==value.content.productIds.length)ctx.addIssue({code:"custom",path:["content","productIds"],message:"product ids must be unique"});if(value.content.mode==="combined"&&value.content.productIds.length>10)ctx.addIssue({code:"custom",path:["content","productIds"],message:"combined cards support at most 10 products"});}});
 export const orderSettingsSchema=z.object({numberTemplate:z.string().min(1).max(80),timezone:z.string().min(1).max(100)});
+
+export const shippingClassCreateSchema=z.object({name:z.string().trim().min(1).max(80),enabled:z.boolean().default(true)});
+export const shippingClassUpdateSchema=shippingClassCreateSchema.partial().refine(value=>Object.keys(value).length>0,"at least one field is required");
+const quantityShippingRuleSchema=z.object({shippingClassId:z.string().uuid().nullable().default(null),mode:z.literal("quantity"),firstItemPrice:moneySchema,additionalItemPrice:moneySchema});
+const weightShippingRuleSchema=z.object({shippingClassId:z.string().uuid().nullable().default(null),mode:z.literal("weight"),firstWeight:weightAmountSchema,additionalWeight:weightAmountSchema,weightUnit:z.enum(WEIGHT_UNITS),firstWeightPrice:moneySchema,additionalWeightPrice:moneySchema});
+export const shippingRuleSchema=z.discriminatedUnion("mode",[quantityShippingRuleSchema,weightShippingRuleSchema]);
+const shippingTemplateContentSchema=z.object({name:z.string().trim().min(1).max(120),currency:currencySchema,enabled:z.boolean().default(true),isDefault:z.boolean().default(false),rules:z.array(shippingRuleSchema).min(1).max(101)}).superRefine((value,ctx)=>{
+  const defaults=value.rules.filter(rule=>rule.shippingClassId===null);
+  if(defaults.length!==1)ctx.addIssue({code:"custom",path:["rules"],message:"exactly one default rule is required"});
+  const classIds=value.rules.flatMap(rule=>rule.shippingClassId?[rule.shippingClassId]:[]);
+  if(new Set(classIds).size!==classIds.length)ctx.addIssue({code:"custom",path:["rules"],message:"shipping class rules must be unique"});
+  if(value.isDefault&&!value.enabled)ctx.addIssue({code:"custom",path:["enabled"],message:"default template must be enabled"});
+});
+export const shippingTemplateCreateSchema=shippingTemplateContentSchema;
+export const shippingTemplateUpdateSchema=shippingTemplateContentSchema;
+export const shippingQuoteSchema=z.object({
+  templateId:z.string().uuid(),
+  currency:currencySchema,
+  items:z.array(z.object({name:z.string().trim().min(1).max(120),quantity:z.coerce.number().int().min(1).max(9999),shippingClassId:z.string().uuid().nullable().optional(),shippingClassName:z.string().trim().max(80).nullable().optional(),...optionalWeightFields}).superRefine(validateWeightPair)).min(1).max(50),
+});
 export const paypalSettingsSchema=z.object({
   enabled:z.boolean(),
   environment:z.enum(["sandbox","live"]),

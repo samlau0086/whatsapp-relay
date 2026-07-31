@@ -15,7 +15,7 @@ export function primaryContactEmail(emails:Array<{email:string;isPrimary?:boolea
 export type OrderSummaryItem={name:string;sku?:string;quantity:number;unitAmount:number};
 export type OrderSummaryFee={name:string;amount:number};
 
-export function calculateOrderTotal(items:OrderSummaryItem[],fees:OrderSummaryFee[]):number{return items.reduce((sum,item)=>sum+item.quantity*item.unitAmount,0)+fees.reduce((sum,fee)=>sum+fee.amount,0);}
+export function calculateOrderTotal(items:OrderSummaryItem[],fees:OrderSummaryFee[],shippingAmount=0):number{return items.reduce((sum,item)=>sum+item.quantity*item.unitAmount,0)+fees.reduce((sum,fee)=>sum+fee.amount,0)+shippingAmount;}
 
 export function formatOrderSummary(orderNumber:string|number,items:OrderSummaryItem[],fees:OrderSummaryFee[],currency:string,description?:string):string{
   const displayNumber=typeof orderNumber==="number"?String(orderNumber).padStart(6,"0"):orderNumber;

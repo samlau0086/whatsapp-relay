@@ -30,6 +30,8 @@ type Product = {
   currency: string;
   weightAmount: number | null;
   weightUnit: WeightUnit | null;
+  shippingClassId: string | null;
+  shippingClass: string | null;
   imageMediaId: string | null;
   imageName: string;
   priceTiers: Tier[];
@@ -188,6 +190,8 @@ export function ProductEditorDialog({
     [currency, setCurrency] = useState(product?.currency ?? baseCurrency),
     [weightAmount,setWeightAmount]=useState(product?.weightAmount?.toString()??""),
     [weightUnit,setWeightUnit]=useState<WeightUnit>(product?.weightUnit??"kg"),
+    [shippingClassId,setShippingClassId]=useState(product?.shippingClassId??""),
+    [shippingClasses,setShippingClasses]=useState<Array<{id:string;name:string}>>([]),
     [tiers, setTiers] = useState(() =>
       (product?.priceTiers.length
         ? product.priceTiers
@@ -256,6 +260,7 @@ export function ProductEditorDialog({
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [busy, imagePickerOpen, onClose]);
+  useEffect(()=>{let cancelled=false;void request("/api/v1/shipping-classes").then(async result=>{onToken(result.token);if(result.response.ok&&!cancelled){const body=await result.response.json() as {data:Array<{id:string;name:string}>};setShippingClasses(body.data);}});return()=>{cancelled=true;};},[request,onToken]);
   function addTier() {
     const last = Number(tiers.at(-1)?.minQuantity) || 1;
     setTiers((all) => [
@@ -324,6 +329,7 @@ export function ProductEditorDialog({
         currency,
         weightAmount:weightAmount===""?null:Number(weightAmount),
         weightUnit:weightAmount===""?null:weightUnit,
+        shippingClassId:product?.shippingClassId&&!shippingClasses.some(item=>item.id===product.shippingClassId)?undefined:shippingClassId||null,
         imageMediaId,
         priceTiers: tiers.map((tier) => ({
           minQuantity: Number(tier.minQuantity),
@@ -409,6 +415,14 @@ export function ProductEditorDialog({
               />
             </label>
           </div>
+          <label>
+            Shipping class · 可选
+            <select value={shippingClassId} onChange={event=>setShippingClassId(event.target.value)}>
+              <option value="">未设置（使用默认规则）</option>
+              {product?.shippingClassId&&!shippingClasses.some(item=>item.id===product.shippingClassId)&&<option value={product.shippingClassId}>{product.shippingClass??"已停用 class"} · 已停用</option>}
+              {shippingClasses.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </label>
           {duplicateName && (
             <span className="duplicate-warning">
               产品库已有同名产品，仍可继续保存。
