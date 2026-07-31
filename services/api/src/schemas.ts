@@ -114,7 +114,7 @@ const contactNamePartSchema=z.string().trim().max(80);
 export const contactCreateSchema=z.object({accountId:z.string().uuid(),name:z.string().trim().max(240).optional(),firstName:contactNamePartSchema.default(""),middleName:contactNamePartSchema.default(""),lastName:contactNamePartSchema.default(""),phone:whatsappPhoneSchema}).refine(value=>Boolean(value.name?.trim()||value.firstName||value.middleName||value.lastName),{path:["firstName"],message:"请输入联系人姓名"});
 const contactEmailSchema=z.object({label:z.string().trim().max(40).default(""),email:z.string().trim().toLowerCase().email().max(254),isPrimary:z.boolean().default(false)});
 const contactMethodSchema=z.object({type:z.enum(["phone","wechat","telegram","line","website","facebook","x","linkedin","instagram","other"]),label:z.string().trim().max(40).default(""),value:z.string().trim().min(1).max(500)});
-const contactAddressSchema=z.object({id:z.string().uuid().optional(),label:z.string().trim().min(1).max(40),recipientName:z.string().trim().max(80).default(""),phone:z.string().trim().max(40).default(""),address:z.string().trim().min(1).max(1000),isDefault:z.boolean().default(false)});
+const contactAddressSchema=z.object({id:z.string().uuid().optional(),label:z.string().trim().min(1).max(40),recipientName:z.string().trim().max(80).default(""),phone:z.string().trim().max(40).default(""),address:z.string().trim().min(1).max(1000),countryCode:z.string().trim().regex(/^[A-Za-z]{2}$/).or(z.literal("")).transform(value=>value?value.toUpperCase():undefined).optional(),province:z.string().trim().max(100).transform(value=>value||undefined).optional(),isDefault:z.boolean().default(false)});
 const calendarDateSchema=z.object({month:z.coerce.number().int().min(1).max(12),day:z.coerce.number().int().min(1).max(31),year:z.coerce.number().int().min(1900).max(2200).nullable().optional()}).superRefine((value,ctx)=>{const year=value.year??2024;if(new Date(Date.UTC(year,value.month-1,value.day)).getUTCMonth()!==value.month-1)ctx.addIssue({code:"custom",path:["day"],message:"invalid calendar date"});});
 const contactSpecialDateSchema=calendarDateSchema.and(z.object({id:z.string().uuid().optional(),kind:z.enum(["anniversary","birthday","custom"]).default("anniversary"),label:z.string().trim().min(1).max(80),leadDays:z.coerce.number().int().min(0).max(365).nullable().optional()}));
 export const contactUpdateSchema=z.object({alias:z.string().trim().max(80),firstName:contactNamePartSchema.optional(),middleName:contactNamePartSchema.optional(),lastName:contactNamePartSchema.optional(),phone:whatsappPhoneSchema.optional(),note:z.string().trim().max(5000),timezone:z.string().trim().max(100).nullable().optional(),preferredLanguage:z.string().trim().regex(/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/).max(35).nullable().optional(),birthday:calendarDateSchema.nullable().optional(),specialDates:z.array(contactSpecialDateSchema).max(30).optional(),emails:z.array(contactEmailSchema).max(20),methods:z.array(contactMethodSchema).max(30),addresses:z.array(contactAddressSchema).max(20).default([])}).superRefine((value,ctx)=>{
@@ -123,6 +123,7 @@ export const contactUpdateSchema=z.object({alias:z.string().trim().max(80),first
   const seen=new Set<string>();
   for(const [index,item] of value.emails.entries()){if(seen.has(item.email))ctx.addIssue({code:"custom",path:["emails",index,"email"],message:"duplicate email"});seen.add(item.email);}
   if(value.addresses.filter(item=>item.isDefault).length>1)ctx.addIssue({code:"custom",path:["addresses"],message:"only one default address is allowed"});
+  value.addresses.forEach((item,index)=>{if(item.province&&!item.countryCode)ctx.addIssue({code:"custom",path:["addresses",index,"countryCode"],message:"country code is required when province is set"});});
 }).transform(value=>({...value,emails:value.emails.map((item,index)=>({...item,isPrimary:value.emails.some(email=>email.isPrimary)?item.isPrimary:index===0})),addresses:value.addresses.map((item,index)=>({...item,isDefault:value.addresses.some(address=>address.isDefault)?item.isDefault:index===0}))}));
 
 export const taskStatusSchema=z.enum(["planned","in_progress","waiting_approval","scheduled","completed","overdue","failed","cancelled"]);
@@ -212,12 +213,15 @@ const orderItemSchema=z.object({name:z.string().trim().min(1).max(120),sku:z.str
 const orderFeeSchema=z.object({name:z.string().trim().min(1).max(80),amount:moneySchema.refine(value=>value>0,"fee must be positive")});
 export const ORDER_BUSINESS_STATUSES=["quotation","pending_confirmation","pending_payment","paid","processing","shipped","completed","cancelled"] as const;
 export const orderBusinessStatusSchema=z.enum(ORDER_BUSINESS_STATUSES);
+const destinationCountryCodeSchema=z.string().trim().length(2).regex(/^[A-Za-z]{2}$/).transform(value=>value.toUpperCase());
 export const customerAddressSchema=z.object({
   label:z.string().trim().min(1).max(40),
   recipientName:z.string().trim().max(80).optional().transform(value=>value||undefined),
   phone:z.string().trim().max(40).optional().transform(value=>value||undefined),
   address:z.string().trim().min(1).max(1000),
-});
+  countryCode:destinationCountryCodeSchema.nullable().optional().transform(value=>value||undefined),
+  province:z.string().trim().max(100).nullable().optional().transform(value=>value||undefined),
+}).superRefine((value,ctx)=>{if(value.province&&!value.countryCode)ctx.addIssue({code:"custom",path:["countryCode"],message:"country code is required when province is set"});});
 const orderContentSchema=z.object({
   currency:currencySchema,
   businessStatus:orderBusinessStatusSchema.default("quotation"),
@@ -253,14 +257,16 @@ export const orderSettingsSchema=z.object({numberTemplate:z.string().min(1).max(
 
 export const shippingClassCreateSchema=z.object({name:z.string().trim().min(1).max(80),enabled:z.boolean().default(true)});
 export const shippingClassUpdateSchema=shippingClassCreateSchema.partial().refine(value=>Object.keys(value).length>0,"at least one field is required");
-const quantityShippingRuleSchema=z.object({shippingClassId:z.string().uuid().nullable().default(null),mode:z.literal("quantity"),firstItemPrice:moneySchema,additionalItemPrice:moneySchema});
-const weightShippingRuleSchema=z.object({shippingClassId:z.string().uuid().nullable().default(null),mode:z.literal("weight"),firstWeight:weightAmountSchema,additionalWeight:weightAmountSchema,weightUnit:z.enum(WEIGHT_UNITS),firstWeightPrice:moneySchema,additionalWeightPrice:moneySchema});
+const shippingDestinationFields={destinationCountryCode:destinationCountryCodeSchema.nullable().default(null),destinationProvince:z.string().trim().max(100).nullable().default(null)};
+const quantityShippingRuleSchema=z.object({shippingClassId:z.string().uuid().nullable().default(null),...shippingDestinationFields,mode:z.literal("quantity"),firstItemPrice:moneySchema,additionalItemPrice:moneySchema});
+const weightShippingRuleSchema=z.object({shippingClassId:z.string().uuid().nullable().default(null),...shippingDestinationFields,mode:z.literal("weight"),firstWeight:weightAmountSchema,additionalWeight:weightAmountSchema,weightUnit:z.enum(WEIGHT_UNITS),firstWeightPrice:moneySchema,additionalWeightPrice:moneySchema});
 export const shippingRuleSchema=z.discriminatedUnion("mode",[quantityShippingRuleSchema,weightShippingRuleSchema]);
 const shippingTemplateContentSchema=z.object({name:z.string().trim().min(1).max(120),currency:currencySchema,enabled:z.boolean().default(true),isDefault:z.boolean().default(false),rules:z.array(shippingRuleSchema).min(1).max(101)}).superRefine((value,ctx)=>{
-  const defaults=value.rules.filter(rule=>rule.shippingClassId===null);
+  const defaults=value.rules.filter(rule=>rule.shippingClassId===null&&rule.destinationCountryCode===null&&rule.destinationProvince===null);
   if(defaults.length!==1)ctx.addIssue({code:"custom",path:["rules"],message:"exactly one default rule is required"});
-  const classIds=value.rules.flatMap(rule=>rule.shippingClassId?[rule.shippingClassId]:[]);
-  if(new Set(classIds).size!==classIds.length)ctx.addIssue({code:"custom",path:["rules"],message:"shipping class rules must be unique"});
+  const keys=value.rules.map(rule=>`${rule.shippingClassId??""}|${rule.destinationCountryCode??""}|${rule.destinationProvince?.toLocaleLowerCase()??""}`);
+  if(new Set(keys).size!==keys.length)ctx.addIssue({code:"custom",path:["rules"],message:"shipping rules must be unique for each destination and class"});
+  value.rules.forEach((rule,index)=>{if(rule.destinationProvince&&!rule.destinationCountryCode)ctx.addIssue({code:"custom",path:["rules",index,"destinationCountryCode"],message:"country code is required when province is set"});});
   if(value.isDefault&&!value.enabled)ctx.addIssue({code:"custom",path:["enabled"],message:"default template must be enabled"});
 });
 export const shippingTemplateCreateSchema=shippingTemplateContentSchema;
@@ -268,6 +274,7 @@ export const shippingTemplateUpdateSchema=shippingTemplateContentSchema;
 export const shippingQuoteSchema=z.object({
   templateId:z.string().uuid(),
   currency:currencySchema,
+  destination:z.object({countryCode:destinationCountryCodeSchema.nullable().optional(),province:z.string().trim().max(100).nullable().optional()}).superRefine((value,ctx)=>{if(value.province&&!value.countryCode)ctx.addIssue({code:"custom",path:["countryCode"],message:"country code is required when province is set"});}).optional(),
   items:z.array(z.object({name:z.string().trim().min(1).max(120),quantity:z.coerce.number().int().min(1).max(9999),shippingClassId:z.string().uuid().nullable().optional(),shippingClassName:z.string().trim().max(80).nullable().optional(),...optionalWeightFields}).superRefine(validateWeightPair)).min(1).max(50),
 });
 export const paypalSettingsSchema=z.object({

@@ -29,7 +29,14 @@ export type ShippingQuoteItem={
 export type ShippingRuleEntry={
   shippingClassId:string|null;
   shippingClassName:string|null;
+  destinationCountryCode:string|null;
+  destinationProvince:string|null;
   rule:ShippingRule;
+};
+
+export type ShippingDestination={
+  countryCode?:string|null;
+  province?:string|null;
 };
 
 export type ShippingQuoteBreakdown={
@@ -40,6 +47,8 @@ export type ShippingQuoteBreakdown={
   weightAmount:number|null;
   weightUnit:WeightUnit|null;
   amount:number;
+  matchedCountryCode:string|null;
+  matchedProvince:string|null;
 };
 
 export type ShippingCalculation=
@@ -52,8 +61,22 @@ export function calculateShipping(
   items:ShippingQuoteItem[],
   defaultRule:ShippingRule,
   overrides:ShippingRuleEntry[],
+  destination:ShippingDestination={},
 ):ShippingCalculation{
-  const overrideMap=new Map(overrides.filter(entry=>entry.shippingClassId).map(entry=>[entry.shippingClassId!,entry]));
+  const countryCode=destination.countryCode?.trim().toUpperCase()||null,province=destination.province?.trim().toLocaleLowerCase()||null;
+  const matchingRule=(shippingClassId:string|null)=>{
+    const zones:Array<{countryCode:string|null;province:string|null}>=[];
+    if(countryCode&&province)zones.push({countryCode,province});
+    if(countryCode)zones.push({countryCode,province:null});
+    zones.push({countryCode:null,province:null});
+    for(const zone of zones){
+      const classRule=shippingClassId?overrides.find(entry=>entry.shippingClassId===shippingClassId&&entry.destinationCountryCode===zone.countryCode&&(entry.destinationProvince?.trim().toLocaleLowerCase()??null)===zone.province):undefined;
+      if(classRule)return classRule;
+      const zoneDefault=overrides.find(entry=>entry.shippingClassId===null&&entry.destinationCountryCode===zone.countryCode&&(entry.destinationProvince?.trim().toLocaleLowerCase()??null)===zone.province);
+      if(zoneDefault)return zoneDefault;
+    }
+    return{shippingClassId:null,shippingClassName:null,destinationCountryCode:null,destinationProvince:null,rule:defaultRule};
+  };
   const groups=new Map<string,{shippingClassId:string|null;shippingClassName:string;items:Array<ShippingQuoteItem&{index:number}>}>();
   items.forEach((item,index)=>{
     const key=item.shippingClassId??"__default__";
@@ -63,10 +86,10 @@ export function calculateShipping(
   });
   const missingWeightItems:Array<{index:number;name:string}>=[],breakdown:ShippingQuoteBreakdown[]=[];
   for(const group of groups.values()){
-    const entry=group.shippingClassId?overrideMap.get(group.shippingClassId):undefined,rule=entry?.rule??defaultRule;
+    const entry=matchingRule(group.shippingClassId),rule=entry.rule;
     const quantity=group.items.reduce((sum,item)=>sum+item.quantity,0);
     if(rule.mode==="quantity"){
-      breakdown.push({shippingClassId:group.shippingClassId,shippingClassName:group.shippingClassName,mode:"quantity",quantity,weightAmount:null,weightUnit:null,amount:money(rule.firstItemPrice+Math.max(0,quantity-1)*rule.additionalItemPrice)});
+      breakdown.push({shippingClassId:group.shippingClassId,shippingClassName:group.shippingClassName,mode:"quantity",quantity,weightAmount:null,weightUnit:null,amount:money(rule.firstItemPrice+Math.max(0,quantity-1)*rule.additionalItemPrice),matchedCountryCode:entry.destinationCountryCode,matchedProvince:entry.destinationProvince});
       continue;
     }
     let weight=0;
@@ -77,7 +100,7 @@ export function calculateShipping(
     }
     if(missingWeightItems.length)continue;
     const steps=Math.max(0,Math.ceil((weight-rule.firstWeight)/rule.additionalWeight));
-    breakdown.push({shippingClassId:group.shippingClassId,shippingClassName:group.shippingClassName,mode:"weight",quantity,weightAmount:weight,weightUnit:rule.weightUnit,amount:money(rule.firstWeightPrice+steps*rule.additionalWeightPrice)});
+    breakdown.push({shippingClassId:group.shippingClassId,shippingClassName:group.shippingClassName,mode:"weight",quantity,weightAmount:weight,weightUnit:rule.weightUnit,amount:money(rule.firstWeightPrice+steps*rule.additionalWeightPrice),matchedCountryCode:entry.destinationCountryCode,matchedProvince:entry.destinationProvince});
   }
   if(missingWeightItems.length)return{ok:false,missingWeightItems};
   return{ok:true,amount:money(breakdown.reduce((sum,item)=>sum+item.amount,0)),breakdown};

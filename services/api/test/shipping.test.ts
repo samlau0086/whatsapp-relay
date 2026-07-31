@@ -11,7 +11,7 @@ test("quantity shipping groups classes and applies default fallbacks",()=>{
     {name:"C",quantity:2,shippingClassId:"standard",shippingClassName:"Standard"},
     {name:"D",quantity:1},
   ],{mode:"quantity",firstItemPrice:5,additionalItemPrice:2},[
-    {shippingClassId:"heavy",shippingClassName:"Heavy",rule:{mode:"quantity",firstItemPrice:10,additionalItemPrice:3}},
+    {shippingClassId:"heavy",shippingClassName:"Heavy",destinationCountryCode:null,destinationProvince:null,rule:{mode:"quantity",firstItemPrice:10,additionalItemPrice:3}},
   ]);
   assert.equal(result.ok,true);
   if(result.ok){
@@ -46,18 +46,42 @@ test("shipping currency conversion rounds the final order amount",()=>{
   assert.throws(()=>convertShippingCurrency(10,0,1),/invalid_currency_rate/);
 });
 
+test("shipping rules prefer province, then country, then global destinations",()=>{
+  const rules=[
+    {shippingClassId:null,shippingClassName:null,destinationCountryCode:"US",destinationProvince:null,rule:{mode:"quantity" as const,firstItemPrice:12,additionalItemPrice:2}},
+    {shippingClassId:null,shippingClassName:null,destinationCountryCode:"US",destinationProvince:"California",rule:{mode:"quantity" as const,firstItemPrice:8,additionalItemPrice:1}},
+    {shippingClassId:"heavy",shippingClassName:"Heavy",destinationCountryCode:"US",destinationProvince:"California",rule:{mode:"quantity" as const,firstItemPrice:20,additionalItemPrice:4}},
+  ];
+  const global={mode:"quantity" as const,firstItemPrice:5,additionalItemPrice:1};
+  const california=calculateShipping([{name:"A",quantity:2},{name:"B",quantity:1,shippingClassId:"heavy",shippingClassName:"Heavy"}],global,rules,{countryCode:"us",province:"california"});
+  assert.equal(california.ok,true);
+  if(california.ok){
+    assert.equal(california.amount,29);
+    assert.deepEqual(california.breakdown.map(item=>[item.matchedCountryCode,item.matchedProvince]),[["US","California"],["US","California"]]);
+  }
+  const texas=calculateShipping([{name:"A",quantity:1,shippingClassId:"heavy",shippingClassName:"Heavy"}],global,rules,{countryCode:"US",province:"Texas"});
+  assert.equal(texas.ok,true);
+  if(texas.ok)assert.equal(texas.amount,12);
+  const globalResult=calculateShipping([{name:"A",quantity:1}],global,rules);
+  assert.equal(globalResult.ok,true);
+  if(globalResult.ok)assert.equal(globalResult.amount,5);
+});
+
 test("shipping schemas enforce one default rule and extend products and orders",()=>{
   const classId="10000000-0000-4000-8000-000000000001",templateId="20000000-0000-4000-8000-000000000002";
-  assert.equal(shippingTemplateCreateSchema.safeParse({name:"Default",currency:"USD",enabled:true,isDefault:true,rules:[{shippingClassId:null,mode:"quantity",firstItemPrice:5,additionalItemPrice:2},{shippingClassId:classId,mode:"weight",firstWeight:1,additionalWeight:.5,weightUnit:"kg",firstWeightPrice:10,additionalWeightPrice:3}]}).success,true);
+  assert.equal(shippingTemplateCreateSchema.safeParse({name:"Default",currency:"USD",enabled:true,isDefault:true,rules:[{shippingClassId:null,mode:"quantity",firstItemPrice:5,additionalItemPrice:2},{shippingClassId:classId,destinationCountryCode:"US",destinationProvince:"California",mode:"weight",firstWeight:1,additionalWeight:.5,weightUnit:"kg",firstWeightPrice:10,additionalWeightPrice:3}]}).success,true);
   assert.equal(shippingTemplateCreateSchema.safeParse({name:"Broken",currency:"USD",enabled:true,isDefault:false,rules:[{shippingClassId:classId,mode:"quantity",firstItemPrice:5,additionalItemPrice:2}]}).success,false);
-  assert.equal(shippingQuoteSchema.safeParse({templateId,currency:"USD",items:[{name:"Bag",quantity:2,weightAmount:1,weightUnit:"kg",shippingClassId:classId}]}).success,true);
+  assert.equal(shippingTemplateCreateSchema.safeParse({name:"Duplicate",currency:"USD",enabled:true,isDefault:false,rules:[{shippingClassId:null,mode:"quantity",firstItemPrice:5,additionalItemPrice:2},{shippingClassId:classId,destinationCountryCode:"US",mode:"quantity",firstItemPrice:5,additionalItemPrice:2},{shippingClassId:classId,destinationCountryCode:"us",mode:"quantity",firstItemPrice:6,additionalItemPrice:2}]}).success,false);
+  assert.equal(shippingQuoteSchema.safeParse({templateId,currency:"USD",destination:{countryCode:"us",province:"California"},items:[{name:"Bag",quantity:2,weightAmount:1,weightUnit:"kg",shippingClassId:classId}]}).success,true);
+  assert.equal(shippingQuoteSchema.safeParse({templateId,currency:"USD",destination:{province:"California"},items:[{name:"Bag",quantity:1}]}).success,false);
   assert.equal(productCreateSchema.safeParse({clientProductId:templateId,name:"Bag",sku:"B-1",currency:"USD",priceTiers:[{minQuantity:1,unitAmount:10}],shippingClassId:classId}).success,true);
   assert.equal(orderSchema.safeParse({clientOrderId:templateId,currency:"USD",items:[{name:"Bag",quantity:1,unitAmount:10,shippingClassId:classId}],shippingAmount:3,shippingTemplateId:templateId,acceptCalculatedShipping:true}).success,true);
 });
 
 test("shipping migration, routes, snapshots, and startup migration are wired",async()=>{
-  const [migration,routes,server,startup]=await Promise.all([
+  const [migration,destinationMigration,routes,server,startup]=await Promise.all([
     readFile(new URL("../../../infra/postgres/migrations/058_shipping_templates.sql",import.meta.url),"utf8"),
+    readFile(new URL("../../../infra/postgres/migrations/059_shipping_destinations.sql",import.meta.url),"utf8"),
     readFile(new URL("../src/shipping-routes.ts",import.meta.url),"utf8"),
     readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
     readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
@@ -65,9 +89,12 @@ test("shipping migration, routes, snapshots, and startup migration are wired",as
   assert.match(migration,/CREATE TABLE IF NOT EXISTS shipping_classes/);
   assert.match(migration,/CREATE TABLE IF NOT EXISTS shipping_templates/);
   assert.match(migration,/shipping_quote_snapshot jsonb/);
+  assert.match(destinationMigration,/destination_country_code/);
+  assert.match(destinationMigration,/contact_addresses[\s\S]*country_code/);
   assert.match(routes,/\/api\/v1\/shipping\/quotes/);
   assert.match(routes,/calculateShippingQuote/);
   assert.match(server,/acceptCalculatedShipping/);
   assert.match(server,/shipping_class_name/);
   assert.match(startup,/058_shipping_templates\.sql/);
+  assert.match(startup,/059_shipping_destinations\.sql/);
 });
