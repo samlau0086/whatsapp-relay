@@ -27,7 +27,7 @@ test("product card sends accept complete translated product names and reject par
   const productIds=["11111111-1111-4111-8111-111111111111","22222222-2222-4222-8222-222222222222"],base={accountId:"33333333-3333-4333-8333-333333333333",clientBatchId:"batch_12345678",productIds,mode:"individual" as const,showPrice:true};
   assert.equal(productCardSendSchema.safeParse({...base,translationTargetLanguage:"zh-CN",translatedProductNames:productIds.map((productId,index)=>({productId,name:`译名 ${index+1}`}))}).success,true);
   assert.equal(productCardSendSchema.safeParse({...base,translationTargetLanguage:"zh-CN",translatedProductNames:[{productId:productIds[0],name:"译名"}]}).success,false);
-  assert.equal(productCardSendSchema.safeParse({...base,translationTargetLanguage:"zh-CN",translatedProductNames:productIds.map(productId=>({productId:productIds[0],name:"重复"}))}).success,false);
+  assert.equal(productCardSendSchema.safeParse({...base,translationTargetLanguage:"zh-CN",translatedProductNames:productIds.map(()=>({productId:productIds[0],name:"重复"}))}).success,false);
   assert.equal(productCardSendSchema.safeParse({...base,translationTargetLanguage:"zh-CN",translatedProductNames:[...productIds.map((productId,index)=>({productId,name:`译名 ${index+1}`})),{productId:"44444444-4444-4444-8444-444444444444",name:"越界"}]}).success,false);
 });
 

@@ -347,10 +347,11 @@ export function ProductCardSendDialog({
       window.clearTimeout(timer);
     }
   }
-  // eslint-disable-next-line react-hooks/purity -- This clock is read only after an explicit send action invokes the async function.
   async function waitForBatch(batchId: string) {
+    // eslint-disable-next-line react-hooks/purity -- Polling starts only after an explicit send action.
     const deadline = Date.now() + 20_000,
       path = `/api/v1/conversations/${conversationId}/product-cards/batches/${encodeURIComponent(batchId)}?accountId=${encodeURIComponent(accountId)}`;
+    // eslint-disable-next-line react-hooks/purity -- The clock bounds this event-driven polling loop.
     while (Date.now() < deadline) {
       try {
         const { result, body } = await requestJsonWithTimeout(path, {}, 3_500);
