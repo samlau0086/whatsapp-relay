@@ -133,6 +133,11 @@ test("product card sending recovers from a lost response without duplicating the
   assert.match(server,/left\(client_message_id,length\(\$3\)\+1\)=\$3\|\|':'/);
 });
 
+test("product card sending offers preset and custom grid collages",async()=>{
+  const [dialog,server,image]=await Promise.all([readFile(new URL("../../../app/product-card-send-dialog.tsx",import.meta.url),"utf8"),readFile(new URL("../src/server.ts",import.meta.url),"utf8"),readFile(new URL("../src/product-card-image.ts",import.meta.url),"utf8")]);
+  assert.match(dialog,/GRID_PRESETS\s*=\s*\[2,\s*3,\s*4,\s*5,\s*8\]/);assert.match(dialog,/合并为网格拼图/);assert.match(dialog,/自定义/);assert.match(dialog,/gridOverflow/);assert.match(server,/renderProductCardGrid/);assert.match(image,/export async function renderProductCardGrid/);
+});
+
 test("product card captions come from the template and are translated before WhatsApp sending",async()=>{
   const [dialog,editor,server]=await Promise.all([
     readFile(new URL("../../../app/product-card-send-dialog.tsx",import.meta.url),"utf8"),
@@ -171,7 +176,7 @@ test("product card search can exactly match a complete SKU or product title",asy
   ]);
   assert.match(dialog,/精准匹配/);
   assert.match(dialog,/role="switch"/);
-  assert.match(dialog,/exactMatch\?"&exact=true"/);
+  assert.match(dialog,/exactMatch\s*\?\s*"&exact=true"/);
   assert.match(server,/lower\(btrim\(p\.name\)\)=lower\(\$1\)/);
   assert.match(server,/lower\(btrim\(p\.sku\)\)=lower\(\$1\)/);
   assert.match(server,/invalid_exact_match/);

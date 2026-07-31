@@ -14,6 +14,16 @@ export async function renderProductCards(template:ProductCardTemplate,products:P
   return sharp({create:{width:WIDTH,height,channels:4,background:"#E9F0EC"}}).composite(composite).png({compressionLevel:9}).toBuffer();
 }
 
+export async function renderProductCardGrid(template:ProductCardTemplate,products:ProductCardRenderProduct[],showPrice:boolean,rows:number,columns:number):Promise<Buffer>{
+  if(!Number.isInteger(rows)||!Number.isInteger(columns)||rows<1||columns<1||rows>10||columns>10||products.length>rows*columns)throw new Error("invalid product card grid");
+  const cards=await Promise.all(products.map(product=>renderCard(template,product,showPrice))),metadata=await Promise.all(cards.map(card=>sharp(card).metadata()));
+  const gap=24,canvasWidth=2160,cellWidth=Math.floor((canvasWidth-gap*(columns-1))/columns),resized=await Promise.all(cards.map(async(card,index)=>{const width=metadata[index].width??WIDTH,height=metadata[index].height??720,targetHeight=Math.max(1,Math.round(height*cellWidth/width));return{input:await sharp(card).resize({width:cellWidth}).png({compressionLevel:9}).toBuffer(),height:targetHeight};}));
+  const usedRows=Math.max(1,Math.ceil(products.length/columns)),rowHeights=Array.from({length:usedRows},(_,row)=>Math.max(...resized.slice(row*columns,(row+1)*columns).map(card=>card.height),1)),rowTops:number[]=[];let top=0;
+  for(const height of rowHeights){rowTops.push(top);top+=height+gap;}
+  const height=Math.max(1,top-gap),composite=resized.map((card,index)=>({input:card.input,left:(index%columns)*(cellWidth+gap),top:rowTops[Math.floor(index/columns)]}));
+  return sharp({create:{width:canvasWidth,height,channels:4,background:"#E9F0EC"}}).composite(composite).png({compressionLevel:9}).toBuffer();
+}
+
 async function renderCard(template:ProductCardTemplate,product:ProductCardRenderProduct,showPrice:boolean):Promise<Buffer>{
   const imageData=product.image?(await sharp(product.image).rotate().resize(900,620,{fit:"cover"}).png().toBuffer()).toString("base64"):null;
   const fragments:string[]=[];let y=36;
