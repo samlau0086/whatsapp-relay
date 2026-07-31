@@ -12,9 +12,13 @@ export const LANGUAGES=[
 export function languageName(code:string){return LANGUAGES.find(item=>item[0]===code)?.[1]??code;}
 const LANGUAGE_COUNTRIES:Record<string,string>={zh:"CN",en:"US",ms:"MY",id:"ID",th:"TH",vi:"VN",ja:"JP",ko:"KR",es:"ES",fr:"FR",de:"DE",it:"IT",pt:"PT",ru:"RU",ar:"SA",hi:"IN",tr:"TR",nl:"NL",pl:"PL"};
 export function languageShortCode(code:string){return code.split("-")[0]?.toUpperCase()??code.toUpperCase();}
-export function languageFlag(code:string){
+export function languageCountryCode(code:string){
   const [language,...parts]=code.split("-"),region=parts.find(part=>/^[A-Za-z]{2}$/.test(part)),country=(region??LANGUAGE_COUNTRIES[language.toLowerCase()])?.toUpperCase();
-  return country?.replace(/[A-Z]/g,letter=>String.fromCodePoint(127397+letter.charCodeAt(0)))??"🌐";
+  return country?.toLowerCase()??null;
+}
+export function LanguageFlagIcon({code,className=""}:{code:string;className?:string}){
+  const country=languageCountryCode(code);
+  return country?<span className={`language-flag fi fi-${country} ${className}`.trim()} role="img" aria-label={`${country.toUpperCase()} 国旗`}/>:<span className={`language-flag-fallback ${className}`.trim()} aria-hidden="true">🌐</span>;
 }
 
 export function LanguagePicker({value,onChange,label="搜索并选择语言",allowEmpty=false,placeholder="搜索语言名称或代码"}:{value:string;onChange:(value:string)=>void;label?:string;allowEmpty?:boolean;placeholder?:string}){
@@ -37,5 +41,5 @@ export function LanguagePicker({value,onChange,label="搜索并选择语言",all
       choose(visible[highlighted][0]);
     }
   }
-  return <div className="language-picker"><input type="search" value={open?query:languageName(value)} placeholder={placeholder} onFocus={openPicker} onChange={event=>{setOpen(true);setQuery(event.target.value);setHighlighted(0);}} onKeyDown={onKeyDown} onBlur={()=>window.setTimeout(()=>setOpen(false),120)} aria-label={label} role="combobox" aria-expanded={open} aria-controls={listboxId} aria-autocomplete="list" aria-activedescendant={open&&highlighted>=0?`${listboxId}-${highlighted}`:undefined} autoComplete="off"/>{open&&<div id={listboxId} className="language-options" role="listbox">{allowEmpty&&!query.trim()&&<button type="button" role="option" aria-selected={!value} className={!value?"selected":""} onMouseDown={event=>event.preventDefault()} onClick={()=>choose("")}><span>未设置</span><small>—</small></button>}{visible.length?visible.map(([code,name],index)=><button id={`${listboxId}-${index}`} type="button" role="option" aria-selected={code===value} className={code===value||index===highlighted?"selected":""} key={code} onMouseEnter={()=>setHighlighted(index)} onMouseDown={event=>event.preventDefault()} onClick={()=>choose(code)}><span className="language-option-name"><i aria-hidden="true">{languageFlag(code)}</i>{name}</span><small>{code}</small></button>):<span className="language-empty">没有匹配语言</span>}</div>}</div>;
+  return <div className="language-picker"><input type="search" value={open?query:languageName(value)} placeholder={placeholder} onFocus={openPicker} onChange={event=>{setOpen(true);setQuery(event.target.value);setHighlighted(0);}} onKeyDown={onKeyDown} onBlur={()=>window.setTimeout(()=>setOpen(false),120)} aria-label={label} role="combobox" aria-expanded={open} aria-controls={listboxId} aria-autocomplete="list" aria-activedescendant={open&&highlighted>=0?`${listboxId}-${highlighted}`:undefined} autoComplete="off"/>{open&&<div id={listboxId} className="language-options" role="listbox">{allowEmpty&&!query.trim()&&<button type="button" role="option" aria-selected={!value} className={!value?"selected":""} onMouseDown={event=>event.preventDefault()} onClick={()=>choose("")}><span>未设置</span><small>—</small></button>}{visible.length?visible.map(([code,name],index)=><button id={`${listboxId}-${index}`} type="button" role="option" aria-selected={code===value} className={code===value||index===highlighted?"selected":""} key={code} onMouseEnter={()=>setHighlighted(index)} onMouseDown={event=>event.preventDefault()} onClick={()=>choose(code)}><span className="language-option-name"><LanguageFlagIcon code={code}/>{name}</span><small>{code}</small></button>):<span className="language-empty">没有匹配语言</span>}</div>}</div>;
 }

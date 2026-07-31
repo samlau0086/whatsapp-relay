@@ -26,7 +26,8 @@ import { CollageGenerateDialog, ProductWorkspace } from "./collage-materials";
 import { MaterialLibrarySendDialog } from "./material-library-send-dialog";
 import { TaskCenter } from "./task-center";
 import {StatusCenter} from "./status-center";
-import {LanguagePicker,languageFlag,languageName,languageShortCode} from "./language-picker";
+import {LanguageFlagIcon,LanguagePicker,languageName,languageShortCode} from "./language-picker";
+import {CountryPicker} from "./country-picker";
 import { conversationCountsPath, conversationListPath, conversationSummaryPath, type ConversationDateFilter, type ConversationListFilter } from "./conversation-date-filter";
 import { QUICK_REPLY_VARIABLES, quickReplyVariableNames, renderQuickReplyVariables, type QuickReplyVariable, type QuickReplyVariableValues } from "./quick-reply-variables";
 import { confirmAction, ConfirmationHost, promptAction, PromptHost } from "./confirmation-ui";
@@ -1731,7 +1732,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                                 <p>{message.translationSourceText}</p>
                               </div>
                             )}
-                          {translationPreference.enabled &&
+                          {(translationPreference.enabled ||
+                            messageTranslations[message.id]?.status === "translated") &&
                             message.direction === "in" &&
                             message.kind === "text" &&
                             message.text && (
@@ -1758,7 +1760,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                               onReady={keepMessagesAtEnd}
                             />
                           )}{" "}
-                          {translationPreference.enabled &&
+                          {(translationPreference.enabled ||
+                            messageTranslations[message.id]?.status === "translated") &&
                             message.direction === "in" &&
                             message.kind === "audio" && (
                               <VoiceTranslation
@@ -2529,6 +2532,7 @@ function CrmDetailsPanel({
     [error, setError] = useState(""),
     [tagQuery, setTagQuery] = useState(""),
     [tagMenuOpen, setTagMenuOpen] = useState(false),
+    [tagEditing, setTagEditing] = useState<TagItem | null>(null),
     [noteDraft, setNoteDraft] = useState(""),
     [contactTasks, setContactTasks] = useState<ContactTaskSummary[]>(()=>cachedDetails?.contactTasks??[]),
     [taskTitle, setTaskTitle] = useState(""),
@@ -2613,11 +2617,12 @@ function CrmDetailsPanel({
       if (paymentOrderTarget) setPaymentOrderTarget(null);
       else if (sendOrderTarget) setSendOrderTarget(null);
       else if (taskEditing) setTaskEditing(null);
+      else if (tagEditing) setTagEditing(null);
       else if (!orderOpen && !editOrderTarget) onClose();
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [onClose, orderOpen, editOrderTarget, sendOrderTarget, paymentOrderTarget, taskEditing]);
+  }, [onClose, orderOpen, editOrderTarget, sendOrderTarget, paymentOrderTarget, taskEditing, tagEditing]);
   async function request(path: string, init: RequestInit) {
     setBusy(true);
     setError("");
@@ -2722,6 +2727,33 @@ function CrmDetailsPanel({
       setError(reason instanceof Error?reason.message:"创建标签失败");
     }finally{
       setBusy(false);
+    }
+  }
+  async function saveTag() {
+    if(!tagEditing)return;
+    const name=tagEditing.name.trim();
+    if(!name)return;
+    const current=catalog.find(tag=>tag.id===tagEditing.id);
+    if(current&&current.name===name&&current.color.toLowerCase()===tagEditing.color.toLowerCase()){
+      setTagEditing(null);
+      return;
+    }
+    const ok=await request(`/api/v1/tags/${tagEditing.id}`,{
+      method:"PATCH",
+      headers:{"content-type":"application/json"},
+      body:JSON.stringify({name,color:tagEditing.color}),
+    });
+    if(ok){
+      setTagEditing(null);
+      onToast(`标签“${name}”已更新`);
+    }
+  }
+  async function deleteTag(tag:TagItem) {
+    if(!await confirmAction(`删除标签“${tag.name}”后，所有会话都会移除它。`,{title:"删除标签？",confirmLabel:"删除"}))return;
+    const ok=await request(`/api/v1/tags/${tag.id}`,{method:"DELETE"});
+    if(ok){
+      if(tagEditing?.id===tag.id)setTagEditing(null);
+      onToast(`标签“${tag.name}”已删除`);
     }
   }
   async function addNote() {
@@ -2877,7 +2909,7 @@ function CrmDetailsPanel({
             {statusText(active.accountStatus)}
           </span>
           {details?.contact&&<ContactLocalTime contact={details.contact}/>}
-          {details?.contact?.preferredLanguage&&<div className="contact-preferred-language" title={`偏好语言：${languageName(details.contact.preferredLanguage)}`}><span aria-hidden="true">{languageFlag(details.contact.preferredLanguage)}</span><b>{languageShortCode(details.contact.preferredLanguage)}</b></div>}
+          {details?.contact?.preferredLanguage&&<div className="contact-preferred-language" title={`偏好语言：${languageName(details.contact.preferredLanguage)}`}><LanguageFlagIcon code={details.contact.preferredLanguage}/><b>{languageShortCode(details.contact.preferredLanguage)}</b></div>}
           {details?.contact?.primaryEmail&&<p className="contact-primary-email"><Mail size={12}/>{details.contact.primaryEmail}</p>}
           {details?.contact?.methods.filter(method=>!isSocialContactMethod(method.type)).slice(0,2).map((method,index)=><p className="contact-method-summary" key={`${method.type}-${index}`}>{method.label||contactMethodName(method.type)}：{method.value}</p>)}
           {details?.contact&&<ContactSocialLinks methods={details.contact.methods}/>}
@@ -3036,10 +3068,16 @@ function CrmDetailsPanel({
                 </label>
                 {tagMenuOpen&&(visibleTags.length>0||Boolean(normalizedTagQuery))&&<div id="contact-tag-options" className="tag-options" role="listbox">
                   {visibleTags.map(tag=>(
-                    <button type="button" role="option" aria-selected="false" key={tag.id} onMouseDown={event=>event.preventDefault()} onClick={()=>{void toggleTag(tag.id);setTagQuery("");setTagMenuOpen(false);}}>
-                      <i style={{background:tag.color}}/>
-                      <span><b>{tag.name}</b><small>添加标签</small></span>
-                    </button>
+                    <div className="tag-option-row" role="option" aria-selected="false" key={tag.id}>
+                      <button type="button" className="tag-option-add" onMouseDown={event=>event.preventDefault()} onClick={()=>{void toggleTag(tag.id);setTagQuery("");setTagMenuOpen(false);}}>
+                        <i style={{background:tag.color}}/>
+                        <b>{tag.name}</b>
+                      </button>
+                      {canManageTags&&<span className="tag-option-actions">
+                        <button type="button" onMouseDown={event=>event.preventDefault()} onClick={()=>{setTagEditing({...tag});setTagMenuOpen(false);}} aria-label={`编辑标签 ${tag.name}`} title="编辑标签"><Pencil size={13}/></button>
+                        <button type="button" onMouseDown={event=>event.preventDefault()} onClick={()=>void deleteTag(tag)} aria-label={`删除标签 ${tag.name}`} title="删除标签"><Trash2 size={13}/></button>
+                      </span>}
+                    </div>
                   ))}
                   {normalizedTagQuery&&!tagNameExists&&canManageTags&&<button type="button" role="option" aria-selected={visibleTags.length===0} className="create" disabled={busy} onMouseDown={event=>event.preventDefault()} onClick={()=>void createAndAddTag()}>
                     <Plus size={13}/>
@@ -3184,6 +3222,17 @@ function CrmDetailsPanel({
       {contactEditing&&<ContactEditDialog contactId={active.contactId} token={token} onToken={onToken} onClose={()=>setContactEditing(false)} onSaved={async profile=>{setContactEditing(false);setDetails(value=>value?{...value,contact:profile}:value);onToast("联系人资料已更新");await onChanged();await load();}}/>}
       {addressEditing&&<ContactAddressDialog contactId={active.contactId} token={token} onToken={onToken} onClose={()=>setAddressEditing(false)} onSaved={async profile=>{setAddressEditing(false);setDetails(value=>value?{...value,contact:profile}:value);onToast("联系人地址已更新，创建订单时可直接选择");await load();}}/>}
       {taskEditing&&<ContactTaskDialog task={taskEditing} token={token} onToken={onToken} onClose={()=>setTaskEditing(null)} onSaved={async message=>{setTaskEditing(null);onToast(message);await load();await onChanged();}}/>}
+      {tagEditing&&<div className="modal-backdrop tag-edit-backdrop" role="presentation">
+        <section className="login-dialog tag-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="tag-edit-title">
+          <button className="login-close" onClick={()=>setTagEditing(null)} disabled={busy} aria-label="关闭"><X size={17}/></button>
+          <span className="login-logo" style={{background:tagEditing.color}}><Tag size={20}/></span>
+          <h2 id="tag-edit-title">编辑标签</h2>
+          <p>修改名称和颜色后，所有使用该标签的会话会同步更新。</p>
+          <label>标签名称<input autoFocus value={tagEditing.name} maxLength={40} onChange={event=>setTagEditing(tag=>tag?{...tag,name:event.target.value}:tag)} onKeyDown={event=>{if(event.key==="Enter"){event.preventDefault();void saveTag();}}}/></label>
+          <label>标签颜色<span className="tag-edit-color"><input type="color" value={tagEditing.color} onChange={event=>setTagEditing(tag=>tag?{...tag,color:event.target.value}:tag)} aria-label="标签颜色"/><code>{tagEditing.color.toUpperCase()}</code><i style={{background:tagEditing.color}}>{tagEditing.name.trim()||"标签预览"}</i></span></label>
+          <footer><button className="secondary-action" onClick={()=>setTagEditing(null)} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void saveTag()} disabled={busy||!tagEditing.name.trim()}>{busy?"正在保存…":"保存修改"}</button></footer>
+        </section>
+      </div>}
       {orderOpen && (
         <OrderDialog
           active={active}
@@ -5526,7 +5575,7 @@ function ContactAddressDialog({contactId,token,onToken,onClose,onSaved}:{contact
         <div className="address-dialog-toolbar"><span>已保存 {addresses.length} 个地址</span><button type="button" onClick={addAddress}><Plus size={14}/>新增地址</button></div>
         <div className="contact-address-list">{addresses.map((item,index)=><article key={item.id||`new-${index}`}>
           <header><MapPin size={15}/><b>地址 {index+1}</b><label><input type="radio" name="default-address" checked={item.isDefault} onChange={()=>setDefaultAddress(index)}/><span>{item.isDefault?"默认收货地址":"设为默认"}</span></label><button type="button" onClick={()=>removeAddress(index)} aria-label="移除地址"><Trash2 size={14}/></button></header>
-          <div className="contact-address-grid"><label>地址名称<input value={item.label} maxLength={40} onChange={event=>changeAddress(index,{label:event.target.value})} placeholder="例如：公司、家"/></label><label>收件人<input value={item.recipientName} maxLength={80} onChange={event=>changeAddress(index,{recipientName:event.target.value})} placeholder="收件人姓名"/></label><label>联系电话<input value={item.phone} maxLength={40} onChange={event=>changeAddress(index,{phone:event.target.value})} placeholder="联系电话"/></label><label>国家代码<input value={item.countryCode} maxLength={2} onChange={event=>changeAddress(index,{countryCode:event.target.value.toUpperCase(),...(event.target.value?{}:{province:""})})} placeholder="CN、US"/></label><label>省份 / 州<input value={item.province} maxLength={100} disabled={!item.countryCode} onChange={event=>changeAddress(index,{province:event.target.value})} placeholder="广东省、California"/></label><label className="contact-address-detail">详细地址<textarea value={item.address} maxLength={1000} onChange={event=>changeAddress(index,{address:event.target.value})} placeholder="城市、街道及门牌号"/></label></div>
+          <div className="contact-address-grid"><label>地址名称<input value={item.label} maxLength={40} onChange={event=>changeAddress(index,{label:event.target.value})} placeholder="例如：公司、家"/></label><label>收件人<input value={item.recipientName} maxLength={80} onChange={event=>changeAddress(index,{recipientName:event.target.value})} placeholder="收件人姓名"/></label><label>联系电话<input value={item.phone} maxLength={40} onChange={event=>changeAddress(index,{phone:event.target.value})} placeholder="联系电话"/></label><label>国家 / 地区<CountryPicker value={item.countryCode} onChange={countryCode=>changeAddress(index,{countryCode,...(countryCode?{}:{province:""})})}/></label><label>省份 / 州<input value={item.province} maxLength={100} disabled={!item.countryCode} onChange={event=>changeAddress(index,{province:event.target.value})} placeholder="广东省、California"/></label><label className="contact-address-detail">详细地址<textarea value={item.address} maxLength={1000} onChange={event=>changeAddress(index,{address:event.target.value})} placeholder="城市、街道及门牌号"/></label></div>
         </article>)}</div>
         {!addresses.length&&<div className="contact-address-empty"><MapPin size={22}/><b>尚未保存收货地址</b><span>新增后，创建订单时可直接选择。</span></div>}
         {error&&<span className="login-error">{error}</span>}
@@ -5554,7 +5603,7 @@ function ContactEditDialog({contactId,token,onToken,onClose,onSaved}:{contactId:
       <p>{profile.contactName||profile.phone} · {profile.accountName}</p>
       <div className="contact-avatar-editor"><button type="button" className="contact-avatar-picker" onClick={()=>setAvatarPickerOpen(true)} disabled={busy}>{avatarPreview?<span className="contact-avatar large"><img src={avatarPreview} alt="头像预览"/></span>:removeAvatar?<span className="contact-avatar large"><span>{profile.name.slice(0,2).toUpperCase()}</span></span>:<ContactAvatar contact={profile} token={token} onToken={onToken} size="large"/>}<span><b>{profile.avatarUrl&&!removeAvatar?"更换头像":"设置头像"}</b><small>从媒体与附件选择，支持 JPG、PNG 或 WebP，最大 5 MB</small></span></button>{(profile.avatarUrl||avatarFile)&&!removeAvatar&&<button type="button" onClick={()=>{setAvatarFile(null);setRemoveAvatar(true);}}>移除</button>}</div>
       <div className="contact-create-grid"><label>联系人名称<input value={alias} onChange={event=>setAlias(event.target.value)} maxLength={80} placeholder={profile.contactName||profile.phone}/><small>团队维护的显示名称不会被 WhatsApp 同步覆盖。</small></label><label>WhatsApp 号码<input value={phone} onChange={event=>setPhone(event.target.value)} inputMode="tel" disabled={profile.hasConversation&&Boolean(profile.phone)}/><small>{profile.hasConversation&&profile.phone?"该联系人已有对应会话，号码不可修改。":"必须包含国家或地区代码。"}</small></label><label>First name<input value={firstName} onChange={event=>setFirstName(event.target.value)} maxLength={80} placeholder="名字"/></label><label>Middle name<input value={middleName} onChange={event=>setMiddleName(event.target.value)} maxLength={80} placeholder="中间名（可选）"/></label><label>Last name<input value={lastName} onChange={event=>setLastName(event.target.value)} maxLength={80} placeholder="姓氏"/></label></div>
-      <section className="contact-field-section contact-language-field"><header><span><Languages size={15}/><b>偏好语言</b><small>联系人更常用或希望收到消息的语言</small></span>{preferredLanguage&&<button type="button" onClick={()=>setPreferredLanguage("")}>清除设置</button>}</header><LanguagePicker value={preferredLanguage} onChange={setPreferredLanguage} label="搜索联系人偏好语言" allowEmpty/><p>{preferredLanguage?<><span aria-hidden="true">{languageFlag(preferredLanguage)}</span> 已设置为 {languageName(preferredLanguage)}（{languageShortCode(preferredLanguage)}）</>:"尚未设置偏好语言"}</p></section>
+      <section className="contact-field-section contact-language-field"><header><span><Languages size={15}/><b>偏好语言</b><small>联系人更常用或希望收到消息的语言</small></span>{preferredLanguage&&<button type="button" onClick={()=>setPreferredLanguage("")}>清除设置</button>}</header><LanguagePicker value={preferredLanguage} onChange={setPreferredLanguage} label="搜索联系人偏好语言" allowEmpty/><p>{preferredLanguage?<><LanguageFlagIcon code={preferredLanguage}/> 已设置为 {languageName(preferredLanguage)}（{languageShortCode(preferredLanguage)}）</>:"尚未设置偏好语言"}</p></section>
       <section className="contact-field-section contact-timezone-field"><header><span><Clock3 size={15}/><b>联系人时区</b><small>用于详情页显示对方当前时间</small></span>{timezone&&<button type="button" onClick={()=>setTimezone("")}>按国家自动推算</button>}</header><TimezoneSearchDropdown value={timezone} onChange={setTimezone} label="搜索联系人 IANA 时区"/><p>{timezone?`已指定 ${timezone}`:`未指定时区，将根据号码国家/地区自动使用 ${profile.effectiveTimezone}${profile.inferredCountry?`（${profile.inferredCountry}）`:""}`}</p></section>
       <section className="contact-field-section"><header><span><Mail size={15}/><b>邮箱</b><small>邮件功能将默认使用 Primary Email</small></span><button type="button" onClick={addEmail}><Plus size={13}/>添加邮箱</button></header>{emails.length?<div className="contact-repeat-list">{emails.map((email,index)=><div className="contact-email-row" key={email.id??index}><input value={email.label} maxLength={40} onChange={event=>setEmails(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,label:event.target.value}:item))} placeholder="标签，如工作"/><input type="email" value={email.email} maxLength={254} onChange={event=>setEmails(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,email:event.target.value}:item))} placeholder="name@example.com"/><label className="primary-email-radio"><input type="radio" name="primary-email" checked={email.isPrimary} onChange={()=>setPrimary(index)}/>Primary</label><button type="button" className="danger-text" onClick={()=>removeEmail(index)} aria-label="移除邮箱"><Trash2 size={14}/></button></div>)}</div>:<p className="contact-field-empty">尚未添加邮箱</p>}</section>
       <section className="contact-field-section"><header><span><Phone size={15}/><b>其他联系方式</b><small>支持社媒账号或完整链接</small></span><button type="button" onClick={addMethod}><Plus size={13}/>添加方式</button></header>{methods.length?<div className="contact-repeat-list">{methods.map((method,index)=><div className="contact-method-row" key={method.id??index}><select value={method.type} onChange={event=>setMethods(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,type:event.target.value as ContactMethodType}:item))}>{(["phone","wechat","telegram","line","website","facebook","x","linkedin","instagram","other"] as ContactMethodType[]).map(type=><option value={type} key={type}>{contactMethodName(type)}</option>)}</select><input value={method.label} maxLength={40} onChange={event=>setMethods(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,label:event.target.value}:item))} placeholder="自定义标签"/><input value={method.value} maxLength={500} onChange={event=>setMethods(items=>items.map((item,itemIndex)=>itemIndex===index?{...item,value:event.target.value}:item))} placeholder={isSocialContactMethod(method.type)?"账号名或完整链接":"号码、账号或网址"}/><button type="button" className="danger-text" onClick={()=>setMethods(items=>items.filter((_,itemIndex)=>itemIndex!==index))} aria-label="移除联系方式"><Trash2 size={14}/></button></div>)}</div>:<p className="contact-field-empty">尚未添加其他联系方式</p>}</section>

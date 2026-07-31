@@ -149,6 +149,10 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /targetLanguage:message\.cachedTranslationLanguage/);
   assert.match(component, /value\.targetLanguage===translationPreference\.agentLanguage/);
   assert.doesNotMatch(component, /setMessageTranslations\(\{\}\).*translationPreference\.customerLanguage/);
+  assert.equal(
+    component.match(/translationPreference\.enabled \|\|\s*messageTranslations\[message\.id\]\?\.status === "translated"/g)?.length,
+    2,
+  );
   assert.match(component, /Custom Provider/);
   assert.match(component, /gpt-5\.6-luna/);
   assert.match(css, /\.translation-menu/);
@@ -391,6 +395,16 @@ test("inbox supports replying to a specific WhatsApp message", async () => {
   assert.match(css,/\.composer-reply-preview\{/);
 });
 
+test("conversation tag dropdown exposes management actions without redundant helper text", async () => {
+  const component = await readFile(new URL("../app/whatsapp-inbox.tsx", import.meta.url), "utf8");
+  assert.match(component, /className="tag-option-actions"/);
+  assert.match(component, /aria-label={`编辑标签 \${tag\.name}`}/);
+  assert.match(component, /aria-label={`删除标签 \${tag\.name}`}/);
+  assert.match(component, /method:"PATCH"/);
+  assert.match(component, /method:"DELETE"/);
+  assert.doesNotMatch(component, /<small>添加标签<\/small>/);
+});
+
 test("inbox quick replies support search, media types, and conversation translation", async () => {
   const [component,css]=await Promise.all([
     readFile(new URL("../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
@@ -497,6 +511,8 @@ test("translation language picker supports search and keyboard selection", async
   assert.match(picker,/event\.key==="ArrowDown"/);
   assert.match(picker,/event\.key==="Enter"/);
   assert.match(picker,/没有匹配语言/);
-  assert.match(inbox,/import \{LanguagePicker,languageFlag,languageName,languageShortCode\} from "\.\/language-picker"/);
+  assert.match(inbox,/import \{LanguageFlagIcon,LanguagePicker,languageName,languageShortCode\} from "\.\/language-picker"/);
+  assert.match(picker,/className=\{`language-flag fi fi-\$\{country\}/);
+  assert.match(inbox,/<LanguageFlagIcon code=\{details\.contact\.preferredLanguage\}/);
   assert.match(statusCenter,/import \{LanguagePicker,languageName\} from "\.\/language-picker"/);
 });
