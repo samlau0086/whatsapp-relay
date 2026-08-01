@@ -8,6 +8,17 @@ RelayDesk 现在提供统一的普通任务与定时消息中心，包含列表�
 
 > Windows Agent 的安装包发布、注册、扫码和断网恢复验收见 [`docs/windows-agent.md`](docs/windows-agent.md)。VPS 已上线后，建议先按该文档用测试 WhatsApp 账号完成一轮端到端验证，再接入正式账号。
 
+## Docker Relay Agent
+
+RelayDesk 也提供带浏览器管理界面的 Linux Docker Agent。每个容器绑定一个 WhatsApp 账号，二维码、连接状态和重新配对操作可在本地网页完成；会话凭据和待同步事件持久化在 Docker volume 中。
+
+1. 在 RelayDesk 的 **设置 → Agent 管理** 创建 15 分钟有效的一次性注册码。
+2. 下载 `apps/agent/compose.yaml` 与 `apps/agent/.env.docker.example`，将示例文件保存为 `.env`，并填写 `RELAY_CENTRAL_URL`、`RELAY_ENROLLMENT_CODE`、`RELAY_ACCOUNT_ID` 和 `RELAY_MASTER_KEY`。
+3. 执行 `docker compose pull && docker compose up -d`。
+4. 管理界面默认只绑定服务器本机 `127.0.0.1:8788`；通过 `ssh -L 8788:127.0.0.1:8788 <user>@<server>` 建立隧道后，在浏览器打开 `http://127.0.0.1:8788` 扫码。
+
+完整部署、升级、代理和安全访问说明见 [`docs/docker-agent.md`](docs/docker-agent.md)。镜像由 GitHub Actions 发布到 `ghcr.io/samlau0086/relaydesk-agent:latest`。
+
 ## 远程连接方式与部署架构
 
 RelayDesk 采用“公网中心服务器 + 家庭/办公室 Windows Agent”的边缘执行架构。你在外部访问中心服务器上的 Web 工作台，中心服务器负责身份验证、消息存储、API、队列和坐席协作；真正连接 WhatsApp 并执行收发操作的是家里或办公室电脑上的 Windows Agent。

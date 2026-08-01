@@ -134,11 +134,11 @@ function respondJson(response:ServerResponse,status:number,body:unknown):void{re
 async function executeCommand(command:{sequence:number;commandId:string;accountId:string;command:string;payload:Record<string,unknown>}):Promise<Record<string,unknown>>{
   const activeWorker=worker;if(!activeWorker)return deferred(command,"account_worker_unavailable","Account worker is restarting; command remains queued");
   return await new Promise(resolve=>{
-    let complete=false;let started=false;let timer:NodeJS.Timeout|undefined;
+    let complete=false;let started=false;
     const finish=(result:Record<string,unknown>)=>{if(complete)return;complete=true;clearTimeout(timer);activeWorker.off("message",onMessage);activeWorker.off("exit",onExit);resolve(result);};
     const onMessage=(message:Record<string,unknown>)=>{if(message.commandId!==command.commandId)return;if(message.type==="command_started")started=true;if(message.type==="command_result")finish(message);};
     const onExit=()=>finish(started?uncertain(command,"account_worker_restarted","Account worker restarted while sending; delivery could not be confirmed"):deferred(command,"account_worker_restarted","Account worker restarted before sending; command remains queued"));
-    timer=setTimeout(()=>finish(started?uncertain(command,"account_worker_stalled","Account worker stopped responding during send"):deferred(command,"account_worker_unresponsive","Account worker did not accept the command")),70_000);
+    const timer:NodeJS.Timeout=setTimeout(()=>finish(started?uncertain(command,"account_worker_stalled","Account worker stopped responding during send"):deferred(command,"account_worker_unresponsive","Account worker did not accept the command")),70_000);
     activeWorker.on("message",onMessage);activeWorker.once("exit",onExit);activeWorker.send({type:"command",...command},error=>{if(error)finish(deferred(command,"account_worker_ipc_failed",error.message));});
   });
 }
