@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "npm run build && electron .",
     "build": "node scripts/generate-icon.mjs && tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "start:docker": "node dist/docker-main.js",
     "test:store": "npm run build && node --test test/store.test.mjs",
     "test:preload": "npm run build && electron scripts/preload-smoke-main.mjs",
     "start": "electron .",

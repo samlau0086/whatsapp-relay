@@ -1,0 +1,21 @@
+services:
+  agent:
+    image: ghcr.io/samlau0086/relaydesk-agent:latest
+    restart: unless-stopped
+    ports:
+      - "${RELAY_UI_BIND:-127.0.0.1}:${RELAY_UI_PORT:-8788}:8788"
+    environment:
+      RELAY_CENTRAL_URL: ${RELAY_CENTRAL_URL:?Set the public RelayDesk URL}
+      RELAY_ENROLLMENT_CODE: ${RELAY_ENROLLMENT_CODE:-}
+      RELAY_AGENT_NAME: ${RELAY_AGENT_NAME:-Docker Relay Agent}
+      RELAY_ACCOUNT_ID: ${RELAY_ACCOUNT_ID:?Set a UUID for this WhatsApp account}
+      RELAY_ACCOUNT_NAME: ${RELAY_ACCOUNT_NAME:-WhatsApp}
+      RELAY_MASTER_KEY: ${RELAY_MASTER_KEY:-}
+      RELAY_PROXY_URL: ${RELAY_PROXY_URL:-}
+      RELAY_UI_BIND: 0.0.0.0
+      RELAY_UI_PORT: 8788
+    volumes:
+      - relay-agent-data:/data
+
+volumes:
+  relay-agent-data:

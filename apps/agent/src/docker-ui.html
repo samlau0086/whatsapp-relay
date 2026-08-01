@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RelayDesk Docker Agent</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#f3f6f4;color:#17231e;font:14px "Microsoft YaHei",Segoe UI,sans-serif}.top{background:#143d2e;color:#fff;padding:26px max(22px,calc((100vw - 900px)/2));display:flex;justify-content:space-between;gap:16px;align-items:center}.top h1{font-size:20px;margin:0 0 6px}.top p{font-size:12px;opacity:.75;margin:0}.version{border:1px solid #ffffff33;border-radius:999px;padding:6px 10px;font:600 12px Consolas,monospace}.wrap{max-width:900px;margin:auto;padding:24px 20px}.card{background:#fff;border:1px solid #e1e8e4;border-radius:14px;padding:20px;margin-bottom:16px;box-shadow:0 6px 18px #183b2d0c}.row{display:flex;justify-content:space-between;align-items:center;gap:14px}.label{font-size:12px;color:#718078;margin:0 0 5px}.value{font-weight:600;word-break:break-all}.hint{color:#718078;font-size:12px;line-height:1.65;margin:8px 0 0}.status{display:inline-flex;align-items:center;gap:7px;font-size:12px;white-space:nowrap}.dot{width:9px;height:9px;border-radius:50%;background:#aab4af}.dot.online{background:#21b96d;box-shadow:0 0 0 3px #dcf6e8}.dot.pairing{background:#e6a531;box-shadow:0 0 0 3px #fff1cf}.qr{display:grid;place-items:center;min-height:360px;background:#f4f7f5;border-radius:10px;margin-top:14px}.qr img{width:360px;max-width:100%;height:auto}.qr.empty{color:#718078;text-align:center;padding:30px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}button{height:38px;border:0;border-radius:8px;background:#167b50;color:#fff;padding:0 16px;cursor:pointer}button:hover{background:#106840}button.secondary{background:#edf5f0;color:#176947}button.danger{background:#fff0ee;color:#a94135}.notice{display:none;margin:0 0 16px;padding:11px 14px;background:#fff1ef;color:#9d4439;border-radius:9px;font-size:12px}.notice.show{display:block}@media(max-width:550px){.top,.row{align-items:flex-start;flex-direction:column}.top{padding:22px}.wrap{padding:16px}.qr{min-height:280px}}
+  </style>
+</head>
+<body>
+  <header class="top"><div><h1>RelayDesk Docker Agent</h1><p>本地管理界面 · WhatsApp 会话凭据仅保留在 Docker volume</p></div><span class="version">v__AGENT_VERSION__</span></header>
+  <main class="wrap">
+    <p id="notice" class="notice"></p>
+    <section class="card"><div class="row"><div><p class="label">中心平台</p><div class="value" id="central-url">加载中…</div></div><span class="status"><i class="dot" id="central-dot"></i><span id="central-status">加载中</span></span></div></section>
+    <section class="card"><div class="row"><div><p class="label">WhatsApp 账号</p><div class="value" id="account-name">加载中…</div><p class="hint" id="account-id"></p></div><span class="status"><i class="dot" id="account-dot"></i><span id="account-status">加载中</span></span></div><div class="actions"><button class="secondary" id="reconnect">重新连接</button><button class="danger" id="repair">重新配对并生成新二维码</button></div></section>
+    <section class="card"><b>扫码关联 WhatsApp</b><p class="hint">在手机 WhatsApp 的“关联设备”中扫描。二维码通常在连接或重新配对后出现，并会自动刷新。</p><div id="qr" class="qr empty">正在等待二维码。首次启动、连接中或已经上线时不会显示。</div></section>
+    <section class="card"><b>安全访问</b><p class="hint">默认仅监听宿主机 `127.0.0.1:8788`。请通过 SSH 隧道访问，或在明确配置访问控制的反向代理之后才对外暴露该界面。</p></section>
+  </main>
+  <script>
+    const $=id=>document.getElementById(id);let busy=false;
+    const labels={online:"已连接",offline:"离线",pairing:"等待扫码",logged_out:"已退出",error:"错误",incompatible:"版本不兼容"};
+    function setStatus(prefix,value){$(prefix+"-status").textContent=labels[value]||value;$(prefix+"-dot").className="dot"+(value==="online"?" online":value==="pairing"?" pairing":"")}
+    function notice(message){const node=$("notice");node.textContent=message;node.classList.toggle("show",Boolean(message))}
+    async function request(path){const response=await fetch(path,{method:"POST"});if(!response.ok)throw new Error(`请求失败（HTTP ${response.status}）`)}
+    async function refresh(){try{const state=await fetch("/api/state",{cache:"no-store"}).then(r=>{if(!r.ok)throw new Error(`状态读取失败（HTTP ${r.status}）`);return r.json()});$("central-url").textContent=state.baseUrl;setStatus("central",state.centralStatus);const account=state.account;if(account){$("account-name").textContent=account.name;$("account-id").textContent=account.id;setStatus("account",account.status)}else{$("account-name").textContent="尚未配置";$("account-id").textContent="";setStatus("account","offline")}const qr=$("qr");if(state.qrDataUrl){qr.className="qr";qr.innerHTML="";const image=new Image();image.src=state.qrDataUrl;image.alt="WhatsApp 关联二维码";qr.append(image)}else{qr.className="qr empty";qr.textContent=account?.status==="online"?"WhatsApp 已连接。": "正在等待二维码。首次启动、连接中或已经上线时不会显示。"}notice("")}catch(error){notice(error.message)}}
+    $("reconnect").onclick=async()=>{if(busy)return;busy=true;try{await request("/api/reconnect");notice("已请求重新连接。")}catch(error){notice(error.message)}finally{busy=false;await refresh()}};
+    $("repair").onclick=async()=>{if(busy||!confirm("重新配对会清除当前 WhatsApp 会话，并要求使用新二维码扫描。是否继续？"))return;busy=true;try{await request("/api/repair");notice("正在清除旧会话并生成新的二维码。")}catch(error){notice(error.message)}finally{busy=false;await refresh()}};
+    refresh();setInterval(refresh,3000);
+  </script>
+</body>
+</html>

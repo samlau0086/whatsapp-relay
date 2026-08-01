@@ -1,0 +1,14 @@
+.git
+.github
+**/node_modules
+**/dist
+**/release
+.env
+.env.*
+!.env.example
+.next
+.vinext
+.wrangler
+coverage
+outputs
+work

@@ -273,6 +273,7 @@ function startCentral(baseUrl: string, agentId: string, credential: string): voi
     agentId,
     credential,
     app.getVersion(),
+    `win32-${process.arch}`,
     PROTOCOL_VERSION,
     ["publish_status_v1"],
     executeWorkerCommand,
