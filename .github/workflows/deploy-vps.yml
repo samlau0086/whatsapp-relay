@@ -93,8 +93,9 @@ jobs:
         if: always()
         continue-on-error: true
         run: |
-          if docker compose -f performance/conversations/compose.yaml exec -T postgres \
-            psql -U relay_perf -d relay_perf -tAc "SELECT to_regprocedure('perf_uuid(text)') IS NOT NULL" | grep -qx t; then
+          seeded=$(docker compose -f performance/conversations/compose.yaml exec -T postgres \
+            psql -U relay_perf -d relay_perf -tAc "SELECT to_regprocedure('perf_uuid(text)') IS NOT NULL")
+          if [ "$seeded" = "t" ]; then
             mkdir -p performance-artifacts
             docker compose -f performance/conversations/compose.yaml exec -T postgres \
               psql -U relay_perf -d relay_perf < performance/conversations/explain.sql \
