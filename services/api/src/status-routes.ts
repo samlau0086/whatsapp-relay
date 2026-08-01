@@ -140,7 +140,7 @@ export async function registerStatusRoutes(app:FastifyInstance):Promise<void>{
   });
   app.delete("/api/v1/status-campaigns/:id",{preHandler:authenticate},async(request,reply)=>{
     if(!canManage(request.principal))return reply.code(403).send({error:"supervisor_required"});const {id}=request.params as {id:string},campaign=await campaignAccess(request,reply,id);if(!campaign)return;
-    await transaction(async client=>{await client.query("UPDATE status_campaigns SET status='cancelled',updated_at=now() WHERE id=$1",[id]);await client.query("UPDATE status_posts SET status='cancelled',updated_at=now() WHERE campaign_id=$1 AND status IN ('queued','scheduled')",[id]);});return reply.code(204).send();
+    await transaction(async client=>{await client.query("DELETE FROM status_campaigns WHERE id=$1",[id]);});return reply.code(204).send();
   });
   app.post("/api/v1/status-campaigns/:id/posts",{preHandler:authenticate},async(request,reply)=>{
     if(!canManage(request.principal))return reply.code(403).send({error:"supervisor_required"});const parsed=postsCreateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});

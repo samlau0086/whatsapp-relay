@@ -12,6 +12,8 @@ test("status publishing owns separate persistence, scheduling, and command resul
   assert.match(migration,/status_post_id uuid REFERENCES status_posts/);
   assert.match(routes,/status-campaigns\/preview-schedule/);
   assert.match(routes,/status_campaign_recipients/);
+  assert.match(routes,/DELETE FROM status_campaigns WHERE id=\$1/);
+  assert.doesNotMatch(routes,/UPDATE status_campaigns SET status='cancelled'/);
   assert.match(engine,/command,payload\) VALUES\(\$1,\$2,\$3,'publish_status'/);
   assert.match(engine,/status='uncertain'/);
   assert.match(statusCenter,/编辑计划/);
