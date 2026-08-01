@@ -1,6 +1,8 @@
 export type ConversationDateFilter="all"|"today"|"yesterday"|"day3"|"day5"|"day7"|"day15plus"|"unreplied";
 export type ConversationListFilter="all"|"mine"|"unassigned"|"favorite"|"closed"|"archived"|"reminders";
-export type ConversationListOptions={filter?:ConversationListFilter;accountId?:string;q?:string;tagId?:string;cursor?:string;limit?:number};
+export type ConversationCustomerStage="new"|"considering"|"qualified"|"won"|"lost";
+export type ConversationLatestOrderStatus="none"|"any"|"quotation"|"pending_confirmation"|"pending_payment"|"paid"|"processing"|"shipped"|"completed"|"cancelled";
+export type ConversationListOptions={filter?:ConversationListFilter;accountId?:string;q?:string;tagId?:string;customerStage?:ConversationCustomerStage;latestOrderStatus?:ConversationLatestOrderStatus;cursor?:string;limit?:number};
 
 export const CONVERSATION_DATE_FILTERS:Array<{value:ConversationDateFilter;label:string}>=[
   {value:"all",label:"全部"},
@@ -34,6 +36,8 @@ export function conversationListPath(filter:ConversationDateFilter,now=new Date(
   if(options.accountId)params.set("accountId",options.accountId);
   if(options.q?.trim())params.set("q",options.q.trim());
   if(options.tagId)params.set("tagId",options.tagId);
+  if(options.customerStage)params.set("customerStage",options.customerStage);
+  if(options.latestOrderStatus)params.set("latestOrderStatus",options.latestOrderStatus);
   if(options.cursor)params.set("cursor",options.cursor);
   if(filter==="unreplied")params.set("unreplied","true");
   const range=conversationDateRange(filter,now);

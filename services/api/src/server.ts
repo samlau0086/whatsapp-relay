@@ -323,8 +323,10 @@ app.get("/api/v1/accounts", { preHandler:authenticate }, async (request) => {
 });
 
 type ConversationFilter="all"|"mine"|"unassigned"|"favorite"|"closed"|"archived"|"reminders";
-type ConversationQuery={accountId?:string;status?:string;q?:string;tagId?:string;filter?:string;limit?:string;before?:string;cursor?:string;lastMessageFrom?:string;lastMessageBefore?:string;unreplied?:string};
+type ConversationQuery={accountId?:string;status?:string;q?:string;tagId?:string;customerStage?:string;latestOrderStatus?:string;filter?:string;limit?:string;before?:string;cursor?:string;lastMessageFrom?:string;lastMessageBefore?:string;unreplied?:string};
 const CONVERSATION_FILTERS=new Set<ConversationFilter>(["all","mine","unassigned","favorite","closed","archived","reminders"]);
+const CONVERSATION_CUSTOMER_STAGES=new Set(["new","considering","qualified","won","lost"]);
+const CONVERSATION_ORDER_STATUSES=new Set(["none","any","quotation","pending_confirmation","pending_payment","paid","processing","shipped","completed","cancelled"]);
 
 function parseConversationRange(query:ConversationQuery){
   const from=query.lastMessageFrom?new Date(query.lastMessageFrom):null,before=query.lastMessageBefore?new Date(query.lastMessageBefore):null;
@@ -346,6 +348,8 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
   if(query.accountId&&!canAccessAccount(request.principal,query.accountId))return reply.code(403).send({error:"account_forbidden"});
   if(query.unreplied!==undefined&&query.unreplied!=="true"&&query.unreplied!=="false")return reply.code(400).send({error:"invalid_unreplied_filter"});
   if(query.filter&&!CONVERSATION_FILTERS.has(query.filter as ConversationFilter))return reply.code(400).send({error:"invalid_conversation_filter"});
+  if(query.customerStage&&!CONVERSATION_CUSTOMER_STAGES.has(query.customerStage))return reply.code(400).send({error:"invalid_customer_stage_filter"});
+  if(query.latestOrderStatus&&!CONVERSATION_ORDER_STATUSES.has(query.latestOrderStatus))return reply.code(400).send({error:"invalid_latest_order_status_filter"});
   const range=parseConversationRange(query);if(!range)return reply.code(400).send({error:"invalid_conversation_date_range"});
   const cursor=parseConversationCursor(query.cursor);if(cursor==="invalid")return reply.code(400).send({error:"invalid_cursor"});
   if(query.tagId&&!isPostgresUuid(query.tagId))return reply.code(400).send({error:"invalid_tag_filter"});
@@ -358,25 +362,28 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
   const latestSort="COALESCE(c.last_message_at,c.created_at)";
   const searchCte=keyword?`search_conversations AS MATERIALIZED (
     SELECT search_conversation.id,search_conversation.account_id,search_conversation.contact_id,search_conversation.status,search_conversation.favorite,
-      search_conversation.assigned_user_id,search_conversation.last_message_at,search_conversation.last_message_direction,search_conversation.summary_updated_at,search_conversation.created_at
+      search_conversation.assigned_user_id,search_conversation.customer_stage,search_conversation.last_message_at,search_conversation.last_message_direction,search_conversation.summary_updated_at,search_conversation.created_at
     FROM conversations search_conversation
     WHERE search_conversation.last_message_text ILIKE '%'||$4||'%'
     UNION
     SELECT contact_conversation.id,contact_conversation.account_id,contact_conversation.contact_id,contact_conversation.status,contact_conversation.favorite,
-      contact_conversation.assigned_user_id,contact_conversation.last_message_at,contact_conversation.last_message_direction,contact_conversation.summary_updated_at,contact_conversation.created_at
+      contact_conversation.assigned_user_id,contact_conversation.customer_stage,contact_conversation.last_message_at,contact_conversation.last_message_direction,contact_conversation.summary_updated_at,contact_conversation.created_at
     FROM contacts search_contact
     JOIN conversations contact_conversation ON contact_conversation.contact_id=search_contact.id
     WHERE (COALESCE(search_contact.alias,'') || ' ' || COALESCE(search_contact.display_name,'') || ' ' || COALESCE(search_contact.phone_e164,'') || ' ' || search_contact.provider_user_id) ILIKE '%'||$4||'%'
   ),`:"";
   const candidateSource=keyword?"search_conversations c":"conversations c";
   const candidateFilter=filter==="all"?"AND c.status<>'archived'":filter==="mine"?"AND c.assigned_user_id=$9::uuid":filter==="unassigned"?"AND c.assigned_user_id IS NULL":filter==="favorite"?"AND c.favorite":filter==="closed"?"AND c.status='closed'":filter==="archived"?"AND c.status='archived'":"";
+  const latestOrderJoin=query.latestOrderStatus?"LEFT JOIN LATERAL (SELECT business_status FROM orders WHERE conversation_id=c.id AND deleted_at IS NULL ORDER BY created_at DESC,id DESC LIMIT 1) latest_order ON true":"";
+  const latestOrderFilter=query.latestOrderStatus==="none"?"AND latest_order.business_status IS NULL":query.latestOrderStatus==="any"?"AND latest_order.business_status IS NOT NULL":query.latestOrderStatus?"AND latest_order.business_status=$16::text":"";
   const candidateCursor=!cursor?"":reminderMode?"AND (reminder_task.due_at>$11 OR (reminder_task.due_at=$11 AND c.id<$12::uuid))":`AND (${latestSort}<$11 OR (${latestSort}=$11 AND c.id<$12::uuid))`;
   const result=await pool.query(`WITH parameter_types AS NOT MATERIALIZED (
-    SELECT $4::text keyword_value,$9::uuid principal_user_id,$10::text filter_value,$11::timestamptz cursor_at,$12::uuid cursor_id,$14::uuid tag_id
+    SELECT $4::text keyword_value,$9::uuid principal_user_id,$10::text filter_value,$11::timestamptz cursor_at,$12::uuid cursor_id,$14::uuid tag_id,$15::text customer_stage,$16::text latest_order_status
   ), ${searchCte} candidates AS MATERIALIZED (
     SELECT c.id,${reminderMode?"reminder_task.due_at":latestSort} sort_at
     FROM ${candidateSource} JOIN channel_accounts a ON a.id=c.account_id
     LEFT JOIN LATERAL (SELECT direction,occurred_at FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
+    ${latestOrderJoin}
     ${reminderMode?`JOIN LATERAL (
       SELECT task.due_at FROM tasks task
       WHERE (task.conversation_id=c.id OR (task.conversation_id IS NULL AND task.contact_id=c.contact_id))
@@ -387,9 +394,11 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
     WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::text IS NULL OR c.status::text=$3)
       AND ($14::uuid IS NULL OR EXISTS(SELECT 1 FROM conversation_tags selected_tag WHERE selected_tag.conversation_id=c.id AND selected_tag.tag_id=$14))
+      AND ($15::text IS NULL OR c.customer_stage=$15::text)
       AND ($5::timestamptz IS NULL OR c.last_message_at<$5) AND ($6::timestamptz IS NULL OR c.last_message_at>=$6) AND ($7::timestamptz IS NULL OR c.last_message_at<$7)
       AND ($8::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in')
       ${candidateFilter}
+      ${latestOrderFilter}
       ${candidateCursor}
     ORDER BY sort_at ${reminderMode?"ASC":"DESC"},c.id DESC
     LIMIT $13
@@ -404,7 +413,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
     LEFT JOIN LATERAL (SELECT text_content,kind,direction,status,occurred_at FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true
     ORDER BY candidates.sort_at ${reminderMode?"ASC":"DESC"},c.id DESC`,
-    [query.accountId??null,accountIds,query.status??null,keyword,query.before??null,range.from,range.before,query.unreplied==="true",principalUserId,filter,cursor?.sortAt??null,cursor?.id??null,limit+1,query.tagId??null]);
+    [query.accountId??null,accountIds,query.status??null,keyword,query.before??null,range.from,range.before,query.unreplied==="true",principalUserId,filter,cursor?.sortAt??null,cursor?.id??null,limit+1,query.tagId??null,query.customerStage??null,query.latestOrderStatus??null]);
   const hasMore=result.rows.length>limit,data=result.rows.slice(0,limit),last=data[data.length-1];
   return{data,nextCursor:hasMore&&last?Buffer.from(JSON.stringify({sortAt:last.sort_at,id:last.id}),"utf8").toString("base64url"):null,total:null};
 });
@@ -464,6 +473,8 @@ app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(requ
   if(query.unreplied!==undefined&&query.unreplied!=="true"&&query.unreplied!=="false")return reply.code(400).send({error:"invalid_unreplied_filter"});
   if(query.filter&&!CONVERSATION_FILTERS.has(query.filter as ConversationFilter))return reply.code(400).send({error:"invalid_conversation_filter"});
   if(query.tagId&&!isPostgresUuid(query.tagId))return reply.code(400).send({error:"invalid_tag_filter"});
+  if(query.customerStage&&!CONVERSATION_CUSTOMER_STAGES.has(query.customerStage))return reply.code(400).send({error:"invalid_customer_stage_filter"});
+  if(query.latestOrderStatus&&!CONVERSATION_ORDER_STATUSES.has(query.latestOrderStatus))return reply.code(400).send({error:"invalid_latest_order_status_filter"});
   const range=parseConversationRange(query);if(!range)return reply.code(400).send({error:"invalid_conversation_date_range"});
   const keyword=query.q?.trim().toLocaleLowerCase()||"";if(keyword.length>100)return reply.code(400).send({error:"conversation_query_too_long"});
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null;
@@ -473,10 +484,11 @@ app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(requ
     COALESCE((SELECT json_agg(json_build_object('id',method.id,'type',method.type,'label',method.label,'value',method.value) ORDER BY method.position,method.id) FROM contact_methods method WHERE method.contact_id=co.id),'[]'::json) contact_methods,
     a.id account_id,a.display_name account_name,a.status account_status,a.transport,a.platform,mp.page_id,COALESCE(c.last_message_text,m.text_content) last_message,
     COALESCE(c.last_message_kind,m.kind) last_message_kind,COALESCE(c.last_message_direction,m.direction) last_message_direction,COALESCE(c.last_message_status,m.status) last_message_status,
-    COALESCE(tag_list.tags,'[]'::json) tags,reminder_task.due_at remind_at
+    COALESCE(tag_list.tags,'[]'::json) tags,reminder_task.due_at remind_at,latest_order.business_status latest_order_status
     FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN channel_accounts a ON a.id=c.account_id LEFT JOIN messenger_page_accounts mp ON mp.account_id=a.id
     LEFT JOIN LATERAL (SELECT text_content,kind,direction,status,occurred_at FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true
+    LEFT JOIN LATERAL (SELECT business_status FROM orders WHERE conversation_id=c.id AND deleted_at IS NULL ORDER BY created_at DESC,id DESC LIMIT 1) latest_order ON true
     LEFT JOIN LATERAL (
       SELECT task.due_at FROM tasks task
       WHERE (task.conversation_id=c.id OR (task.conversation_id IS NULL AND task.contact_id=c.contact_id))
@@ -490,6 +502,8 @@ app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(requ
   const matches=(!query.accountId||row.account_id===query.accountId)
     &&(!query.status||row.status===query.status)
     &&(!query.tagId||Array.isArray(row.tags)&&row.tags.some((tag:{id?:unknown})=>String(tag.id)===query.tagId))
+    &&(!query.customerStage||row.customer_stage===query.customerStage)
+    &&(!query.latestOrderStatus||(query.latestOrderStatus==="none"&&!row.latest_order_status)||(query.latestOrderStatus==="any"&&Boolean(row.latest_order_status))||row.latest_order_status===query.latestOrderStatus)
     &&(!keyword||[row.display_name,row.phone_e164,row.last_message].some(value=>String(value??"").toLocaleLowerCase().includes(keyword)))
     &&(legacyBefore===null||lastAt!==null&&lastAt<legacyBefore)&&(from===null||lastAt!==null&&lastAt>=from)&&(before===null||lastAt!==null&&lastAt<before)
     &&(query.unreplied!=="true"||row.last_message_direction==="in")
@@ -1193,7 +1207,9 @@ app.post("/api/v1/conversations/:id/orders",{preHandler:authenticate},async(requ
     for(const [position,fee] of parsed.data.fees.entries())await client.query("INSERT INTO order_fees(order_id,position,name,amount) VALUES($1,$2,$3,$4)",[orderRow.id,position,fee.name,fee.amount]);
     await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'order.draft','order',$2,$3)",[principal.id,orderRow.id,JSON.stringify({conversationId:id,displayOrderNumber:orderRow.display_order_number,itemCount:parsed.data.items.length,feeCount:parsed.data.fees.length,translateOnSend:parsed.data.translateOnSend})]);return{id:orderRow.id,display_order_number:orderRow.display_order_number,status:orderRow.status,deduplicated:false};
   });
-  if(!result)return reply.code(404).send({error:"not_found"});return reply.code(201).send({orderId:result.id,orderNumber:String(result.display_order_number),status:result.status,deduplicated:result.deduplicated});
+  if(!result)return reply.code(404).send({error:"not_found"});
+  if(!result.deduplicated)await pool.query("SELECT relay_publish_conversation_change(c.id,c.account_id) FROM conversations c WHERE c.id=$1",[id]);
+  return reply.code(201).send({orderId:result.id,orderNumber:String(result.display_order_number),status:result.status,deduplicated:result.deduplicated});
 });
 
 app.patch("/api/v1/conversations/:conversationId/orders/:orderId",{preHandler:authenticate},async(request,reply)=>{
@@ -1215,6 +1231,7 @@ app.patch("/api/v1/conversations/:conversationId/orders/:orderId/status",{preHan
   if(!current.rowCount||!canAccessAccount(principal,current.rows[0].account_id))return reply.code(404).send({error:"not_found"});
   const updated=await pool.query("UPDATE orders SET business_status=$2 WHERE id=$1 RETURNING business_status",[orderId,parsed.data.businessStatus]);
   await auditCrm(principal.id,"order.status.update","order",orderId,{conversationId,businessStatus:parsed.data.businessStatus});
+  await pool.query("SELECT relay_publish_conversation_change($1,$2)",[conversationId,current.rows[0].account_id]);
   return{orderId,businessStatus:updated.rows[0].business_status};
 });
 
@@ -1240,7 +1257,7 @@ app.post("/api/v1/conversations/:conversationId/orders/:orderId/send",{preHandle
 });
 
 app.delete("/api/v1/conversations/:conversationId/orders/:orderId",{preHandler:authenticate},async(request,reply)=>{
-  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const principal=request.principal;const {conversationId,orderId}=request.params as {conversationId:string;orderId:string};const access=await pool.query("SELECT c.account_id FROM orders o JOIN conversations c ON c.id=o.conversation_id WHERE o.id=$1 AND o.conversation_id=$2 AND o.deleted_at IS NULL",[orderId,conversationId]);if(!access.rowCount||!canAccessAccount(principal,access.rows[0].account_id))return reply.code(404).send({error:"not_found"});try{const cancellation=await cancelCurrentPaymentRequest(orderId,principal.id);if(cancellation==="paid")return reply.code(409).send({error:"paid_order_locked",message:"已付款订单不能删除"});}catch(error){request.log.warn({orderId,paypalError:error instanceof PayPalApiError?error.code:String(error)},"PayPal invoice cancellation failed before order delete");return reply.code(502).send({error:"paypal_cancel_failed",message:"付款请求作废失败，订单未删除，请稍后重试"});}const deleted=await transaction(async client=>{const found=await client.query("SELECT o.status,c.account_id FROM orders o JOIN conversations c ON c.id=o.conversation_id WHERE o.id=$1 AND o.conversation_id=$2 AND o.deleted_at IS NULL FOR UPDATE",[orderId,conversationId]);if(!found.rowCount||!canAccessAccount(principal,found.rows[0].account_id))return false;await client.query("UPDATE orders SET deleted_at=now() WHERE id=$1",[orderId]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'order.delete','order',$2,$3)",[principal.id,orderId,JSON.stringify({conversationId,wasSent:found.rows[0].status!=="draft"})]);return true;});if(!deleted)return reply.code(404).send({error:"not_found"});return reply.code(204).send();
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const principal=request.principal;const {conversationId,orderId}=request.params as {conversationId:string;orderId:string};const access=await pool.query("SELECT c.account_id FROM orders o JOIN conversations c ON c.id=o.conversation_id WHERE o.id=$1 AND o.conversation_id=$2 AND o.deleted_at IS NULL",[orderId,conversationId]);if(!access.rowCount||!canAccessAccount(principal,access.rows[0].account_id))return reply.code(404).send({error:"not_found"});try{const cancellation=await cancelCurrentPaymentRequest(orderId,principal.id);if(cancellation==="paid")return reply.code(409).send({error:"paid_order_locked",message:"已付款订单不能删除"});}catch(error){request.log.warn({orderId,paypalError:error instanceof PayPalApiError?error.code:String(error)},"PayPal invoice cancellation failed before order delete");return reply.code(502).send({error:"paypal_cancel_failed",message:"付款请求作废失败，订单未删除，请稍后重试"});}const deleted=await transaction(async client=>{const found=await client.query("SELECT o.status,c.account_id FROM orders o JOIN conversations c ON c.id=o.conversation_id WHERE o.id=$1 AND o.conversation_id=$2 AND o.deleted_at IS NULL FOR UPDATE",[orderId,conversationId]);if(!found.rowCount||!canAccessAccount(principal,found.rows[0].account_id))return false;await client.query("UPDATE orders SET deleted_at=now() WHERE id=$1",[orderId]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'order.delete','order',$2,$3)",[principal.id,orderId,JSON.stringify({conversationId,wasSent:found.rows[0].status!=="draft"})]);return true;});if(!deleted)return reply.code(404).send({error:"not_found"});await pool.query("SELECT relay_publish_conversation_change($1,$2)",[conversationId,access.rows[0].account_id]);return reply.code(204).send();
 });
 
 app.post("/api/v1/conversations", {preHandler:authenticate}, async(request,reply)=>{

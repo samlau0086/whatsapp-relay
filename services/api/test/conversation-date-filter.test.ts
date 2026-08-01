@@ -44,13 +44,13 @@ test("cursor IDs accept every PostgreSQL UUID, not only RFC-versioned UUIDs",()=
 });
 
 test("conversation list and counts paths carry server-side filters without leaking search into counts",()=>{
-  const now=new Date(2026,6,26,12),path=conversationListPath("today",now,{filter:"mine",accountId:"account-id",q:" Alice ",tagId:"tag-id",cursor:"cursor",limit:40});
-  assert.match(path,/filter=mine/);assert.match(path,/accountId=account-id/);assert.match(path,/q=Alice/);assert.match(path,/tagId=tag-id/);assert.match(path,/cursor=cursor/);
+  const now=new Date(2026,6,26,12),path=conversationListPath("today",now,{filter:"mine",accountId:"account-id",q:" Alice ",tagId:"tag-id",customerStage:"qualified",latestOrderStatus:"pending_payment",cursor:"cursor",limit:40});
+  assert.match(path,/filter=mine/);assert.match(path,/accountId=account-id/);assert.match(path,/q=Alice/);assert.match(path,/tagId=tag-id/);assert.match(path,/customerStage=qualified/);assert.match(path,/latestOrderStatus=pending_payment/);assert.match(path,/cursor=cursor/);
   const counts=conversationCountsPath("today",now,"account-id");
   assert.match(counts,/accountId=account-id/);assert.doesNotMatch(counts,/[?&]q=/);
-  const summary=conversationSummaryPath("conversation-id","today",now,{filter:"mine",accountId:"account-id",q:" Alice ",tagId:"tag-id"});
+  const summary=conversationSummaryPath("conversation-id","today",now,{filter:"mine",accountId:"account-id",q:" Alice ",tagId:"tag-id",customerStage:"qualified",latestOrderStatus:"any"});
   assert.match(summary,/\/api\/v1\/conversations\/conversation-id\/summary\?/);
-  assert.match(summary,/filter=mine/);assert.match(summary,/tagId=tag-id/);assert.doesNotMatch(summary,/[?&]limit=/);
+  assert.match(summary,/filter=mine/);assert.match(summary,/tagId=tag-id/);assert.match(summary,/customerStage=qualified/);assert.match(summary,/latestOrderStatus=any/);assert.doesNotMatch(summary,/[?&]limit=/);
 });
 
 test("conversation API applies a closed-open last-message range",async()=>{
@@ -63,7 +63,14 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.match(server,/invalid_conversation_filter/);
   assert.match(server,/invalid_cursor/);
   assert.match(server,/invalid_tag_filter/);
+  assert.match(server,/invalid_customer_stage_filter/);
+  assert.match(server,/invalid_latest_order_status_filter/);
   assert.match(server,/selected_tag\.tag_id=\$14/);
+  assert.match(server,/c\.customer_stage=\$15::text/);
+  assert.match(server,/ORDER BY created_at DESC,id DESC LIMIT 1/);
+  assert.match(server,/latest_order\.business_status IS NULL/);
+  assert.match(server,/latest_order\.business_status IS NOT NULL/);
+  assert.match(server,/latest_order\.business_status=\$16::text/);
   const conversationRoute=server.slice(server.indexOf('app.get("/api/v1/conversations"'),server.indexOf('app.get("/api/v1/conversations/counts"'));
   assert.doesNotMatch(conversationRoute,/COUNT\(\*\) OVER/);
   assert.match(conversationRoute,/total:null/);
@@ -153,10 +160,14 @@ test("inbox uses debounced search, cursor loading, realtime reconciliation, and 
   assert.match(ui,/conversationCursorRef/);
   assert.match(ui,/useConversationFeed/);
   assert.match(ui,/tagId:selectedTag/);
+  assert.match(ui,/customerStage:selectedCustomerStage\|\|undefined/);
+  assert.match(ui,/latestOrderStatus:selectedLatestOrderStatus\|\|undefined/);
   assert.match(ui,/onTagOpen=\{\(\)=>void loadConversationTags\(apiToken\)\}/);
   assert.match(ui,/onTagCatalogChange=\{syncConversationTags\}/);
   assert.match(panel,/aria-label="搜索并筛选会话标签"/);
   assert.match(panel,/conversation-tag-chip/);
+  assert.match(panel,/aria-label="按客户阶段筛选会话"/);
+  assert.match(panel,/aria-label="按最新订单状态筛选会话"/);
   assert.match(panel,/移除标签/);
   assert.match(feed,/60_000/);
   assert.match(feed,/100/);

@@ -1,17 +1,18 @@
 "use client";
 
-import {Check,ChevronDown,Menu,RefreshCw,Search,Tag,X} from "lucide-react";
+import {Check,ChevronDown,Menu,RefreshCw,Search,ShoppingCart,Tag,UserRound,X} from "lucide-react";
 import {useEffect,useMemo,useRef,useState,type KeyboardEvent,type MouseEvent,type RefObject} from "react";
-import {CONVERSATION_DATE_FILTERS,type ConversationDateFilter} from "./conversation-date-filter";
+import {CONVERSATION_DATE_FILTERS,type ConversationCustomerStage,type ConversationDateFilter,type ConversationLatestOrderStatus} from "./conversation-date-filter";
 import type {Conversation} from "./conversation-types";
 import {ConversationVirtualList} from "./conversation-virtual-list";
 
 export function ConversationPanel({
-  filter,subtitle,query,onQuery,tags,tagId,onTagId,onTagOpen,onOpenSidebar,onRefresh,dateFilter,onDateFilter,onDateKeyDown,
+  filter,subtitle,query,onQuery,tags,tagId,onTagId,onTagOpen,customerStage,onCustomerStage,latestOrderStatus,onLatestOrderStatus,onOpenSidebar,onRefresh,dateFilter,onDateFilter,onDateKeyDown,
   listRef,sentinelRef,items,rows,totalSize,measure,effectiveActiveId,clock,markingUnreadId,onSelect,onMenu,onMarkUnread,
   loading,loadError,hasAccounts,loadingMore,loadMoreError,hasMore,onLoadMore,
 }:{
   filter:string;subtitle:string;query:string;onQuery:(value:string)=>void;tags:Array<{id:string;name:string;color:string}>;tagId:string;onTagId:(value:string)=>void;onTagOpen:()=>void;onOpenSidebar:()=>void;onRefresh:()=>void;
+  customerStage:""|ConversationCustomerStage;onCustomerStage:(value:""|ConversationCustomerStage)=>void;latestOrderStatus:""|ConversationLatestOrderStatus;onLatestOrderStatus:(value:""|ConversationLatestOrderStatus)=>void;
   dateFilter:ConversationDateFilter;onDateFilter:(value:ConversationDateFilter)=>void;onDateKeyDown:(event:KeyboardEvent<HTMLButtonElement>)=>void;
   listRef:RefObject<HTMLDivElement|null>;sentinelRef:RefObject<HTMLDivElement|null>;items:Conversation[];rows:Array<{index:number;start:number}>;totalSize:number;
   measure:(element:HTMLDivElement|null)=>void;
@@ -26,6 +27,16 @@ export function ConversationPanel({
     </header>
     <label className="search-box"><Search size={15}/><input value={query} onChange={event=>onQuery(event.target.value)} maxLength={100} placeholder="搜索会话、联系人或号码"/></label>
     <ConversationTagFilter tags={tags} value={tagId} onChange={onTagId} onOpen={onTagOpen}/>
+    <div className="conversation-attribute-filters">
+      <label><UserRound size={14}/><select aria-label="按客户阶段筛选会话" value={customerStage} onChange={event=>onCustomerStage(event.target.value as ""|ConversationCustomerStage)}>
+        <option value="">全部客户阶段</option>
+        <option value="new">新线索</option><option value="considering">待考量</option><option value="qualified">合格</option><option value="won">已成交</option><option value="lost">已流失</option>
+      </select><ChevronDown size={13}/></label>
+      <label><ShoppingCart size={14}/><select aria-label="按最新订单状态筛选会话" value={latestOrderStatus} onChange={event=>onLatestOrderStatus(event.target.value as ""|ConversationLatestOrderStatus)}>
+        <option value="">全部订单情况</option><option value="none">未创建订单</option><option value="any">已创建订单</option>
+        <option value="quotation">报价</option><option value="pending_confirmation">待确认</option><option value="pending_payment">待付款</option><option value="paid">已付款</option><option value="processing">处理中</option><option value="shipped">已发货</option><option value="completed">已完成</option><option value="cancelled">已取消</option>
+      </select><ChevronDown size={13}/></label>
+    </div>
     <div className="conversation-date-tabs" role="tablist" aria-label="按最后联系时间筛选会话">
       {CONVERSATION_DATE_FILTERS.map(item=><button key={item.value} type="button" role="tab" aria-selected={dateFilter===item.value} tabIndex={dateFilter===item.value?0:-1} className={dateFilter===item.value?"active":""} onClick={()=>onDateFilter(item.value)} onKeyDown={onDateKeyDown}>{item.label}</button>)}
     </div>
