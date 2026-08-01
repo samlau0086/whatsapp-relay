@@ -4,7 +4,7 @@ import {authenticate,type Principal} from "./auth.js";
 import {config} from "./config.js";
 import {pool,transaction} from "./db.js";
 import {rescheduleStatusCampaign} from "./status-engine.js";
-import {generateStatusSlots,isValidIanaTimeZone,type StatusSchedule} from "./status-schedule.js";
+import {generateStatusSlots,isValidIanaTimeZone,statusDateOnly,type StatusSchedule} from "./status-schedule.js";
 
 const uuid=z.string().uuid();
 const languageCode=z.string().trim().min(2).max(35).regex(/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/);
@@ -59,7 +59,7 @@ async function canRead(principal:Principal|undefined,accountId:string):Promise<b
 }
 function canManage(principal:Principal|undefined):boolean{return principal?.kind==="user"&&["admin","supervisor"].includes(principal.role??"");}
 function scheduleFrom(value:Record<string,unknown>):StatusSchedule{
-  return{timezone:String(value.timezone),startDate:String(value.startDate??value.start_date).slice(0,10),endDate:String(value.endDate??value.end_date).slice(0,10),activeWeekdays:(value.activeWeekdays??value.active_weekdays) as number[],dailyStart:String(value.dailyStart??value.daily_start).slice(0,5),dailyEnd:String(value.dailyEnd??value.daily_end).slice(0,5),intervalMinutes:Number(value.intervalMinutes??value.interval_minutes)};
+  return{timezone:String(value.timezone),startDate:statusDateOnly(value.startDate??value.start_date),endDate:statusDateOnly(value.endDate??value.end_date),activeWeekdays:(value.activeWeekdays??value.active_weekdays) as number[],dailyStart:String(value.dailyStart??value.daily_start).slice(0,5),dailyEnd:String(value.dailyEnd??value.daily_end).slice(0,5),intervalMinutes:Number(value.intervalMinutes??value.interval_minutes)};
 }
 function validateSchedule(value:Record<string,unknown>):void{
   if(!isValidIanaTimeZone(String(value.timezone)))throw Object.assign(new Error("invalid_timezone"),{statusCode:400});

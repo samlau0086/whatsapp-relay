@@ -12,6 +12,14 @@ export function isValidIanaTimeZone(value:string):boolean{
   try{new Intl.DateTimeFormat("en-US",{timeZone:value}).format();return true;}catch{return false;}
 }
 
+export function statusDateOnly(value:unknown):string{
+  if(value instanceof Date){
+    if(Number.isNaN(value.getTime()))return "";
+    return `${value.getFullYear()}-${String(value.getMonth()+1).padStart(2,"0")}-${String(value.getDate()).padStart(2,"0")}`;
+  }
+  return String(value).slice(0,10);
+}
+
 function localParts(date:Date,timeZone:string){
   const parts=new Intl.DateTimeFormat("en-CA",{timeZone,year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(date);
   const get=(type:string)=>Number(parts.find(item=>item.type===type)?.value);

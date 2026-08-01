@@ -1,24 +1,19 @@
 import type {PoolClient} from "pg";
 import {transaction} from "./db.js";
-import {generateStatusSlots,type StatusSchedule} from "./status-schedule.js";
+import {generateStatusSlots,statusDateOnly,type StatusSchedule} from "./status-schedule.js";
 
 type CampaignRow={
-  id:string;timezone:string;start_date:string;end_date:string;active_weekdays:number[];
+  id:string;timezone:string;start_date:unknown;end_date:unknown;active_weekdays:number[];
   daily_start:string;daily_end:string;interval_minutes:number;status:string;
 };
-
-function dateOnly(value:unknown):string{
-  if(value instanceof Date)return value.toISOString().slice(0,10);
-  return String(value).slice(0,10);
-}
 
 function timeOnly(value:unknown):string{return String(value).slice(0,5);}
 
 function campaignSchedule(row:CampaignRow):StatusSchedule{
   return{
     timezone:String(row.timezone),
-    startDate:dateOnly(row.start_date),
-    endDate:dateOnly(row.end_date),
+    startDate:statusDateOnly(row.start_date),
+    endDate:statusDateOnly(row.end_date),
     activeWeekdays:(row.active_weekdays??[]).map(Number),
     dailyStart:timeOnly(row.daily_start),
     dailyEnd:timeOnly(row.daily_end),

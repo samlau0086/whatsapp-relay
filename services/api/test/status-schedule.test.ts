@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {generateStatusSlots,isValidIanaTimeZone} from "../src/status-schedule.js";
+import {generateStatusSlots,isValidIanaTimeZone,statusDateOnly} from "../src/status-schedule.js";
 
 test("status schedule resets its cadence inside each allowed local-day window",()=>{
   const slots=generateStatusSlots({timezone:"Asia/Shanghai",startDate:"2026-07-27",endDate:"2026-07-28",activeWeekdays:[1,2],dailyStart:"09:00",dailyEnd:"12:00",intervalMinutes:180});
@@ -17,4 +17,10 @@ test("status schedule honors notBefore and validates IANA zones",()=>{
   assert.deepEqual(slots.map(value=>value.toISOString()),["2026-07-28T10:00:00.000Z","2026-07-28T11:00:00.000Z"]);
   assert.equal(isValidIanaTimeZone("Asia/Shanghai"),true);
   assert.equal(isValidIanaTimeZone("Not/A_Zone"),false);
+});
+
+test("status schedule preserves PostgreSQL date columns as calendar dates",()=>{
+  const databaseDate=new Date(2026,7,3);
+  assert.equal(statusDateOnly(databaseDate),"2026-08-03");
+  assert.equal(statusDateOnly("2026-08-03"),"2026-08-03");
 });
