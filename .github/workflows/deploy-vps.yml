@@ -80,6 +80,9 @@ jobs:
           node-version: 22.13.0
       - name: Start isolated performance stack
         run: docker compose -f performance/conversations/compose.yaml up --detach --build --wait
+      - name: Print performance stack logs on startup failure
+        if: failure()
+        run: docker compose -f performance/conversations/compose.yaml logs --no-color api postgres
       - name: Seed 100k conversations and 1m messages
         run: docker compose -f performance/conversations/compose.yaml exec -T postgres psql -U relay_perf -d relay_perf < performance/conversations/seed.sql
       - name: Build summary indexes and validate backfill
@@ -90,10 +93,15 @@ jobs:
         if: always()
         continue-on-error: true
         run: |
-          mkdir -p performance-artifacts
-          docker compose -f performance/conversations/compose.yaml exec -T postgres \
-            psql -U relay_perf -d relay_perf < performance/conversations/explain.sql \
-            > performance-artifacts/explain.jsonl
+          if docker compose -f performance/conversations/compose.yaml exec -T postgres \
+            psql -U relay_perf -d relay_perf -tAc "SELECT to_regprocedure('perf_uuid(text)') IS NOT NULL" | grep -qx t; then
+            mkdir -p performance-artifacts
+            docker compose -f performance/conversations/compose.yaml exec -T postgres \
+              psql -U relay_perf -d relay_perf < performance/conversations/explain.sql \
+              > performance-artifacts/explain.jsonl
+          else
+            echo "Skipping execution plans: performance seed has not completed."
+          fi
       - name: Upload performance artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
