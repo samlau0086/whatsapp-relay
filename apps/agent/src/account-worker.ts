@@ -75,7 +75,7 @@ async function connect(options:Init):Promise<void>{
       const jid=jidNormalizedUser(repositoryJid??await auth.resolveJid(rawJid));
       if(rawJid.endsWith("@lid")&&jid.endsWith("@s.whatsapp.net"))emitIdentity(options.accountId,rawJid,jid,item.pushName??undefined);
       const content=normalizeMessageContent(item.message);if(!content)continue;
-      const text=content.conversation??content.extendedTextMessage?.text??content.imageMessage?.caption??content.videoMessage?.caption??content.buttonsResponseMessage?.selectedDisplayText??content.listResponseMessage?.title??undefined;
+      const text=content.conversation??content.extendedTextMessage?.text??content.imageMessage?.caption??content.videoMessage?.caption??content.documentMessage?.caption??content.buttonsResponseMessage?.selectedDisplayText??content.listResponseMessage?.title??undefined;
       const quotedWhatsappMessageId=quotedMessageId(content);
       const sticker=Boolean(content.stickerMessage);
       const kind=content.imageMessage||sticker?"image":content.videoMessage?"video":content.audioMessage?"audio":content.documentMessage?"document":content.locationMessage?"location":content.contactMessage?"contact":"text";
