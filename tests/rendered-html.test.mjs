@@ -133,6 +133,7 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /此会话偏好会跨浏览器同步/);
   assert.match(component, /TranslationPreviewDialog/);
   assert.match(component, /IncomingTranslation/);
+  assert.match(component, /\["text","image","video","document"\]\.includes\(message\.kind\)/);
   assert.match(component, /detectedLanguageName\(value\.sourceLanguage\)/);
   assert.match(component, /VoiceTranslation/);
   assert.match(component, /AI 翻译语音为/);

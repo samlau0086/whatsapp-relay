@@ -154,7 +154,7 @@ app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"Rel
   "/api/v1/me/translation-preferences":{get:{summary:"读取当前坐席在指定会话中的翻译偏好"},put:{summary:"保存当前坐席在指定会话中的翻译偏好"}},
   "/api/v1/translation/status":{get:{summary:"读取 AI 翻译可用状态"}},
   "/api/v1/translations/preview":{post:{summary:"生成待发送文本的翻译预览"}},
-  "/api/v1/translations/messages":{post:{summary:"批量读取或生成接收文字及语音消息译文"}},
+  "/api/v1/translations/messages":{post:{summary:"批量读取或生成接收文字、媒体说明及语音消息译文"}},
   "/api/v1/admin/translation-providers":{get:{summary:"管理员读取翻译 Provider 配置"}},
   "/api/v1/admin/translation-providers/{provider}":{put:{summary:"管理员保存并启用翻译 Provider"}},
   "/api/v1/admin/tts-providers":{get:{summary:"管理员读取语音 Provider 配置"}},
@@ -1465,7 +1465,8 @@ app.post("/api/v1/translations/messages", {preHandler:authenticate}, async(reque
   const languageMatches=(cached:unknown)=>!requestedSourceLanguage||String(cached??"").toLowerCase()===requestedSourceLanguage.toLowerCase();
   const hasCurrentTranslation=(row:Record<string,unknown>)=>Boolean(row.translated_text)&&languageMatches(row.source_language);
   const hasCurrentTranscription=(row:Record<string,unknown>)=>Boolean(row.transcript_text)&&languageMatches(row.transcription_source_language);
-  const eligible=found.rows.filter(row=>row.direction==="in"&&((row.kind==="text"&&String(row.text_content??"").trim())||(row.kind==="audio"&&row.media_id&&row.object_key&&(hasCurrentTranslation(row)||parsed.data.generateAudio))));
+  const hasWrittenText=(row:Record<string,unknown>)=>["text","image","video","document"].includes(String(row.kind))&&Boolean(String(row.text_content??"").trim());
+  const eligible=found.rows.filter(row=>row.direction==="in"&&(hasWrittenText(row)||(row.kind==="audio"&&row.media_id&&row.object_key&&(hasCurrentTranslation(row)||parsed.data.generateAudio))));
   const setting=eligible.some(row=>!hasCurrentTranslation(row))?await activeTranslationSetting():null;
   if(eligible.some(row=>!hasCurrentTranslation(row))&&!setting)return reply.code(503).send({error:"translation_not_configured",message:"管理员尚未启用 AI 翻译 Provider"});
   const generated=await mapWithConcurrency(eligible.filter(row=>!hasCurrentTranslation(row)),3,row=>singleFlight(messageTranslationFlights,`${row.id}:${parsed.data.targetLanguage}:${requestedSourceLanguage??"auto"}`,async()=>{
@@ -1492,7 +1493,7 @@ app.post("/api/v1/translations/messages", {preHandler:authenticate}, async(reque
     }catch(error){const failure=translationFailure(error);request.log.error({messageId:row.id,provider:setting?.provider,error:String(error),failure:failure.error},"Incoming message translation failed");return{id:row.id,...failure};}
   }));
   const generatedById=new Map(generated.map(item=>[item.id,item]));
-  return{data:parsed.data.messageIds.map(messageId=>{const row=found.rows.find(item=>item.id===messageId);const isText=row?.kind==="text"&&String(row.text_content??"").trim();const isAudio=row?.kind==="audio"&&row.media_id&&row.object_key;if(!row||row.direction!=="in"||(!isText&&!isAudio)||(isAudio&&!hasCurrentTranslation(row)&&!parsed.data.generateAudio))return{messageId,status:"skipped"};const item=generatedById.get(messageId);if(item?.error)return{messageId,status:"failed",error:item.error,message:item.message};return{messageId,status:"translated",translatedText:hasCurrentTranslation(row)?row.translated_text:item?.translatedText,sourceLanguage:hasCurrentTranslation(row)?row.source_language:item?.sourceLanguage,...(isAudio?{sourceText:hasCurrentTranscription(row)?row.transcript_text:item?.sourceText}:{})};})};
+  return{data:parsed.data.messageIds.map(messageId=>{const row=found.rows.find(item=>item.id===messageId);const isWritten=Boolean(row&&hasWrittenText(row));const isAudio=row?.kind==="audio"&&row.media_id&&row.object_key;if(!row||row.direction!=="in"||(!isWritten&&!isAudio)||(isAudio&&!hasCurrentTranslation(row)&&!parsed.data.generateAudio))return{messageId,status:"skipped"};const item=generatedById.get(messageId);if(item?.error)return{messageId,status:"failed",error:item.error,message:item.message};return{messageId,status:"translated",translatedText:hasCurrentTranslation(row)?row.translated_text:item?.translatedText,sourceLanguage:hasCurrentTranslation(row)?row.source_language:item?.sourceLanguage,...(isAudio?{sourceText:hasCurrentTranscription(row)?row.transcript_text:item?.sourceText}:{})};})};
 });
 
 app.get("/api/v1/admin/translation-providers", {preHandler:authenticate}, async(request,reply)=>{

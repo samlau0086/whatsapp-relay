@@ -766,7 +766,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     },0);
     return()=>window.clearTimeout(timer);
   },[active?.accountId,userId]);
-  useEffect(()=>{if(!apiToken||!translationPreference.enabled||!translationConfigured)return;const ids=currentMessages.filter(message=>message.direction==="in"&&((message.kind==="text"&&message.text.trim())||(message.kind==="audio"&&message.attachment))&&!messageTranslations[message.id]).map(message=>message.id);if(!ids.length)return;const timer=window.setTimeout(()=>void loadIncomingTranslations(apiToken,ids,translationPreference.agentLanguage,translationPreference.customerLanguage),0);return()=>window.clearTimeout(timer);},[apiToken,currentMessages,translationPreference.enabled,translationPreference.agentLanguage,translationPreference.customerLanguage,translationConfigured,messageTranslations,loadIncomingTranslations]);
+  useEffect(()=>{if(!apiToken||!translationPreference.enabled||!translationConfigured)return;const ids=currentMessages.filter(message=>message.direction==="in"&&((["text","image","video","document"].includes(message.kind)&&message.text.trim())||(message.kind==="audio"&&message.attachment))&&!messageTranslations[message.id]).map(message=>message.id);if(!ids.length)return;const timer=window.setTimeout(()=>void loadIncomingTranslations(apiToken,ids,translationPreference.agentLanguage,translationPreference.customerLanguage),0);return()=>window.clearTimeout(timer);},[apiToken,currentMessages,translationPreference.enabled,translationPreference.agentLanguage,translationPreference.customerLanguage,translationConfigured,messageTranslations,loadIncomingTranslations]);
   useEffect(()=>{if(!toast)return;const timer=window.setTimeout(()=>setToast(""),3200);return()=>window.clearTimeout(timer);},[toast]);
   useEffect(()=>{const timer=window.setInterval(()=>setClock(Date.now()),30_000);return()=>window.clearInterval(timer);},[]);
   async function updateConversation(change:Record<string,unknown>,conversationId=active?.id){
@@ -1747,7 +1747,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                           {(translationPreference.enabled ||
                             messageTranslations[message.id]?.status === "translated") &&
                             message.direction === "in" &&
-                            message.kind === "text" &&
+                            ["text","image","video","document"].includes(message.kind) &&
                             message.text && (
                               <IncomingTranslation
                                 value={messageTranslations[message.id]}

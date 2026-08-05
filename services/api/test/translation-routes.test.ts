@@ -30,6 +30,8 @@ test("translation routes enforce user preferences, admin-only credential access,
   assert.match(server,/normalizeTranscriptionAudio/);
   assert.match(server,/transcription_endpoint_missing/);
   assert.match(server,/hasCurrentTranslation\(row\)\|\|parsed\.data\.generateAudio/);
+  assert.match(server,/\["text","image","video","document"\]\.includes\(String\(row\.kind\)\)/);
+  assert.match(server,/hasWrittenText\(row\)/);
   assert.match(server,/translation_source_text/);
   assert.match(server,/delete outboundMessage\.translationSourceText/);
   assert.match(initialMigration,/PRIMARY KEY \(message_id,target_language\)/);
