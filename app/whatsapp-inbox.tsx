@@ -331,7 +331,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [translationReadyConversationId,setTranslationReadyConversationId]=useState("");
   const [translationMenuOpen,setTranslationMenuOpen]=useState(false);
   const [messageTranslations,setMessageTranslations]=useState<Record<string,MessageTranslation>>({});
-  const [translationPreview,setTranslationPreview]=useState<{source:string;translated:string;targetLanguage:string}|null>(null);
+  const [translationPreview,setTranslationPreview]=useState<{source:string;translated:string;targetLanguage:string;media?:{asset:MediaAsset;throwOnFailure:boolean;includeReply:boolean;followingAssets:MediaAsset[]}}|null>(null);
   const [translatingDraft,setTranslatingDraft]=useState(false);
   const [translationError,setTranslationError]=useState("");
   const [replySuggestionBusy,setReplySuggestionBusy]=useState(false);
@@ -1085,14 +1085,29 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     }
   }
 
-  async function sendMediaAsset(asset:MediaAsset,caption:string,throwOnFailure=false,includeReply=true){
+  async function sendMediaAsset(asset:MediaAsset,caption:string,throwOnFailure=false,includeReply=true,translationSourceText?:string,translationTargetLanguage?:string){
     if(!active||!apiToken)return;
     if(active.platform==="messenger"&&caption.trim()){const message="Messenger 媒体首版不支持 caption，请先单独发送文字";setToast(message);if(throwOnFailure)throw new Error(message);return;}
     const kind=mediaKind(asset.mimeType),clientMessageId=crypto.randomUUID(),quoted=includeReply&&selectedReply?messageQuote(selectedReply):undefined;setDraft("");setReplyTo(null);
-    setMessages(all=>({...all,[active.id]:[...(all[active.id]??[]),{id:clientMessageId,direction:"out",kind,text:caption,quoted,platform:active.platform,pageId:active.pageId??undefined,time:formatTime(new Date()),status:"queued",attachment:{id:asset.id,name:asset.fileName,mime:asset.mimeType,size:formatBytes(asset.size)}}]}));
-    const queued=await authorizedFetch("/api/v1/messages",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId:active.accountId,conversationId:active.id,clientMessageId,type:kind,text:caption||undefined,mediaId:asset.id,...(quoted?{quotedMessageId:quoted.id}:{})})});if(queued.token!==apiToken)setApiToken(queued.token);
+    setMessages(all=>({...all,[active.id]:[...(all[active.id]??[]),{id:clientMessageId,direction:"out",kind,text:caption,translationSourceText,translationTargetLanguage,quoted,platform:active.platform,pageId:active.pageId??undefined,time:formatTime(new Date()),status:"queued",attachment:{id:asset.id,name:asset.fileName,mime:asset.mimeType,size:formatBytes(asset.size)}}]}));
+    const queued=await authorizedFetch("/api/v1/messages",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId:active.accountId,conversationId:active.id,clientMessageId,type:kind,text:caption||undefined,mediaId:asset.id,...(translationSourceText?{translationSourceText}:{}),...(translationTargetLanguage?{translationTargetLanguage}:{}),...(quoted?{quotedMessageId:quoted.id}:{})})});if(queued.token!==apiToken)setApiToken(queued.token);
     if(!queued.response.ok){const body=await queued.response.json().catch(()=>({})) as {error?:string};const message=body.error==="agent_upgrade_required"?"请先升级 Windows Agent 后再使用指定回复":`附件消息入队失败（HTTP ${queued.response.status}）`;setToast(message);setMessages(all=>({...all,[active.id]:(all[active.id]??[]).map(item=>item.id===clientMessageId?{...item,status:"failed"}:item)}));if(throwOnFailure)throw new Error(message);return;}
     setMediaOpen(false);setMaterialLibraryOpen(false);setToast(active.accountStatus==="online"?"附件已进入发送队列":"账号离线，附件已持久化排队");void loadMessages(queued.token,active.id);
+  }
+
+  async function previewAndSendMediaAsset(asset:MediaAsset,caption:string,throwOnFailure=false,includeReply=true,followingAssets:MediaAsset[]=[]){
+    const source=caption.trim();
+    if(!source||!translationPreference.enabled){await sendMediaAsset(asset,source,throwOnFailure,includeReply);for(const item of followingAssets)await sendMediaAsset(item,"",true,false);return;}
+    if(!translationConfigured){const message="AI 翻译暂不可用，请联系管理员配置 Provider";setToast(message);if(throwOnFailure)throw new Error(message);return;}
+    setTranslatingDraft(true);setTranslationError("");
+    try{
+      const targetLanguage=translationPreference.customerLanguage,result=await authorizedFetch("/api/v1/translations/preview",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:source,targetLanguage})});
+      if(result.token!==apiToken)setApiToken(result.token);
+      const body=await result.response.json().catch(()=>({})) as {translatedText?:string;message?:string};
+      if(!result.response.ok||!body.translatedText)throw new Error(body.message??"翻译失败");
+      setTranslationPreview({source,translated:body.translatedText,targetLanguage,media:{asset,throwOnFailure,includeReply,followingAssets}});
+    }catch(reason){const message=reason instanceof Error?reason.message:"翻译失败";setTranslationError(message);setToast("AI 翻译失败，附件未发送");if(throwOnFailure)throw reason;}
+    finally{setTranslatingDraft(false);}
   }
 
   async function uploadComposerImages(files:FileList|File[]){
@@ -1106,15 +1121,17 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     const caption=draft.trim();
     setComposerImageBusy(true);setComposerImageDragging(false);
     try{
+      const uploaded:MediaAsset[]=[];
       for(const [index,file] of images.entries()){
         const form=new FormData();form.append("file",file);
         const result=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(active.accountId)}`,apiToken,{method:"POST",body:form});
         if(result.token!==apiToken)setApiToken(result.token);
         const body=await result.response.json().catch(()=>({})) as {mediaId?:string;fileName?:string;mimeType?:string;size?:number;sha256?:string;message?:string};
         if(!result.response.ok||!body.mediaId)throw new Error(body.message??`${file.name} 上传失败（HTTP ${result.response.status}）`);
-        await sendMediaAsset({id:body.mediaId,fileName:body.fileName??file.name,mimeType:body.mimeType??file.type,size:body.size??file.size,sha256:body.sha256??"",createdAt:new Date().toISOString(),usageCount:0},index===0?caption:"",true,index===0);
+        uploaded.push({id:body.mediaId,fileName:body.fileName??file.name,mimeType:body.mimeType??file.type,size:body.size??file.size,sha256:body.sha256??"",createdAt:new Date().toISOString(),usageCount:0});
       }
-      setToast(images.length>1?`${images.length} 张图片已进入发送队列`:"图片已进入发送队列");
+      await previewAndSendMediaAsset(uploaded[0],caption,true,true,uploaded.slice(1));
+      if(!caption||!translationPreference.enabled)setToast(images.length>1?`${images.length} 张图片已进入发送队列`:"图片已进入发送队列");
     }catch(reason){setToast(reason instanceof Error?reason.message:"图片上传失败");}
     finally{setComposerImageBusy(false);}
   }
@@ -1175,19 +1192,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   async function sendQuickReplyMedia(asset:MediaAsset,captionOverride?:string){
     let caption=asset.mimeType.startsWith("audio/")?"":(captionOverride??draft).trim();
     if(caption){const rendered=await resolveQuickReplyText(caption);if(rendered===null)return;caption=rendered.trim();}
-    if(caption&&translationPreference.enabled){
-      if(!translationConfigured){setToast("AI 翻译暂不可用，请联系管理员配置 Provider");return;}
-      setTranslatingDraft(true);setTranslationError("");
-      try{
-        const result=await authorizedFetch("/api/v1/translations/preview",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:caption,targetLanguage:translationPreference.customerLanguage})});
-        if(result.token!==apiToken)setApiToken(result.token);
-        const body=await result.response.json().catch(()=>({})) as {translatedText?:string;message?:string};
-        if(!result.response.ok||!body.translatedText)throw new Error(body.message??"翻译失败");
-        caption=body.translatedText;
-      }catch(reason){setTranslationError(reason instanceof Error?reason.message:"翻译失败");setToast("AI 翻译失败，快捷回复未发送");return;}
-      finally{setTranslatingDraft(false);}
-    }
-    setQuickReplyOpen(false);await sendMediaAsset(asset,caption);
+    setQuickReplyOpen(false);await previewAndSendMediaAsset(asset,caption);
   }
 
   function addMessageToQuickReplies(message:ChatMessage){
@@ -2251,10 +2256,11 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           accountId={active.accountId}
           token={apiToken}
           initialCaption={draft}
+          translationEnabled={translationPreference.enabled}
           onToken={setApiToken}
           onToast={setToast}
           onClose={() => setMediaOpen(false)}
-          onSend={sendMediaAsset}
+          onSend={previewAndSendMediaAsset}
         />
       )}
       {materialLibraryOpen && active && (
@@ -2331,13 +2337,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           translated={translationPreview.translated}
           targetLanguage={translationPreview.targetLanguage}
           onClose={() => setTranslationPreview(null)}
-          onConfirm={(text) =>
-            void queueTextMessage(
-              text,
-              translationPreview.source,
-              translationPreview.targetLanguage,
-            )
-          }
+          onConfirm={(text) => void (async()=>{
+            const preview=translationPreview;setTranslationPreview(null);
+            if(!preview.media){await queueTextMessage(text,preview.source,preview.targetLanguage);return;}
+            await sendMediaAsset(preview.media.asset,text,preview.media.throwOnFailure,preview.media.includeReply,preview.source,preview.targetLanguage);
+            for(const asset of preview.media.followingAssets)await sendMediaAsset(asset,"",true,false);
+          })()}
         />
       )}
       {conversationMenu && (
@@ -4243,7 +4248,7 @@ function TextToSpeechDialog({accountId,token,initialText,translationEnabled,tran
 
 const MEDIA_PAGE_SIZE=24;
 
-function MediaDialog({accountId,token,initialCaption,onToken,onToast,onClose,onSend}:{accountId:string;token:string;initialCaption:string;onToken:(token:string)=>void;onToast:(text:string)=>void;onClose:()=>void;onSend:(asset:MediaAsset,caption:string)=>Promise<void>}){
+function MediaDialog({accountId,token,initialCaption,translationEnabled,onToken,onToast,onClose,onSend}:{accountId:string;token:string;initialCaption:string;translationEnabled:boolean;onToken:(token:string)=>void;onToast:(text:string)=>void;onClose:()=>void;onSend:(asset:MediaAsset,caption:string)=>Promise<void>}){
   const [assets,setAssets]=useState<MediaAsset[]>([]),[selectedId,setSelectedId]=useState(""),[query,setQuery]=useState(""),[debouncedQuery,setDebouncedQuery]=useState(""),[filter,setFilter]=useState("all"),[caption,setCaption]=useState(initialCaption),[busy,setBusy]=useState(false),[dragging,setDragging]=useState(false),[loading,setLoading]=useState(true),[loadingMore,setLoadingMore]=useState(false),[total,setTotal]=useState(0),[error,setError]=useState("");
   const inputRef=useRef<HTMLInputElement>(null),gridRef=useRef<HTMLDivElement>(null),sentinelRef=useRef<HTMLDivElement>(null),tokenRef=useRef(token),onTokenRef=useRef(onToken),loadVersionRef=useRef(0),loadingMoreRef=useRef(false);
   useEffect(()=>{tokenRef.current=token;onTokenRef.current=onToken;},[token,onToken]);
@@ -4274,7 +4279,8 @@ function MediaDialog({accountId,token,initialCaption,onToken,onToast,onClose,onS
   const selected=assets.find(item=>item.id===selectedId)??null;
   async function upload(files:FileList|File[]){const list=Array.from(files);if(!list.length)return;setBusy(true);setError("");try{let last:MediaAsset|null=null;for(const file of list){if(file.size>64*1024*1024)throw new Error(`${file.name} 超过 64 MB`);const form=new FormData();form.append("file",file);const currentToken=tokenRef.current,result=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(accountId)}`,currentToken,{method:"POST",body:form});if(result.token!==currentToken)onTokenRef.current(result.token);if(!result.response.ok)throw new Error(`${file.name} 上传失败（HTTP ${result.response.status}）`);const body=await result.response.json() as {mediaId:string;fileName:string;mimeType:string;size:number;sha256:string};last={id:body.mediaId,fileName:body.fileName,mimeType:body.mimeType,size:body.size,sha256:body.sha256,createdAt:new Date().toISOString(),usageCount:0};}await refresh();if(last)setSelectedId(last.id);onToast(list.length>1?`${list.length} 个文件已加入媒体库`:"文件已加入媒体库");}catch(reason){setError(reason instanceof Error?reason.message:"上传失败");}finally{setBusy(false);setDragging(false);}}
   async function remove(asset:MediaAsset){if(asset.usageCount>0){setError("该文件已被消息使用，不能删除");return;}if(!await confirmAction(`文件“${asset.fileName}”将从媒体库中永久删除。`,{title:"删除媒体文件？",confirmLabel:"删除"}))return;setBusy(true);const currentToken=tokenRef.current,result=await authorizedFetch(`/api/v1/media/${asset.id}`,currentToken,{method:"DELETE"});if(result.token!==currentToken)onTokenRef.current(result.token);setBusy(false);if(!result.response.ok){setError(result.response.status===409?"该文件已被消息使用，不能删除":`删除失败（HTTP ${result.response.status}）`);return;}if(selectedId===asset.id)setSelectedId("");setAssets(current=>current.filter(item=>item.id!==asset.id));setTotal(current=>Math.max(0,current-1));onToast("文件已从媒体库删除");}
-  return <div className="modal-backdrop media-backdrop" role="presentation"><section className="media-dialog" role="dialog" aria-modal="true" aria-labelledby="media-dialog-title"><header><div><span className="login-logo"><Paperclip size={21}/></span><span><h2 id="media-dialog-title">媒体与附件</h2><p>上传一次，之后可在该 WhatsApp 账号的会话中复用。</p></span></div><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button></header><div className={`media-dropzone ${dragging?"dragging":""}`} onDragEnter={event=>{event.preventDefault();setDragging(true)}} onDragOver={event=>event.preventDefault()} onDragLeave={event=>{if(event.currentTarget===event.target)setDragging(false)}} onDrop={event=>{event.preventDefault();void upload(event.dataTransfer.files)}} onClick={()=>inputRef.current?.click()} role="button" tabIndex={0} onKeyDown={event=>{if(event.key==="Enter"||event.key===" ")inputRef.current?.click();}}><UploadCloud size={30}/><b>{busy?"正在上传…":"拖拽文件到这里、直接粘贴，或点击选择"}</b><span>图片、MP4、OGG、MP3、PDF、ZIP；单文件最大 64 MB</span><input ref={inputRef} type="file" multiple accept="image/jpeg,image/png,image/webp,video/mp4,audio/ogg,audio/mpeg,application/pdf,application/zip" onChange={event=>{if(event.target.files)void upload(event.target.files);event.currentTarget.value="";}}/></div><div className="media-library-head"><div><b>媒体库</b><span>{loading?"正在加载…":`已加载 ${assets.length} / 共 ${total} 个文件`}</span></div><label><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索全部文件名"/></label></div><div className="media-filters">{[["all","全部"],["image","图片"],["video","视频"],["audio","音频"],["document","文档"]].map(([value,label])=><button key={value} className={filter===value?"active":""} onClick={()=>setFilter(value)}>{label}</button>)}</div><div ref={gridRef} className="media-grid">{loading&&!assets.length?<div className="media-load-more"><RefreshCw className="spin" size={18}/>正在加载第一批文件…</div>:assets.length?assets.map(asset=>{const kind=mediaKind(asset.mimeType);return <div key={asset.id} role="button" tabIndex={0} className={`media-item ${kind==="image"?"with-image-preview":""} ${selectedId===asset.id?"selected":""}`} onClick={()=>setSelectedId(asset.id)} onKeyDown={event=>{if(event.key==="Enter"||event.key===" ")setSelectedId(asset.id);}}>{kind==="image"?<ProductImage mediaId={asset.id} token={token} onToken={onToken} alt={asset.fileName} className="media-library-preview" preview/>:<span className={`media-kind ${kind}`}><FileText size={22}/></span>}<span><b title={asset.fileName}>{asset.fileName}</b><small>{formatBytes(asset.size)} · {asset.usageCount?`已使用 ${asset.usageCount} 次`:"未使用"}</small></span><button type="button" className="media-delete-button" aria-label={`删除 ${asset.fileName}`} title={asset.usageCount?"该文件正在使用，不能删除":"删除此文件"} disabled={busy||asset.usageCount>0} onClick={event=>{event.stopPropagation();void remove(asset)}}><Trash2 size={14}/><span>删除</span></button></div>}):<div className="media-empty"><FileText size={28}/><b>媒体库中暂无匹配文件</b><span>{debouncedQuery?"搜索已覆盖全部媒体与附件":"可从上方拖拽或粘贴上传"}</span></div>}{assets.length>0&&hasMore&&<div ref={sentinelRef} className="media-load-more">{loadingMore?<><RefreshCw className="spin" size={16}/>正在加载更多…</>:<span>继续滚动加载更多</span>}</div>}</div>{error&&<span className="login-error media-error">{error}</span>}<footer><label>附件说明（可选）<input value={caption} onChange={event=>setCaption(event.target.value)} maxLength={65536} placeholder="随附件一起发送的文字"/></label><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" disabled={!selected||busy} onClick={()=>selected&&void onSend(selected,caption.trim())}>发送所选附件</button></footer></section></div>;
+  async function submit(){if(!selected||busy)return;setBusy(true);setError("");try{await onSend(selected,caption.trim());}catch(reason){setError(reason instanceof Error?reason.message:"附件发送失败");}finally{setBusy(false);}}
+  return <div className="modal-backdrop media-backdrop" role="presentation"><section className="media-dialog" role="dialog" aria-modal="true" aria-labelledby="media-dialog-title"><header><div><span className="login-logo"><Paperclip size={21}/></span><span><h2 id="media-dialog-title">媒体与附件</h2><p>上传一次，之后可在该 WhatsApp 账号的会话中复用。</p></span></div><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button></header><div className={`media-dropzone ${dragging?"dragging":""}`} onDragEnter={event=>{event.preventDefault();setDragging(true)}} onDragOver={event=>event.preventDefault()} onDragLeave={event=>{if(event.currentTarget===event.target)setDragging(false)}} onDrop={event=>{event.preventDefault();void upload(event.dataTransfer.files)}} onClick={()=>inputRef.current?.click()} role="button" tabIndex={0} onKeyDown={event=>{if(event.key==="Enter"||event.key===" ")inputRef.current?.click();}}><UploadCloud size={30}/><b>{busy?"正在处理…":"拖拽文件到这里、直接粘贴，或点击选择"}</b><span>图片、MP4、OGG、MP3、PDF、ZIP；单文件最大 64 MB</span><input ref={inputRef} type="file" multiple accept="image/jpeg,image/png,image/webp,video/mp4,audio/ogg,audio/mpeg,application/pdf,application/zip" onChange={event=>{if(event.target.files)void upload(event.target.files);event.currentTarget.value="";}}/></div><div className="media-library-head"><div><b>媒体库</b><span>{loading?"正在加载…":`已加载 ${assets.length} / 共 ${total} 个文件`}</span></div><label><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索全部文件名"/></label></div><div className="media-filters">{[["all","全部"],["image","图片"],["video","视频"],["audio","音频"],["document","文档"]].map(([value,label])=><button key={value} className={filter===value?"active":""} onClick={()=>setFilter(value)}>{label}</button>)}</div><div ref={gridRef} className="media-grid">{loading&&!assets.length?<div className="media-load-more"><RefreshCw className="spin" size={18}/>正在加载第一批文件…</div>:assets.length?assets.map(asset=>{const kind=mediaKind(asset.mimeType);return <div key={asset.id} role="button" tabIndex={0} className={`media-item ${kind==="image"?"with-image-preview":""} ${selectedId===asset.id?"selected":""}`} onClick={()=>setSelectedId(asset.id)} onKeyDown={event=>{if(event.key==="Enter"||event.key===" ")setSelectedId(asset.id);}}>{kind==="image"?<ProductImage mediaId={asset.id} token={token} onToken={onToken} alt={asset.fileName} className="media-library-preview" preview/>:<span className={`media-kind ${kind}`}><FileText size={22}/></span>}<span><b title={asset.fileName}>{asset.fileName}</b><small>{formatBytes(asset.size)} · {asset.usageCount?`已使用 ${asset.usageCount} 次`:"未使用"}</small></span><button type="button" className="media-delete-button" aria-label={`删除 ${asset.fileName}`} title={asset.usageCount?"该文件正在使用，不能删除":"删除此文件"} disabled={busy||asset.usageCount>0} onClick={event=>{event.stopPropagation();void remove(asset)}}><Trash2 size={14}/><span>删除</span></button></div>}):<div className="media-empty"><FileText size={28}/><b>媒体库中暂无匹配文件</b><span>{debouncedQuery?"搜索已覆盖全部媒体与附件":"可从上方拖拽或粘贴上传"}</span></div>}{assets.length>0&&hasMore&&<div ref={sentinelRef} className="media-load-more">{loadingMore?<><RefreshCw className="spin" size={16}/>正在加载更多…</>:<span>继续滚动加载更多</span>}</div>}</div>{error&&<span className="login-error media-error">{error}</span>}<footer><label>附件说明（可选）<input value={caption} onChange={event=>setCaption(event.target.value)} maxLength={65536} placeholder="随附件一起发送的文字"/></label><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" disabled={!selected||busy} onClick={()=>void submit()}>{busy?<><RefreshCw className="spin" size={14}/>正在处理…</>:translationEnabled&&caption.trim()?<><Languages size={14}/>预览翻译</>:"发送所选附件"}</button></footer></section></div>;
 }
 
 function mapMediaAsset(item:Record<string,unknown>):MediaAsset{return{id:String(item.id),fileName:String(item.file_name??"未命名文件"),mimeType:String(item.mime_type??"application/octet-stream"),size:Number(item.byte_size??0),sha256:String(item.sha256??""),createdAt:String(item.created_at??""),usageCount:Number(item.usage_count??0)};}

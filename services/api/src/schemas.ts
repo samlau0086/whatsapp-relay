@@ -37,7 +37,8 @@ export const messageSchema = z.object({
 }).superRefine((value, ctx) => {
   if(value.type==="template"&&!value.template)ctx.addIssue({code:"custom",path:["template"],message:"template message requires template data"});
   if (value.type === "text" && !value.text?.trim()) ctx.addIssue({ code:"custom", path:["text"], message:"文本消息不能为空" });
-  if (value.type !== "text" && value.translationSourceText) ctx.addIssue({ code:"custom", path:["translationSourceText"], message:"只有文本消息可以保存翻译原文" });
+  if (value.translationSourceText && !["text","image","video","audio","document"].includes(value.type)) ctx.addIssue({ code:"custom", path:["translationSourceText"], message:"该消息类型不能保存翻译原文" });
+  if (value.translationSourceText && !value.text?.trim()) ctx.addIssue({ code:"custom", path:["text"], message:"翻译后的消息必须包含发送文本" });
   if (Boolean(value.translationSourceText) !== Boolean(value.translationTargetLanguage)) ctx.addIssue({ code:"custom", path:["translationTargetLanguage"], message:"翻译原文和目标语言必须同时提供" });
   if (["image","video","audio","document"].includes(value.type) && !value.mediaId) ctx.addIssue({ code:"custom", path:["mediaId"], message:"媒体消息必须提供 mediaId" });
 });

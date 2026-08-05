@@ -163,6 +163,8 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /原文（仅坐席可见）→/);
   assert.match(component, /translationSourceText/);
   assert.match(component, /translationTargetLanguage/);
+  assert.match(component, /previewAndSendMediaAsset/);
+  assert.match(component, /AI 翻译失败，附件未发送/);
   assert.match(component, /generateAudio/);
   assert.match(component, /value\.status==="idle"/);
   assert.match(css, /\.outgoing-translation-source/);
@@ -419,7 +421,7 @@ test("inbox quick replies support search, media types, and conversation translat
   assert.match(component,/\["document","文件"\]/);
   assert.match(component,/translationEnabled/);
   assert.match(component,/sendQuickReplyMedia/);
-  assert.match(component,/targetLanguage:translationPreference\.customerLanguage/);
+  assert.match(component,/previewAndSendMediaAsset\(asset,caption\)/);
   assert.match(component,/className="message-save-quick-reply"/);
   assert.match(component,/aria-label="加入快捷回复"/);
   assert.match(component,/function addMessageToQuickReplies/);

@@ -71,7 +71,9 @@ test("translated outgoing text can retain an agent-only source",()=>{
   assert.equal(translated.translationSourceText,"你好");
   assert.equal(translated.translationTargetLanguage,"en");
   assert.equal(messageSchema.safeParse({accountId,conversationId:accountId,clientMessageId:"translated-message-002",type:"text",text:"Hello",translationSourceText:"你好"}).success,false);
-  assert.equal(messageSchema.safeParse({accountId,conversationId:accountId,clientMessageId:"translated-audio-001",type:"audio",mediaId:accountId,translationSourceText:"你好"}).success,false);
+  const translatedAttachment=messageSchema.parse({accountId,conversationId:accountId,clientMessageId:"translated-image-001",type:"image",mediaId:accountId,text:"Hello",translationSourceText:"你好",translationTargetLanguage:"en"});
+  assert.equal(translatedAttachment.translationSourceText,"你好");
+  assert.equal(messageSchema.safeParse({accountId,conversationId:accountId,clientMessageId:"translated-audio-001",type:"audio",mediaId:accountId,translationSourceText:"你好",translationTargetLanguage:"en"}).success,false);
 });
 
 test("CRM schemas enforce stages, tags, notes, and reminder dates",()=>{
