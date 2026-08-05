@@ -185,6 +185,8 @@ const productBulkUpdateItemSchema=z.object({sku:z.string().trim().min(1).max(80)
 export const productBulkUpdateSchema=z.object({products:z.array(productBulkUpdateItemSchema).min(1).max(100)}).superRefine((value,ctx)=>{const seen=new Set<string>();for(const [index,product] of value.products.entries()){const key=product.sku.toLocaleLowerCase();if(seen.has(key))ctx.addIssue({code:"custom",path:["products",index,"sku"],message:"product skus must be unique"});seen.add(key);}});
 const bulkPriceOperation=z.object({field:z.literal("price"),mode:z.enum(["set","increase","decrease","percentIncrease","percentDecrease"]),value:z.coerce.number().nonnegative().max(99_999_999.99)});
 const bulkTagOperation=z.object({field:z.literal("tags"),mode:z.enum(["add","remove","set"]),tags:z.array(productLabelSchema).min(1).max(30)});
+const bulkCategoryOperation=z.object({field:z.literal("category"),mode:z.literal("set"),value:z.string().trim().max(80)});
+const bulkShippingClassOperation=z.object({field:z.literal("shippingClass"),mode:z.literal("set"),shippingClassId:z.string().uuid().nullable()});
 const bulkTitleOperation=z.discriminatedUnion("mode",[
   z.object({field:z.literal("title"),mode:z.literal("set"),value:z.string().trim().min(1).max(120)}),
   z.object({field:z.literal("title"),mode:z.enum(["prefix","suffix"]),value:z.string().min(1).max(120)}),
@@ -195,7 +197,7 @@ const bulkSkuOperation=z.discriminatedUnion("mode",[
   z.object({field:z.literal("sku"),mode:z.enum(["prefix","suffix"]),value:z.string().min(1).max(80)}),
   z.object({field:z.literal("sku"),mode:z.literal("replace"),search:z.string().min(1).max(80),value:z.string().max(80)}),
 ]);
-export const productBulkEditSchema=z.object({productIds:z.array(z.string().uuid()).min(1).max(100),operation:z.union([bulkPriceOperation,bulkTagOperation,bulkTitleOperation,bulkSkuOperation])}).superRefine((value,ctx)=>{if(new Set(value.productIds).size!==value.productIds.length)ctx.addIssue({code:"custom",path:["productIds"],message:"product ids must be unique"});if(value.operation.field==="price"&&value.operation.mode==="percentDecrease"&&value.operation.value>100)ctx.addIssue({code:"custom",path:["operation","value"],message:"percentage decrease cannot exceed 100"});});
+export const productBulkEditSchema=z.object({productIds:z.array(z.string().uuid()).min(1).max(100),operation:z.union([bulkPriceOperation,bulkTagOperation,bulkCategoryOperation,bulkShippingClassOperation,bulkTitleOperation,bulkSkuOperation])}).superRefine((value,ctx)=>{if(new Set(value.productIds).size!==value.productIds.length)ctx.addIssue({code:"custom",path:["productIds"],message:"product ids must be unique"});if(value.operation.field==="price"&&value.operation.mode==="percentDecrease"&&value.operation.value>100)ctx.addIssue({code:"custom",path:["operation","value"],message:"percentage decrease cannot exceed 100"});});
 export const productCardBatchIdSchema=z.string().min(8).max(96).regex(/^[A-Za-z0-9_-]+$/,"invalid product card batch id");
 export const productCardBatchStatusSchema=z.object({accountId:z.string().uuid(),batchId:productCardBatchIdSchema});
 const productCardGridSchema=z.object({rows:z.number().int().min(1).max(10),columns:z.number().int().min(1).max(10)});

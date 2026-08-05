@@ -273,6 +273,9 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /\/api\/v1\/products\/bulk-edit/);
   assert.match(component, /按比例增加/);
   assert.match(component, /selectField\("sku"\)/);
+  assert.match(component, /selectField\("category"\)/);
+  assert.match(component, /selectField\("shippingClass"\)/);
+  assert.match(component, /无 Shipping Class/);
   assert.match(component, /SKU 在有效产品中必须保持唯一/);
   assert.match(css, /\.product-bulk-toolbar/);
   assert.match(css, /\.product-bulk-dialog/);

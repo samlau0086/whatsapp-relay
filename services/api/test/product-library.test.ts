@@ -133,6 +133,21 @@ test("product card sending recovers from a lost response without duplicating the
   assert.match(server,/left\(client_message_id,length\(\$3\)\+1\)=\$3\|\|':'/);
 });
 
+test("bulk product editing supports category and shipping class",async()=>{
+  const [schemas,server,component]=await Promise.all([
+    readFile(new URL("../src/schemas.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+  ]);
+  assert.match(schemas,/bulkCategoryOperation/);
+  assert.match(schemas,/bulkShippingClassOperation/);
+  assert.match(server,/operation\.field==="category"/);
+  assert.match(server,/operation\.field==="shippingClass"/);
+  assert.match(server,/shippingClassExists\(client,operation\.shippingClassId,true\)/);
+  assert.match(component,/selectField\("category"\)/);
+  assert.match(component,/selectField\("shippingClass"\)/);
+});
+
 test("product card sending offers preset and custom grid collages",async()=>{
   const [dialog,server,image]=await Promise.all([readFile(new URL("../../../app/product-card-send-dialog.tsx",import.meta.url),"utf8"),readFile(new URL("../src/server.ts",import.meta.url),"utf8"),readFile(new URL("../src/product-card-image.ts",import.meta.url),"utf8")]);
   assert.match(dialog,/GRID_PRESETS\s*=\s*\[2,\s*3,\s*4,\s*5,\s*8\]/);assert.match(dialog,/合并为网格拼图/);assert.match(dialog,/自定义/);assert.match(dialog,/gridOverflow/);assert.match(server,/renderProductCardGrid/);assert.match(image,/export async function renderProductCardGrid/);
@@ -239,6 +254,7 @@ test("product tags support searching, creating, editing, and deleting labels",as
   assert.match(dialog,/method: "DELETE"/);
   assert.match(css,/\.product-label-option-row:hover \.product-label-option-actions/);
   assert.match(css,/\.product-label-option-row:focus-within \.product-label-option-actions/);
+  assert.match(css,/\.product-label-editor \.product-label-option-add\{[^}]*color:#34443c/);
   assert.match(schemas,/productLabelCatalogUpdateSchema/);
   assert.match(schemas,/productLabelCatalogDeleteSchema/);
   assert.match(server,/app\.patch\("\/api\/v1\/product-labels"/);

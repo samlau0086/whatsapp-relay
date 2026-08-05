@@ -824,6 +824,11 @@ app.patch("/api/v1/products/bulk-edit",{preHandler:authenticate},async(request,r
       if(operation.mode==="remove")await client.query("DELETE FROM product_labels WHERE product_id=ANY($1::uuid[]) AND lower(name)=ANY($2::text[])",[productIds,operation.tags.map(tag=>tag.name.toLocaleLowerCase())]);
       else for(const productId of productIds)for(const tag of uniqueProductLabels(operation.tags))await client.query("INSERT INTO product_labels(product_id,name,color) VALUES($1,$2,$3) ON CONFLICT(product_id,lower(name)) DO UPDATE SET color=EXCLUDED.color",[productId,tag.name,tag.color]);
       await client.query("UPDATE products SET updated_at=now() WHERE id=ANY($1::uuid[])",[productIds]);
+    }else if(operation.field==="category"){
+      await client.query("UPDATE products SET category=$2,updated_at=now() WHERE id=ANY($1::uuid[])",[productIds,operation.value]);
+    }else if(operation.field==="shippingClass"){
+      if(operation.shippingClassId&&!await shippingClassExists(client,operation.shippingClassId,true))throw Object.assign(new Error("shipping_class_unavailable"),{statusCode:409});
+      await client.query("UPDATE products SET shipping_class_id=$2,updated_at=now() WHERE id=ANY($1::uuid[])",[productIds,operation.shippingClassId]);
     }else{
       const column=operation.field==="sku"?"sku":"name",maxLength=operation.field==="sku"?80:120,invalidResult=operation.field==="sku"?"invalid_resulting_sku":"invalid_resulting_title";
       const updates=found.rows.map(row=>{const current=String(row[column]);let next:string;if(operation.mode==="set")next=operation.value;else if(operation.mode==="prefix")next=operation.value+current;else if(operation.mode==="suffix")next=current+operation.value;else if("search" in operation)next=current.replaceAll(operation.search,operation.value);else throw new Error("invalid_text_operation");if(!next.trim()||next.length>maxLength)throw Object.assign(new Error(invalidResult),{statusCode:400});return{id:String(row.id),next};});
