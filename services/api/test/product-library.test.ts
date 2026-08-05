@@ -219,7 +219,12 @@ test("product pagination uses bounded stale-while-revalidate data and media cach
 });
 
 test("product tags support searching, creating, editing, and deleting labels",async()=>{
-  const dialog=await readFile(new URL("../../../app/product-editor-dialog.tsx",import.meta.url),"utf8");
+  const [dialog,css,schemas,server]=await Promise.all([
+    readFile(new URL("../../../app/product-editor-dialog.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/globals.css",import.meta.url),"utf8"),
+    readFile(new URL("../src/schemas.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+  ]);
   assert.match(dialog,/role="combobox"/);
   assert.match(dialog,/role="listbox"/);
   assert.match(dialog,/搜索或创建标签/);
@@ -227,6 +232,19 @@ test("product tags support searching, creating, editing, and deleting labels",as
   assert.match(dialog,/products\.flatMap\(\(item\) => item\.tags\)/);
   assert.match(dialog,/setTags\(\(all\) =>\s*all\.map/);
   assert.match(dialog,/setTags\(\(all\) =>\s*all\.filter/);
+  assert.match(dialog,/className="product-label-option-actions"/);
+  assert.match(dialog,/aria-label={`编辑标签 \${tag\.name}`}/);
+  assert.match(dialog,/aria-label={`删除标签 \${tag\.name}`}/);
+  assert.match(dialog,/method: "PATCH"/);
+  assert.match(dialog,/method: "DELETE"/);
+  assert.match(css,/\.product-label-option-row:hover \.product-label-option-actions/);
+  assert.match(css,/\.product-label-option-row:focus-within \.product-label-option-actions/);
+  assert.match(schemas,/productLabelCatalogUpdateSchema/);
+  assert.match(schemas,/productLabelCatalogDeleteSchema/);
+  assert.match(server,/app\.patch\("\/api\/v1\/product-labels"/);
+  assert.match(server,/app\.delete\("\/api\/v1\/product-labels"/);
+  assert.match(server,/product_label\.update/);
+  assert.match(server,/product_label\.delete/);
 });
 
 test("products persist category and brand and expose server-side filters",async()=>{

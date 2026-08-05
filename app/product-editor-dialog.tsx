@@ -1,7 +1,8 @@
 "use client";
 
-import { Plus, ShoppingBag, Trash2, UploadCloud, X } from "lucide-react";
+import { Check, Pencil, Plus, ShoppingBag, Trash2, UploadCloud, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { confirmAction } from "./confirmation-ui";
 import {
   MediaImagePreview,
   ProductImageMediaDialog,
@@ -37,6 +38,15 @@ type Product = {
   priceTiers: Tier[];
   tags: Tag[];
 };
+
+function uniqueCatalogTags(products: Product[]) {
+  const unique = new Map<string, Tag>();
+  for (const tag of products.flatMap((item) => item.tags)) {
+    const key = tag.name.trim().toLowerCase();
+    if (key && !unique.has(key)) unique.set(key, tag);
+  }
+  return [...unique.values()].sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+}
 
 function uniqueValues(values: string[]) {
   return [...new Map(values.map((value) => [value.trim().toLowerCase(), value.trim()])).values()]
@@ -170,6 +180,7 @@ export function ProductEditorDialog({
   onToken,
   onClose,
   onSaved,
+  onCatalogChanged,
 }: {
   product?: Product;
   products: Product[];
@@ -181,6 +192,7 @@ export function ProductEditorDialog({
   onToken: (token: string) => void;
   onClose: () => void;
   onSaved: (message: string) => Promise<void>;
+  onCatalogChanged: (message: string) => Promise<void>;
 }) {
   const [name, setName] = useState(product?.name ?? ""),
     [sku, setSku] = useState(product?.sku ?? ""),
@@ -212,6 +224,13 @@ export function ProductEditorDialog({
     [tagColor, setTagColor] = useState("#E8EEF7"),
     [tagMenuOpen, setTagMenuOpen] = useState(false),
     [tagIndex, setTagIndex] = useState(0),
+    [catalog, setCatalog] = useState<Tag[]>(() => uniqueCatalogTags(products)),
+    [tagEditing, setTagEditing] = useState<{
+      currentName: string;
+      name: string;
+      color: string;
+    } | null>(null),
+    [tagActionBusy, setTagActionBusy] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const CURRENCIES = currencies.map((item) => item.code);
@@ -236,16 +255,9 @@ export function ProductEditorDialog({
   const catalogTags = useMemo(() => {
       const selected = new Set(
           tags.map((tag) => tag.name.trim().toLowerCase()),
-        ),
-        unique = new Map<string, Tag>();
-      for (const tag of products.flatMap((item) => item.tags)) {
-        const key = tag.name.trim().toLowerCase();
-        if (key && !selected.has(key) && !unique.has(key)) unique.set(key, tag);
-      }
-      return [...unique.values()].sort((a, b) =>
-        a.name.localeCompare(b.name, "zh-CN"),
-      );
-    }, [products, tags]),
+        );
+      return catalog.filter((tag) => !selected.has(tag.name.trim().toLowerCase()));
+    }, [catalog, tags]),
     tagMatches = catalogTags
       .filter(
         (tag) =>
@@ -295,6 +307,62 @@ export function ProductEditorDialog({
     if (tagMatches.length)
       addTag(tagMatches[Math.min(tagIndex, tagMatches.length - 1)]);
     else addTag();
+  }
+  async function updateCatalogTag() {
+    if (!tagEditing || !tagEditing.name.trim()) return;
+    setTagActionBusy(true);
+    setError("");
+    try {
+      const next = { ...tagEditing, name: tagEditing.name.trim() };
+      const result = await request("/api/v1/product-labels", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(next),
+      });
+      onToken(result.token);
+      const body = (await result.response.json().catch(() => ({}))) as ProductErrorBody;
+      if (!result.response.ok) throw new Error(body.message ?? (body.error === "not_found" ? "标签已不存在" : `标签更新失败（HTTP ${result.response.status}）`));
+      const currentKey = next.currentName.toLowerCase(), updated = { id: crypto.randomUUID(), name: next.name, color: next.color };
+      setCatalog((all) => {
+        const unique = new Map<string, Tag>();
+        for (const item of all) {
+          const value = item.name.trim().toLowerCase() === currentKey ? updated : item;
+          unique.set(value.name.trim().toLowerCase(), value);
+        }
+        return [...unique.values()].sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+      });
+      setTags((all) => all.map((item) => item.name.trim().toLowerCase() === currentKey ? { ...item, name: next.name, color: next.color } : item));
+      setTagEditing(null);
+      await onCatalogChanged(`产品标签“${next.name}”已更新`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "标签更新失败");
+    } finally {
+      setTagActionBusy(false);
+    }
+  }
+  async function deleteCatalogTag(tag: Tag) {
+    if (!await confirmAction(`删除产品标签“${tag.name}”后，所有产品都会移除它。`, { title: "删除产品标签？", confirmLabel: "删除" })) return;
+    setTagActionBusy(true);
+    setError("");
+    try {
+      const result = await request("/api/v1/product-labels", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: tag.name }),
+      });
+      onToken(result.token);
+      const body = (await result.response.json().catch(() => ({}))) as ProductErrorBody;
+      if (!result.response.ok) throw new Error(body.message ?? (body.error === "not_found" ? "标签已不存在" : `标签删除失败（HTTP ${result.response.status}）`));
+      const key = tag.name.trim().toLowerCase();
+      setCatalog((all) => all.filter((item) => item.name.trim().toLowerCase() !== key));
+      setTags((all) => all.filter((item) => item.name.trim().toLowerCase() !== key));
+      if (tagEditing?.currentName.trim().toLowerCase() === key) setTagEditing(null);
+      await onCatalogChanged(`产品标签“${tag.name}”已删除`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "标签删除失败");
+    } finally {
+      setTagActionBusy(false);
+    }
   }
   async function save() {
     const money = /^\d+(?:\.\d{1,2})?$/,
@@ -712,23 +780,38 @@ export function ProductEditorDialog({
                     className="product-label-options"
                     role="listbox"
                   >
-                    {tagMatches.map((tag, index) => (
-                      <button
-                        type="button"
-                        role="option"
-                        aria-selected={index === tagIndex}
-                        className={index === tagIndex ? "active" : ""}
-                        key={tag.id || tag.name}
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => addTag(tag)}
-                      >
-                        <i style={{ background: tag.color }} />
-                        <span>
-                          <b>{tag.name}</b>
-                          <small>已有标签</small>
-                        </span>
-                      </button>
-                    ))}
+                    {tagMatches.map((tag, index) => {
+                      const editing = tagEditing?.currentName.toLowerCase() === tag.name.toLowerCase();
+                      return editing ? (
+                        <div className="product-label-option-edit" key={tag.id || tag.name}>
+                          <input
+                            value={tagEditing.name}
+                            maxLength={40}
+                            autoFocus
+                            aria-label={`编辑标签名称 ${tag.name}`}
+                            onChange={(event) => setTagEditing({ ...tagEditing, name: event.target.value })}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") { event.preventDefault(); void updateCatalogTag(); }
+                              else if (event.key === "Escape") { event.stopPropagation(); setTagEditing(null); }
+                            }}
+                          />
+                          <input type="color" value={tagEditing.color} aria-label={`编辑标签颜色 ${tag.name}`} onChange={(event) => setTagEditing({ ...tagEditing, color: event.target.value })} />
+                          <button type="button" disabled={tagActionBusy || !tagEditing.name.trim()} onClick={() => void updateCatalogTag()} aria-label={`保存标签 ${tag.name}`} title="保存"><Check size={13} /></button>
+                          <button type="button" disabled={tagActionBusy} onClick={() => setTagEditing(null)} aria-label={`取消编辑标签 ${tag.name}`} title="取消"><X size={13} /></button>
+                        </div>
+                      ) : (
+                        <div className={`product-label-option-row ${index === tagIndex ? "active" : ""}`} role="option" aria-selected={index === tagIndex} key={tag.id || tag.name}>
+                          <button type="button" className="product-label-option-add" onMouseDown={(event) => event.preventDefault()} onClick={() => addTag(tag)}>
+                            <i style={{ background: tag.color }} />
+                            <span><b>{tag.name}</b><small>已有标签</small></span>
+                          </button>
+                          <span className="product-label-option-actions">
+                            <button type="button" disabled={tagActionBusy} onMouseDown={(event) => event.preventDefault()} onClick={() => setTagEditing({ currentName: tag.name, name: tag.name, color: tag.color })} aria-label={`编辑标签 ${tag.name}`} title="编辑标签"><Pencil size={13} /></button>
+                            <button type="button" disabled={tagActionBusy} onMouseDown={(event) => event.preventDefault()} onClick={() => void deleteCatalogTag(tag)} aria-label={`删除标签 ${tag.name}`} title="删除标签"><Trash2 size={13} /></button>
+                          </span>
+                        </div>
+                      );
+                    })}
                     {!tagMatches.length && tagName.trim() && (
                       <button
                         type="button"

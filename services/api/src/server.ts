@@ -9,7 +9,7 @@ import { ifNoneMatchMatches, IMMUTABLE_PRIVATE_CACHE_CONTROL, strongEtag } from 
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount, hasScope, type Principal } from "./auth.js";
-import { apiKeyCreateSchema, contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, materialSendBatchStatusSchema, materialSendSchema, messageRetrySchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderBusinessStatusUpdateSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderUpdateSchema, paymentSendSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productNameTranslationPreviewSchema, productSkuQuerySchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
+import { apiKeyCreateSchema, contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, materialSendBatchStatusSchema, materialSendSchema, messageRetrySchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderBusinessStatusUpdateSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderUpdateSchema, paymentSendSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productLabelCatalogDeleteSchema, productLabelCatalogUpdateSchema, productNameTranslationPreviewSchema, productSkuQuerySchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
 import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
 import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline, clearAgentAttention } from "./agent-hub.js";
 import { generateSpeech, ttsProviderFailureMessage, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
@@ -701,6 +701,37 @@ app.get("/api/v1/products",{preHandler:authenticate},async(request,reply)=>{
     WHERE p.deleted_at IS NULL AND ($1::text IS NULL OR ($4::boolean AND (lower(btrim(p.name))=lower($1) OR lower(btrim(p.sku))=lower($1))) OR (NOT $4::boolean AND (p.name ILIKE '%'||$1||'%' OR p.sku ILIKE '%'||$1||'%' OR p.description ILIKE '%'||$1||'%' OR p.category ILIKE '%'||$1||'%' OR p.brand ILIKE '%'||$1||'%' OR EXISTS(SELECT 1 FROM product_labels search_label WHERE search_label.product_id=p.id AND search_label.name ILIKE '%'||$1||'%')))) AND ($2::text IS NULL OR p.currency=$2) AND ($3::text IS NULL OR EXISTS(SELECT 1 FROM product_labels filter_label WHERE filter_label.product_id=p.id AND lower(filter_label.name)=lower($3))) AND ($5::text IS NULL OR lower(p.category)=lower($5)) AND ($6::text IS NULL OR lower(p.brand)=lower($6))
     ORDER BY p.updated_at DESC,p.id LIMIT $7 OFFSET $8`,[query.q?.trim()||null,parsedCurrency?.data??null,query.tag?.trim()||null,query.exact==="true",query.category?.trim()||null,query.brand?.trim()||null,limit+1,offset]),pool.query("SELECT DISTINCT label.name FROM product_labels label JOIN products p ON p.id=label.product_id WHERE p.deleted_at IS NULL ORDER BY label.name"),pool.query("SELECT DISTINCT category FROM products WHERE deleted_at IS NULL AND category<>'' ORDER BY category"),pool.query("SELECT DISTINCT brand FROM products WHERE deleted_at IS NULL AND brand<>'' ORDER BY brand")]);
   return{data:result.rows.slice(0,limit).map(mapProductRow),total:Number(result.rows[0]?.total_count??0),hasMore:result.rows.length>limit,nextOffset:result.rows.length>limit?offset+limit:null,tags:tagOptions.rows.map(row=>String(row.name)),categories:categoryOptions.rows.map(row=>String(row.category)),brands:brandOptions.rows.map(row=>String(row.brand))};
+});
+
+app.patch("/api/v1/product-labels",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const parsed=productLabelCatalogUpdateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  const principal=request.principal,{currentName,name,color}=parsed.data;
+  const result=await transaction(async client=>{
+    const affected=await client.query("SELECT product_id FROM product_labels WHERE lower(btrim(name))=lower($1) FOR UPDATE",[currentName]);
+    if(!affected.rowCount)return null;
+    const productIds=[...new Set(affected.rows.map(row=>String(row.product_id)))];
+    if(currentName.toLocaleLowerCase()!==name.toLocaleLowerCase())await client.query("DELETE FROM product_labels WHERE product_id=ANY($1::uuid[]) AND lower(btrim(name))=lower($2) AND lower(btrim(name))<>lower($3)",[productIds,name,currentName]);
+    const updated=await client.query("UPDATE product_labels SET name=$2,color=$3 WHERE lower(btrim(name))=lower($1) RETURNING id",[currentName,name,color]);
+    await client.query("UPDATE products SET updated_at=now() WHERE id=ANY($1::uuid[])",[productIds]);
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'product_label.update','product_label',NULL,$2)",[principal.id,JSON.stringify({currentName,name,color,productCount:productIds.length})]);
+    return{updated:updated.rowCount,productCount:productIds.length,name,color};
+  });
+  if(!result)return reply.code(404).send({error:"not_found"});return result;
+});
+
+app.delete("/api/v1/product-labels",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const parsed=productLabelCatalogDeleteSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  const principal=request.principal,result=await transaction(async client=>{
+    const removed=await client.query("DELETE FROM product_labels WHERE lower(btrim(name))=lower($1) RETURNING product_id",[parsed.data.name]);
+    if(!removed.rowCount)return null;
+    const productIds=[...new Set(removed.rows.map(row=>String(row.product_id)))];
+    await client.query("UPDATE products SET updated_at=now() WHERE id=ANY($1::uuid[])",[productIds]);
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'product_label.delete','product_label',NULL,$2)",[principal.id,JSON.stringify({name:parsed.data.name,productCount:productIds.length})]);
+    return{deleted:removed.rowCount,productCount:productIds.length};
+  });
+  if(!result)return reply.code(404).send({error:"not_found"});return result;
 });
 
 app.post("/api/v1/products/query",{preHandler:authenticate},async(request,reply)=>{

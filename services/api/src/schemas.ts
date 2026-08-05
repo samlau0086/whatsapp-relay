@@ -164,6 +164,8 @@ export const currencySettingsSchema=z.object({
   else if(base.rate!==1)ctx.addIssue({code:"custom",path:["currencies",codes.indexOf(value.baseCurrency),"rate"],message:"base currency rate must equal 1"});
 });
 export const productLabelSchema=z.object({name:z.string().trim().min(1).max(40),color:z.string().regex(/^#[0-9A-Fa-f]{6}$/)});
+export const productLabelCatalogUpdateSchema=z.object({currentName:z.string().trim().min(1).max(40),name:z.string().trim().min(1).max(40),color:z.string().regex(/^#[0-9A-Fa-f]{6}$/)});
+export const productLabelCatalogDeleteSchema=z.object({name:z.string().trim().min(1).max(40)});
 export const productPriceTierSchema=z.object({minQuantity:z.coerce.number().int().min(1).max(999999),unitAmount:moneySchema});
 const weightAmountSchema=z.coerce.number().positive().max(99_999_999);
 const optionalWeightFields={weightAmount:weightAmountSchema.nullable().optional(),weightUnit:z.enum(WEIGHT_UNITS).nullable().optional()};
