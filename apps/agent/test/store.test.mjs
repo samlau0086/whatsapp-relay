@@ -190,3 +190,18 @@ test("protocol placeholders can be removed without dropping real replies", () =>
     rmSync(directory,{recursive:true,force:true});
   }
 });
+
+test("group chat capability synchronizes metadata and preserves quoted participants",()=>{
+  const main=readFileSync(new URL("../dist/main.js",import.meta.url),"utf8");
+  const docker=readFileSync(new URL("../dist/docker-main.js",import.meta.url),"utf8");
+  const worker=readFileSync(new URL("../dist/account-worker.js",import.meta.url),"utf8");
+  const central=readFileSync(new URL("../dist/central-client.js",import.meta.url),"utf8");
+  assert.match(main,/group_chat_v1/);
+  assert.match(docker,/group_chat_v1/);
+  assert.match(worker,/groupFetchAllParticipating/);
+  assert.match(worker,/group_sync_complete/);
+  assert.match(worker,/group-participants\.update/);
+  assert.match(worker,/chatType:\s*isGroup\s*\?\s*"group"/);
+  assert.match(worker,/participant:\s*quotedParticipantJid\s*\|\|\s*undefined/);
+  assert.match(central,/bytes\s*>\s*1_750_000/);
+});

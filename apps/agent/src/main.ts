@@ -275,7 +275,7 @@ function startCentral(baseUrl: string, agentId: string, credential: string): voi
     app.getVersion(),
     `win32-${process.arch}`,
     PROTOCOL_VERSION,
-    ["publish_status_v1"],
+    ["publish_status_v1","group_chat_v1"],
     executeWorkerCommand,
     (status) => {
       if (client !== nextClient) return;

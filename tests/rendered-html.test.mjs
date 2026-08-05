@@ -53,6 +53,11 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /\/api\/v1\/media/);
   assert.match(component, /EmojiPicker/);
   assert.match(component, /MediaDialog/);
+  assert.match(component, /GroupDetailsPanel/);
+  assert.match(component, /group-message-sender/);
+  assert.match(component, /conversationType!=="group"&&<AgentConversationBar/);
+  assert.match(conversationRow, /groupParticipantCount/);
+  assert.match(css, /group-member-list/);
   assert.match(component, /MaterialLibrarySendDialog/);
   assert.match(component, /打开素材库/);
   const materialSendDialog = await readFile(new URL("../app/material-library-send-dialog.tsx", import.meta.url), "utf8");

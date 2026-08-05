@@ -8,6 +8,7 @@ export type Conversation = {
   preview:string;lastDirection:"in"|"out"|null;lastMessageStatus:ConversationMessageStatus|null;time:string;unread:number;accountStatus:string;assignedUserId:string|null;
   lastMessageAt:string|null;favorite:boolean;conversationStatus:string;customerStage:string;tags:TagItem[];remindAt:string|null;
   platform:"whatsapp"|"messenger";pageId:string|null;transport:"web"|"cloud";serviceWindowExpiresAt:string|null;replyWindowExpiresAt:string|null;
+  conversationType:"direct"|"group";groupJid:string|null;groupParticipantCount:number;groupActive:boolean;
 };
 
 export type ConversationChangedEvent={type:"conversation.changed";conversationId:string;accountId:string;platform?:"whatsapp"|"messenger";pageId?:string|null};

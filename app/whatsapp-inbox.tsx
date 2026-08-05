@@ -204,8 +204,9 @@ function updateCachedConversationDetails(conversationId:string,update:(details:C
 const CONTACT_TASK_STATUS:Record<string,string>={planned:"计划中",in_progress:"进行中",waiting_approval:"待审批",scheduled:"待发送",completed:"已完成",overdue:"已逾期",failed:"失败",cancelled:"已取消"};
 type ChatMessage = {
   id:string; direction:"in"|"out"; kind:string; text:string; time:string;occurredAt?:string;
+  senderJid?:string;senderName?:string;
   platform?:"whatsapp"|"messenger";providerMessageId?:string;pageId?:string;
-  quoted?:{id:string;direction:"in"|"out";kind:string;text:string};
+  quoted?:{id:string;direction:"in"|"out";kind:string;text:string;senderName?:string};
   translationSourceText?:string;
   translationTargetLanguage?:string;
   failureMessage?:string;
@@ -881,6 +882,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
 
   async function sendMessage(){
     if(!active||!apiToken||!draft.trim()||translatingDraft||composerImageBusy||quickReplyResolving)return;
+    if(active.conversationType==="group"&&!active.groupActive){setToast("此群已退出或不可访问，无法发送消息");return;}
     const resolvedSource=await resolveQuickReplyText(draft.trim());
     if(resolvedSource===null)return;
     const source=resolvedSource.trim();
@@ -943,7 +945,9 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       };
       setToast(
         body.error === "agent_upgrade_required"
-          ? "请先升级 Windows Agent 后再使用指定回复"
+          ? "请先升级 Windows Agent 后再使用群聊或指定回复"
+          : body.error === "group_inactive"
+            ? "此群已退出或不可访问，无法发送消息"
           : `消息入队失败（HTTP ${response.status}）`,
       );
       setMessages((all) => ({
@@ -1516,7 +1520,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                       className="avatar"
                       style={{ background: active.color }}
                     >
-                      {active.initials}
+                      {active.conversationType==="group"?<Users size={18}/>:active.initials}
                     </span>
                     <span>
                       <b>{active.name}</b>
@@ -1524,8 +1528,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                         <i
                           className={`status-dot ${active.accountStatus === "online" ? "online" : ""}`}
                         />
-                        <span className={`channel-badge ${active.platform}`}>{active.platform==="messenger"?<Facebook size={10}/>:<MessageCircle size={10}/>} {active.platform==="messenger"?"Facebook":"WhatsApp"}</span>{" · "}
-                        {active.account} ·{" "}
+                        <span className={`channel-badge ${active.platform}`}>{active.platform==="messenger"?<Facebook size={10}/>:active.conversationType==="group"?<Users size={10}/>:<MessageCircle size={10}/>} {active.conversationType==="group"?"WhatsApp 群聊":active.platform==="messenger"?"Facebook":"WhatsApp"}</span>{" · "}
+                        {active.account}{active.conversationType==="group"?` · ${active.groupParticipantCount} 位成员`:""} ·{" "}
                         {active.platform==="messenger"?"Page":active.transport === "cloud" ? "Cloud API" : "Web"} ·{" "}
                         {statusText(active.accountStatus)}
                       </small>
@@ -1585,7 +1589,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                     </button>
                   </div>
                 </header>
-                <AgentConversationBar
+                {active.conversationType!=="group"&&<AgentConversationBar
                   conversationId={active.id}
                   token={apiToken}
                   refreshKey={latestMessageId}
@@ -1593,7 +1597,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                   onToast={setToast}
                   onUseDraft={setDraft}
                   onSent={() => void loadMessages(apiToken, active.id)}
-                />
+                />}
                 {active.accountStatus !== "online" && (
                   <div className="offline-banner">
                     <WifiOff size={15} />
@@ -1673,12 +1677,13 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                             className="avatar message-avatar"
                             style={{ background: active.color }}
                           >
-                            {active.initials}
+                            {active.conversationType==="group"?(message.senderName||participantLabel(message.senderJid)).slice(0,2).toUpperCase():active.initials}
                           </span>
                         )}
                         <div
                           className={`message-bubble ${message.attachment?.name.startsWith("sticker-") ? "sticker-bubble" : ""}`}
                         >
+                          {active.conversationType==="group"&&message.direction==="in"&&<b className="group-message-sender">{message.senderName||participantLabel(message.senderJid)}</b>}
                           <div className="message-actions">
                             <button
                               className="message-reply-action"
@@ -1943,7 +1948,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                       </button>
                     </div>
                   )}
-                  {cloudWindowClosed&&active.platform==="whatsapp" ? (
+                  {active.conversationType==="group"&&!active.groupActive?<div className="messenger-window-closed"><Users size={15}/><span>此群已退出或不可访问，无法继续发送消息</span></div>:cloudWindowClosed&&active.platform==="whatsapp" ? (
                     <TemplateComposer
                       accountId={active.accountId}
                       conversationId={active.id}
@@ -2085,7 +2090,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             )}
           </section>
 
-          {detailsOpen && active && (
+          {detailsOpen && active && (active.conversationType==="group"?<GroupDetailsPanel active={active} token={apiToken} onToken={setApiToken} onClose={()=>setDetailsOpen(false)}/>: (
             <CrmDetailsPanel
               key={active.id}
               active={active}
@@ -2117,7 +2122,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                 await loadWorkspace(apiToken, true);
               }}
             />
-          )}
+          ))}
         </>
       ) : view === "contacts" ? (
         <ContactManagement
@@ -2425,13 +2430,13 @@ function stageName(value:string){return CUSTOMER_STAGES.find(item=>item[0]===val
 function ConversationContextMenu({state,tags,busy,onSection,onTags,onStage,onToggleTag,onNote,onStatus,onEdit,onTask}:{state:ConversationContextState;tags:TagItem[];busy:boolean;onSection:(section:ConversationContextState["section"])=>void;onTags:()=>void;onStage:(value:string)=>void;onToggleTag:(tag:TagItem)=>void;onNote:()=>void;onStatus:()=>void;onEdit:()=>void;onTask:()=>void}){
   const item=state.conversation;
   return <div className="conversation-context-menu" style={{left:state.x,top:state.y}} role="menu" aria-label={`${item.name} 的快捷操作`} onClick={event=>event.stopPropagation()}>
-    <header><span className="avatar small" style={{background:item.color}}>{item.initials}</span><span><b>{item.name}</b><small>{item.phone||item.account}</small></span></header>
+    <header><span className="avatar small" style={{background:item.color}}>{item.conversationType==="group"?<Users size={15}/>:item.initials}</span><span><b>{item.name}</b><small>{item.conversationType==="group"?`${item.groupParticipantCount} 位成员`:item.phone||item.account}</small></span></header>
     {state.section==="root"?<div className="conversation-context-actions">
-      <button role="menuitem" onClick={()=>onSection("stage")}><Zap size={15}/><span><b>修改客户阶段</b><small>{stageName(item.customerStage)}</small></span><em>›</em></button>
+      {item.conversationType!=="group"&&<button role="menuitem" onClick={()=>onSection("stage")}><Zap size={15}/><span><b>修改客户阶段</b><small>{stageName(item.customerStage)}</small></span><em>›</em></button>}
       <button role="menuitem" onClick={onTags}><Tag size={15}/><span><b>修改标签</b><small>{item.tags.length?item.tags.map(tag=>tag.name).join("、"):"暂无标签"}</small></span><em>›</em></button>
       <button role="menuitem" onClick={onNote}><FileText size={15}/><span><b>添加备注</b><small>团队共享备注</small></span></button>
-      <button role="menuitem" onClick={onEdit}><Pencil size={15}/><span><b>编辑资料</b><small>名称、邮箱及联系方式</small></span></button>
-      <button role="menuitem" onClick={onTask}><ClipboardList size={15}/><span><b>添加任务</b><small>关联当前客户和会话</small></span></button>
+      {item.conversationType!=="group"&&<button role="menuitem" onClick={onEdit}><Pencil size={15}/><span><b>编辑资料</b><small>名称、邮箱及联系方式</small></span></button>}
+      {item.conversationType!=="group"&&<button role="menuitem" onClick={onTask}><ClipboardList size={15}/><span><b>添加任务</b><small>关联当前客户和会话</small></span></button>}
       <i/>
       <button role="menuitem" className={item.conversationStatus==="closed"?"reopen":""} disabled={busy} onClick={onStatus}><CheckCheck size={15}/><span><b>{item.conversationStatus==="closed"?"重新打开会话":"关闭会话"}</b><small>{item.conversationStatus==="closed"?"恢复到全部会话":"移入已关闭会话"}</small></span></button>
     </div>:state.section==="stage"?<div className="conversation-context-submenu"><button className="context-back" onClick={()=>onSection("root")}>‹ 返回快捷操作</button><h4>客户阶段</h4>{CUSTOMER_STAGES.map(([value,label])=><button key={value} disabled={busy} className={item.customerStage===value?"selected":""} onClick={()=>onStage(value)}><span>{label}</span>{item.customerStage===value&&<Check size={14}/>}</button>)}</div>:<div className="conversation-context-submenu tags"><button className="context-back" onClick={()=>onSection("root")}>‹ 返回快捷操作</button><h4>标签 <small>{item.tags.length}/20</small></h4>{busy&&!tags.length?<p>正在读取标签…</p>:tags.length?tags.map(tag=><button key={tag.id} disabled={busy||!item.tags.some(value=>value.id===tag.id)&&item.tags.length>=20} className={item.tags.some(value=>value.id===tag.id)?"selected":""} onClick={()=>onToggleTag(tag)}><i style={{background:tag.color}}/><span>{tag.name}</span>{item.tags.some(value=>value.id===tag.id)&&<Check size={14}/>}</button>):<p>暂时没有可用标签</p>}</div>}
@@ -2502,6 +2507,20 @@ function ContactTaskDialog({task,token,onToken,onClose,onSaved}:{task:ContactTas
       <footer><button className="danger-text contact-task-delete" onClick={()=>void remove()} disabled={loading||busy}><Trash2 size={14}/>删除任务</button><span/><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void save()} disabled={loading||busy||!detail||!title.trim()}>{busy?"正在处理…":"保存更改"}</button></footer>
     </section>
   </div>;
+}
+
+function GroupDetailsPanel({active,token,onToken,onClose}:{active:Conversation;token:string;onToken:(token:string)=>void;onClose:()=>void}){
+  type GroupParticipant={participant_jid:string;phone_jid:string|null;lid_jid:string|null;display_name:string|null;role:"member"|"admin"|"superadmin"};
+  type GroupDetails={group_jid:string;subject:string;description:string|null;owner_jid:string|null;participant_count:number;is_announcement:boolean;is_community:boolean;active:boolean;participants:GroupParticipant[]};
+  const [details,setDetails]=useState<GroupDetails|null>(null),[error,setError]=useState("");
+  useEffect(()=>{const controller=new AbortController();void authorizedFetch(`/api/v1/conversations/${active.id}/group`,token,{signal:controller.signal}).then(async result=>{if(result.token!==token)onToken(result.token);if(!result.response.ok)throw new Error("群资料加载失败");setDetails(await result.response.json() as GroupDetails);}).catch(reason=>{if(!controller.signal.aborted)setError(reason instanceof Error?reason.message:String(reason));});return()=>controller.abort();},[active.id,token,onToken]);
+  return <aside className="details-panel group-details" aria-label="群聊详情">
+    <header className="details-header"><span><Users size={17}/><b>群聊资料</b></span><button className="icon-button" onClick={onClose} aria-label="关闭群聊详情"><X size={17}/></button></header>
+    {!details&&!error?<div className="group-details-loading"><RefreshCw className="spin" size={17}/>正在读取群资料</div>:error?<div className="group-details-loading">{error}</div>:details&&<>
+      <section className="group-profile"><span className="avatar large" style={{background:active.color}}><Users size={23}/></span><h2>{details.subject}</h2><p>{details.participant_count} 位成员 · {details.is_announcement?"仅管理员可发言":"所有成员可发言"}</p>{!details.active&&<em>已退出或无法访问此群，发送功能已停用</em>}{details.description&&<div>{details.description}</div>}</section>
+      <section className="group-member-section"><header><h3>成员</h3><span>{details.participants.length}</span></header><div className="group-member-list">{details.participants.map(member=>{const label=member.display_name||participantLabel(member.phone_jid||member.participant_jid);return <article key={member.participant_jid}><span className="avatar">{label.slice(0,2).toUpperCase()}</span><span><b>{label}</b><small>{participantLabel(member.phone_jid||member.participant_jid)}</small></span>{member.role!=="member"&&<em>{member.role==="superadmin"?"群主":"管理员"}</em>}</article>;})}</div></section>
+    </>}
+  </aside>;
 }
 
 function CrmDetailsPanel({
@@ -4286,7 +4305,7 @@ function MediaDialog({accountId,token,initialCaption,translationEnabled,onToken,
 function mapMediaAsset(item:Record<string,unknown>):MediaAsset{return{id:String(item.id),fileName:String(item.file_name??"未命名文件"),mimeType:String(item.mime_type??"application/octet-stream"),size:Number(item.byte_size??0),sha256:String(item.sha256??""),createdAt:String(item.created_at??""),usageCount:Number(item.usage_count??0)};}
 function mediaKind(mime:string){return mime.startsWith("image/")?"image":mime.startsWith("video/")?"video":mime.startsWith("audio/")?"audio":"document";}
 
-function mapConversation(item:Record<string,unknown>,index:number):Conversation {const name=String(item.display_name??item.phone_e164??item.provider_user_id??"未知联系人"),methods=Array.isArray(item.contact_methods)?item.contact_methods.map(mapContactMethod):[],lastDirection=item.last_message_direction==="in"||item.last_message_direction==="out"?item.last_message_direction:null,lastMessageStatus:Conversation["lastMessageStatus"]=["received","queued","dispatching","sent","delivered","read","failed","uncertain"].includes(String(item.last_message_status))?item.last_message_status as NonNullable<Conversation["lastMessageStatus"]>:null,lastMessageAt=item.last_message_at?String(item.last_message_at):null,windowExpiresAt=(item.reply_window_expires_at??item.service_window_expires_at)?String(item.reply_window_expires_at??item.service_window_expires_at):null;return{id:String(item.id),name,initials:name.slice(0,2).toUpperCase(),color:COLORS[index%COLORS.length],account:String(item.account_name??"未知账号"),accountId:String(item.account_id),phone:String(item.phone_e164??""),providerUserId:String(item.provider_user_id??""),contactId:String(item.contact_id??""),alias:String(item.alias??""),contactName:String(item.contact_name??item.phone_e164??item.provider_user_id??""),primaryEmail:String(item.primary_email??""),contactMethods:methods,preview:String(item.last_message??kindText(String(item.last_message_kind??""))),lastDirection,lastMessageStatus,lastMessageAt,time:lastMessageAt?formatTime(new Date(lastMessageAt)):"",unread:Number(item.unread_count??0),accountStatus:String(item.account_status??"offline"),assignedUserId:item.assigned_user_id?String(item.assigned_user_id):null,favorite:Boolean(item.favorite),conversationStatus:String(item.status??"open"),customerStage:String(item.customer_stage??"new"),tags:Array.isArray(item.tags)?item.tags.map(mapTag):[],remindAt:item.remind_at?String(item.remind_at):null,platform:item.platform==="messenger"?"messenger":"whatsapp",pageId:item.page_id?String(item.page_id):null,transport:String(item.transport??"web") as "web"|"cloud",serviceWindowExpiresAt:windowExpiresAt,replyWindowExpiresAt:windowExpiresAt};}
+function mapConversation(item:Record<string,unknown>,index:number):Conversation {const conversationType=item.conversation_type==="group"?"group":"direct",name=String(item.display_name??item.phone_e164??item.provider_user_id??"未知联系人"),methods=Array.isArray(item.contact_methods)?item.contact_methods.map(mapContactMethod):[],lastDirection=item.last_message_direction==="in"||item.last_message_direction==="out"?item.last_message_direction:null,lastMessageStatus:Conversation["lastMessageStatus"]=["received","queued","dispatching","sent","delivered","read","failed","uncertain"].includes(String(item.last_message_status))?item.last_message_status as NonNullable<Conversation["lastMessageStatus"]>:null,lastMessageAt=item.last_message_at?String(item.last_message_at):null,windowExpiresAt=(item.reply_window_expires_at??item.service_window_expires_at)?String(item.reply_window_expires_at??item.service_window_expires_at):null,lastMessage=String(item.last_message??kindText(String(item.last_message_kind??""))),preview=conversationType==="group"&&item.last_message_sender_name?`${String(item.last_message_sender_name)}: ${lastMessage}`:lastMessage;return{id:String(item.id),name,initials:name.slice(0,2).toUpperCase(),color:COLORS[index%COLORS.length],account:String(item.account_name??"未知账号"),accountId:String(item.account_id),phone:conversationType==="group"?"":String(item.phone_e164??""),providerUserId:String(item.provider_user_id??""),contactId:String(item.contact_id??""),alias:String(item.alias??""),contactName:String(item.contact_name??item.phone_e164??item.provider_user_id??""),primaryEmail:String(item.primary_email??""),contactMethods:methods,preview,lastDirection,lastMessageStatus,lastMessageAt,time:lastMessageAt?formatTime(new Date(lastMessageAt)):"",unread:Number(item.unread_count??0),accountStatus:String(item.account_status??"offline"),assignedUserId:item.assigned_user_id?String(item.assigned_user_id):null,favorite:Boolean(item.favorite),conversationStatus:String(item.status??"open"),customerStage:String(item.customer_stage??"new"),tags:Array.isArray(item.tags)?item.tags.map(mapTag):[],remindAt:item.remind_at?String(item.remind_at):null,platform:item.platform==="messenger"?"messenger":"whatsapp",pageId:item.page_id?String(item.page_id):null,transport:String(item.transport??"web") as "web"|"cloud",serviceWindowExpiresAt:windowExpiresAt,replyWindowExpiresAt:windowExpiresAt,conversationType,groupJid:item.group_jid?String(item.group_jid):null,groupParticipantCount:Number(item.group_participant_count??0),groupActive:item.group_active!==false};}
 function mapContactMethod(item:Record<string,unknown>):ContactMethod{return{id:item.id?String(item.id):undefined,type:String(item.type??"other") as ContactMethodType,label:String(item.label??""),value:String(item.value??"")};}
 function mapContactProfile(item:Record<string,unknown>):ContactProfile{const emails=Array.isArray(item.emails)?item.emails.map(email=>{const value=email as Record<string,unknown>;return{id:value.id?String(value.id):undefined,label:String(value.label??""),email:String(value.email??""),isPrimary:Boolean(value.isPrimary??value.is_primary)};}):[],methods=Array.isArray(item.methods)?item.methods.map(method=>mapContactMethod(method as Record<string,unknown>)):[],addresses=Array.isArray(item.addresses)?item.addresses.map(address=>mapCustomerAddress(address as Record<string,unknown>)):[],birthday=item.birthday&&typeof item.birthday==="object"?item.birthday as ContactDate:null,specialDates=Array.isArray(item.specialDates)?item.specialDates as ContactSpecialDate[]:[],conversationId=item.conversationId?String(item.conversationId):item.conversation_id?String(item.conversation_id):null;return{id:String(item.id),accountId:String(item.accountId??item.account_id??""),accountName:String(item.accountName??item.account_name??""),alias:String(item.alias??""),contactName:String(item.contactName??item.contact_name??""),firstName:String(item.firstName??item.first_name??""),middleName:String(item.middleName??item.middle_name??""),lastName:String(item.lastName??item.last_name??""),name:String(item.name??item.alias??item.contactName??item.phone??"未知联系人"),phone:String(item.phone??item.phone_e164??""),avatarUrl:item.avatarUrl?String(item.avatarUrl):item.avatar_url?String(item.avatar_url):null,note:String(item.note??""),timezone:item.timezone?String(item.timezone):null,preferredLanguage:item.preferredLanguage?String(item.preferredLanguage):item.preferred_language?String(item.preferred_language):null,effectiveTimezone:String(item.effectiveTimezone??item.effective_timezone??"UTC"),timezoneSource:(item.timezoneSource??item.timezone_source??"fallback") as ContactProfile["timezoneSource"],inferredCountry:item.inferredCountry?String(item.inferredCountry):item.inferred_country?String(item.inferred_country):null,birthday,specialDates,emails,primaryEmail:item.primaryEmail?String(item.primaryEmail):emails.find(email=>email.isPrimary)?.email??null,methods,addresses,conversationId,hasConversation:Boolean(item.hasConversation??conversationId),lastMessageAt:item.lastMessageAt?String(item.lastMessageAt):item.last_message_at?String(item.last_message_at):null,updatedAt:String(item.updatedAt??item.updated_at??"")};}
 
@@ -4320,7 +4339,7 @@ function ContactSocialLinks({methods}:{methods:ContactMethod[]}){
   })}</div>;
 }
 function mapTag(item:Record<string,unknown>):TagItem{return{id:String(item.id),name:String(item.name??"标签"),color:String(item.color??"#DFF5E8")};}
-function mapMessage(item:Record<string,unknown>):ChatMessage {const kind=String(item.kind??"text"),mediaId=String(item.media_id??""),occurredAt=String(item.occurred_at),quotedId=String(item.quoted_message_id??""),commandId=String(item.command_id??"");return{id:String(item.id),direction:item.direction as "in"|"out",kind,text:String(item.text_content??(mediaId?"":kindText(kind))),platform:item.platform==="messenger"?"messenger":"whatsapp",providerMessageId:item.provider_message_id?String(item.provider_message_id):undefined,pageId:item.page_id?String(item.page_id):undefined,quoted:quotedId?{id:quotedId,direction:item.quoted_direction as "in"|"out",kind:String(item.quoted_kind??"text"),text:String(item.quoted_text_content??item.quoted_file_name??kindText(String(item.quoted_kind??"text")))}:undefined,translationSourceText:item.translation_source_text?String(item.translation_source_text):undefined,translationTargetLanguage:item.translation_target_language?String(item.translation_target_language):undefined,failureMessage:item.failure_message?String(item.failure_message):undefined,queueDiagnostic:item.direction==="out"?{commandId,state:String(item.command_state??""),attempt:Number(item.command_attempt??0),lastError:String(item.command_last_error??""),availableAt:String(item.command_available_at??""),claimedAt:String(item.command_claimed_at??""),createdAt:String(item.command_created_at??""),accountStatus:String(item.account_status??""),agentStatus:String(item.agent_status??""),agentLastSeenAt:String(item.agent_last_seen_at??"")}:undefined,cachedTranslationText:item.cached_translation_text?String(item.cached_translation_text):undefined,cachedTranslationLanguage:item.cached_translation_language?String(item.cached_translation_language):undefined,cachedTranslationSourceLanguage:item.cached_translation_source_language?String(item.cached_translation_source_language):undefined,cachedTranscriptionText:item.cached_transcription_text?String(item.cached_transcription_text):undefined,time:formatMessageTime(occurredAt),occurredAt,status:item.status as ChatMessage["status"],attachment:item.file_name&&mediaId?{id:mediaId,name:String(item.file_name),mime:String(item.mime_type??"文件"),size:formatBytes(Number(item.byte_size??0))}:undefined};}
+function mapMessage(item:Record<string,unknown>):ChatMessage {const kind=String(item.kind??"text"),mediaId=String(item.media_id??""),occurredAt=String(item.occurred_at),quotedId=String(item.quoted_message_id??""),commandId=String(item.command_id??"");return{id:String(item.id),direction:item.direction as "in"|"out",kind,text:String(item.text_content??(mediaId?"":kindText(kind))),senderJid:item.sender_jid?String(item.sender_jid):undefined,senderName:item.sender_name?String(item.sender_name):undefined,platform:item.platform==="messenger"?"messenger":"whatsapp",providerMessageId:item.provider_message_id?String(item.provider_message_id):undefined,pageId:item.page_id?String(item.page_id):undefined,quoted:quotedId?{id:quotedId,direction:item.quoted_direction as "in"|"out",kind:String(item.quoted_kind??"text"),text:String(item.quoted_text_content??item.quoted_file_name??kindText(String(item.quoted_kind??"text"))),senderName:item.quoted_sender_name?String(item.quoted_sender_name):undefined}:undefined,translationSourceText:item.translation_source_text?String(item.translation_source_text):undefined,translationTargetLanguage:item.translation_target_language?String(item.translation_target_language):undefined,failureMessage:item.failure_message?String(item.failure_message):undefined,queueDiagnostic:item.direction==="out"?{commandId,state:String(item.command_state??""),attempt:Number(item.command_attempt??0),lastError:String(item.command_last_error??""),availableAt:String(item.command_available_at??""),claimedAt:String(item.command_claimed_at??""),createdAt:String(item.command_created_at??""),accountStatus:String(item.account_status??""),agentStatus:String(item.agent_status??""),agentLastSeenAt:String(item.agent_last_seen_at??"")}:undefined,cachedTranslationText:item.cached_translation_text?String(item.cached_translation_text):undefined,cachedTranslationLanguage:item.cached_translation_language?String(item.cached_translation_language):undefined,cachedTranslationSourceLanguage:item.cached_translation_source_language?String(item.cached_translation_source_language):undefined,cachedTranscriptionText:item.cached_transcription_text?String(item.cached_transcription_text):undefined,time:formatMessageTime(occurredAt),occurredAt,status:item.status as ChatMessage["status"],attachment:item.file_name&&mediaId?{id:mediaId,name:String(item.file_name),mime:String(item.mime_type??"文件"),size:formatBytes(Number(item.byte_size??0))}:undefined};}
 
 function messageQuote(message:ChatMessage):NonNullable<ChatMessage["quoted"]>{return{id:message.id,direction:message.direction,kind:message.kind,text:message.text||message.attachment?.name||kindText(message.kind)};}
 function mapEmailActivity(item:Record<string,unknown>):EmailActivity{return{id:String(item.id),subject:String(item.subject),recipients:Array.isArray(item.recipients)?item.recipients.map(value=>{const recipient=value as Record<string,unknown>;return{email:String(recipient.email),label:String(recipient.label??"")};}):[],contentType:String(item.content_type),status:String(item.status) as EmailActivity["status"],attempt:Number(item.attempt??0),lastError:String(item.last_error??""),createdAt:String(item.created_at),senderName:String(item.sender_name??""),attachmentCount:Number(item.attachment_count??0)};}
@@ -4369,7 +4388,8 @@ function AccountStatus({initials,color,name,detail,online=false}:{initials:strin
 function MessageStatus({status}:{status?:ChatMessage["status"]}){if(status==="queued"||status==="dispatching")return <span className="message-state queued"><Clock3 size={12}/>{status==="queued"?"排队中":"发送中"}</span>;if(status==="failed"||status==="uncertain")return <span className="message-state failed"><X size={12}/>{status==="failed"?"失败":"待确认"}</span>;if(status==="read")return <span className="message-state read"><CheckCheck size={13}/>已读</span>;if(status==="delivered")return <span className="message-state"><CheckCheck size={13}/>已送达</span>;return <span className="message-state"><Check size={13}/>已发送</span>;}
 function QueueDiagnostic({message}:{message:ChatMessage}){const diagnostic=message.queueDiagnostic;if(!diagnostic?.commandId)return <small className="message-queue-diagnostic warning"><Info size={11}/>未找到发送命令，请刷新页面后重试</small>;const agentOnline=diagnostic.agentStatus==="online",accountOnline=diagnostic.accountStatus==="online",label=message.status==="dispatching"?"Agent 已接收，正在执行":!agentOnline?"等待 Agent 上线":!accountOnline?"等待 WhatsApp 账号上线":diagnostic.lastError?"等待自动重试":"等待 Agent 接收";const detail=[`命令 ${diagnostic.commandId.slice(0,8)}`,`尝试 ${diagnostic.attempt}`,diagnostic.lastError||"",diagnostic.agentLastSeenAt?`Agent 最近运行 ${formatDateTime(diagnostic.agentLastSeenAt)}`:""].filter(Boolean).join(" · ");return <small className={`message-queue-diagnostic ${agentOnline&&accountOnline?"":"warning"}`}><Info size={11}/><span><b>{label}</b><em>{detail}</em></span></small>;}
 
-function QuotedMessage({quote,customerName}:{quote:NonNullable<ChatMessage["quoted"]>;customerName:string}){return <div className="quoted-message"><b>{quote.direction==="in"?customerName:"我方"}</b><span>{quote.text||kindText(quote.kind)}</span></div>;}
+function QuotedMessage({quote,customerName}:{quote:NonNullable<ChatMessage["quoted"]>;customerName:string}){return <div className="quoted-message"><b>{quote.direction==="in"?(quote.senderName||customerName):"我方"}</b><span>{quote.text||kindText(quote.kind)}</span></div>;}
+function participantLabel(jid?:string):string{if(!jid)return"未知成员";const user=jid.split("@")[0].split(":")[0];return jid.endsWith("@s.whatsapp.net")?`+${user}`:user||jid;}
 
 function MessageMedia({attachment,token,onToken,onReady}:{attachment:{id:string;name:string;size:string;mime:string};token:string;onToken:(token:string)=>void;onReady:()=>void}){
   const [url,setUrl]=useState("");const [error,setError]=useState("");
@@ -5632,7 +5652,7 @@ function OrderManagement({token,accounts,onToken,onToast,onConversation}:{token:
     <div className="order-management-filters"><label><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索订单号、客户名称或手机号"/></label><select value={accountId} onChange={event=>setAccountId(event.target.value)} aria-label="按账号筛选"><option value="">全部账号</option>{accounts.map(account=><option key={account.id} value={account.id}>{account.name}</option>)}</select><select value={status} onChange={event=>setStatus(event.target.value)} aria-label="按状态筛选"><option value="">全部状态</option><option value="draft">草稿</option><option value="queued">已发送</option></select><input type="date" value={dateFrom} onChange={event=>setDateFrom(event.target.value)} aria-label="开始日期"/><input type="date" value={dateTo} min={dateFrom||undefined} onChange={event=>setDateTo(event.target.value)} aria-label="结束日期"/></div>
     {loading?<EmptyState title="正在读取订单" text="请稍候…"/>:error?<EmptyState title="订单加载失败" text={error}/>:orders.length?<><div className="order-table-wrap"><table className="order-table"><thead><tr><th>订单号</th><th>客户 / 账号</th><th>商品</th><th>金额</th><th>状态</th><th>创建时间</th><th aria-label="操作"/></tr></thead><tbody>{orders.map(order=><tr key={order.id} onClick={()=>setViewing(order)}><td><b>#{order.orderNumber}</b><small>{order.createdByName}</small></td><td><b>{order.customerName||order.customerPhone||"未知客户"}</b><small>{order.accountName}{order.customerPhone?` · ${order.customerPhone}`:""}</small></td><td>{order.items.length} 件<small>{order.items.slice(0,2).map(item=>item.name).join("、")}{order.items.length>2?"…":""}</small></td><td><b>{order.currency} {order.amount.toFixed(2)}</b></td><td><em className={`delivery-state ${order.messageStatus}`}>{order.status==="draft"?"草稿":deliveryText(order.messageStatus)}</em>{order.paymentRequest&&<small className={`payment-state ${order.paymentRequest.status.toLowerCase()}`}>{paymentStatusText(order.paymentRequest.status)}</small>}</td><td>{formatDateTime(order.createdAt)}</td><td><span className="order-row-actions"><button onClick={event=>{event.stopPropagation();setEditing(order);}} aria-label={`编辑订单 ${order.orderNumber}`}><Pencil size={13}/></button><button className="danger" onClick={event=>{event.stopPropagation();void remove(order);}} aria-label={`删除订单 ${order.orderNumber}`}><Trash2 size={13}/></button></span></td></tr>)}</tbody></table></div>{nextCursor&&<button className="order-load-more" onClick={()=>void load(false)}>加载更多订单</button>}</>:<EmptyState title="暂无匹配订单" text="订单需先在客户会话中创建，或调整当前筛选条件"/>}
     {viewing&&<OrderDetailsDialog order={viewing} token={token} onToken={onToken} onToast={onToast} onPaymentChange={paymentRequest=>{setViewing(current=>current?{...current,paymentRequest}:current);setOrders(items=>items.map(item=>item.id===viewing.id?{...item,paymentRequest}:item));}} onClose={()=>setViewing(null)} onEdit={()=>{setViewing(null);setEditing(viewing);}} onConversation={()=>onConversation(viewing.conversationId)}/>}
-    {editing&&<OrderDialog order={editing} active={{id:editing.conversationId,name:editing.customerName,initials:"",color:"#477a62",account:editing.accountName,accountId:editing.accountId,phone:editing.customerPhone,contactId:"",alias:"",contactName:editing.customerName,primaryEmail:"",contactMethods:[],preview:"",lastDirection:null,lastMessageStatus:null,lastMessageAt:null,time:"",unread:0,accountStatus:"online",assignedUserId:null,favorite:false,conversationStatus:"open",customerStage:"new",tags:[],remindAt:null,transport:"web",serviceWindowExpiresAt:null}} token={token} onToken={onToken} onClose={()=>setEditing(null)} onCreated={async orderNumber=>{setEditing(null);onToast(`订单 #${orderNumber} 已更新`);cursorRef.current=null;await load(true);}}/>}
+    {editing&&<OrderDialog order={editing} active={{id:editing.conversationId,name:editing.customerName,initials:"",color:"#477a62",account:editing.accountName,accountId:editing.accountId,phone:editing.customerPhone,providerUserId:"",contactId:"",alias:"",contactName:editing.customerName,primaryEmail:"",contactMethods:[],preview:"",lastDirection:null,lastMessageStatus:null,lastMessageAt:null,time:"",unread:0,accountStatus:"online",assignedUserId:null,favorite:false,conversationStatus:"open",customerStage:"new",tags:[],remindAt:null,platform:"whatsapp",pageId:null,transport:"web",serviceWindowExpiresAt:null,replyWindowExpiresAt:null,conversationType:"direct",groupJid:null,groupParticipantCount:0,groupActive:true}} token={token} onToken={onToken} onClose={()=>setEditing(null)} onCreated={async orderNumber=>{setEditing(null);onToast(`订单 #${orderNumber} 已更新`);cursorRef.current=null;await load(true);}}/>}
     {importing&&<DataImportDialog kind="orders" accounts={accounts.map(account=>({id:account.id,name:account.name}))} request={(path,init)=>authorizedFetch(path,token,init)} onToken={onToken} onClose={()=>setImporting(false)} onImported={async count=>{setImporting(false);cursorRef.current=null;onToast(`已导入 ${count} 张草稿订单`);await load(true);}}/>}
   </section>;
 }

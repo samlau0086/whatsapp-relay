@@ -11,8 +11,16 @@ export class CentralClient {
   stop():void{this.stopped=true;clearInterval(this.heartbeat);this.socket?.close();}
   flush():void{
     if(this.socket?.readyState!==WebSocket.OPEN)return;
-    const events=this.store.pendingEvents();if(!events.length)return;
-    this.socket.send(JSON.stringify({type:"event_batch",fromCursor:events[0].cursor,toCursor:events[events.length-1].cursor,events:events.map((event)=>({cursor:event.cursor,kind:event.event_kind,payload:JSON.parse(event.payload)}))}));
+    const pending=this.store.pendingEvents();if(!pending.length)return;
+    const events:Array<{cursor:number;kind:string;payload:unknown}>=[];
+    for(const event of pending){
+      const candidate={cursor:event.cursor,kind:event.event_kind,payload:JSON.parse(event.payload)};
+      const next=[...events,candidate];
+      const bytes=Buffer.byteLength(JSON.stringify({type:"event_batch",fromCursor:next[0].cursor,toCursor:next[next.length-1].cursor,events:next}));
+      if(events.length&&bytes>1_750_000)break;
+      events.push(candidate);
+    }
+    this.socket.send(JSON.stringify({type:"event_batch",fromCursor:events[0].cursor,toCursor:events[events.length-1].cursor,events}));
   }
   private connect():void{
     const url=new URL("/agent/ws",this.baseUrl.replace(/^http/,"ws"));

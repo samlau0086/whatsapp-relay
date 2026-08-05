@@ -125,6 +125,8 @@ async function processBatch(agentId: string, frame: AgentFrame): Promise<{ackedC
           if(event.kind==="message")await ingestNormalizedMessage(client,event.payload,{agentId});
           else if(event.kind==="message_status")await updateNormalizedMessageStatus(client,event.payload);
           else if(event.kind==="contact_identity")await mergeContactIdentity(client,agentId,event.payload);
+          else if(event.kind==="group_snapshot")await ingestGroupSnapshot(client,agentId,event.payload);
+          else if(event.kind==="group_sync_complete")await completeGroupSync(client,agentId,event.payload);
           else if(event.kind==="account_status"){
             const updated=await client.query("UPDATE channel_accounts SET status=$2::wa_account_status,status_reason=$3,last_event_at=now(),last_connected_at=CASE WHEN $2::wa_account_status='online'::wa_account_status THEN now() ELSE last_connected_at END WHERE id=$1 AND agent_id=$4 RETURNING id",[event.payload.accountId,event.payload.status,event.payload.reason??null,agentId]);
             if(updated.rowCount)await createWebhookEvent(client,"account.status_changed",String(event.payload.accountId),event.payload);
@@ -185,13 +187,31 @@ function normalizedIdentityJid(value:unknown,server:"lid"|"s.whatsapp.net"):stri
 
 export async function ingestNormalizedMessage(client: import("pg").PoolClient, payload: Record<string,unknown>, source:{agentId?:string;transport?:'cloud'}): Promise<void> {
   const chatJid = String(payload.chatJid);
-  if (chatJid.endsWith("@g.us") || chatJid.endsWith("@broadcast")) return;
+  if (chatJid.endsWith("@broadcast")) return;
   if(String(payload.kind??"text")==="text"&&!payload.text&&!payload.media)return;
   const accountId = String(payload.accountId);
   const account=source.transport==="cloud"
     ?await client.query("SELECT id FROM channel_accounts WHERE id=$1 AND platform='whatsapp' AND transport='cloud'",[accountId])
     :await client.query("SELECT id FROM channel_accounts WHERE id=$1 AND platform='whatsapp' AND agent_id=$2 AND transport='web'",[accountId,source.agentId]);
   if(!account.rowCount)throw new Error("message_account_not_owned_by_agent");
+  if(chatJid.endsWith("@g.us")){
+    if(source.transport==="cloud")return;
+    const peer=await upsertGroupPeer(client,accountId,chatJid,chatJid.split("@")[0]);
+    const senderJid=normalizedParticipantJid(payload.senderJid),senderName=String(payload.senderName??"").trim()||null;
+    if(senderJid){
+      await client.query("INSERT INTO whatsapp_group_participants(group_id,participant_jid,phone_jid,lid_jid,display_name) VALUES($1,$2,CASE WHEN $2 LIKE '%@s.whatsapp.net' THEN $2 END,CASE WHEN $2 LIKE '%@lid' THEN $2 END,$3) ON CONFLICT(group_id,participant_jid) DO UPDATE SET display_name=COALESCE(NULLIF(EXCLUDED.display_name,''),whatsapp_group_participants.display_name),updated_at=now()",[peer.groupId,senderJid,senderName]);
+      await client.query("UPDATE whatsapp_groups SET participant_count=(SELECT count(*) FROM whatsapp_group_participants WHERE group_id=$1),updated_at=now() WHERE id=$1",[peer.groupId]);
+    }
+    const media=payload.media as {uploadId?:string}|undefined;
+    const quoteMetadata=payload.quotedWhatsappMessageId?JSON.stringify({quotedWhatsappMessageId:payload.quotedWhatsappMessageId,quotedParticipantJid:payload.quotedParticipantJid??null}):null;
+    const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_provider_user_id,sender_display_name,provider_message_id,direction,kind,text_content,media_id,quoted_message_id,status,occurred_at,provider_payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,(SELECT id FROM messages WHERE account_id=$2 AND conversation_id=$1 AND provider_message_id=$10),$11,$12,$13) ON CONFLICT(account_id,provider_message_id) DO NOTHING RETURNING id",[peer.conversationId,accountId,payload.direction==="in"?senderJid:null,payload.direction==="in"?senderName:null,payload.whatsappMessageId,payload.direction,payload.kind,payload.text??null,media?.uploadId??null,payload.quotedWhatsappMessageId??null,payload.direction==="in"?"received":"sent",payload.occurredAt,quoteMetadata]);
+    if(message.rowCount){
+      await client.query("UPDATE conversations SET unread_count=unread_count+CASE WHEN $2='in' THEN 1 ELSE 0 END,status='open' WHERE id=$1",[peer.conversationId,payload.direction]);
+      await client.query("UPDATE messages SET quoted_message_id=$1 WHERE account_id=$2 AND conversation_id=$3 AND quoted_message_id IS NULL AND provider_payload->>'quotedWhatsappMessageId'=$4",[message.rows[0].id,accountId,peer.conversationId,payload.whatsappMessageId]);
+      await createWebhookEvent(client,"message.received",message.rows[0].id,{...payload,platform:"whatsapp",providerMessageId:payload.whatsappMessageId,platformMessageId:message.rows[0].id,conversationId:peer.conversationId});
+    }
+    return;
+  }
   const phonePart=chatJid.endsWith("@s.whatsapp.net")?chatJid.split("@")[0].split(":")[0]:null;
   const phone=phonePart&&/^\d{7,15}$/.test(phonePart)?`+${phonePart}`:null;
   const rawChatJid=String(payload.rawChatJid??"");
@@ -207,6 +227,43 @@ export async function ingestNormalizedMessage(client: import("pg").PoolClient, p
     if(payload.direction==="in"&&(payload.kind==="text"||payload.kind==="audio"))await enqueueInboundAgentWork(client,conversation.rows[0].id,message.rows[0].id);
   }
 }
+
+async function ingestGroupSnapshot(client:import("pg").PoolClient,agentId:string,payload:Record<string,unknown>):Promise<void>{
+  const accountId=String(payload.accountId??""),groupJid=normalizedGroupJid(payload.groupJid),subject=String(payload.subject??"").trim().slice(0,500);
+  if(!accountId||!groupJid||!subject)throw new Error("invalid_group_snapshot");
+  const owned=await client.query("SELECT id FROM channel_accounts WHERE id=$1 AND agent_id=$2 AND platform='whatsapp' AND transport='web'",[accountId,agentId]);
+  if(!owned.rowCount)throw new Error("group_account_not_owned_by_agent");
+  const peer=await upsertGroupPeer(client,accountId,groupJid,subject);
+  const syncId=typeof payload.syncId==="string"&&UUID_PATTERN.test(payload.syncId)?payload.syncId:null;
+  await client.query("UPDATE whatsapp_groups SET subject=$2,description=$3,owner_jid=$4,is_announcement=$5,is_community=$6,active=true,sync_id=COALESCE($7::uuid,sync_id),last_synced_at=now(),updated_at=now() WHERE id=$1",[peer.groupId,subject,String(payload.description??"").trim()||null,normalizedParticipantJid(payload.ownerJid),Boolean(payload.isAnnouncement),Boolean(payload.isCommunity),syncId]);
+  const participants=Array.isArray(payload.participants)?payload.participants as Array<Record<string,unknown>>:[];
+  const normalized=participants.map(item=>({jid:normalizedParticipantJid(item.jid),phoneJid:normalizedPhoneJid(item.phoneJid),lidJid:normalizedLidJid(item.lidJid),displayName:String(item.displayName??"").trim().slice(0,240)||null,role:["member","admin","superadmin"].includes(String(item.role))?String(item.role):"member"})).filter((item):item is typeof item&{jid:string}=>Boolean(item.jid));
+  await client.query("DELETE FROM whatsapp_group_participants WHERE group_id=$1",[peer.groupId]);
+  if(normalized.length)await client.query("INSERT INTO whatsapp_group_participants(group_id,participant_jid,phone_jid,lid_jid,display_name,role) SELECT $1,item.jid,item.phone_jid,item.lid_jid,item.display_name,item.role FROM jsonb_to_recordset($2::jsonb) AS item(jid text,phone_jid text,lid_jid text,display_name text,role text) ON CONFLICT(group_id,participant_jid) DO UPDATE SET phone_jid=EXCLUDED.phone_jid,lid_jid=EXCLUDED.lid_jid,display_name=EXCLUDED.display_name,role=EXCLUDED.role,updated_at=now()",[peer.groupId,JSON.stringify(normalized.map(item=>({jid:item.jid,phone_jid:item.phoneJid,lid_jid:item.lidJid,display_name:item.displayName,role:item.role})))]);
+  await client.query("UPDATE whatsapp_groups SET participant_count=$2 WHERE id=$1",[peer.groupId,normalized.length]);
+}
+
+async function completeGroupSync(client:import("pg").PoolClient,agentId:string,payload:Record<string,unknown>):Promise<void>{
+  const accountId=String(payload.accountId??""),syncId=String(payload.syncId??"");
+  if(!UUID_PATTERN.test(syncId))throw new Error("invalid_group_sync");
+  const owned=await client.query("SELECT id FROM channel_accounts WHERE id=$1 AND agent_id=$2 AND platform='whatsapp' AND transport='web'",[accountId,agentId]);
+  if(!owned.rowCount)throw new Error("group_account_not_owned_by_agent");
+  const inactive=await client.query("UPDATE whatsapp_groups SET active=false,updated_at=now() WHERE account_id=$1 AND active AND sync_id IS DISTINCT FROM $2::uuid RETURNING contact_id",[accountId,syncId]);
+  if(inactive.rowCount)await client.query("UPDATE conversations SET status='archived' WHERE account_id=$1 AND contact_id=ANY($2::uuid[])",[accountId,inactive.rows.map(row=>row.contact_id)]);
+}
+
+async function upsertGroupPeer(client:import("pg").PoolClient,accountId:string,groupJid:string,subject:string):Promise<{groupId:string;contactId:string;conversationId:string}>{
+  const contact=await client.query("INSERT INTO contacts(account_id,provider_user_id,display_name,entity_type,last_seen_at) VALUES($1,$2,$3,'group',now()) ON CONFLICT(account_id,provider_user_id) DO UPDATE SET display_name=EXCLUDED.display_name,entity_type='group',last_seen_at=now(),updated_at=now() RETURNING id",[accountId,groupJid,subject]);
+  const conversation=await client.query("INSERT INTO conversations(account_id,contact_id,unread_count) VALUES($1,$2,0) ON CONFLICT(account_id,contact_id) DO UPDATE SET status=CASE WHEN conversations.status='archived' THEN 'open'::conversation_status ELSE conversations.status END RETURNING id",[accountId,contact.rows[0].id]);
+  const group=await client.query("INSERT INTO whatsapp_groups(account_id,contact_id,group_jid,subject) VALUES($1,$2,$3,$4) ON CONFLICT(account_id,group_jid) DO UPDATE SET contact_id=EXCLUDED.contact_id,subject=EXCLUDED.subject,active=true,updated_at=now() RETURNING id",[accountId,contact.rows[0].id,groupJid,subject]);
+  return{groupId:String(group.rows[0].id),contactId:String(contact.rows[0].id),conversationId:String(conversation.rows[0].id)};
+}
+
+const UUID_PATTERN=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+function normalizedGroupJid(value:unknown):string|null{const jid=String(value??"").trim().toLowerCase();return /^[0-9-]+@g\.us$/.test(jid)?jid:null;}
+function normalizedParticipantJid(value:unknown):string|null{const jid=String(value??"").trim().toLowerCase();return /^\d+(?::\d+)?@(s\.whatsapp\.net|lid)$/.test(jid)?jid.replace(/:\d+@/,"@"):null;}
+function normalizedPhoneJid(value:unknown):string|null{const jid=normalizedParticipantJid(value);return jid?.endsWith("@s.whatsapp.net")?jid:null;}
+function normalizedLidJid(value:unknown):string|null{const jid=normalizedParticipantJid(value);return jid?.endsWith("@lid")?jid:null;}
 
 export async function updateNormalizedMessageStatus(client: import("pg").PoolClient, payload: Record<string,unknown>): Promise<void> {
   const result = await client.query("UPDATE messages SET status=$3,failure_code=COALESCE($4,failure_code),failure_message=COALESCE($5,failure_message) WHERE account_id=$1 AND provider_message_id=$2 RETURNING id,conversation_id", [payload.accountId,payload.whatsappMessageId,payload.status,payload.failureCode??null,payload.failureMessage??null]);

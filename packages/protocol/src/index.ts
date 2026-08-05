@@ -27,12 +27,34 @@ export interface NormalizedMessage {
   chatJid: string;
   rawChatJid?: string;
   senderJid: string;
+  senderName?: string;
+  chatType?: "direct" | "group";
   direction: "in" | "out";
   kind: MessageKind;
   text?: string;
   quotedWhatsappMessageId?: string;
   occurredAt: string;
   media?: { uploadId: string; mimeType: string; fileName?: string; size: number; sha256: string };
+}
+
+export interface GroupSnapshot {
+  eventId: string;
+  accountId: string;
+  syncId?: string;
+  groupJid: string;
+  subject: string;
+  description?: string;
+  ownerJid?: string;
+  isAnnouncement: boolean;
+  isCommunity: boolean;
+  participants: Array<{
+    jid: string;
+    phoneJid?: string;
+    lidJid?: string;
+    displayName?: string;
+    role: "member" | "admin" | "superadmin";
+  }>;
+  at: string;
 }
 
 export interface AgentEventBatch {
@@ -44,6 +66,8 @@ export interface AgentEventBatch {
     | { cursor:number; kind: "message_status"; payload: { accountId: string; whatsappMessageId: string; status: DeliveryStatus; at: string } }
     | { cursor:number; kind: "account_status"; payload: { accountId: string; status: AccountStatus; reason?: string; at: string } }
     | { cursor:number; kind: "contact_identity"; payload: { eventId:string; accountId:string; phoneJid:string; lidJid:string; displayName?:string; at:string } }
+    | { cursor:number; kind: "group_snapshot"; payload: GroupSnapshot }
+    | { cursor:number; kind: "group_sync_complete"; payload: { eventId:string; accountId:string; syncId:string; at:string } }
   >;
 }
 

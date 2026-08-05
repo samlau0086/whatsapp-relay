@@ -29,6 +29,7 @@ export type OutboundPayload={
   template?:unknown;
   quotedMessageId?:string;
   quotedWhatsappMessageId?:string;
+  quotedParticipantJid?:string;
   quotedProviderMessageId?:string;
   quotedDirection?:"in"|"out";
   quotedText?:string;

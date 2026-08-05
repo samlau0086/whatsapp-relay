@@ -1,7 +1,7 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import makeWASocket, { Browsers, BufferJSON, DisconnectReason, downloadMediaMessage, fetchLatestBaileysVersion, initAuthCreds, jidNormalizedUser, normalizeMessageContent, proto, type AnyMessageContent, type AuthenticationState, type SignalDataTypeMap } from "@whiskeysockets/baileys";
+import makeWASocket, { Browsers, BufferJSON, DisconnectReason, downloadMediaMessage, fetchLatestBaileysVersion, initAuthCreds, jidNormalizedUser, normalizeMessageContent, proto, type AnyMessageContent, type AuthenticationState, type GroupMetadata, type GroupParticipant, type SignalDataTypeMap } from "@whiskeysockets/baileys";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { pino } from "pino";
 import { ProxyAgent as UndiciProxyAgent } from "undici";
@@ -10,7 +10,7 @@ import { centralMediaAuthorizationError, describeSendError, isCentralMediaAuthor
 type Init = {type:"init";accountId:string;dataDir:string;masterKey:string;baseUrl:string;credential:string;proxyUrl?:string};
 type Command = {type:"command";sequence:number;commandId:string;command:string;payload:Record<string,unknown>};
 type Control = {type:"shutdown";logout?:boolean}|{type:"reconnect"};
-let socket:ReturnType<typeof makeWASocket>|undefined;let init:Init|undefined;let sendChain=Promise.resolve();let reconnectAttempt=0;let reconnectTimer:NodeJS.Timeout|undefined;let connectionOpen=false;let connectionGeneration=0;let mediaProxyAgent:UndiciProxyAgent|undefined;let messageCache:Awaited<ReturnType<typeof encryptedAuthState>>|undefined;
+let socket:ReturnType<typeof makeWASocket>|undefined;let init:Init|undefined;let sendChain=Promise.resolve();let reconnectAttempt=0;let reconnectTimer:NodeJS.Timeout|undefined;let connectionOpen=false;let connectionGeneration=0;let mediaProxyAgent:UndiciProxyAgent|undefined;let messageCache:Awaited<ReturnType<typeof encryptedAuthState>>|undefined;const groupRefreshTimers=new Map<string,NodeJS.Timeout>();
 const emit=(message:unknown):void=>{process.send?.(message);};
 const emitIdentity=(accountId:string,lid:string,pn:string,displayName?:string):void=>{const lidJid=jidNormalizedUser(lid),phoneJid=jidNormalizedUser(pn);if(!lidJid.endsWith("@lid")||!phoneJid.endsWith("@s.whatsapp.net"))return;emit({type:"event",kind:"contact_identity",payload:{eventId:`identity:${accountId}:${lidJid}:${phoneJid}`,accountId,lidJid,phoneJid,displayName,at:new Date().toISOString()}});};
 setInterval(()=>emit({type:"worker_heartbeat",at:new Date().toISOString()}),10_000).unref();
@@ -33,6 +33,7 @@ async function shutdown(logout:boolean):Promise<void>{
 
 async function connect(options:Init):Promise<void>{
   const generation=++connectionGeneration;
+  for(const timer of groupRefreshTimers.values())clearTimeout(timer);groupRefreshTimers.clear();
   if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=undefined;}
   const previousSocket=socket;socket=undefined;connectionOpen=false;
   try{previousSocket?.end(undefined);}catch{}
@@ -60,7 +61,7 @@ async function connect(options:Init):Promise<void>{
   activeSocket.ev.on("connection.update",({connection,lastDisconnect,qr})=>{
     if(generation!==connectionGeneration)return;
     if(qr)emit({type:"qr",accountId:options.accountId,qr});
-    if(connection==="open"){connectionOpen=true;reconnectAttempt=0;if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=undefined;}emit({type:"status",accountId:options.accountId,status:"online"});}
+    if(connection==="open"){connectionOpen=true;reconnectAttempt=0;if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=undefined;}emit({type:"status",accountId:options.accountId,status:"online"});void syncParticipatingGroups(activeSocket,options,generation);}
     if(connection==="close"){
       connectionOpen=false;
       const status=(lastDisconnect?.error as {output?:{statusCode?:number}}|undefined)?.output?.statusCode;
@@ -68,15 +69,28 @@ async function connect(options:Init):Promise<void>{
       emit({type:"status",accountId:options.accountId,status:"offline",reason:disconnectReason(lastDisconnect?.error)});scheduleReconnect(options,generation);
     }
   });
+  const refreshGroup=(groupJid:string)=>{
+    const jid=jidNormalizedUser(groupJid);if(!jid.endsWith("@g.us")||generation!==connectionGeneration)return;
+    const previous=groupRefreshTimers.get(jid);if(previous)clearTimeout(previous);
+    groupRefreshTimers.set(jid,setTimeout(()=>{groupRefreshTimers.delete(jid);void activeSocket.groupMetadata(jid).then(metadata=>emitGroupSnapshot(options,metadata)).catch(error=>emit({type:"diagnostic",level:"warn",accountId:options.accountId,message:"group_metadata_refresh_failed",detail:`${jid}: ${String(error)}`}));},750));
+  };
+  activeSocket.ev.on("groups.upsert",groups=>{if(generation!==connectionGeneration)return;for(const group of groups)emitGroupSnapshot(options,group);});
+  activeSocket.ev.on("groups.update",groups=>{if(generation!==connectionGeneration)return;for(const group of groups)if(group.id)refreshGroup(group.id);});
+  activeSocket.ev.on("group-participants.update",update=>{if(generation===connectionGeneration)refreshGroup(update.id);});
   activeSocket.ev.on("messages.upsert",({messages,type})=>{if(generation!==connectionGeneration)return;void (async()=>{
     for(const item of messages){
-      const rawJid=jidNormalizedUser(item.key.remoteJid??undefined);if(!rawJid||rawJid.endsWith("@g.us")||rawJid.endsWith("@broadcast")||!item.key.id||!item.message)continue;
-      const repositoryJid=rawJid.endsWith("@lid")?await activeSocket.signalRepository.lidMapping.getPNForLID(rawJid):null;
-      const jid=jidNormalizedUser(repositoryJid??await auth.resolveJid(rawJid));
+      const rawJid=jidNormalizedUser(item.key.remoteJid??undefined);if(!rawJid||rawJid.endsWith("@broadcast")||!item.key.id||!item.message)continue;
+      const isGroup=rawJid.endsWith("@g.us");
+      const repositoryJid=!isGroup&&rawJid.endsWith("@lid")?await activeSocket.signalRepository.lidMapping.getPNForLID(rawJid):null;
+      const jid=isGroup?rawJid:jidNormalizedUser(repositoryJid??await auth.resolveJid(rawJid));
       if(rawJid.endsWith("@lid")&&jid.endsWith("@s.whatsapp.net"))emitIdentity(options.accountId,rawJid,jid,item.pushName??undefined);
+      const rawSender=jidNormalizedUser(item.key.participant??(isGroup?undefined:jid));
+      const senderJid=rawSender?await resolveUserJid(activeSocket,auth,rawSender):jid;
+      if(rawSender.endsWith("@lid")&&senderJid.endsWith("@s.whatsapp.net"))emitIdentity(options.accountId,rawSender,senderJid,item.pushName??undefined);
       const content=normalizeMessageContent(item.message);if(!content)continue;
       const text=content.conversation??content.extendedTextMessage?.text??content.imageMessage?.caption??content.videoMessage?.caption??content.documentMessage?.caption??content.buttonsResponseMessage?.selectedDisplayText??content.listResponseMessage?.title??undefined;
       const quotedWhatsappMessageId=quotedMessageId(content);
+      const quotedParticipantJid=quotedParticipant(content);
       const sticker=Boolean(content.stickerMessage);
       const kind=content.imageMessage||sticker?"image":content.videoMessage?"video":content.audioMessage?"audio":content.documentMessage?"document":content.locationMessage?"location":content.contactMessage?"contact":"text";
       if(kind==="text"&&!text)continue;
@@ -86,7 +100,7 @@ async function connect(options:Init):Promise<void>{
         try{const mediaRequestOptions=mediaProxyAgent?({dispatcher:mediaProxyAgent} as unknown as RequestInit):undefined;const bytes=await downloadMediaMessage(item,"buffer",{options:mediaRequestOptions},{logger,reuploadRequest:async(message)=>activeSocket.updateMediaMessage(message)});const mime=content.stickerMessage?.mimetype??content.imageMessage?.mimetype??content.videoMessage?.mimetype??content.audioMessage?.mimetype??content.documentMessage?.mimetype??(sticker?"image/webp":"application/octet-stream");const fileName=sticker?`sticker-${item.key.id}.webp`:content.documentMessage?.fileName??`${item.key.id}.${kind}`;const uploaded=await uploadInboundMedia(options,bytes,mime,fileName);media={uploadId:uploaded.mediaId,mimeType:mime,fileName,size:uploaded.size,sha256:uploaded.sha256,isSticker:sticker};}
         catch(error){emit({type:"diagnostic",level:"warn",accountId:options.accountId,message:"media_upload_failed",detail:String(error)});}
       }
-      emit({type:"event",kind:"message",live:type==="notify",payload:{eventId:`message:${options.accountId}:${item.key.id}`,accountId:options.accountId,whatsappMessageId:item.key.id,chatJid:jid,rawChatJid:rawJid,senderJid:jidNormalizedUser(item.key.participant??jid),senderName:item.pushName??undefined,direction:item.key.fromMe?"out":"in",kind,text,quotedWhatsappMessageId,occurredAt:messageTime(item.messageTimestamp),media}});
+      emit({type:"event",kind:"message",live:type==="notify",payload:{eventId:`message:${options.accountId}:${item.key.id}`,accountId:options.accountId,whatsappMessageId:item.key.id,chatJid:jid,rawChatJid:rawJid,chatType:isGroup?"group":"direct",senderJid,senderName:item.pushName??undefined,direction:item.key.fromMe?"out":"in",kind,text,quotedWhatsappMessageId,quotedParticipantJid,occurredAt:messageTime(item.messageTimestamp),media}});
     }
   })().catch(error=>emit({type:"diagnostic",level:"error",accountId:options.accountId,message:"message_normalize_failed",detail:String(error)}));});
   activeSocket.ev.on("messages.update",(updates)=>{if(generation!==connectionGeneration)return;for(const update of updates){if(!update.key.id||!update.update.status)continue;const mapped=update.update.status>=4?"read":update.update.status>=3?"delivered":"sent";emit({type:"event",kind:"message_status",payload:{eventId:`status:${options.accountId}:${update.key.id}:${mapped}`,accountId:options.accountId,whatsappMessageId:update.key.id,status:mapped,at:new Date().toISOString()}});}});
@@ -136,9 +150,39 @@ async function execute(command:Command):Promise<void>{
     const toJid=String(command.payload.toJid??"");if(!toJid)throw new Error("Missing destination JID");
     const quotedId=String(command.payload.quotedWhatsappMessageId??"");
     const quotedMessage=quotedId?(await messageCache?.getMessage(quotedId))??{conversation:String(command.payload.quotedText??"[message]")}:undefined;
-    const quoted=quotedMessage?{key:{remoteJid:toJid,id:quotedId,fromMe:command.payload.quotedDirection==="out"},message:quotedMessage}:undefined;
+    const quotedParticipantJid=String(command.payload.quotedParticipantJid??"");
+    const quoted=quotedMessage?{key:{remoteJid:toJid,id:quotedId,fromMe:command.payload.quotedDirection==="out",participant:quotedParticipantJid||undefined},message:quotedMessage}:undefined;
     const sent=await waitForSendConfirmation(socket.sendMessage(toJid,content,quoted?{quoted}:undefined),30_000);if(sent?.key.id&&sent.message)await messageCache?.saveMessage(sent.key.id,sent.message);emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",whatsappMessageId:sent?.key.id,completedAt:new Date().toISOString()});
   }catch(error){const errorMessage=describeSendError(error);if(isSendConfirmationTimeout(error)){const options=init;connectionOpen=false;emit({type:"diagnostic",level:"error",accountId:options.accountId,message:"send_confirmation_timeout_reconnecting",detail:errorMessage});emit({type:"status",accountId:options.accountId,status:"offline",reason:errorMessage});emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"uncertain",errorCode:"send_confirmation_timeout",errorMessage:`${errorMessage}; connection is being rebuilt`,completedAt:new Date().toISOString()});void connect(options);return;}if(isCentralMediaAuthorizationError(error)){emit({type:"diagnostic",level:"warn",accountId:init.accountId,message:"central_media_authorization_pending",detail:errorMessage});emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"deferred",errorCode:"central_media_authorization_pending",errorMessage:"Center media authorization is temporarily unavailable; command remains queued",completedAt:new Date().toISOString()});return;}if(isTransientSendConnectionError(error)){const options=init;connectionOpen=false;emit({type:"diagnostic",level:"warn",accountId:options.accountId,message:"send_deferred_after_transient_error",detail:errorMessage});emit({type:"status",accountId:options.accountId,status:"offline",reason:errorMessage});emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"deferred",errorCode:"transient_send_error",errorMessage:`Temporary send failure (${errorMessage}); command remains queued while the connection is rebuilt`,completedAt:new Date().toISOString()});void connect(options);return;}emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"failed",errorCode:"whatsapp_rejected",errorMessage,completedAt:new Date().toISOString()});}
+}
+
+async function syncParticipatingGroups(activeSocket:ReturnType<typeof makeWASocket>,options:Init,generation:number):Promise<void>{
+  const syncId=randomUUID();
+  try{
+    const groups=await activeSocket.groupFetchAllParticipating();
+    if(generation!==connectionGeneration)return;
+    for(const group of Object.values(groups))emitGroupSnapshot(options,group,syncId);
+    emit({type:"event",kind:"group_sync_complete",payload:{eventId:`group-sync:${options.accountId}:${syncId}`,accountId:options.accountId,syncId,at:new Date().toISOString()}});
+  }catch(error){emit({type:"diagnostic",level:"warn",accountId:options.accountId,message:"group_sync_failed",detail:String(error)});}
+}
+
+function emitGroupSnapshot(options:Init,metadata:GroupMetadata,syncId?:string):void{
+  const groupJid=jidNormalizedUser(metadata.id);if(!groupJid.endsWith("@g.us"))return;
+  const participants=(metadata.participants??[]).map(normalizeGroupParticipant).filter((item):item is NonNullable<typeof item>=>Boolean(item));
+  const version=syncId??`${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+  emit({type:"event",kind:"group_snapshot",payload:{eventId:`group:${options.accountId}:${groupJid}:${version}`,accountId:options.accountId,syncId,groupJid,subject:metadata.subject||groupJid.split("@")[0],description:metadata.desc??undefined,ownerJid:metadata.ownerPn??metadata.owner??undefined,isAnnouncement:Boolean(metadata.announce),isCommunity:Boolean(metadata.isCommunity),participants,at:new Date().toISOString()}});
+}
+
+function normalizeGroupParticipant(participant:GroupParticipant):{jid:string;phoneJid?:string;lidJid?:string;displayName?:string;role:"member"|"admin"|"superadmin"}|null{
+  const id=jidNormalizedUser(participant.id),phoneJid=jidNormalizedUser(participant.phoneNumber),lidJid=jidNormalizedUser(participant.lid);
+  const jid=phoneJid.endsWith("@s.whatsapp.net")?phoneJid:id||lidJid;if(!jid)return null;
+  return{jid,phoneJid:phoneJid.endsWith("@s.whatsapp.net")?phoneJid:undefined,lidJid:lidJid.endsWith("@lid")?lidJid:id.endsWith("@lid")?id:undefined,displayName:participant.name??participant.notify??participant.verifiedName??undefined,role:participant.admin==="superadmin"||participant.isSuperAdmin?"superadmin":participant.admin==="admin"||participant.isAdmin?"admin":"member"};
+}
+
+async function resolveUserJid(activeSocket:ReturnType<typeof makeWASocket>,auth:Awaited<ReturnType<typeof encryptedAuthState>>,rawJid:string):Promise<string>{
+  if(!rawJid.endsWith("@lid"))return jidNormalizedUser(rawJid);
+  const mapped=await activeSocket.signalRepository.lidMapping.getPNForLID(rawJid);
+  return jidNormalizedUser(mapped??await auth.resolveJid(rawJid));
 }
 
 function quotedMessageId(content:proto.IMessage):string|undefined{
@@ -153,6 +197,12 @@ function quotedMessageId(content:proto.IMessage):string|undefined{
     content.contactMessage?.contextInfo,
   ];
   return candidates.find(context=>context?.stanzaId)?.stanzaId??undefined;
+}
+
+function quotedParticipant(content:proto.IMessage):string|undefined{
+  const candidates=[content.extendedTextMessage?.contextInfo,content.imageMessage?.contextInfo,content.videoMessage?.contextInfo,content.audioMessage?.contextInfo,content.documentMessage?.contextInfo,content.stickerMessage?.contextInfo,content.locationMessage?.contextInfo,content.contactMessage?.contextInfo];
+  const participant=candidates.find(context=>context?.participant)?.participant;
+  return participant?jidNormalizedUser(participant):undefined;
 }
 
 async function downloadOutboundMedia(options:Init,mediaId:string):Promise<{bytes:Buffer;mime:string;name:string}>{
