@@ -432,13 +432,22 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
       AND (task.conversation_id IS NOT NULL OR EXISTS(SELECT 1 FROM conversations linked WHERE linked.contact_id=task.contact_id))
       AND ($2::uuid[] IS NULL OR task.account_id=ANY($2))
     ORDER BY task.due_at,task.id LIMIT 20`,[request.principal.id,accountIds]):Promise.resolve({rows:[]});
-  const [result,reminderResult,dueReminderResult]=await Promise.all([
-    pool.query(`SELECT COUNT(*) FILTER(WHERE c.status<>'archived')::int all_count,COUNT(*) FILTER(WHERE c.status<>'archived' AND co.entity_type='group')::int groups,COUNT(*) FILTER(WHERE c.assigned_user_id=$7::uuid)::int mine,
+  // Group contacts are sparse; keep their lookup off the primary 100k-row aggregate.
+  const [result,groupResult,reminderResult,dueReminderResult]=await Promise.all([
+    pool.query(`SELECT COUNT(*) FILTER(WHERE c.status<>'archived')::int all_count,COUNT(*) FILTER(WHERE c.assigned_user_id=$7::uuid)::int mine,
       COUNT(*) FILTER(WHERE c.assigned_user_id IS NULL)::int unassigned,COUNT(*) FILTER(WHERE c.favorite)::int favorite,
       COUNT(*) FILTER(WHERE c.status='closed')::int closed,COUNT(*) FILTER(WHERE c.status='archived')::int archived
-    FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN channel_accounts a ON a.id=c.account_id
+    FROM conversations c JOIN channel_accounts a ON a.id=c.account_id
     LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
+      AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
+      AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
+    `,countParams),
+    pool.query(`SELECT COUNT(*)::int groups
+    FROM contacts co JOIN conversations c ON c.account_id=co.account_id AND c.contact_id=co.id JOIN channel_accounts a ON a.id=c.account_id
+    LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
+    WHERE co.entity_type='group' AND c.status<>'archived' AND (a.transport='cloud' OR a.agent_id IS NOT NULL)
+      AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
       AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
     `,countParams),
@@ -465,8 +474,8 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
     ) reminder_conversations`,countParams),
     dueReminderPromise
   ]);
-  const row=result.rows[0]??{},reminderRow=reminderResult.rows[0]??{},dueReminders=dueReminderResult.rows;
-  return{all:Number(row.all_count??0),groups:Number(row.groups??0),mine:Number(row.mine??0),unassigned:Number(row.unassigned??0),favorite:Number(row.favorite??0),closed:Number(row.closed??0),archived:Number(row.archived??0),reminders:Number(reminderRow.reminders??0),dueReminders};
+  const row=result.rows[0]??{},groupRow=groupResult.rows[0]??{},reminderRow=reminderResult.rows[0]??{},dueReminders=dueReminderResult.rows;
+  return{all:Number(row.all_count??0),groups:Number(groupRow.groups??0),mine:Number(row.mine??0),unassigned:Number(row.unassigned??0),favorite:Number(row.favorite??0),closed:Number(row.closed??0),archived:Number(row.archived??0),reminders:Number(reminderRow.reminders??0),dueReminders};
 });
 
 app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(request,reply)=>{

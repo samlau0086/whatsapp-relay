@@ -35,3 +35,15 @@ LEFT JOIN LATERAL (
   FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id
 )tag_list ON true
 ORDER BY candidates.sort_at DESC,c.id DESC;
+EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON)
+SELECT COUNT(*) FILTER(WHERE c.status<>'archived')::int all_count,
+  COUNT(*) FILTER(WHERE c.assigned_user_id IS NULL)::int unassigned,
+  COUNT(*) FILTER(WHERE c.favorite)::int favorite
+FROM conversations c JOIN channel_accounts a ON a.id=c.account_id
+WHERE a.transport='cloud' OR a.agent_id IS NOT NULL;
+EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON)
+SELECT COUNT(*)::int groups
+FROM contacts co
+JOIN conversations c ON c.account_id=co.account_id AND c.contact_id=co.id
+JOIN channel_accounts a ON a.id=c.account_id
+WHERE co.entity_type='group' AND c.status<>'archived' AND (a.transport='cloud' OR a.agent_id IS NOT NULL);
