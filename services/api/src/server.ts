@@ -450,7 +450,7 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
       AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
       AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
-    `,countParams),
+    `,countParams.slice(0,6)),
     pool.query(`SELECT COUNT(*)::int reminders FROM (
       SELECT c.id FROM tasks task
       JOIN conversations c ON c.id=task.conversation_id

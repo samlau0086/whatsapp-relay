@@ -110,6 +110,7 @@ test("conversation API applies a closed-open last-message range",async()=>{
   const primaryCountQuery=countsRoute.slice(countsRoute.indexOf('pool.query(`SELECT COUNT(*) FILTER'),countsRoute.indexOf('pool.query(`SELECT COUNT(*)::int groups'));
   assert.doesNotMatch(primaryCountQuery,/JOIN contacts/);
   assert.match(countsRoute,/c\.account_id=co\.account_id AND c\.contact_id=co\.id/);
+  assert.match(countsRoute,/co\.entity_type='group'[\s\S]*?countParams\.slice\(0,6\)/);
   assert.match(countsRoute,/groups:Number\(groupRow\.groups\?\?0\)/);
   const summaryRoute=server.slice(server.indexOf('app.get("/api/v1/conversations/:id/summary"'),server.indexOf('app.get("/api/v1/conversations/:id/group"'));
   assert.match(summaryRoute,/filter==="groups"&&row\.conversation_type==="group"/);
