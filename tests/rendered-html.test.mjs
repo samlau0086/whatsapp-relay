@@ -67,6 +67,7 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(css, /group-member-list/);
   assert.match(css, /\.contact-preview-body/);
   assert.match(css, /\.contact-preview-actions/);
+  assert.match(css, /\.login-dialog\.contact-preview-dialog\{width:clamp\(760px,56vw,1600px\)!important/);
   assert.match(component, /MaterialLibrarySendDialog/);
   assert.match(component, /打开素材库/);
   const materialSendDialog = await readFile(new URL("../app/material-library-send-dialog.tsx", import.meta.url), "utf8");
