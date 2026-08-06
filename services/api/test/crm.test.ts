@@ -93,6 +93,22 @@ test("structured contact names and one default shipping address are migrated",as
   assert.match(inbox,/next\.find\(item=>item\.isDefault\)/);
 });
 
+test("contact business and location fields are migrated, searchable, and exposed",async()=>{
+  const [migration,migrator,server,inbox]=await Promise.all([
+    readFile(new URL("../../../infra/postgres/migrations/061_contact_business_location.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+  ]);
+  for(const column of ["company_name","job_title","country","province","city"])assert.match(migration,new RegExp(`ADD COLUMN IF NOT EXISTS ${column} text`));
+  assert.match(migrator,/061_contact_business_location\.sql/);
+  assert.match(server,/companyName:String\(row\.company_name/);
+  assert.match(server,/co\.company_name ILIKE/);
+  assert.match(server,/co\.city ILIKE/);
+  assert.match(inbox,/<label>公司名<input value=\{companyName\}/);
+  assert.match(inbox,/<dt>城市<\/dt><dd>\{profile\.city/);
+});
+
 test("contact aliases stay independent from synchronized WhatsApp names",async()=>{
   const [server,hub,migration,migrator]=await Promise.all([
     readFile(new URL("../src/server.ts",import.meta.url),"utf8"),

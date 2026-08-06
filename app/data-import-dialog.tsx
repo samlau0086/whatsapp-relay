@@ -13,8 +13,8 @@ const CONFIG={
   contacts:{
     title:"CSV 批量导入联系人",
     description:"按 WhatsApp 账号和号码新增或更新联系人。重复号码会更新资料，不会重复创建。",
-    headers:["account","phone","first_name","middle_name","last_name","alias","email","note"],
-    example:[["销售主账号","+8613800138000","Alice","","Smith","Alice","alice@example.com","重点客户"]],
+    headers:["account","phone","first_name","middle_name","last_name","alias","company_name","job_title","country","province","city","email","note"],
+    example:[["销售主账号","+8613800138000","Alice","","Smith","Alice","Acme Inc.","采购经理","中国","广东省","深圳市","alice@example.com","重点客户"]],
   },
   orders:{
     title:"CSV 批量导入订单",
@@ -85,9 +85,9 @@ export function DataImportDialog({kind,accounts,request,onToken,onClose,onImport
     onToken(search.token);if(!search.response.ok)throw new Error(`第 ${row.line} 行联系人查询失败`);
     const found=(await search.response.json() as {data:Array<Record<string,unknown>>}).data.find(item=>normalizedPhone(String(item.phone??item.phone_e164??""))===phone);
     let id=found?String(found.id):"";
-    if(!id){const created=await request("/api/v1/contacts",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId:account.id,phone,firstName:values.first_name,middleName:values.middle_name,lastName:values.last_name,name:values.alias||undefined})});onToken(created.token);const body=await created.response.json().catch(()=>({})) as Record<string,unknown>;if(!created.response.ok)throw new Error(`第 ${row.line} 行：${String(body.message??body.error??"创建失败")}`);id=String(body.id);}
+    if(!id){const created=await request("/api/v1/contacts",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId:account.id,phone,firstName:values.first_name,middleName:values.middle_name,lastName:values.last_name,name:values.alias||undefined,companyName:values.company_name,jobTitle:values.job_title,country:values.country,province:values.province,city:values.city})});onToken(created.token);const body=await created.response.json().catch(()=>({})) as Record<string,unknown>;if(!created.response.ok)throw new Error(`第 ${row.line} 行：${String(body.message??body.error??"创建失败")}`);id=String(body.id);}
     const existing=found??{},existingEmails=Array.isArray(existing.emails)?existing.emails:[],existingMethods=Array.isArray(existing.methods)?existing.methods:[],existingAddresses=Array.isArray(existing.addresses)?existing.addresses:[];
-    const saved=await request(`/api/v1/contacts/${id}`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({alias:values.alias||existing.alias||"",firstName:values.first_name||existing.firstName||existing.first_name||"",middleName:values.middle_name||existing.middleName||existing.middle_name||"",lastName:values.last_name||existing.lastName||existing.last_name||"",note:values.note||existing.note||"",emails:values.email?[{label:"主要邮箱",email:values.email,isPrimary:true}]:existingEmails,methods:existingMethods,addresses:existingAddresses})});onToken(saved.token);if(!saved.response.ok){const body=await saved.response.json().catch(()=>({})) as Record<string,unknown>;throw new Error(`第 ${row.line} 行：${String(body.message??body.error??"更新失败")}`);}
+    const saved=await request(`/api/v1/contacts/${id}`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({alias:values.alias||existing.alias||"",firstName:values.first_name||existing.firstName||existing.first_name||"",middleName:values.middle_name||existing.middleName||existing.middle_name||"",lastName:values.last_name||existing.lastName||existing.last_name||"",companyName:values.company_name||existing.companyName||existing.company_name||"",jobTitle:values.job_title||existing.jobTitle||existing.job_title||"",country:values.country||existing.country||"",province:values.province||existing.province||"",city:values.city||existing.city||"",note:values.note||existing.note||"",emails:values.email?[{label:"主要邮箱",email:values.email,isPrimary:true}]:existingEmails,methods:existingMethods,addresses:existingAddresses})});onToken(saved.token);if(!saved.response.ok){const body=await saved.response.json().catch(()=>({})) as Record<string,unknown>;throw new Error(`第 ${row.line} 行：${String(body.message??body.error??"更新失败")}`);}
   }
   async function resolveConversation(row:PreviewRow){
     const values=row.values;if(values.conversation_id)return values.conversation_id;
