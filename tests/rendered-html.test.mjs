@@ -55,6 +55,9 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /MediaDialog/);
   assert.match(component, /GroupDetailsPanel/);
   assert.match(component, /ContactProfilePreviewDialog/);
+  assert.match(component, /联系人资料已更新/);
+  assert.match(component, /编辑资料/);
+  assert.match(component, /收货地址/);
   assert.match(component, /group\/direct-conversation/);
   assert.match(component, /添加到联系人/);
   assert.match(component, /发起私聊/);
@@ -62,6 +65,8 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /conversationType!=="group"&&<AgentConversationBar/);
   assert.match(conversationRow, /groupParticipantCount/);
   assert.match(css, /group-member-list/);
+  assert.match(css, /\.contact-preview-body/);
+  assert.match(css, /\.contact-preview-actions/);
   assert.match(component, /MaterialLibrarySendDialog/);
   assert.match(component, /打开素材库/);
   const materialSendDialog = await readFile(new URL("../app/material-library-send-dialog.tsx", import.meta.url), "utf8");
