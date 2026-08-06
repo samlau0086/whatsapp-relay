@@ -240,7 +240,7 @@ type EmailProviderId="smtp"|"resend";
 type EmailProviderConfig={provider:EmailProviderId;enabled:boolean;configured:boolean;fromName:string;fromEmail:string;replyTo:string;host:string;port:number;tls:"tls"|"starttls";username:string;secret:string;updatedAt:string|null};
 type TranslationPreference={enabled:boolean;agentLanguage:string;customerLanguage:string;updatedAt:string|null};
 type ConversationContextState={conversation:Conversation;x:number;y:number;section:"root"|"stage"|"tags"};
-type ConversationCounts={all:number;mine:number;unassigned:number;favorite:number;closed:number;archived:number;reminders:number};
+type ConversationCounts={all:number;groups:number;mine:number;unassigned:number;favorite:number;closed:number;archived:number;reminders:number};
 type CurrencyItem={code:string;name:string;rate:number};
 type CurrencyConfig={baseCurrency:string;currencies:CurrencyItem[];rateSource?:string|null;rateDate?:string|null;rateUpdatedAt?:string|null};
 type MessageTranslation={status:"idle"|"loading"|"translated"|"failed";text?:string;sourceText?:string;sourceLanguage?:string;targetLanguage?:string;message?:string};
@@ -248,9 +248,10 @@ type KnowledgeBaseItem={id:string;name:string;description:string;document_count?
 type AgentDraft={id:string;text_content:string;reply_zh:string|null;reason:string;citations:string[];created_at:string};
 type ReplySuggestion={conversationId:string;reply:string;replyZh:string;analysis:string;confidence:number;citations:string[];sources:Array<{id:string;source:string}>;customerName:string;contextUsed:string[]};
 const DEFAULT_TRANSLATION_PREFERENCE:TranslationPreference={enabled:false,agentLanguage:"zh-CN",customerLanguage:"en",updatedAt:null};
-const EMPTY_CONVERSATION_COUNTS:ConversationCounts={all:0,mine:0,unassigned:0,favorite:0,closed:0,archived:0,reminders:0};
+const EMPTY_CONVERSATION_COUNTS:ConversationCounts={all:0,groups:0,mine:0,unassigned:0,favorite:0,closed:0,archived:0,reminders:0};
 
 function conversationFilterKey(label:string):ConversationListFilter{
+  if(label==="群会话")return"groups";
   if(label==="分配给我")return"mine";
   if(label==="未分配")return"unassigned";
   if(label==="收藏")return"favorite";
@@ -1461,6 +1462,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
               <p className="section-label">收件箱</p>
               {[
                 { label: "全部会话", icon: Inbox, count: counts.all },
+                { label: "群会话", icon: Users, count: counts.groups },
                 { label: "分配给我", icon: Users, count: counts.mine },
                 { label: "未分配", icon: UserPlus, count: counts.unassigned },
                 { label: "我的提醒", icon: Bell, count: counts.reminders },

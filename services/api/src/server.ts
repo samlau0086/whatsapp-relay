@@ -322,9 +322,9 @@ app.get("/api/v1/accounts", { preHandler:authenticate }, async (request) => {
   return { data:result.rows };
 });
 
-type ConversationFilter="all"|"mine"|"unassigned"|"favorite"|"closed"|"archived"|"reminders";
+type ConversationFilter="all"|"groups"|"mine"|"unassigned"|"favorite"|"closed"|"archived"|"reminders";
 type ConversationQuery={accountId?:string;status?:string;q?:string;tagId?:string;customerStage?:string;latestOrderStatus?:string;filter?:string;limit?:string;before?:string;cursor?:string;lastMessageFrom?:string;lastMessageBefore?:string;unreplied?:string};
-const CONVERSATION_FILTERS=new Set<ConversationFilter>(["all","mine","unassigned","favorite","closed","archived","reminders"]);
+const CONVERSATION_FILTERS=new Set<ConversationFilter>(["all","groups","mine","unassigned","favorite","closed","archived","reminders"]);
 const CONVERSATION_CUSTOMER_STAGES=new Set(["new","considering","qualified","won","lost"]);
 const CONVERSATION_ORDER_STATUSES=new Set(["none","any","quotation","pending_confirmation","pending_payment","paid","processing","shipped","completed","cancelled"]);
 
@@ -373,7 +373,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
     WHERE (COALESCE(search_contact.alias,'') || ' ' || COALESCE(search_contact.display_name,'') || ' ' || COALESCE(search_contact.phone_e164,'') || ' ' || search_contact.provider_user_id) ILIKE '%'||$4||'%'
   ),`:"";
   const candidateSource=keyword?"search_conversations c":"conversations c";
-  const candidateFilter=filter==="all"?"AND c.status<>'archived'":filter==="mine"?"AND c.assigned_user_id=$9::uuid":filter==="unassigned"?"AND c.assigned_user_id IS NULL":filter==="favorite"?"AND c.favorite":filter==="closed"?"AND c.status='closed'":filter==="archived"?"AND c.status='archived'":"";
+  const candidateFilter=filter==="all"?"AND c.status<>'archived'":filter==="groups"?"AND c.status<>'archived' AND EXISTS(SELECT 1 FROM contacts group_contact WHERE group_contact.id=c.contact_id AND group_contact.entity_type='group')":filter==="mine"?"AND c.assigned_user_id=$9::uuid":filter==="unassigned"?"AND c.assigned_user_id IS NULL":filter==="favorite"?"AND c.favorite":filter==="closed"?"AND c.status='closed'":filter==="archived"?"AND c.status='archived'":"";
   const latestOrderJoin=query.latestOrderStatus?"LEFT JOIN LATERAL (SELECT business_status FROM orders WHERE conversation_id=c.id AND deleted_at IS NULL ORDER BY created_at DESC,id DESC LIMIT 1) latest_order ON true":"";
   const latestOrderFilter=query.latestOrderStatus==="none"?"AND latest_order.business_status IS NULL":query.latestOrderStatus==="any"?"AND latest_order.business_status IS NOT NULL":query.latestOrderStatus?"AND latest_order.business_status=$16::text":"";
   const candidateCursor=!cursor?"":reminderMode?"AND (reminder_task.due_at>$11 OR (reminder_task.due_at=$11 AND c.id<$12::uuid))":`AND (${latestSort}<$11 OR (${latestSort}=$11 AND c.id<$12::uuid))`;
@@ -433,10 +433,10 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
       AND ($2::uuid[] IS NULL OR task.account_id=ANY($2))
     ORDER BY task.due_at,task.id LIMIT 20`,[request.principal.id,accountIds]):Promise.resolve({rows:[]});
   const [result,reminderResult,dueReminderResult]=await Promise.all([
-    pool.query(`SELECT COUNT(*) FILTER(WHERE c.status<>'archived')::int all_count,COUNT(*) FILTER(WHERE c.assigned_user_id=$7::uuid)::int mine,
+    pool.query(`SELECT COUNT(*) FILTER(WHERE c.status<>'archived')::int all_count,COUNT(*) FILTER(WHERE c.status<>'archived' AND co.entity_type='group')::int groups,COUNT(*) FILTER(WHERE c.assigned_user_id=$7::uuid)::int mine,
       COUNT(*) FILTER(WHERE c.assigned_user_id IS NULL)::int unassigned,COUNT(*) FILTER(WHERE c.favorite)::int favorite,
       COUNT(*) FILTER(WHERE c.status='closed')::int closed,COUNT(*) FILTER(WHERE c.status='archived')::int archived
-    FROM conversations c JOIN channel_accounts a ON a.id=c.account_id
+    FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN channel_accounts a ON a.id=c.account_id
     LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
@@ -466,7 +466,7 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
     dueReminderPromise
   ]);
   const row=result.rows[0]??{},reminderRow=reminderResult.rows[0]??{},dueReminders=dueReminderResult.rows;
-  return{all:Number(row.all_count??0),mine:Number(row.mine??0),unassigned:Number(row.unassigned??0),favorite:Number(row.favorite??0),closed:Number(row.closed??0),archived:Number(row.archived??0),reminders:Number(reminderRow.reminders??0),dueReminders};
+  return{all:Number(row.all_count??0),groups:Number(row.groups??0),mine:Number(row.mine??0),unassigned:Number(row.unassigned??0),favorite:Number(row.favorite??0),closed:Number(row.closed??0),archived:Number(row.archived??0),reminders:Number(reminderRow.reminders??0),dueReminders};
 });
 
 app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(request,reply)=>{
@@ -509,7 +509,7 @@ app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(requ
     &&(!keyword||[row.display_name,row.phone_e164,row.last_message].some(value=>String(value??"").toLocaleLowerCase().includes(keyword)))
     &&(legacyBefore===null||lastAt!==null&&lastAt<legacyBefore)&&(from===null||lastAt!==null&&lastAt>=from)&&(before===null||lastAt!==null&&lastAt<before)
     &&(query.unreplied!=="true"||row.last_message_direction==="in")
-    &&(!filter||(filter==="all"&&row.status!=="archived")||(filter==="mine"&&row.assigned_user_id===principalUserId)||(filter==="unassigned"&&!row.assigned_user_id)||(filter==="favorite"&&row.favorite)||(filter==="closed"&&row.status==="closed")||(filter==="archived"&&row.status==="archived")||(filter==="reminders"&&row.remind_at));
+    &&(!filter||(filter==="all"&&row.status!=="archived")||(filter==="groups"&&row.conversation_type==="group"&&row.status!=="archived")||(filter==="mine"&&row.assigned_user_id===principalUserId)||(filter==="unassigned"&&!row.assigned_user_id)||(filter==="favorite"&&row.favorite)||(filter==="closed"&&row.status==="closed")||(filter==="archived"&&row.status==="archived")||(filter==="reminders"&&row.remind_at));
   return{data:row,matches:Boolean(matches)};
 });
 

@@ -51,6 +51,7 @@ test("conversation list and counts paths carry server-side filters without leaki
   const summary=conversationSummaryPath("conversation-id","today",now,{filter:"mine",accountId:"account-id",q:" Alice ",tagId:"tag-id",customerStage:"qualified",latestOrderStatus:"any"});
   assert.match(summary,/\/api\/v1\/conversations\/conversation-id\/summary\?/);
   assert.match(summary,/filter=mine/);assert.match(summary,/tagId=tag-id/);assert.match(summary,/customerStage=qualified/);assert.match(summary,/latestOrderStatus=any/);assert.doesNotMatch(summary,/[?&]limit=/);
+  assert.match(conversationListPath("all",now,{filter:"groups"}),/filter=groups/);
 });
 
 test("conversation API applies a closed-open last-message range",async()=>{
@@ -90,6 +91,8 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.match(conversationRoute,/task\.status NOT IN \('completed','cancelled','failed'\)/);
   assert.match(conversationRoute,/task\.due_at<now\(\)\+interval '3 days'/);
   assert.match(conversationRoute,/task\.conversation_id=c\.id OR \(task\.conversation_id IS NULL AND task\.contact_id=c\.contact_id\)/);
+  assert.match(conversationRoute,/filter==="groups"/);
+  assert.match(conversationRoute,/group_contact\.entity_type='group'/);
   assert.doesNotMatch(conversationRoute,/\$10::text IS NULL OR/);
   assert.match(conversationRoute,/parameter_types AS NOT MATERIALIZED/);
   assert.match(conversationRoute,/\$4::text keyword_value,\$9::uuid principal_user_id,\$10::text filter_value,\$11::timestamptz cursor_at,\$12::uuid cursor_id/);
@@ -103,6 +106,10 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.match(countsRoute,/\) reminder_conversations/);
   assert.doesNotMatch(countsRoute,/LEFT JOIN LATERAL \(\s*SELECT task\.due_at/);
   assert.doesNotMatch(countsRoute,/WITH base AS MATERIALIZED/);
+  assert.match(countsRoute,/co\.entity_type='group'/);
+  assert.match(countsRoute,/groups:Number\(row\.groups\?\?0\)/);
+  const summaryRoute=server.slice(server.indexOf('app.get("/api/v1/conversations/:id/summary"'),server.indexOf('app.get("/api/v1/conversations/:id/group"'));
+  assert.match(summaryRoute,/filter==="groups"&&row\.conversation_type==="group"/);
 });
 
 test("performance reports retain representative HTTP failure details",async()=>{
@@ -162,6 +169,7 @@ test("inbox uses debounced search, cursor loading, realtime reconciliation, and 
   assert.match(ui,/tagId:selectedTag/);
   assert.match(ui,/customerStage:selectedCustomerStage\|\|undefined/);
   assert.match(ui,/latestOrderStatus:selectedLatestOrderStatus\|\|undefined/);
+  assert.match(ui,/{ label: "群会话", icon: Users, count: counts\.groups }/);
   assert.match(ui,/onTagOpen=\{\(\)=>void loadConversationTags\(apiToken\)\}/);
   assert.match(ui,/onTagCatalogChange=\{syncConversationTags\}/);
   assert.match(panel,/aria-label="搜索并筛选会话标签"/);
