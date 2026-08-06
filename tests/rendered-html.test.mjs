@@ -54,6 +54,10 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /EmojiPicker/);
   assert.match(component, /MediaDialog/);
   assert.match(component, /GroupDetailsPanel/);
+  assert.match(component, /ContactProfilePreviewDialog/);
+  assert.match(component, /group\/direct-conversation/);
+  assert.match(component, /添加到联系人/);
+  assert.match(component, /发起私聊/);
   assert.match(component, /group-message-sender/);
   assert.match(component, /conversationType!=="group"&&<AgentConversationBar/);
   assert.match(conversationRow, /groupParticipantCount/);

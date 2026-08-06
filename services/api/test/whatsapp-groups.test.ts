@@ -29,6 +29,10 @@ test("group API exposes members and blocks unsupported business automation",asyn
   const server=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
   const tasks=await readFile(new URL("../src/task-routes.ts",import.meta.url),"utf8");
   assert.match(server,/\/api\/v1\/conversations\/:id\/group/);
+  assert.match(server,/\/api\/v1\/conversations\/:id\/group\/direct-conversation/);
+  assert.match(server,/contact\.id contact_id/);
+  assert.match(server,/group_participant\.open_direct/);
+  assert.match(server,/participant_phone_unavailable/);
   assert.match(server,/group_chat_v1/);
   assert.match(server,/quotedParticipantJid/);
   assert.match(server,/group_feature_unavailable/);

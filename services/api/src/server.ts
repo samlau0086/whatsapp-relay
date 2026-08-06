@@ -518,8 +518,39 @@ app.get("/api/v1/conversations/:id/group",{preHandler:authenticate},async(reques
   const group=await pool.query(`SELECT g.id,g.account_id,g.group_jid,g.subject,g.description,g.owner_jid,g.participant_count,g.is_announcement,g.is_community,g.active,g.updated_at
     FROM conversations c JOIN whatsapp_groups g ON g.contact_id=c.contact_id WHERE c.id=$1`,[id]);
   if(!group.rowCount||!canAccessAccount(request.principal,String(group.rows[0].account_id)))return reply.code(404).send({error:"not_found"});
-  const participants=await pool.query("SELECT participant_jid,phone_jid,lid_jid,display_name,role FROM whatsapp_group_participants WHERE group_id=$1 ORDER BY CASE role WHEN 'superadmin' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,lower(COALESCE(display_name,phone_jid,participant_jid)),participant_jid",[group.rows[0].id]);
+  const participants=await pool.query(`SELECT participant.participant_jid,participant.phone_jid,participant.lid_jid,participant.display_name,participant.role,
+    contact.id contact_id,COALESCE(NULLIF(contact.alias,''),NULLIF(concat_ws(' ',contact.first_name,contact.middle_name,contact.last_name),''),contact.display_name,contact.phone_e164) contact_name,
+    contact.phone_e164 contact_phone,contact.avatar_url contact_avatar_url,direct.id direct_conversation_id
+    FROM whatsapp_group_participants participant JOIN whatsapp_groups joined_group ON joined_group.id=participant.group_id
+    LEFT JOIN LATERAL (SELECT person.* FROM contacts person WHERE person.account_id=joined_group.account_id AND person.entity_type='person'
+      AND (person.provider_user_id=COALESCE(participant.phone_jid,CASE WHEN participant.participant_jid LIKE '%@s.whatsapp.net' THEN participant.participant_jid END)
+        OR person.phone_e164='+'||split_part(COALESCE(participant.phone_jid,CASE WHEN participant.participant_jid LIKE '%@s.whatsapp.net' THEN participant.participant_jid END),'@',1))
+      ORDER BY CASE WHEN person.provider_user_id=participant.phone_jid THEN 0 ELSE 1 END,person.updated_at DESC LIMIT 1) contact ON true
+    LEFT JOIN conversations direct ON direct.account_id=joined_group.account_id AND direct.contact_id=contact.id
+    WHERE participant.group_id=$1
+    ORDER BY CASE participant.role WHEN 'superadmin' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,lower(COALESCE(NULLIF(contact.alias,''),NULLIF(concat_ws(' ',contact.first_name,contact.middle_name,contact.last_name),''),contact.display_name,participant.display_name,participant.phone_jid,participant.participant_jid)),participant.participant_jid`,[group.rows[0].id]);
   return{...group.rows[0],participants:participants.rows};
+});
+
+app.post("/api/v1/conversations/:id/group/direct-conversation",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const {id}=request.params as {id:string},participantJid=String((request.body as {participantJid?:unknown}|null)?.participantJid??"").trim().toLowerCase();
+  if(!/^\d+(?::\d+)?@(s\.whatsapp\.net|lid)$/.test(participantJid))return reply.code(400).send({error:"invalid_participant"});
+  const member=await pool.query(`SELECT joined_group.account_id,participant.participant_jid,participant.phone_jid,participant.display_name
+    FROM conversations group_conversation JOIN whatsapp_groups joined_group ON joined_group.contact_id=group_conversation.contact_id
+    JOIN whatsapp_group_participants participant ON participant.group_id=joined_group.id
+    WHERE group_conversation.id=$1 AND participant.participant_jid=$2`,[id,participantJid]);
+  if(!member.rowCount||!canAccessAccount(request.principal,member.rows[0].account_id))return reply.code(404).send({error:"not_found"});
+  const phoneJid=String(member.rows[0].phone_jid??(participantJid.endsWith("@s.whatsapp.net")?participantJid:""));
+  if(!/^\d{7,15}@s\.whatsapp\.net$/.test(phoneJid))return reply.code(409).send({error:"participant_phone_unavailable",message:"该成员尚无可用的 WhatsApp 手机号"});
+  const phoneUser=phoneJid.slice(0,phoneJid.indexOf("@")),phone=`+${phoneUser}`,displayName=String(member.rows[0].display_name??"").trim().slice(0,240)||phone;
+  const created=await transaction(async client=>{
+    const contact=await client.query("INSERT INTO contacts(account_id,provider_user_id,phone_e164,display_name,entity_type,last_seen_at) VALUES($1,$2,$3,$4,'person',now()) ON CONFLICT(account_id,provider_user_id) DO UPDATE SET phone_e164=COALESCE(contacts.phone_e164,EXCLUDED.phone_e164),display_name=COALESCE(NULLIF(contacts.display_name,''),EXCLUDED.display_name),last_seen_at=now(),updated_at=now() RETURNING id",[member.rows[0].account_id,phoneJid,phone,displayName]);
+    const conversation=await client.query("INSERT INTO conversations(account_id,contact_id,status) VALUES($1,$2,'open') ON CONFLICT(account_id,contact_id) DO UPDATE SET status='open',closed_at=NULL RETURNING id",[member.rows[0].account_id,contact.rows[0].id]);
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'group_participant.open_direct','conversation',$2,$3)",[request.principal!.id,conversation.rows[0].id,JSON.stringify({groupConversationId:id,participantJid,phoneJid,contactId:contact.rows[0].id})]);
+    return{conversationId:String(conversation.rows[0].id),contactId:String(contact.rows[0].id)};
+  });
+  return reply.code(201).send(created);
 });
 
 app.patch("/api/v1/conversations/:id", { preHandler:authenticate }, async (request,reply) => {
