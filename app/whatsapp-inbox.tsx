@@ -5,7 +5,7 @@ import {
   Inbox, Info, Languages, Mail, MessageCircle, Mic, MonitorSmartphone, Paperclip, Phone, Plus,
   Pencil, RefreshCw, Search, Send, Settings, ShieldCheck, ShoppingBag, Smile, Sparkles, Star, Trash2, UploadCloud, UserPlus,
   Users, Wifi, WifiOff, X, ClipboardList, ExternalLink, Bot, Brain, BookOpen, MapPin, Copy, CreditCard, LayoutGrid, List, Eye, EyeOff, ReceiptText, Reply, Zap, Tag,
-  Facebook, Instagram, Linkedin, Building2,
+  Facebook, Instagram, Linkedin, Building2, ArrowRightLeft,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -316,6 +316,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [loading,setLoading]=useState(true);
   const [loadError,setLoadError]=useState("");
   const [newConversationOpen,setNewConversationOpen]=useState(false);
+  const [transferConversation,setTransferConversation]=useState<Conversation|null>(null);
   const [mediaOpen,setMediaOpen]=useState(false);
   const [composerImageBusy,setComposerImageBusy]=useState(false);
   const [composerImageDragging,setComposerImageDragging]=useState(false);
@@ -1531,7 +1532,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                           className={`status-dot ${active.accountStatus === "online" ? "online" : ""}`}
                         />
                         <span className={`channel-badge ${active.platform}`}>{active.platform==="messenger"?<Facebook size={10}/>:active.conversationType==="group"?<Users size={10}/>:<MessageCircle size={10}/>} {active.conversationType==="group"?"WhatsApp 群聊":active.platform==="messenger"?"Facebook":"WhatsApp"}</span>{" · "}
-                        {active.account}{active.conversationType==="group"?` · ${active.groupParticipantCount} 位成员`:""} ·{" "}
+                        {active.conversationType==="group"?active.account:<button type="button" className="conversation-account-transfer" onClick={()=>setTransferConversation(active)} title="转移到其他账号">{active.account}<ArrowRightLeft size={11}/></button>}{active.conversationType==="group"?` · ${active.groupParticipantCount} 位成员`:""} ·{" "}
                         {active.platform==="messenger"?"Page":active.transport === "cloud" ? "Cloud API" : "Web"} ·{" "}
                         {statusText(active.accountStatus)}
                       </small>
@@ -2249,6 +2250,23 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           }}
         />
       )}
+      {transferConversation && (
+        <ConversationTransferDialog
+          conversation={transferConversation}
+          accounts={accounts}
+          token={apiToken}
+          onToken={setApiToken}
+          onClose={()=>setTransferConversation(null)}
+          onTransferred={async(account,accessToken)=>{
+            setTransferConversation(null);
+            setConversations(current=>current.map(item=>item.id===transferConversation.id?{...item,accountId:account.id,account:account.name,accountStatus:account.status,transport:account.transport}:item));
+            if(selectedAccount)setSelectedAccount(account.id);
+            else await loadWorkspace(accessToken,true);
+            setActiveId(transferConversation.id);
+            setToast(`会话已转移到“${account.name}”，聊天记录和关联信息保持不变`);
+          }}
+        />
+      )}
       {replySuggestion&&active?.id===replySuggestion.conversationId&&(
         <ReplySuggestionDialog
           suggestion={replySuggestion}
@@ -2449,6 +2467,24 @@ function ConversationNoteDialog({conversation,token,onToken,onClose,onSaved}:{co
   const [body,setBody]=useState(""),[busy,setBusy]=useState(false),[error,setError]=useState("");
   async function save(){if(!body.trim()||busy)return;setBusy(true);setError("");const result=await authorizedFetch(`/api/v1/conversations/${conversation.id}/notes`,token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({body:body.trim()})});if(result.token!==token)onToken(result.token);if(!result.response.ok){setError(`备注保存失败（HTTP ${result.response.status}）`);setBusy(false);return;}await onSaved();}
   return <div className="modal-backdrop context-action-backdrop" role="presentation"><section className="login-dialog context-action-dialog" role="dialog" aria-modal="true" aria-labelledby="context-note-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><FileText size={19}/></span><h2 id="context-note-title">给 {conversation.name} 添加备注</h2><p>备注将对团队成员共享，并显示在联系人详情中。</p><label>备注内容<textarea autoFocus value={body} onChange={event=>setBody(event.target.value)} maxLength={5000} placeholder="记录客户需求、跟进情况或注意事项"/><small>{body.length}/5000</small></label>{error&&<span className="login-error">{error}</span>}<footer><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void save()} disabled={busy||!body.trim()}>{busy?"正在保存…":"添加备注"}</button></footer></section></div>;
+}
+
+function ConversationTransferDialog({conversation,accounts,token,onToken,onClose,onTransferred}:{conversation:Conversation;accounts:Account[];token:string;onToken:(token:string)=>void;onClose:()=>void;onTransferred:(account:Account,token:string)=>Promise<void>}){
+  const eligible=accounts.filter(account=>account.id!==conversation.accountId&&account.platform===conversation.platform);
+  const [accountId,setAccountId]=useState(eligible[0]?.id??""),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  const target=eligible.find(account=>account.id===accountId);
+  async function transfer(){
+    if(!target||busy)return;
+    const confirmed=await confirmAction(`将“${conversation.name}”从“${conversation.account}”转移到“${target.name}”？聊天记录、标签、备注、订单及其他会话关联信息都会保留。`,{title:"确认转移账号？",confirmLabel:"确认转移",tone:"warning"});
+    if(!confirmed)return;
+    setBusy(true);setError("");
+    const result=await authorizedFetch(`/api/v1/conversations/${conversation.id}/transfer`,token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId:target.id})});
+    if(result.token!==token)onToken(result.token);
+    const body=await result.response.json().catch(()=>({})) as {message?:string};
+    if(!result.response.ok){setError(body.message??`账号转移失败（HTTP ${result.response.status}）`);setBusy(false);return;}
+    await onTransferred(target,result.token);
+  }
+  return <div className="modal-backdrop context-action-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget&&!busy)onClose();}}><section className="login-dialog context-action-dialog conversation-transfer-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-transfer-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><ArrowRightLeft size={19}/></span><h2 id="conversation-transfer-title">转移会话账号</h2><p>为“{conversation.name}”选择新的发送账号。转移不会清除聊天记录或会话关联信息。</p>{eligible.length?<label>目标账号<select autoFocus value={accountId} onChange={event=>setAccountId(event.target.value)} disabled={busy}>{eligible.map(account=><option key={account.id} value={account.id}>{account.platform==="messenger"?"Facebook":"WhatsApp"} · {account.name} · {account.status==="online"?"在线":"离线"}</option>)}</select></label>:<div className="conversation-transfer-empty">没有其他可转移的同渠道账号</div>}{error&&<span className="login-error">{error}</span>}<footer><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void transfer()} disabled={busy||!target}>{busy?"正在转移…":"转移账号"}</button></footer></section></div>;
 }
 
 function ConversationQuickTaskDialog({conversation,token,assignedUserId,onToken,onClose,onSaved}:{conversation:Conversation;token:string;assignedUserId:string|null;onToken:(token:string)=>void;onClose:()=>void;onSaved:()=>void}){

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { apiKeyCreateSchema, contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, currencySettingsSchema, customerStageSchema, materialSendSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, orderUpdateSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productSkuQuerySchema, productUpdateSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
+import { apiKeyCreateSchema, contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, conversationTransferSchema, currencySettingsSchema, customerStageSchema, materialSendSchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderSchema, orderSendSchema, orderUpdateSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productSkuQuerySchema, productUpdateSchema, reminderSchema, tagCreateSchema, textToSpeechSchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "../src/schemas.js";
 
 const accountId="10000000-0000-4000-8000-000000000009";
 
@@ -27,6 +27,12 @@ test("account automation accepts only supported default conversation modes",()=>
   for(const mode of ["cautious","full","human_paused"])assert.equal(conversationAgentModeSchema.safeParse(mode).success,true);
   assert.equal(conversationAgentModeSchema.safeParse("active").success,false);
   assert.equal(conversationAgentModeSchema.safeParse("").success,false);
+});
+
+test("conversation transfer requires a target account UUID",()=>{
+  assert.equal(conversationTransferSchema.safeParse({accountId}).success,true);
+  assert.equal(conversationTransferSchema.safeParse({accountId:"not-an-account"}).success,false);
+  assert.equal(conversationTransferSchema.safeParse({}).success,false);
 });
 
 test("contact input normalizes WhatsApp numbers for create and edit",()=>{

@@ -9,7 +9,7 @@ import { ifNoneMatchMatches, IMMUTABLE_PRIVATE_CACHE_CONTROL, strongEtag } from 
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount, hasScope, type Principal } from "./auth.js";
-import { apiKeyCreateSchema, contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, materialSendBatchStatusSchema, materialSendSchema, messageRetrySchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderBusinessStatusUpdateSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderUpdateSchema, paymentSendSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productLabelCatalogDeleteSchema, productLabelCatalogUpdateSchema, productNameTranslationPreviewSchema, productSkuQuerySchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
+import { apiKeyCreateSchema, contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, conversationTransferSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, materialSendBatchStatusSchema, materialSendSchema, messageRetrySchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderBusinessStatusUpdateSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderUpdateSchema, paymentSendSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productLabelCatalogDeleteSchema, productLabelCatalogUpdateSchema, productNameTranslationPreviewSchema, productSkuQuerySchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
 import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
 import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline, clearAgentAttention } from "./agent-hub.js";
 import { generateSpeech, ttsProviderFailureMessage, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
@@ -109,6 +109,7 @@ app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"Rel
   "/api/v1/events/ticket":{post:{summary:"签发 30 秒有效的浏览器事件 WebSocket 票据"}},
   "/api/v1/events/ws":{get:{summary:"接收账号权限范围内的会话增量事件"}},
   "/api/v1/conversations/{id}":{patch:{summary:"认领、收藏、更新客户阶段、关闭或标记已读"},delete:{summary:"永久删除会话及其关联数据"}},
+  "/api/v1/conversations/{id}/transfer":{post:{summary:"将会话及联系人关联转移到另一个同渠道账号"}},
   "/api/v1/conversations/{id}/contact":{patch:{summary:"编辑联系人别名"}},
   "/api/v1/conversations/{id}/details":{get:{summary:"读取会话标签、备注、个人提醒与订单"}},
   "/api/v1/conversations/{id}/materials/send":{post:{summary:"跨素材库拼接或逐张发送所选图片"}},
@@ -576,6 +577,48 @@ app.patch("/api/v1/conversations/:id", { preHandler:authenticate }, async (reque
   if(["closed","archived"].includes(updated.rows[0].status)||["won","lost"].includes(updated.rows[0].customer_stage))await pool.query("UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error='conversation_no_longer_eligible' WHERE conversation_id=$1 AND state='pending' AND kind IN ('reply','followup')",[id]);
   await pool.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'conversation.update','conversation',$2,$3)",[request.principal.id,id,JSON.stringify(body)]);
   return updated.rows[0];
+});
+
+app.post("/api/v1/conversations/:id/transfer", {preHandler:authenticate}, async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const parsed=conversationTransferSchema.safeParse(request.body);
+  if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  const principal=request.principal,{id}=request.params as {id:string},targetAccountId=parsed.data.accountId;
+  const result=await transaction(async client=>{
+    const current=await client.query(`SELECT c.account_id,c.contact_id,co.provider_user_id,co.entity_type,a.platform,a.display_name account_name
+      FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN channel_accounts a ON a.id=c.account_id
+      WHERE c.id=$1 FOR UPDATE OF c,co`,[id]);
+    if(!current.rowCount||!canAccessAccount(principal,current.rows[0].account_id))return{status:"not_found" as const};
+    const source=current.rows[0];
+    if(source.account_id===targetAccountId)return{status:"same_account" as const};
+    if(source.entity_type==="group")return{status:"group_unsupported" as const};
+    const target=await client.query("SELECT id,display_name,platform FROM channel_accounts WHERE id=$1",[targetAccountId]);
+    if(!target.rowCount||!canAccessAccount(principal,targetAccountId))return{status:"target_forbidden" as const};
+    if(target.rows[0].platform!==source.platform)return{status:"platform_mismatch" as const};
+    const duplicate=await client.query("SELECT c.id FROM contacts co LEFT JOIN conversations c ON c.contact_id=co.id WHERE co.account_id=$1 AND co.provider_user_id=$2 LIMIT 1",[targetAccountId,source.provider_user_id]);
+    if(duplicate.rowCount)return{status:"contact_conflict" as const};
+    const pending=await client.query("SELECT 1 FROM outbound_commands oc JOIN messages m ON m.id=oc.message_id WHERE m.conversation_id=$1 AND oc.state IN ('pending','dispatched') LIMIT 1",[id]);
+    if(pending.rowCount)return{status:"outbound_pending" as const};
+    const ruleConflict=await client.query(`SELECT 1 FROM task_rules moving JOIN task_rules existing
+      ON existing.account_id=$2 AND existing.contact_id=moving.contact_id AND existing.source=moving.source AND existing.source_key=moving.source_key AND existing.id<>moving.id
+      WHERE moving.contact_id=$1 LIMIT 1`,[source.contact_id,targetAccountId]);
+    if(ruleConflict.rowCount)return{status:"task_rule_conflict" as const};
+    await client.query("UPDATE contacts SET account_id=$2,updated_at=now() WHERE id=$1",[source.contact_id,targetAccountId]);
+    await client.query("UPDATE conversations SET account_id=$2 WHERE id=$1",[id,targetAccountId]);
+    await client.query("UPDATE tasks SET account_id=$2,updated_at=now() WHERE conversation_id=$1 OR contact_id=$3",[id,targetAccountId,source.contact_id]);
+    await client.query("UPDATE task_rules SET account_id=$2,updated_at=now() WHERE contact_id=$1",[source.contact_id,targetAccountId]);
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'conversation.transfer','conversation',$2,$3)",[principal.id,id,JSON.stringify({fromAccountId:source.account_id,fromAccountName:source.account_name,toAccountId:targetAccountId,toAccountName:target.rows[0].display_name,contactId:source.contact_id})]);
+    return{status:"transferred" as const,accountId:targetAccountId,accountName:String(target.rows[0].display_name)};
+  });
+  if(result.status==="not_found")return reply.code(404).send({error:"not_found"});
+  if(result.status==="target_forbidden")return reply.code(403).send({error:"target_account_forbidden",message:"目标账号不存在或你没有访问权限"});
+  if(result.status==="same_account")return reply.code(400).send({error:"same_account",message:"会话已经属于该账号"});
+  if(result.status==="group_unsupported")return reply.code(409).send({error:"group_transfer_unsupported",message:"群会话不能转移账号"});
+  if(result.status==="platform_mismatch")return reply.code(409).send({error:"platform_mismatch",message:"会话只能转移到相同渠道类型的账号"});
+  if(result.status==="contact_conflict")return reply.code(409).send({error:"contact_conflict",message:"目标账号已存在该联系人，无法转移为重复会话"});
+  if(result.status==="outbound_pending")return reply.code(409).send({error:"outbound_pending",message:"该会话仍有待发送消息，请发送完成后再转移"});
+  if(result.status==="task_rule_conflict")return reply.code(409).send({error:"task_rule_conflict",message:"目标账号已存在该联系人的相同任务规则，请先处理冲突规则"});
+  return reply.send({id,...result});
 });
 
 app.delete("/api/v1/conversations/:id", { preHandler:authenticate }, async (request,reply) => {
