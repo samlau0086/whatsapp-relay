@@ -939,3 +939,34 @@ button { color:inherit; }
 .status-campaign-strip article>.status-campaign-actions{position:static;right:auto;bottom:auto;grid-column:1/-1;display:flex;gap:5px;padding-top:8px;margin-top:2px;border-top:1px solid #edf2ef}
 .status-campaign-actions button{width:auto!important;height:28px!important;border:1px solid #dce5e0!important;border-radius:6px!important;background:#fff!important;padding:0 8px!important;display:flex!important;align-items:center;gap:4px;font-size:11px}
 .status-campaign-actions button.danger{color:#ae4e45;border-color:#f0d2cd!important}
+
+/* Contact directory views */
+.contact-filters{grid-template-columns:minmax(280px,1fr) 220px auto}
+.contact-view-tools{display:flex;align-items:center;justify-content:flex-end;gap:10px}
+.contact-view-tools>span{color:#74827b;font-size:12px;white-space:nowrap}
+.contact-view-tools>div{display:flex;padding:2px;border:1px solid #dce5e0;border-radius:8px;background:#fff}
+.contact-view-tools button{width:32px;height:30px;border:0;border-radius:6px;background:transparent;color:#75857d;display:grid;place-items:center;cursor:pointer}
+.contact-view-tools button.active{background:#e8f6ee;color:#08764a}
+.contact-card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.contact-card{min-width:0;overflow:hidden;border:1px solid #dce5e0;border-radius:8px;background:#fff;box-shadow:0 1px 2px #173b2910}
+.contact-card>header{position:relative;min-height:132px;display:flex;align-items:flex-start;gap:14px;padding:25px 18px 18px 108px;background:#315f55;border-bottom:1px solid #dfe8e3}
+.contact-card>header>div{min-width:0}
+.contact-card>header>.contact-avatar{position:absolute;left:18px;bottom:-32px;border:4px solid #fff;box-shadow:0 2px 7px #173b2930}
+.contact-card h2{margin:5px 0 0;overflow:hidden;color:#fff;font-size:18px;line-height:1.25;text-overflow:ellipsis;white-space:nowrap}
+.contact-card header p{min-height:18px;margin:6px 0 0;overflow:hidden;color:#d9ebe3;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.contact-card-details{display:grid;gap:0;padding:42px 16px 10px}
+.contact-card-details p{min-width:0;min-height:48px;margin:0;display:grid;grid-template-columns:24px minmax(0,1fr);align-items:center;border-bottom:1px solid #edf2ef;color:#47705c}
+.contact-card-details p:last-child{border-bottom:0}
+.contact-card-details p>span{min-width:0;display:grid;gap:2px}
+.contact-card-details small{color:#849089;font-size:10px}
+.contact-card-details b{overflow:hidden;color:#31463c;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.contact-card>footer{min-height:54px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;border-top:1px solid #e5ece8;background:#fafcfb}
+.contact-card>footer>div{display:flex;gap:5px}
+.contact-card>footer button{height:34px;border:1px solid #d7e2dc;border-radius:7px;background:#fff;color:#315c49;display:flex;align-items:center;justify-content:center;gap:6px;padding:0 11px;cursor:pointer}
+.contact-card>footer>div button{width:34px;padding:0}
+.contact-card>footer button.danger{border-color:#efd2cf;color:#a64239}
+.contact-card>footer .contact-card-conversation{border-color:#153f2f;background:#153f2f;color:#fff;font-weight:650}
+.contact-card>footer .contact-card-conversation:disabled{border-color:#dce4e0;background:#edf1ef;color:#8b9791;cursor:not-allowed}
+.contact-pagination-nav{margin-top:18px}
+@media(max-width:850px){.contact-filters{grid-template-columns:1fr 1fr}.contact-filters>label{grid-column:1/-1}.contact-view-tools{justify-content:space-between;grid-column:1/-1}}
+@media(max-width:600px){.contact-filters{grid-template-columns:1fr}.contact-filters>label{grid-column:auto}.contact-view-tools{grid-column:auto}.contact-card-grid{grid-template-columns:1fr}.contact-card>header{min-height:116px;padding:18px 14px 14px 92px}.contact-card>header>.contact-avatar{left:14px;bottom:-28px}.contact-card .contact-avatar.large{width:64px;height:64px}.contact-card-details{padding-top:38px}.contact-card>footer{align-items:stretch}.contact-card>footer .contact-card-conversation{flex:1}.contact-pagination-nav .product-page-size{order:1}.contact-pagination-nav>button:first-of-type{order:2}.contact-pagination-nav>button:nth-of-type(2){order:3}.contact-pagination-nav .product-page-jump{order:5}}
