@@ -20,6 +20,7 @@ type ProductErrorBody = {
   };
 };
 type Tier = { minQuantity: number; unitAmount: number };
+type ProductVariant = { id?: string; attributes: Record<string, string>; sku: string; priceTiers: Tier[]; imageMediaId?: string | null };
 type Tag = { id: string; name: string; color: string };
 type Product = {
   id: string;
@@ -37,6 +38,7 @@ type Product = {
   imageName: string;
   priceTiers: Tier[];
   tags: Tag[];
+  variants?: ProductVariant[];
 };
 
 function uniqueCatalogTags(products: Product[]) {
@@ -218,6 +220,7 @@ export function ProductEditorDialog({
       product?.imageMediaId ?? null,
     ),
     [imageName, setImageName] = useState(product?.imageName ?? ""),
+    [variantJson, setVariantJson] = useState(() => JSON.stringify(product?.variants ?? [], null, 2)),
     [imagePickerOpen, setImagePickerOpen] = useState(false),
     [tags, setTags] = useState<Tag[]>(product?.tags ?? []),
     [tagName, setTagName] = useState(""),
@@ -385,6 +388,19 @@ export function ProductEditorDialog({
       setError("请填写名称、唯一 SKU，以及从数量 1 开始且门槛递增的阶梯单价");
       return;
     }
+    let variants: ProductVariant[] = [];
+    try {
+      const parsedVariants = JSON.parse(variantJson || "[]");
+      if (!Array.isArray(parsedVariants) || parsedVariants.length > 500) throw new Error("变体必须是最多 500 项的 JSON 数组");
+      variants = parsedVariants as ProductVariant[];
+      const seenSku = new Set<string>(), seenCombo = new Set<string>();
+      for (const variant of variants) {
+        if (!variant?.sku || !variant?.attributes || !Array.isArray(variant.priceTiers) || !variant.priceTiers.length) throw new Error("每个变体都需要 attributes、sku 和 priceTiers");
+        const combo = Object.entries(variant.attributes).sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => `${key}=${value}`).join("|");
+        if (seenSku.has(variant.sku.toLowerCase()) || seenCombo.has(combo)) throw new Error("变体 SKU 和规格组合必须唯一");
+        seenSku.add(variant.sku.toLowerCase()); seenCombo.add(combo);
+      }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "变体 JSON 无效"); return; }
     setBusy(true);
     setError("");
     try {
@@ -404,6 +420,7 @@ export function ProductEditorDialog({
           unitAmount: Number(tier.unitAmount),
         })),
         tags: tags.map((tag) => ({ name: tag.name.trim(), color: tag.color })),
+        variants,
       };
       const result = await request(
         product ? `/api/v1/products/${product.id}` : "/api/v1/products",
@@ -677,6 +694,10 @@ export function ProductEditorDialog({
               移除图片
             </button>
           )}
+          <section className="product-variant-editor">
+            <header><b>产品变体</b><small>每项包含规格组合、独立 SKU、阶梯价格和可选图片；不需要变体时保持为空。</small></header>
+            <textarea value={variantJson} onChange={(event) => setVariantJson(event.target.value)} rows={8} spellCheck={false} placeholder={'例如：[\n  {"attributes":{"颜色":"红色","尺寸":"L"},"sku":"TS-L-RED","priceTiers":[{"minQuantity":1,"unitAmount":29.9}],"imageMediaId":null}\n]'} />
+          </section>
           <div className="product-label-editor">
             <b>产品标签</b>
             {tags.map((tag, index) => (
