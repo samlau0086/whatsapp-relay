@@ -89,6 +89,17 @@ function SearchableCreatableField({
     setOpen(false);
     setActiveIndex(0);
   }
+  function generateVariantCombinations() {
+    const dimensions = variantDimensions.map((dimension) => ({ name: dimension.name.trim(), values: [...new Set(dimension.values.split(",").map((value) => value.trim()).filter(Boolean))] })).filter((dimension) => dimension.name && dimension.values.length);
+    const combinations = dimensions.reduce<Record<string, string>[]>((all, dimension) => all.flatMap((current) => dimension.values.map((value) => ({ ...current, [dimension.name]: value }))), [{}]);
+    const parentTiers = tiers.map((tier) => ({ id: crypto.randomUUID(), minQuantity: tier.minQuantity, unitAmount: tier.unitAmount }));
+    setVariantRows((current) => combinations.slice(0, 500).map((attributes) => {
+      const existing = current.find((row) => JSON.stringify(row.attributes) === JSON.stringify(attributes));
+      if (existing) return existing;
+      const suffix = Object.values(attributes).map((value) => value.trim().replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "")).filter(Boolean).join("-");
+      return { id: crypto.randomUUID(), attributes, sku: [sku.trim(), suffix].filter(Boolean).join("-"), priceTiers: parentTiers.map((tier) => ({ ...tier, id: crypto.randomUUID() })), imageMediaId: null, imageName: "" };
+    }));
+  }
   return (
     <label className="product-taxonomy-field">
       {label} · 可选
@@ -697,6 +708,7 @@ export function ProductEditorDialog({
             </button>
           )}
           <section className="product-variant-editor">
+            <button type="button" className="secondary-action" onClick={generateVariantCombinations}><Plus size={13} />按父 SKU 和阶梯价生成组合</button>
             <header><span><b>产品变体</b><small>添加规格和值后自动生成组合，每个组合可设置独立 SKU、价格和图片。</small></span><button type="button" onClick={() => setVariantDimensions((items) => [...items, { id: crypto.randomUUID(), name: "", values: "" }])}><Plus size={13} />添加规格</button></header>
             {variantDimensions.map((dimension, index) => <div className="product-variant-dimension" key={dimension.id}><input value={dimension.name} placeholder="规格名，如颜色" onChange={(event) => setVariantDimensions((items) => items.map((item) => item.id === dimension.id ? { ...item, name: event.target.value } : item))} /><input value={dimension.values} placeholder="规格值，用逗号分隔，如红色, 蓝色" onChange={(event) => setVariantDimensions((items) => items.map((item) => item.id === dimension.id ? { ...item, values: event.target.value } : item))} /><button type="button" aria-label="删除规格" onClick={() => setVariantDimensions((items) => items.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={13} /></button></div>)}
             <button type="button" className="secondary-action" onClick={() => { const dimensions = variantDimensions.map((dimension) => ({ name: dimension.name.trim(), values: [...new Set(dimension.values.split(",").map((value) => value.trim()).filter(Boolean))] })).filter((dimension) => dimension.name && dimension.values.length); const combinations = dimensions.reduce<Record<string, string>[]>((result, dimension) => result.flatMap((current) => dimension.values.map((value) => ({ ...current, [dimension.name]: value }))), [{}]); setVariantRows((current) => combinations.slice(0, 500).map((attributes) => { const old = current.find((row) => JSON.stringify(row.attributes) === JSON.stringify(attributes)); return old ?? { id: crypto.randomUUID(), attributes, sku: "", priceTiers: [{ id: crypto.randomUUID(), minQuantity: "1", unitAmount: "" }], imageMediaId: null, imageName: "" }; })); }}>生成组合</button>
