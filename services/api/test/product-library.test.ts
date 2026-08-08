@@ -310,6 +310,9 @@ test("products support internal tier pricing, supplier links, and private order-
   assert.match(migration,/to_regclass\('public\.product_variant_price_tiers'\)[\s\S]*cost_amount/);
   assert.match(migration,/internal_note_snapshot/);
   assert.match(schemas,/unit amount must match cost amount and profit margin/);
+  assert.match(schemas,/value\.costAmount\/\(1-value\.profitMargin\/100\)/);
+  const editor=await readFile(new URL("../../../app/product-editor-dialog.tsx",import.meta.url),"utf8");
+  assert.match(editor,/cost\/\(1-margin\/100\)/);
   assert.match(server,/supplier_links=CASE WHEN/);
   assert.match(server,/INSERT INTO product_price_tiers\(product_id,min_quantity,unit_amount,cost_amount,profit_margin\)/);
   const crm=await readFile(new URL("../src/crm.ts",import.meta.url),"utf8");
