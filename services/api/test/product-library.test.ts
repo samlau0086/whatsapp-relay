@@ -307,11 +307,13 @@ test("products support internal tier pricing, supplier links, and private order-
   ]);
   assert.match(migration,/supplier_links jsonb/);
   assert.match(migration,/internal_note text/);
-  assert.match(migration,/product_variant_price_tiers[\s\S]*cost_amount/);
+  assert.match(migration,/to_regclass\('public\.product_variant_price_tiers'\)[\s\S]*cost_amount/);
   assert.match(migration,/internal_note_snapshot/);
   assert.match(schemas,/unit amount must match cost amount and profit margin/);
   assert.match(server,/supplier_links=CASE WHEN/);
   assert.match(server,/INSERT INTO product_price_tiers\(product_id,min_quantity,unit_amount,cost_amount,profit_margin\)/);
+  const crm=await readFile(new URL("../src/crm.ts",import.meta.url),"utf8");
+  assert.match(crm,/ALTER TABLE product_variant_price_tiers ADD COLUMN IF NOT EXISTS cost_amount/);
   assert.match(server,/internal_note_snapshot\) VALUES/);
   assert.match(server,/'internalNote',i\.internal_note_snapshot/);
   assert.match(dialog,/calculatedPrice/);
