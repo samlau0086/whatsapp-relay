@@ -21,6 +21,8 @@ type ProductErrorBody = {
 };
 type Tier = { minQuantity: number; unitAmount: number };
 type ProductVariant = { id?: string; attributes: Record<string, string>; sku: string; priceTiers: Tier[]; imageMediaId?: string | null };
+type VariantDimension = { id: string; name: string; values: string };
+type VariantDraft = { id: string; attributes: Record<string, string>; sku: string; minQuantity: string; unitAmount: string; imageMediaId: string | null; imageName: string };
 type Tag = { id: string; name: string; color: string };
 type Product = {
   id: string;
@@ -220,7 +222,12 @@ export function ProductEditorDialog({
       product?.imageMediaId ?? null,
     ),
     [imageName, setImageName] = useState(product?.imageName ?? ""),
-    [variantJson, setVariantJson] = useState(() => JSON.stringify(product?.variants ?? [], null, 2)),
+    [variantDimensions, setVariantDimensions] = useState<VariantDimension[]>(() => {
+      const names = [...new Set((product?.variants ?? []).flatMap((variant) => Object.keys(variant.attributes)))];
+      return names.map((name) => ({ id: crypto.randomUUID(), name, values: [...new Set((product?.variants ?? []).map((variant) => variant.attributes[name]).filter(Boolean))].join(", ") }));
+    }),
+    [variantRows, setVariantRows] = useState<VariantDraft[]>(() => (product?.variants ?? []).map((variant) => ({ id: variant.id ?? crypto.randomUUID(), attributes: variant.attributes, sku: variant.sku, minQuantity: String(variant.priceTiers[0]?.minQuantity ?? 1), unitAmount: String(variant.priceTiers[0]?.unitAmount ?? ""), imageMediaId: variant.imageMediaId ?? null, imageName: "" }))),
+    [variantImageIndex, setVariantImageIndex] = useState<number | null>(null),
     [imagePickerOpen, setImagePickerOpen] = useState(false),
     [tags, setTags] = useState<Tag[]>(product?.tags ?? []),
     [tagName, setTagName] = useState(""),
@@ -388,19 +395,8 @@ export function ProductEditorDialog({
       setError("请填写名称、唯一 SKU，以及从数量 1 开始且门槛递增的阶梯单价");
       return;
     }
-    let variants: ProductVariant[] = [];
-    try {
-      const parsedVariants = JSON.parse(variantJson || "[]");
-      if (!Array.isArray(parsedVariants) || parsedVariants.length > 500) throw new Error("变体必须是最多 500 项的 JSON 数组");
-      variants = parsedVariants as ProductVariant[];
-      const seenSku = new Set<string>(), seenCombo = new Set<string>();
-      for (const variant of variants) {
-        if (!variant?.sku || !variant?.attributes || !Array.isArray(variant.priceTiers) || !variant.priceTiers.length) throw new Error("每个变体都需要 attributes、sku 和 priceTiers");
-        const combo = Object.entries(variant.attributes).sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => `${key}=${value}`).join("|");
-        if (seenSku.has(variant.sku.toLowerCase()) || seenCombo.has(combo)) throw new Error("变体 SKU 和规格组合必须唯一");
-        seenSku.add(variant.sku.toLowerCase()); seenCombo.add(combo);
-      }
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "变体 JSON 无效"); return; }
+    const variants: ProductVariant[] = variantRows.filter((variant) => variant.sku.trim()).map((variant) => ({ id: variant.id, attributes: variant.attributes, sku: variant.sku.trim(), priceTiers: [{ minQuantity: Number(variant.minQuantity), unitAmount: Number(variant.unitAmount) }], imageMediaId: variant.imageMediaId }));
+    if (variants.some((variant) => !Number.isInteger(variant.priceTiers[0].minQuantity) || variant.priceTiers[0].minQuantity < 1 || !Number.isFinite(variant.priceTiers[0].unitAmount))) { setError("请完善每个变体的起购数量和单价"); return; }
     setBusy(true);
     setError("");
     try {
@@ -447,6 +443,12 @@ export function ProductEditorDialog({
     }
   }
   function selectImage(asset: ProductImageAsset) {
+    if (variantImageIndex !== null) {
+      setVariantRows((rows) => rows.map((row, index) => index === variantImageIndex ? { ...row, imageMediaId: asset.id, imageName: asset.fileName } : row));
+      setVariantImageIndex(null);
+      setImagePickerOpen(false);
+      return;
+    }
     setImageMediaId(asset.id);
     setImageName(asset.fileName);
     setImagePickerOpen(false);
@@ -695,8 +697,10 @@ export function ProductEditorDialog({
             </button>
           )}
           <section className="product-variant-editor">
-            <header><b>产品变体</b><small>每项包含规格组合、独立 SKU、阶梯价格和可选图片；不需要变体时保持为空。</small></header>
-            <textarea value={variantJson} onChange={(event) => setVariantJson(event.target.value)} rows={8} spellCheck={false} placeholder={'例如：[\n  {"attributes":{"颜色":"红色","尺寸":"L"},"sku":"TS-L-RED","priceTiers":[{"minQuantity":1,"unitAmount":29.9}],"imageMediaId":null}\n]'} />
+            <header><span><b>产品变体</b><small>添加规格和值后自动生成组合，每个组合可设置独立 SKU、价格和图片。</small></span><button type="button" onClick={() => setVariantDimensions((items) => [...items, { id: crypto.randomUUID(), name: "", values: "" }])}><Plus size={13} />添加规格</button></header>
+            {variantDimensions.map((dimension, index) => <div className="product-variant-dimension" key={dimension.id}><input value={dimension.name} placeholder="规格名，如颜色" onChange={(event) => setVariantDimensions((items) => items.map((item) => item.id === dimension.id ? { ...item, name: event.target.value } : item))} /><input value={dimension.values} placeholder="规格值，用逗号分隔，如红色, 蓝色" onChange={(event) => setVariantDimensions((items) => items.map((item) => item.id === dimension.id ? { ...item, values: event.target.value } : item))} /><button type="button" aria-label="删除规格" onClick={() => setVariantDimensions((items) => items.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={13} /></button></div>)}
+            <button type="button" className="secondary-action" onClick={() => { const dimensions = variantDimensions.map((dimension) => ({ name: dimension.name.trim(), values: [...new Set(dimension.values.split(",").map((value) => value.trim()).filter(Boolean))] })).filter((dimension) => dimension.name && dimension.values.length); const combinations = dimensions.reduce<Record<string, string>[]>((result, dimension) => result.flatMap((current) => dimension.values.map((value) => ({ ...current, [dimension.name]: value }))), [{}]); setVariantRows((current) => combinations.slice(0, 500).map((attributes) => { const old = current.find((row) => JSON.stringify(row.attributes) === JSON.stringify(attributes)); return old ?? { id: crypto.randomUUID(), attributes, sku: "", minQuantity: "1", unitAmount: "", imageMediaId: null, imageName: "" }; })); }}>生成组合</button>
+            {variantRows.map((variant, index) => <div className="product-variant-row" key={variant.id}><span>{Object.entries(variant.attributes).map(([key, value]) => `${key}: ${value}`).join(" / ")}</span><input value={variant.sku} placeholder="变体 SKU" onChange={(event) => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, sku: event.target.value } : row))} /><input value={variant.minQuantity} inputMode="numeric" placeholder="起购量" onChange={(event) => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, minQuantity: event.target.value } : row))} /><input value={variant.unitAmount} inputMode="decimal" placeholder="单价" onChange={(event) => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, unitAmount: event.target.value } : row))} /><button type="button" onClick={() => { setVariantImageIndex(index); setImagePickerOpen(true); }}>{variant.imageName || "选择图片"}</button><button type="button" aria-label="删除变体" onClick={() => setVariantRows((rows) => rows.filter((_, rowIndex) => rowIndex !== index))}><Trash2 size={13} /></button></div>)}
           </section>
           <div className="product-label-editor">
             <b>产品标签</b>
