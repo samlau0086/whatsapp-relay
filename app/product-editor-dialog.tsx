@@ -19,10 +19,13 @@ type ProductErrorBody = {
     fieldErrors?: Record<string, string[]>;
   };
 };
-type Tier = { minQuantity: number; unitAmount: number };
+type Tier = { minQuantity: number; unitAmount: number; costAmount?: number; profitMargin?: number };
 type ProductVariant = { id?: string; attributes: Record<string, string>; sku: string; priceTiers: Tier[]; imageMediaId?: string | null };
 type VariantDimension = { id: string; name: string; values: string };
-type VariantDraft = { id: string; attributes: Record<string, string>; sku: string; priceTiers: Array<{ id: string; minQuantity: string; unitAmount: string }>; imageMediaId: string | null; imageName: string };
+type TierDraft = { id: string; minQuantity: string; unitAmount: string; costAmount: string; profitMargin: string };
+type VariantDraft = { id: string; attributes: Record<string, string>; sku: string; priceTiers: TierDraft[]; imageMediaId: string | null; imageName: string };
+type SupplierLink = { label: string; url: string };
+type SupplierLinkDraft = SupplierLink & { id: string };
 type Tag = { id: string; name: string; color: string };
 type Product = {
   id: string;
@@ -39,6 +42,8 @@ type Product = {
   imageMediaId: string | null;
   imageName: string;
   priceTiers: Tier[];
+  supplierLinks: SupplierLink[];
+  internalNote: string;
   tags: Tag[];
   variants?: ProductVariant[];
 };
@@ -198,6 +203,13 @@ export function ProductEditorDialog({
   onSaved: (message: string) => Promise<void>;
   onCatalogChanged: (message: string) => Promise<void>;
 }) {
+  const tierDraft = (tier: Tier, emptyPrice = false): TierDraft => ({
+    id: crypto.randomUUID(),
+    minQuantity: String(tier.minQuantity),
+    unitAmount: emptyPrice ? "" : tier.unitAmount.toFixed(2),
+    costAmount: tier.costAmount === undefined ? "" : tier.costAmount.toFixed(2),
+    profitMargin: tier.profitMargin === undefined ? "" : String(tier.profitMargin),
+  });
   const [name, setName] = useState(product?.name ?? ""),
     [sku, setSku] = useState(product?.sku ?? ""),
     [description, setDescription] = useState(product?.description ?? ""),
@@ -212,12 +224,10 @@ export function ProductEditorDialog({
       (product?.priceTiers.length
         ? product.priceTiers
         : [{ minQuantity: 1, unitAmount: 0 }]
-      ).map((tier) => ({
-        id: crypto.randomUUID(),
-        minQuantity: String(tier.minQuantity),
-        unitAmount: product ? tier.unitAmount.toFixed(2) : "",
-      })),
+      ).map((tier) => tierDraft(tier, !product)),
     ),
+    [supplierLinks,setSupplierLinks]=useState<SupplierLinkDraft[]>(()=>(product?.supplierLinks??[]).map(link=>({...link,id:crypto.randomUUID()}))),
+    [internalNote,setInternalNote]=useState(product?.internalNote??""),
     [imageMediaId, setImageMediaId] = useState<string | null>(
       product?.imageMediaId ?? null,
     ),
@@ -226,7 +236,7 @@ export function ProductEditorDialog({
       const names = [...new Set((product?.variants ?? []).flatMap((variant) => Object.keys(variant.attributes)))];
       return names.map((name) => ({ id: crypto.randomUUID(), name, values: [...new Set((product?.variants ?? []).map((variant) => variant.attributes[name]).filter(Boolean))].join(", ") }));
     }),
-    [variantRows, setVariantRows] = useState<VariantDraft[]>(() => (product?.variants ?? []).map((variant) => ({ id: variant.id ?? crypto.randomUUID(), attributes: variant.attributes, sku: variant.sku, priceTiers: (variant.priceTiers.length ? variant.priceTiers : [{ minQuantity: 1, unitAmount: 0 }]).map((tier) => ({ id: crypto.randomUUID(), minQuantity: String(tier.minQuantity), unitAmount: String(tier.unitAmount) })), imageMediaId: variant.imageMediaId ?? null, imageName: "" }))),
+    [variantRows, setVariantRows] = useState<VariantDraft[]>(() => (product?.variants ?? []).map((variant) => ({ id: variant.id ?? crypto.randomUUID(), attributes: variant.attributes, sku: variant.sku, priceTiers: (variant.priceTiers.length ? variant.priceTiers : [{ minQuantity: 1, unitAmount: 0 }]).map((tier) => tierDraft(tier)), imageMediaId: variant.imageMediaId ?? null, imageName: "" }))),
     [variantImageIndex, setVariantImageIndex] = useState<number | null>(null),
     [imagePickerOpen, setImagePickerOpen] = useState(false),
     [tags, setTags] = useState<Tag[]>(product?.tags ?? []),
@@ -291,8 +301,19 @@ export function ProductEditorDialog({
         id: crypto.randomUUID(),
         minQuantity: String(last + 1),
         unitAmount: "",
+        costAmount: "",
+        profitMargin: "",
       },
     ]);
+  }
+  function calculatedPrice(costAmount:string,profitMargin:string){
+    const cost=Number(costAmount),margin=Number(profitMargin);
+    return costAmount!==""&&profitMargin!==""&&Number.isFinite(cost)&&Number.isFinite(margin)?(Math.round(cost*(1+margin/100)*100)/100).toFixed(2):"";
+  }
+  function updateTierDraft(tier:TierDraft,field:keyof Pick<TierDraft,"minQuantity"|"unitAmount"|"costAmount"|"profitMargin">,value:string){
+    const next={...tier,[field]:value};
+    if(field==="costAmount"||field==="profitMargin")next.unitAmount=calculatedPrice(next.costAmount,next.profitMargin)||next.unitAmount;
+    return next;
   }
   function addTag(source?: Tag) {
     const value = (source?.name ?? tagName).trim();
@@ -377,7 +398,9 @@ export function ProductEditorDialog({
   async function save() {
     const money = /^\d+(?:\.\d{1,2})?$/,
       positiveNumber=/^\d+(?:\.\d+)?$/,
-      quantities = tiers.map((tier) => Number(tier.minQuantity));
+      quantities = tiers.map((tier) => Number(tier.minQuantity)),
+      invalidInternalPricing=tiers.some(tier=>(tier.costAmount==="")!==(tier.profitMargin==="")||(tier.costAmount!==""&&(!money.test(tier.costAmount)||!/^\d+(?:\.\d{1,4})?$/.test(tier.profitMargin)||calculatedPrice(tier.costAmount,tier.profitMargin)!==Number(tier.unitAmount).toFixed(2)))),
+      normalizedSupplierLinks=supplierLinks.map(link=>({label:link.label.trim(),url:link.url.trim()})).filter(link=>link.label||link.url);
     if (
       !name.trim() ||
       !sku.trim() ||
@@ -386,17 +409,19 @@ export function ProductEditorDialog({
         (tier) =>
           !/^\d+$/.test(tier.minQuantity) || !money.test(tier.unitAmount),
       ) ||
+      invalidInternalPricing ||
+      normalizedSupplierLinks.some(link=>!link.url||!/^https?:\/\//i.test(link.url)) ||
       (weightAmount!==""&&(!positiveNumber.test(weightAmount)||Number(weightAmount)<=0)) ||
       quantities.some(
         (value, index) =>
           value < 1 || (index > 0 && value <= quantities[index - 1]),
       )
     ) {
-      setError("请填写名称、唯一 SKU，以及从数量 1 开始且门槛递增的阶梯单价");
+      setError("请检查名称、SKU、阶梯价格、成本利润率和供应商链接；成本与利润率需同时填写");
       return;
     }
-    const variants: ProductVariant[] = variantRows.filter((variant) => variant.sku.trim()).map((variant) => ({ id: variant.id, attributes: variant.attributes, sku: variant.sku.trim(), priceTiers: variant.priceTiers.map((tier) => ({ minQuantity: Number(tier.minQuantity), unitAmount: Number(tier.unitAmount) })), imageMediaId: variant.imageMediaId }));
-    if (variants.some((variant) => !variant.priceTiers.length || variant.priceTiers[0].minQuantity !== 1 || variant.priceTiers.some((tier, index) => !Number.isInteger(tier.minQuantity) || tier.minQuantity < 1 || !Number.isFinite(tier.unitAmount) || (index > 0 && tier.minQuantity <= variant.priceTiers[index - 1].minQuantity)))) { setError("请完善每个变体从数量 1 开始、门槛递增的阶梯价格"); return; }
+    const variants: ProductVariant[] = variantRows.filter((variant) => variant.sku.trim()).map((variant) => ({ id: variant.id, attributes: variant.attributes, sku: variant.sku.trim(), priceTiers: variant.priceTiers.map((tier) => ({ minQuantity: Number(tier.minQuantity), unitAmount: Number(tier.unitAmount),...(tier.costAmount!==""?{costAmount:Number(tier.costAmount),profitMargin:Number(tier.profitMargin)}:{}) })), imageMediaId: variant.imageMediaId }));
+    if (variantRows.some(variant=>variant.priceTiers.some(tier=>(tier.costAmount==="")!==(tier.profitMargin==="")||(tier.costAmount!==""&&calculatedPrice(tier.costAmount,tier.profitMargin)!==Number(tier.unitAmount).toFixed(2))))||variants.some((variant) => !variant.priceTiers.length || variant.priceTiers[0].minQuantity !== 1 || variant.priceTiers.some((tier, index) => !Number.isInteger(tier.minQuantity) || tier.minQuantity < 1 || !Number.isFinite(tier.unitAmount) || (index > 0 && tier.minQuantity <= variant.priceTiers[index - 1].minQuantity)))) { setError("请完善每个变体从数量 1 开始、门槛递增的阶梯价格和成本利润率"); return; }
     setBusy(true);
     setError("");
     try {
@@ -406,6 +431,8 @@ export function ProductEditorDialog({
         description: description.trim(),
         category: category.trim(),
         brand: brand.trim(),
+        supplierLinks:normalizedSupplierLinks,
+        internalNote:internalNote.trim(),
         currency,
         weightAmount:weightAmount===""?null:Number(weightAmount),
         weightUnit:weightAmount===""?null:weightUnit,
@@ -414,6 +441,7 @@ export function ProductEditorDialog({
         priceTiers: tiers.map((tier) => ({
           minQuantity: Number(tier.minQuantity),
           unitAmount: Number(tier.unitAmount),
+          ...(tier.costAmount!==""?{costAmount:Number(tier.costAmount),profitMargin:Number(tier.profitMargin)}:{}),
         })),
         tags: tags.map((tag) => ({ name: tag.name.trim(), color: tag.color })),
         variants,
@@ -456,7 +484,7 @@ export function ProductEditorDialog({
   function generateVariantCombinations() {
     const dimensions = variantDimensions.map((dimension) => ({ name: dimension.name.trim(), values: [...new Set(dimension.values.split(",").map((value) => value.trim()).filter(Boolean))] })).filter((dimension) => dimension.name && dimension.values.length);
     const combinations = dimensions.reduce<Record<string, string>[]>((all, dimension) => all.flatMap((current) => dimension.values.map((value) => ({ ...current, [dimension.name]: value }))), [{}]);
-    const parentTiers = tiers.map((tier) => ({ id: crypto.randomUUID(), minQuantity: tier.minQuantity, unitAmount: tier.unitAmount }));
+    const parentTiers = tiers.map((tier) => ({ ...tier, id: crypto.randomUUID() }));
     setVariantRows((current) => combinations.slice(0, 500).map((attributes) => {
       const existing = current.find((row) => JSON.stringify(row.attributes) === JSON.stringify(attributes));
       if (existing) return existing;
@@ -586,7 +614,7 @@ export function ProductEditorDialog({
                       setTiers((all) =>
                         all.map((item) =>
                           item.id === tier.id
-                            ? { ...item, minQuantity: event.target.value }
+                            ? updateTierDraft(item,"minQuantity",event.target.value)
                             : item,
                         ),
                       )
@@ -611,7 +639,7 @@ export function ProductEditorDialog({
                       setTiers((all) =>
                         all.map((item) =>
                           item.id === tier.id
-                            ? { ...item, unitAmount: value }
+                            ? updateTierDraft(item,"unitAmount",value)
                             : item,
                         ),
                       );
@@ -620,12 +648,20 @@ export function ProductEditorDialog({
                       setTiers((all) =>
                         all.map((item) =>
                           item.id === tier.id
-                            ? { ...item, unitAmount: event.target.value }
+                            ? updateTierDraft(item,"unitAmount",event.target.value)
                             : item,
                         ),
                       )
                     }
                   />
+                </label>
+                <label>
+                  成本 · 内部
+                  <input type="number" value={tier.costAmount} inputMode="decimal" min="0" step="0.01" placeholder="可选" onChange={event=>setTiers(all=>all.map(item=>item.id===tier.id?updateTierDraft(item,"costAmount",event.target.value):item))}/>
+                </label>
+                <label>
+                  利润率 % · 内部
+                  <input type="number" value={tier.profitMargin} inputMode="decimal" min="0" step="0.0001" placeholder="可选" onChange={event=>setTiers(all=>all.map(item=>item.id===tier.id?updateTierDraft(item,"profitMargin",event.target.value):item))}/>
                 </label>
                 {index > 0 ? (
                   <button
@@ -644,6 +680,15 @@ export function ProductEditorDialog({
               </div>
             ))}
           </div>
+          <section className="product-supplier-editor">
+            <header><span><b>供应商链接</b><small>仅供内部采购参考，可灵活增删</small></span><button type="button" onClick={()=>setSupplierLinks(all=>[...all,{id:crypto.randomUUID(),label:"",url:""}])} disabled={supplierLinks.length>=30}><Plus size={13}/>添加链接</button></header>
+            {supplierLinks.map(link=><div key={link.id}><input value={link.label} maxLength={120} placeholder="名称，如 1688 供应商" onChange={event=>setSupplierLinks(all=>all.map(item=>item.id===link.id?{...item,label:event.target.value}:item))}/><input type="url" value={link.url} maxLength={2000} placeholder="https://..." onChange={event=>setSupplierLinks(all=>all.map(item=>item.id===link.id?{...item,url:event.target.value}:item))}/><button type="button" aria-label="删除供应商链接" onClick={()=>setSupplierLinks(all=>all.filter(item=>item.id!==link.id))}><Trash2 size={13}/></button></div>)}
+          </section>
+          <label>
+            内部备注 · 仅内部可见
+            <textarea className="product-description-input product-internal-note" value={internalNote} onChange={event=>setInternalNote(event.target.value)} maxLength={4000} rows={4} placeholder="采购要求、质检重点、供应商沟通信息等；不会出现在产品卡片或客户订单中"/>
+            <small className="product-description-count">{internalNote.length}/4000</small>
+          </label>
           <label>
             币种
             <select
@@ -711,8 +756,8 @@ export function ProductEditorDialog({
             <button type="button" className="secondary-action variant-inherit-generate" onClick={generateVariantCombinations}><Plus size={13} />按父 SKU 和阶梯价生成组合</button>
             <header><span><b>产品变体</b><small>添加规格和值后自动生成组合，每个组合可设置独立 SKU、价格和图片。</small></span><button type="button" onClick={() => setVariantDimensions((items) => [...items, { id: crypto.randomUUID(), name: "", values: "" }])}><Plus size={13} />添加规格</button></header>
             {variantDimensions.map((dimension, index) => <div className="product-variant-dimension" key={dimension.id}><input value={dimension.name} placeholder="规格名，如颜色" onChange={(event) => setVariantDimensions((items) => items.map((item) => item.id === dimension.id ? { ...item, name: event.target.value } : item))} /><input value={dimension.values} placeholder="规格值，用逗号分隔，如红色, 蓝色" onChange={(event) => setVariantDimensions((items) => items.map((item) => item.id === dimension.id ? { ...item, values: event.target.value } : item))} /><button type="button" aria-label="删除规格" onClick={() => setVariantDimensions((items) => items.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={13} /></button></div>)}
-            <button type="button" className="secondary-action" onClick={() => { const dimensions = variantDimensions.map((dimension) => ({ name: dimension.name.trim(), values: [...new Set(dimension.values.split(",").map((value) => value.trim()).filter(Boolean))] })).filter((dimension) => dimension.name && dimension.values.length); const combinations = dimensions.reduce<Record<string, string>[]>((result, dimension) => result.flatMap((current) => dimension.values.map((value) => ({ ...current, [dimension.name]: value }))), [{}]); setVariantRows((current) => combinations.slice(0, 500).map((attributes) => { const old = current.find((row) => JSON.stringify(row.attributes) === JSON.stringify(attributes)); return old ?? { id: crypto.randomUUID(), attributes, sku: "", priceTiers: [{ id: crypto.randomUUID(), minQuantity: "1", unitAmount: "" }], imageMediaId: null, imageName: "" }; })); }}>生成组合</button>
-            {variantRows.map((variant, index) => <div className="product-variant-row" key={variant.id}><header><span>{Object.entries(variant.attributes).map(([key, value]) => `${key}: ${value}`).join(" / ")}</span><input value={variant.sku} placeholder="变体 SKU" onChange={(event) => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, sku: event.target.value } : row))} /><button type="button" onClick={() => { setVariantImageIndex(index); setImagePickerOpen(true); }}>{variant.imageName || "选择图片"}</button><button type="button" aria-label="删除变体" onClick={() => setVariantRows((rows) => rows.filter((_, rowIndex) => rowIndex !== index))}><Trash2 size={13} /></button></header><div className="product-variant-tier-list">{variant.priceTiers.map((tier, tierIndex) => <div key={tier.id}><input value={tier.minQuantity} disabled={tierIndex === 0} inputMode="numeric" placeholder="起购量" onChange={(event) => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, priceTiers: row.priceTiers.map((item, itemIndex) => itemIndex === tierIndex ? { ...item, minQuantity: event.target.value } : item) } : row))} /><input value={tier.unitAmount} inputMode="decimal" placeholder="单价" onChange={(event) => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, priceTiers: row.priceTiers.map((item, itemIndex) => itemIndex === tierIndex ? { ...item, unitAmount: event.target.value } : item) } : row))} />{tierIndex > 0 && <button type="button" aria-label="删除价格档位" onClick={() => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, priceTiers: row.priceTiers.filter((_, itemIndex) => itemIndex !== tierIndex) } : row))}><Trash2 size={13} /></button>}</div>)}</div><button type="button" className="variant-add-tier" onClick={() => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, priceTiers: [...row.priceTiers, { id: crypto.randomUUID(), minQuantity: String((Number(row.priceTiers.at(-1)?.minQuantity) || 1) + 1), unitAmount: "" }] } : row))}><Plus size={13} />添加价格档位</button></div>)}
+            <button type="button" className="secondary-action" onClick={() => { const dimensions = variantDimensions.map((dimension) => ({ name: dimension.name.trim(), values: [...new Set(dimension.values.split(",").map((value) => value.trim()).filter(Boolean))] })).filter((dimension) => dimension.name && dimension.values.length); const combinations = dimensions.reduce<Record<string, string>[]>((result, dimension) => result.flatMap((current) => dimension.values.map((value) => ({ ...current, [dimension.name]: value }))), [{}]); setVariantRows((current) => combinations.slice(0, 500).map((attributes) => { const old = current.find((row) => JSON.stringify(row.attributes) === JSON.stringify(attributes)); return old ?? { id: crypto.randomUUID(), attributes, sku: "", priceTiers: [{ id: crypto.randomUUID(), minQuantity: "1", unitAmount: "", costAmount: "", profitMargin: "" }], imageMediaId: null, imageName: "" }; })); }}>生成组合</button>
+            {variantRows.map((variant, index) => <div className="product-variant-row" key={variant.id}><header><span>{Object.entries(variant.attributes).map(([key, value]) => `${key}: ${value}`).join(" / ")}</span><input value={variant.sku} placeholder="变体 SKU" onChange={(event) => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, sku: event.target.value } : row))} /><button type="button" onClick={() => { setVariantImageIndex(index); setImagePickerOpen(true); }}>{variant.imageName || "选择图片"}</button><button type="button" aria-label="删除变体" onClick={() => setVariantRows((rows) => rows.filter((_, rowIndex) => rowIndex !== index))}><Trash2 size={13} /></button></header><div className="product-variant-tier-list">{variant.priceTiers.map((tier, tierIndex) => <div key={tier.id}><input value={tier.minQuantity} disabled={tierIndex === 0} inputMode="numeric" placeholder="起购量" onChange={(event) => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, priceTiers: row.priceTiers.map((item, itemIndex) => itemIndex === tierIndex ? updateTierDraft(item,"minQuantity",event.target.value) : item) } : row))} /><input value={tier.unitAmount} inputMode="decimal" placeholder="单价" onChange={(event) => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, priceTiers: row.priceTiers.map((item, itemIndex) => itemIndex === tierIndex ? updateTierDraft(item,"unitAmount",event.target.value) : item) } : row))} /><input value={tier.costAmount} inputMode="decimal" placeholder="成本" onChange={(event) => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, priceTiers: row.priceTiers.map((item, itemIndex) => itemIndex === tierIndex ? updateTierDraft(item,"costAmount",event.target.value) : item) } : row))} /><input value={tier.profitMargin} inputMode="decimal" placeholder="利润率 %" onChange={(event) => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, priceTiers: row.priceTiers.map((item, itemIndex) => itemIndex === tierIndex ? updateTierDraft(item,"profitMargin",event.target.value) : item) } : row))} />{tierIndex > 0 && <button type="button" aria-label="删除价格档位" onClick={() => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, priceTiers: row.priceTiers.filter((_, itemIndex) => itemIndex !== tierIndex) } : row))}><Trash2 size={13} /></button>}</div>)}</div><button type="button" className="variant-add-tier" onClick={() => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, priceTiers: [...row.priceTiers, { id: crypto.randomUUID(), minQuantity: String((Number(row.priceTiers.at(-1)?.minQuantity) || 1) + 1), unitAmount: "", costAmount: "", profitMargin: "" }] } : row))}><Plus size={13} />添加价格档位</button></div>)}
           </section>
           <div className="product-label-editor">
             <b>产品标签</b>

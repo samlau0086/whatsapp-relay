@@ -29,7 +29,7 @@ test("product routes enforce shared media, snapshots, idempotency, and soft dele
   assert.match(server,/订单 #\$\{orderNumber\}/);
   assert.match(server,/SELECT t\.name,t\.color FROM conversation_tags/);
   assert.match(server,/deleted_at=now\(\),updated_at=now\(\)/);
-  assert.match(server,/INSERT INTO order_items\(order_id,position,product_name,product_sku,quantity,unit_amount,weight_amount,weight_unit,image_media_id,product_id,shipping_class_id,shipping_class_name\)/);
+  assert.match(server,/INSERT INTO order_items\(order_id,position,product_name,product_sku,quantity,unit_amount,weight_amount,weight_unit,image_media_id,product_id,shipping_class_id,shipping_class_name,internal_note_snapshot\)/);
   assert.match(server,/product\.create/);
   assert.match(server,/product\.update/);
   assert.match(server,/product\.delete/);
@@ -294,4 +294,32 @@ test("API startup applies the latest product schema to persistent databases",asy
   assert.match(runner,/025_currency_management\.sql/);
   assert.match(runner,/027_product_description\.sql/);
   assert.match(runner,/047_product_category_brand\.sql/);
+  assert.match(runner,/062_product_internal_pricing\.sql/);
+});
+
+test("products support internal tier pricing, supplier links, and private order-note snapshots",async()=>{
+  const [migration,schemas,server,dialog,component]=await Promise.all([
+    readFile(new URL("../../../infra/postgres/migrations/062_product_internal_pricing.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/schemas.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/product-editor-dialog.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+  ]);
+  assert.match(migration,/supplier_links jsonb/);
+  assert.match(migration,/internal_note text/);
+  assert.match(migration,/product_variant_price_tiers[\s\S]*cost_amount/);
+  assert.match(migration,/internal_note_snapshot/);
+  assert.match(schemas,/unit amount must match cost amount and profit margin/);
+  assert.match(server,/supplier_links=CASE WHEN/);
+  assert.match(server,/INSERT INTO product_price_tiers\(product_id,min_quantity,unit_amount,cost_amount,profit_margin\)/);
+  assert.match(server,/internal_note_snapshot\) VALUES/);
+  assert.match(server,/'internalNote',i\.internal_note_snapshot/);
+  assert.match(dialog,/calculatedPrice/);
+  assert.match(dialog,/供应商链接/);
+  assert.match(dialog,/内部备注 · 仅内部可见/);
+  assert.match(component,/order-item-internal-note/);
+  const cardRoute=server.slice(server.indexOf('app.post("/api/v1/product-cards"'),server.indexOf('app.get("/api/v1/product-cards/batches'));
+  const orderRender=server.slice(server.indexOf('app.post("/api/v1/conversations/:conversationId/orders/:orderId/send"'),server.indexOf('app.post("/api/v1/conversations/:id/orders"'));
+  assert.doesNotMatch(cardRoute,/internal_note|supplier_links|cost_amount|profit_margin/);
+  assert.doesNotMatch(orderRender,/internal_note_snapshot/);
 });
