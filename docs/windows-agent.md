@@ -49,7 +49,7 @@ Get-ChildItem release
 
 `.github/workflows/agent-release.yml` 提供两种入口：
 
-- Actions 页面手动运行 `Build Windows Agent`：构建未签名安装包并保存 14 天的 workflow artifact，适合内部测试。
+- Actions 页面手动运行 `Build Windows Agent`：构建未签名安装包并发布到对应版本的 GitHub Release，适合内部测试。Release 不占用 Actions artifact 存储额度。
 - 推送版本标签：校验标签与 `apps/agent/package.json` 的版本一致，构建安装包、生成 `SHA256SUMS.txt`，并创建 GitHub Release。
 
 发布 `0.1.3` 示例：
