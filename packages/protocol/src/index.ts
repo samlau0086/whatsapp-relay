@@ -4,6 +4,18 @@ export type AccountStatus = "pairing" | "online" | "offline" | "logged_out" | "e
 export type MessageKind = "text" | "image" | "video" | "audio" | "document" | "location" | "contact";
 export type DeliveryStatus = "queued" | "dispatching" | "sent" | "delivered" | "read" | "failed" | "uncertain";
 
+export interface AdReferral {
+  source?: string;
+  sourceId?: string;
+  sourceUrl?: string;
+  headline?: string;
+  body?: string;
+  mediaType?: string;
+  thumbnailUrl?: string;
+  mediaUrl?: string;
+  ctwaClid?: string;
+}
+
 export interface AgentHello {
   type: "hello";
   protocolVersion: number;
@@ -32,6 +44,7 @@ export interface NormalizedMessage {
   direction: "in" | "out";
   kind: MessageKind;
   text?: string;
+  adReferral?: AdReferral;
   quotedWhatsappMessageId?: string;
   occurredAt: string;
   media?: { uploadId: string; mimeType: string; fileName?: string; size: number; sha256: string };

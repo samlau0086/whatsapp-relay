@@ -89,18 +89,19 @@ async function connect(options:Init):Promise<void>{
       if(rawSender.endsWith("@lid")&&senderJid.endsWith("@s.whatsapp.net"))emitIdentity(options.accountId,rawSender,senderJid,item.pushName??undefined);
       const content=normalizeMessageContent(item.message);if(!content)continue;
       const text=content.conversation??content.extendedTextMessage?.text??content.imageMessage?.caption??content.videoMessage?.caption??content.documentMessage?.caption??content.buttonsResponseMessage?.selectedDisplayText??content.listResponseMessage?.title??undefined;
+      const adReferral=externalAdReferral(content);
       const quotedWhatsappMessageId=quotedMessageId(content);
       const quotedParticipantJid=quotedParticipant(content);
       const sticker=Boolean(content.stickerMessage);
       const kind=content.imageMessage||sticker?"image":content.videoMessage?"video":content.audioMessage?"audio":content.documentMessage?"document":content.locationMessage?"location":content.contactMessage?"contact":"text";
-      if(kind==="text"&&!text)continue;
+      if(kind==="text"&&!text&&!adReferral)continue;
       await auth.saveMessage(item.key.id,item.message);
       let media:Record<string,unknown>|undefined;
       if(["image","video","audio","document"].includes(kind)){
         try{const mediaRequestOptions=mediaProxyAgent?({dispatcher:mediaProxyAgent} as unknown as RequestInit):undefined;const bytes=await downloadMediaMessage(item,"buffer",{options:mediaRequestOptions},{logger,reuploadRequest:async(message)=>activeSocket.updateMediaMessage(message)});const mime=content.stickerMessage?.mimetype??content.imageMessage?.mimetype??content.videoMessage?.mimetype??content.audioMessage?.mimetype??content.documentMessage?.mimetype??(sticker?"image/webp":"application/octet-stream");const fileName=sticker?`sticker-${item.key.id}.webp`:content.documentMessage?.fileName??`${item.key.id}.${kind}`;const uploaded=await uploadInboundMedia(options,bytes,mime,fileName);media={uploadId:uploaded.mediaId,mimeType:mime,fileName,size:uploaded.size,sha256:uploaded.sha256,isSticker:sticker};}
         catch(error){emit({type:"diagnostic",level:"warn",accountId:options.accountId,message:"media_upload_failed",detail:String(error)});}
       }
-      emit({type:"event",kind:"message",live:type==="notify",payload:{eventId:`message:${options.accountId}:${item.key.id}`,accountId:options.accountId,whatsappMessageId:item.key.id,chatJid:jid,rawChatJid:rawJid,chatType:isGroup?"group":"direct",senderJid,senderName:item.pushName??undefined,direction:item.key.fromMe?"out":"in",kind,text,quotedWhatsappMessageId,quotedParticipantJid,occurredAt:messageTime(item.messageTimestamp),media}});
+      emit({type:"event",kind:"message",live:type==="notify",payload:{eventId:`message:${options.accountId}:${item.key.id}`,accountId:options.accountId,whatsappMessageId:item.key.id,chatJid:jid,rawChatJid:rawJid,chatType:isGroup?"group":"direct",senderJid,senderName:item.pushName??undefined,direction:item.key.fromMe?"out":"in",kind,text,adReferral,quotedWhatsappMessageId,quotedParticipantJid,occurredAt:messageTime(item.messageTimestamp),media}});
     }
   })().catch(error=>emit({type:"diagnostic",level:"error",accountId:options.accountId,message:"message_normalize_failed",detail:String(error)}));});
   activeSocket.ev.on("messages.update",(updates)=>{if(generation!==connectionGeneration)return;for(const update of updates){if(!update.key.id||!update.update.status)continue;const mapped=update.update.status>=4?"read":update.update.status>=3?"delivered":"sent";emit({type:"event",kind:"message_status",payload:{eventId:`status:${options.accountId}:${update.key.id}:${mapped}`,accountId:options.accountId,whatsappMessageId:update.key.id,status:mapped,at:new Date().toISOString()}});}});
@@ -203,6 +204,23 @@ function quotedParticipant(content:proto.IMessage):string|undefined{
   const candidates=[content.extendedTextMessage?.contextInfo,content.imageMessage?.contextInfo,content.videoMessage?.contextInfo,content.audioMessage?.contextInfo,content.documentMessage?.contextInfo,content.stickerMessage?.contextInfo,content.locationMessage?.contextInfo,content.contactMessage?.contextInfo];
   const participant=candidates.find(context=>context?.participant)?.participant;
   return participant?jidNormalizedUser(participant):undefined;
+}
+
+function externalAdReferral(content:proto.IMessage):Record<string,string>|undefined{
+  const context=[content.extendedTextMessage?.contextInfo,content.imageMessage?.contextInfo,content.videoMessage?.contextInfo,content.documentMessage?.contextInfo].find(item=>item?.externalAdReply);
+  const ad=context?.externalAdReply;if(!ad)return undefined;
+  const referral:Record<string,string>={};
+  const add=(key:string,value:unknown,max=4000)=>{if(value===null||value===undefined||value==="")return;referral[key]=String(value).slice(0,max);};
+  add("source",ad.sourceApp??ad.sourceType,120);add("sourceId",ad.sourceId??ad.ref,500);add("headline",ad.title,1000);add("body",ad.body,4000);add("mediaType",ad.mediaType,80);add("ctwaClid",ad.ctwaClid,500);
+  addSafeUrl(referral,"sourceUrl",ad.sourceUrl??ad.adPreviewUrl??ad.wtwaWebsiteUrl);
+  addSafeUrl(referral,"thumbnailUrl",ad.thumbnailUrl??ad.originalImageUrl);
+  addSafeUrl(referral,"mediaUrl",ad.mediaUrl);
+  return Object.keys(referral).length?referral:undefined;
+}
+
+function addSafeUrl(target:Record<string,string>,key:string,value:unknown):void{
+  if(typeof value!=="string"||value.length>8000)return;
+  try{const url=new URL(value);if(url.protocol==="http:"||url.protocol==="https:")target[key]=url.toString();}catch{}
 }
 
 async function downloadOutboundMedia(options:Init,mediaId:string):Promise<{bytes:Buffer;mime:string;name:string}>{

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {createHmac} from "node:crypto";
 import {readFile} from "node:fs/promises";
 import test from "node:test";
-import {cloudOutboundBody,validMetaSignature,webhookPhoneNumberId} from "../src/whatsapp-cloud.js";
+import {cloudOutboundBody,normalizeCloudAdReferral,validMetaSignature,webhookPhoneNumberId} from "../src/whatsapp-cloud.js";
 import {queueChannelCommand,TemplateRequiredError} from "../src/whatsapp-outbound.js";
 
 test("Meta webhook signature validates the exact raw request body",()=>{
@@ -16,6 +16,26 @@ test("Meta webhook signature validates the exact raw request body",()=>{
 test("webhook routing reads the metadata phone number ID",()=>{
   assert.equal(webhookPhoneNumberId({entry:[{changes:[{value:{metadata:{phone_number_id:"123456"}}}]}]}),"123456");
   assert.equal(webhookPhoneNumberId({entry:[]}),"");
+});
+
+test("Click-to-WhatsApp ad referrals are normalized for message storage",()=>{
+  assert.deepEqual(normalizeCloudAdReferral({source_type:"ad",source_id:"2385",source_url:"https://www.facebook.com/ads/2385",headline:"Wireless headphones",body:"DM for a quote",media_type:"image",image_url:"https://cdn.example.com/headphones.jpg",ctwa_clid:"click-1"}),{
+    source:"ad",sourceId:"2385",sourceUrl:"https://www.facebook.com/ads/2385",headline:"Wireless headphones",body:"DM for a quote",mediaType:"image",ctwaClid:"click-1",thumbnailUrl:"https://cdn.example.com/headphones.jpg",mediaUrl:"https://cdn.example.com/headphones.jpg",
+  });
+  assert.deepEqual(normalizeCloudAdReferral({headline:"Unsafe",source_url:"javascript:alert(1)"}),{headline:"Unsafe"});
+});
+
+test("ad referral metadata is carried from both WhatsApp transports to the inbox",async()=>{
+  const [agent,hub,server,inbox]=await Promise.all([
+    readFile(new URL("../../../apps/agent/src/account-worker.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/agent-hub.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+  ]);
+  assert.match(agent,/externalAdReply/);assert.match(agent,/adReferral/);
+  assert.match(hub,/adReferral:payload\.adReferral/);
+  assert.match(server,/provider_payload->'adReferral' ad_referral/);
+  assert.match(inbox,/function AdReferralCard/);
 });
 
 test("Cloud outbound text and template payloads use Graph API wire shapes",async()=>{

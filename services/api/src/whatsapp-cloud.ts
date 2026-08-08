@@ -228,13 +228,29 @@ async function normalizeCloudMessage(accountId:string,message:Record<string,unkn
   const type=String(message.type??""),from=String(message.from??"").replace(/\D/g,"");
   if(!/^\d{7,15}$/.test(from)||!message.id)return null;
   const context=(message.context??{}) as Record<string,unknown>;
-  const base={eventId:`cloud-message:${accountId}:${message.id}`,accountId,whatsappMessageId:String(message.id),chatJid:`${from}@s.whatsapp.net`,senderJid:`${from}@s.whatsapp.net`,senderName:String(senderName??`+${from}`),direction:"in",quotedWhatsappMessageId:context.id?String(context.id):undefined,occurredAt:unixIso(message.timestamp)};
+  const base={eventId:`cloud-message:${accountId}:${message.id}`,accountId,whatsappMessageId:String(message.id),chatJid:`${from}@s.whatsapp.net`,senderJid:`${from}@s.whatsapp.net`,senderName:String(senderName??`+${from}`),direction:"in",adReferral:normalizeCloudAdReferral(message.referral),quotedWhatsappMessageId:context.id?String(context.id):undefined,occurredAt:unixIso(message.timestamp)};
   if(type==="text")return{...base,kind:"text",text:String(((message.text??{}) as Record<string,unknown>).body??"")};
   if(!["image","video","audio","document"].includes(type))return null;
   const mediaInfo=(message[type]??{}) as Record<string,unknown>,mediaId=String(mediaInfo.id??"");
   if(!mediaId)return null;
   const media=await downloadInboundCloudMedia(accountId,mediaId,token,String(mediaInfo.filename??`${message.id}.${type}`));
   return{...base,kind:type,text:String(mediaInfo.caption??""),media};
+}
+
+export function normalizeCloudAdReferral(value:unknown):Record<string,string>|undefined{
+  if(!value||typeof value!=="object"||Array.isArray(value))return undefined;
+  const input=value as Record<string,unknown>,referral:Record<string,string>={};
+  const add=(key:string,field:string,max=4000)=>{const value=input[field];if(value===null||value===undefined||value==="")return;referral[key]=String(value).slice(0,max);};
+  add("source","source_type",120);add("sourceId","source_id",500);add("headline","headline",1000);add("body","body");add("mediaType","media_type",80);add("ctwaClid","ctwa_clid",500);
+  addSafeReferralUrl(referral,"sourceUrl",input.source_url);
+  addSafeReferralUrl(referral,"thumbnailUrl",input.thumbnail_url??input.image_url);
+  addSafeReferralUrl(referral,"mediaUrl",input.video_url??input.image_url);
+  return Object.keys(referral).length?referral:undefined;
+}
+
+function addSafeReferralUrl(target:Record<string,string>,key:string,value:unknown):void{
+  if(typeof value!=="string"||value.length>8000)return;
+  try{const url=new URL(value);if(url.protocol==="http:"||url.protocol==="https:")target[key]=url.toString();}catch{}
 }
 
 async function downloadInboundCloudMedia(accountId:string,providerMediaId:string,token:string,fileName:string){

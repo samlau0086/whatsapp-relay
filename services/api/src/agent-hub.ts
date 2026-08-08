@@ -188,7 +188,7 @@ function normalizedIdentityJid(value:unknown,server:"lid"|"s.whatsapp.net"):stri
 export async function ingestNormalizedMessage(client: import("pg").PoolClient, payload: Record<string,unknown>, source:{agentId?:string;transport?:'cloud'}): Promise<void> {
   const chatJid = String(payload.chatJid);
   if (chatJid.endsWith("@broadcast")) return;
-  if(String(payload.kind??"text")==="text"&&!payload.text&&!payload.media)return;
+  if(String(payload.kind??"text")==="text"&&!payload.text&&!payload.media&&!payload.adReferral)return;
   const accountId = String(payload.accountId);
   const account=source.transport==="cloud"
     ?await client.query("SELECT id FROM channel_accounts WHERE id=$1 AND platform='whatsapp' AND transport='cloud'",[accountId])
@@ -203,7 +203,8 @@ export async function ingestNormalizedMessage(client: import("pg").PoolClient, p
       await client.query("UPDATE whatsapp_groups SET participant_count=(SELECT count(*) FROM whatsapp_group_participants WHERE group_id=$1),updated_at=now() WHERE id=$1",[peer.groupId]);
     }
     const media=payload.media as {uploadId?:string}|undefined;
-    const quoteMetadata=payload.quotedWhatsappMessageId?JSON.stringify({quotedWhatsappMessageId:payload.quotedWhatsappMessageId,quotedParticipantJid:payload.quotedParticipantJid??null}):null;
+    const providerMetadata={...(payload.quotedWhatsappMessageId?{quotedWhatsappMessageId:payload.quotedWhatsappMessageId,quotedParticipantJid:payload.quotedParticipantJid??null}:{}),...(payload.adReferral&&typeof payload.adReferral==="object"?{adReferral:payload.adReferral}:{})};
+    const quoteMetadata=Object.keys(providerMetadata).length?JSON.stringify(providerMetadata):null;
     const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_provider_user_id,sender_display_name,provider_message_id,direction,kind,text_content,media_id,quoted_message_id,status,occurred_at,provider_payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,(SELECT id FROM messages WHERE account_id=$2 AND conversation_id=$1 AND provider_message_id=$10),$11,$12,$13) ON CONFLICT(account_id,provider_message_id) DO NOTHING RETURNING id",[peer.conversationId,accountId,payload.direction==="in"?senderJid:null,payload.direction==="in"?senderName:null,payload.whatsappMessageId,payload.direction,payload.kind,payload.text??null,media?.uploadId??null,payload.quotedWhatsappMessageId??null,payload.direction==="in"?"received":"sent",payload.occurredAt,quoteMetadata]);
     if(message.rowCount){
       await client.query("UPDATE conversations SET unread_count=unread_count+CASE WHEN $2='in' THEN 1 ELSE 0 END,status='open' WHERE id=$1",[peer.conversationId,payload.direction]);
@@ -219,7 +220,8 @@ export async function ingestNormalizedMessage(client: import("pg").PoolClient, p
   const contact = mergedContactId?await client.query("UPDATE contacts SET display_name=COALESCE(NULLIF($2,''),display_name),last_seen_at=now() WHERE id=$1 RETURNING id",[mergedContactId,String(payload.senderName??"")]):await client.query("INSERT INTO contacts(account_id,provider_user_id,phone_e164,display_name,last_seen_at) VALUES($1,$2,$3,$4,now()) ON CONFLICT(account_id,provider_user_id) DO UPDATE SET phone_e164=COALESCE(contacts.phone_e164,EXCLUDED.phone_e164),display_name=COALESCE(NULLIF(EXCLUDED.display_name,''),contacts.display_name),last_seen_at=now() RETURNING id", [accountId,chatJid,phone,String(payload.senderName ?? phone ?? chatJid.split("@")[0])]);
   const conversation = await client.query("INSERT INTO conversations(account_id,contact_id,unread_count,service_window_expires_at) VALUES($1,$2,CASE WHEN $3='in' THEN 1 ELSE 0 END,CASE WHEN $3='in' AND $4='cloud' THEN $5::timestamptz+interval '24 hours' END) ON CONFLICT(account_id,contact_id) DO UPDATE SET unread_count=conversations.unread_count+CASE WHEN $3='in' THEN 1 ELSE 0 END,status='open',service_window_expires_at=CASE WHEN $3='in' AND $4='cloud' THEN GREATEST(conversations.service_window_expires_at,EXCLUDED.service_window_expires_at) ELSE conversations.service_window_expires_at END RETURNING id", [accountId,contact.rows[0].id,payload.direction,source.transport??"web",payload.occurredAt]);
   const media=payload.media as {uploadId?:string}|undefined;
-  const quoteMetadata=payload.quotedWhatsappMessageId?JSON.stringify({quotedWhatsappMessageId:payload.quotedWhatsappMessageId}):null;
+  const providerMetadata={...(payload.quotedWhatsappMessageId?{quotedWhatsappMessageId:payload.quotedWhatsappMessageId}:{}),...(payload.adReferral&&typeof payload.adReferral==="object"?{adReferral:payload.adReferral}:{})};
+  const quoteMetadata=Object.keys(providerMetadata).length?JSON.stringify(providerMetadata):null;
   const message = await client.query("INSERT INTO messages(conversation_id,account_id,sender_contact_id,provider_message_id,direction,kind,text_content,media_id,quoted_message_id,status,occurred_at,provider_payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8,(SELECT id FROM messages WHERE account_id=$2 AND conversation_id=$1 AND provider_message_id=$9),$10,$11,$12) ON CONFLICT(account_id,provider_message_id) DO NOTHING RETURNING id", [conversation.rows[0].id,accountId,payload.direction === "in" ? contact.rows[0].id : null,payload.whatsappMessageId,payload.direction,payload.kind,payload.text ?? null,media?.uploadId??null,payload.quotedWhatsappMessageId??null,payload.direction === "in" ? "received" : "sent",payload.occurredAt,quoteMetadata]);
   if (message.rowCount){
     await client.query("UPDATE messages SET quoted_message_id=$1 WHERE account_id=$2 AND conversation_id=$3 AND quoted_message_id IS NULL AND provider_payload->>'quotedWhatsappMessageId'=$4",[message.rows[0].id,accountId,conversation.rows[0].id,payload.whatsappMessageId]);
