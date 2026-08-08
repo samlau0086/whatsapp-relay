@@ -89,17 +89,6 @@ function SearchableCreatableField({
     setOpen(false);
     setActiveIndex(0);
   }
-  function generateVariantCombinations() {
-    const dimensions = variantDimensions.map((dimension) => ({ name: dimension.name.trim(), values: [...new Set(dimension.values.split(",").map((value) => value.trim()).filter(Boolean))] })).filter((dimension) => dimension.name && dimension.values.length);
-    const combinations = dimensions.reduce<Record<string, string>[]>((all, dimension) => all.flatMap((current) => dimension.values.map((value) => ({ ...current, [dimension.name]: value }))), [{}]);
-    const parentTiers = tiers.map((tier) => ({ id: crypto.randomUUID(), minQuantity: tier.minQuantity, unitAmount: tier.unitAmount }));
-    setVariantRows((current) => combinations.slice(0, 500).map((attributes) => {
-      const existing = current.find((row) => JSON.stringify(row.attributes) === JSON.stringify(attributes));
-      if (existing) return existing;
-      const suffix = Object.values(attributes).map((value) => value.trim().replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "")).filter(Boolean).join("-");
-      return { id: crypto.randomUUID(), attributes, sku: [sku.trim(), suffix].filter(Boolean).join("-"), priceTiers: parentTiers.map((tier) => ({ ...tier, id: crypto.randomUUID() })), imageMediaId: null, imageName: "" };
-    }));
-  }
   return (
     <label className="product-taxonomy-field">
       {label} · 可选
@@ -463,6 +452,17 @@ export function ProductEditorDialog({
     setImageMediaId(asset.id);
     setImageName(asset.fileName);
     setImagePickerOpen(false);
+  }
+  function generateVariantCombinations() {
+    const dimensions = variantDimensions.map((dimension) => ({ name: dimension.name.trim(), values: [...new Set(dimension.values.split(",").map((value) => value.trim()).filter(Boolean))] })).filter((dimension) => dimension.name && dimension.values.length);
+    const combinations = dimensions.reduce<Record<string, string>[]>((all, dimension) => all.flatMap((current) => dimension.values.map((value) => ({ ...current, [dimension.name]: value }))), [{}]);
+    const parentTiers = tiers.map((tier) => ({ id: crypto.randomUUID(), minQuantity: tier.minQuantity, unitAmount: tier.unitAmount }));
+    setVariantRows((current) => combinations.slice(0, 500).map((attributes) => {
+      const existing = current.find((row) => JSON.stringify(row.attributes) === JSON.stringify(attributes));
+      if (existing) return existing;
+      const suffix = Object.values(attributes).map((value) => value.trim().replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "")).filter(Boolean).join("-");
+      return { id: crypto.randomUUID(), attributes, sku: [sku.trim(), suffix].filter(Boolean).join("-"), priceTiers: parentTiers.map((tier) => ({ ...tier, id: crypto.randomUUID() })), imageMediaId: null, imageName: "" };
+    }));
   }
   return (
     <>
