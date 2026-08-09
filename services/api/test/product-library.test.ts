@@ -139,6 +139,8 @@ test("variant products persist their selected order-item variant",async()=>{
     readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
     readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
   ]);
+  assert.ok(migration.indexOf("CREATE TABLE IF NOT EXISTS product_variants")<migration.indexOf("ADD COLUMN IF NOT EXISTS variant_id"));
+  assert.match(migration,/CREATE TABLE IF NOT EXISTS product_variant_price_tiers/);
   assert.match(migration,/ADD COLUMN IF NOT EXISTS variant_id uuid REFERENCES product_variants\(id\) ON DELETE SET NULL/);
   assert.match(migration,/CREATE INDEX IF NOT EXISTS order_items_variant_idx/);
   assert.match(server,/'variantId',i\.variant_id/);
