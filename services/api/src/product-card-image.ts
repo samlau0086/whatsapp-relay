@@ -2,7 +2,7 @@ import sharp from "sharp";
 import { wrapLine } from "./order-image.js";
 import type { ProductCardTemplate } from "./product-card-template.js";
 
-export type ProductCardRenderProduct={name:string;sku:string;currency:string;priceTiers:Array<{minQuantity:number;unitAmount:number}>;variants?:Array<{attributes:Record<string,string>;sku:string;priceTiers:Array<{minQuantity:number;unitAmount:number}>}>;tags:Array<{name:string}>;image?:Buffer};
+export type ProductCardRenderProduct={name:string;sku:string;currency:string;priceTiers:Array<{minQuantity:number;unitAmount:number}>;variants?:Array<{attributes:Record<string,string>;sku:string;priceTiers:Array<{minQuantity:number;unitAmount:number}>;image?:Buffer}>;tags:Array<{name:string}>;image?:Buffer};
 const WIDTH=1080,PADDING=64,CONTENT_WIDTH=WIDTH-PADDING*2;
 
 export async function renderProductCards(template:ProductCardTemplate,products:ProductCardRenderProduct[],showPrice:boolean):Promise<Buffer>{
@@ -26,6 +26,7 @@ export async function renderProductCardGrid(template:ProductCardTemplate,product
 
 async function renderCard(template:ProductCardTemplate,product:ProductCardRenderProduct,showPrice:boolean):Promise<Buffer>{
   const imageData=product.image?(await sharp(product.image).rotate().resize(900,620,{fit:"cover"}).png().toBuffer()).toString("base64"):null;
+  const variantImageData=await Promise.all((product.variants??[]).map(async variant=>variant.image?(await sharp(variant.image).rotate().resize(180,180,{fit:"contain",background:"#FFFFFF"}).png().toBuffer()).toString("base64"):null));
   const fragments:string[]=[];let y=36;
   for(const block of template.blocks){
     if(block.type==="priceTiers"&&!showPrice)continue;
@@ -37,11 +38,33 @@ async function renderCard(template:ProductCardTemplate,product:ProductCardRender
       y+=height+18;continue;
     }
     if(block.type==="divider"){fragments.push(`<line x1="${PADDING}" y1="${y+10}" x2="${WIDTH-PADDING}" y2="${y+10}" stroke="#DCE7E1" stroke-width="3"/>`);y+=34;continue;}
+    if(block.type==="variants"&&product.variants?.length){
+      const fontSize=block.fontSize==="large"?32:block.fontSize==="small"?23:27,priceFontSize=Math.max(20,fontSize-3),lineHeight=fontSize+10,priceLineHeight=priceFontSize+9,label=block.label?.trim(),bg=block.backgroundColor??"#F8FBF9",color=block.textColor??"#20372D";
+      const layouts=product.variants.map((variant,index)=>{
+        const hasImage=Boolean(variantImageData[index]),attributes=Object.entries(variant.attributes).map(([key,value])=>`${key}: ${value}`).join(" / ")||variant.sku,attributeLines=wrapLine(attributes,hasImage?38:54),tiers=showPrice?variant.priceTiers:[];
+        const textHeight=attributeLines.length*lineHeight+priceLineHeight+tiers.length*priceLineHeight,rowHeight=Math.max(hasImage?176:0,textHeight+30);
+        return{variant,hasImage,attributeLines,tiers,rowHeight};
+      });
+      const sectionPadding=16,labelHeight=label?fontSize+20:0,rowGap=12,height=sectionPadding*2+labelHeight+layouts.reduce((sum,layout)=>sum+layout.rowHeight,0)+rowGap*Math.max(0,layouts.length-1);
+      fragments.push(`<rect x="${PADDING}" y="${y}" width="${CONTENT_WIDTH}" height="${height}" rx="16" fill="${escapeXml(bg)}" stroke="#DCE7E1"/>`);
+      if(label){const align=block.align??"left",labelX=align==="center"?WIDTH/2:align==="right"?WIDTH-PADDING-20:PADDING+20,anchor=align==="center"?"middle":align==="right"?"end":"start";fragments.push(`<text x="${labelX}" y="${y+fontSize+12}" text-anchor="${anchor}" font-family="Noto Sans,Noto Sans CJK SC,sans-serif" font-size="${fontSize}" font-weight="700" fill="${escapeXml(color)}">${escapeXml(label)}</text>`);}
+      let rowY=y+sectionPadding+labelHeight;
+      layouts.forEach((layout,index)=>{
+        const rowX=PADDING+16,rowWidth=CONTENT_WIDTH-32,imageSize=144,textX=layout.hasImage?rowX+imageSize+34:rowX+18;
+        fragments.push(`<rect x="${rowX}" y="${rowY}" width="${rowWidth}" height="${layout.rowHeight}" rx="10" fill="#FFFFFF" stroke="#D9E5DF"/>`);
+        if(layout.hasImage)fragments.push(`<image x="${rowX+16}" y="${rowY+(layout.rowHeight-imageSize)/2}" width="${imageSize}" height="${imageSize}" preserveAspectRatio="xMidYMid meet" href="data:image/png;base64,${variantImageData[index]}"/>`);
+        let textY=rowY+fontSize+18;
+        layout.attributeLines.forEach(line=>{fragments.push(`<text x="${textX}" y="${textY}" font-family="Noto Sans,Noto Sans CJK SC,sans-serif" font-size="${fontSize}" font-weight="700" fill="${escapeXml(color)}">${escapeXml(line)}</text>`);textY+=lineHeight;});
+        fragments.push(`<text x="${textX}" y="${textY}" font-family="Noto Sans,Noto Sans CJK SC,sans-serif" font-size="${priceFontSize}" font-weight="500" fill="#607168">SKU: ${escapeXml(layout.variant.sku)}</text>`);textY+=priceLineHeight;
+        layout.tiers.forEach(tier=>{fragments.push(`<text x="${textX}" y="${textY}" font-family="Noto Sans,Noto Sans CJK SC,sans-serif" font-size="${priceFontSize}" font-weight="600" fill="${escapeXml(color)}">${escapeXml(`${tier.minQuantity}+ units  ${product.currency} ${tier.unitAmount.toFixed(2)} / unit`)}</text>`);textY+=priceLineHeight;});
+        rowY+=layout.rowHeight+rowGap;
+      });
+      y+=height+14;continue;
+    }
     let lines:string[]=[];const label=block.label?.trim();
     if(block.type==="productName")lines=[label?`${label}: ${product.name}`:product.name];
     if(block.type==="sku")lines=[label?`${label}: ${product.sku}`:product.sku];
     if(block.type==="priceTiers"&&!(product.variants?.length))lines=[...(label?[label]:[]),...product.priceTiers.map((tier,index)=>`${tier.minQuantity}+ ${index===0?"":"units / "}${product.currency} ${tier.unitAmount.toFixed(2)} / unit`)];
-    if(block.type==="variants"&&product.variants?.length)lines=[...(label?[label]:[]),...product.variants.map(variant=>{const attributes=Object.entries(variant.attributes).map(([key,value])=>`${key}: ${value}`).join(" / ");const price=variant.priceTiers[0]?.unitAmount;return `${attributes}${attributes?" / ":""}${variant.sku}${price===undefined?"":` / ${product.currency} ${price.toFixed(2)}`}`;})];
     if(block.type==="tags")lines=product.tags.length?[`${label?`${label}: `:""}${product.tags.map(tag=>tag.name).join(" / ")}`]:[];
     if(block.type==="customText")lines=replaceVariables(block.text??"",product).split("\n");
     if(!lines.length)continue;

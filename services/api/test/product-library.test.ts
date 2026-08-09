@@ -115,6 +115,8 @@ test("the product editor previews the selected media image",async()=>{
   assert.match(dialog,/MediaImagePreview/);
   assert.match(dialog,/product-dialog-image-preview/);
   assert.match(dialog,/产品图片预览/);
+  assert.match(dialog,/product-variant-image-preview/);
+  assert.match(dialog,/移除变体图片/);
   const mediaDialog=await readFile(new URL("../../../app/product-image-media-dialog.tsx",import.meta.url),"utf8");
   assert.match(mediaDialog,/requestRef=useRef\(request\)/);
   assert.match(mediaDialog,/\},\[mediaId\]\)/);
@@ -131,6 +133,16 @@ test("product card sending recovers from a lost response without duplicating the
   assert.match(dialog,/正在确认发送状态/);
   assert.match(server,/product-cards\/batches\/:batchId/);
   assert.match(server,/left\(client_message_id,length\(\$3\)\+1\)=\$3\|\|':'/);
+});
+
+test("product cards load variant media and render all variant price tiers",async()=>{
+  const [server,image]=await Promise.all([readFile(new URL("../src/server.ts",import.meta.url),"utf8"),readFile(new URL("../src/product-card-image.ts",import.meta.url),"utf8")]);
+  assert.match(server,/'objectKey',vm\.object_key/);
+  assert.match(server,/LEFT JOIN media vm ON vm\.id=v\.image_media_id AND vm\.status='ready'/);
+  assert.match(server,/loadProductCardImage\(variant\.objectKey\)/);
+  assert.match(image,/variantImageData/);
+  assert.match(image,/layout\.tiers\.forEach/);
+  assert.doesNotMatch(image,/variant\.priceTiers\[0\]/);
 });
 
 test("variant products persist their selected order-item variant",async()=>{

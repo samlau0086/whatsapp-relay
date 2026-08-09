@@ -47,6 +47,16 @@ test("product cards render priced, unpriced, and combined PNG output",async()=>{
   assert.ok((await sharp(combined).metadata()).height!>(await sharp(priced).metadata()).height!);
 });
 
+test("variant product cards render each image and every visible price tier",async()=>{
+  const red=await sharp({create:{width:120,height:120,channels:4,background:"#D9363E"}}).png().toBuffer(),blue=await sharp({create:{width:120,height:120,channels:4,background:"#2764C7"}}).png().toBuffer();
+  const product={name:"Variant perfume",sku:"PERFUME-V",currency:"USD",priceTiers:[],tags:[],variants:[
+    {attributes:{Color:"Red",Size:"100 ml"},sku:"PERFUME-RED",image:red,priceTiers:[{minQuantity:1,unitAmount:160},{minQuantity:10,unitAmount:133.33},{minQuantity:50,unitAmount:120}]},
+    {attributes:{Color:"Blue",Size:"100 ml"},sku:"PERFUME-BLUE",image:blue,priceTiers:[{minQuantity:1,unitAmount:165},{minQuantity:12,unitAmount:140}]},
+  ]};
+  const priced=await renderProductCards(DEFAULT_PRODUCT_CARD_TEMPLATE,[product],true),unpriced=await renderProductCards(DEFAULT_PRODUCT_CARD_TEMPLATE,[product],false),pricedMetadata=await sharp(priced).metadata(),unpricedMetadata=await sharp(unpriced).metadata();
+  assert.equal(pricedMetadata.format,"png");assert.equal(pricedMetadata.width,1080);assert.ok((pricedMetadata.height??0)>(unpricedMetadata.height??0));assert.notEqual(priced.length,unpriced.length);
+});
+
 test("product cards render a bounded grid collage",async()=>{
   const product={name:"Grid perfume",sku:"GRID-001",currency:"USD",priceTiers:[{minQuantity:1,unitAmount:25}],tags:[]},grid=await renderProductCardGrid(DEFAULT_PRODUCT_CARD_TEMPLATE,Array.from({length:6},(_,index)=>({...product,sku:`GRID-${index+1}`})),true,2,3),metadata=await sharp(grid).metadata();
   assert.equal(metadata.format,"png");assert.equal(metadata.width,2160);assert.ok((metadata.height??0)>720);
