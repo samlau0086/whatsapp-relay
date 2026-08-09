@@ -2,7 +2,7 @@ import sharp from "sharp";
 import { wrapLine } from "./order-image.js";
 import type { ProductCardTemplate } from "./product-card-template.js";
 
-export type ProductCardRenderProduct={name:string;sku:string;currency:string;priceTiers:Array<{minQuantity:number;unitAmount:number}>;tags:Array<{name:string}>;image?:Buffer};
+export type ProductCardRenderProduct={name:string;sku:string;currency:string;priceTiers:Array<{minQuantity:number;unitAmount:number}>;variants?:Array<{attributes:Record<string,string>;sku:string;priceTiers:Array<{minQuantity:number;unitAmount:number}>}>;tags:Array<{name:string}>;image?:Buffer};
 const WIDTH=1080,PADDING=64,CONTENT_WIDTH=WIDTH-PADDING*2;
 
 export async function renderProductCards(template:ProductCardTemplate,products:ProductCardRenderProduct[],showPrice:boolean):Promise<Buffer>{
@@ -40,8 +40,9 @@ async function renderCard(template:ProductCardTemplate,product:ProductCardRender
     let lines:string[]=[];const label=block.label?.trim();
     if(block.type==="productName")lines=[label?`${label}: ${product.name}`:product.name];
     if(block.type==="sku")lines=[label?`${label}: ${product.sku}`:product.sku];
-    if(block.type==="priceTiers")lines=[...(label?[label]:[]),...product.priceTiers.map((tier,index)=>`${tier.minQuantity}+ ${index===0?"":"units · "}${product.currency} ${tier.unitAmount.toFixed(2)} / unit`)];
-    if(block.type==="tags")lines=product.tags.length?[`${label?`${label}: `:""}${product.tags.map(tag=>tag.name).join(" · ")}`]:[];
+    if(block.type==="priceTiers"&&!(product.variants?.length))lines=[...(label?[label]:[]),...product.priceTiers.map((tier,index)=>`${tier.minQuantity}+ ${index===0?"":"units / "}${product.currency} ${tier.unitAmount.toFixed(2)} / unit`)];
+    if(block.type==="variants"&&product.variants?.length)lines=[...(label?[label]:[]),...product.variants.map(variant=>{const attributes=Object.entries(variant.attributes).map(([key,value])=>`${key}: ${value}`).join(" / ");const price=variant.priceTiers[0]?.unitAmount;return `${attributes}${attributes?" / ":""}${variant.sku}${price===undefined?"":` / ${product.currency} ${price.toFixed(2)}`}`;})];
+    if(block.type==="tags")lines=product.tags.length?[`${label?`${label}: `:""}${product.tags.map(tag=>tag.name).join(" / ")}`]:[];
     if(block.type==="customText")lines=replaceVariables(block.text??"",product).split("\n");
     if(!lines.length)continue;
     const fontSize=block.fontSize==="large"?38:block.fontSize==="small"?24:30,lineHeight=fontSize+14,wrapped=lines.flatMap(line=>wrapLine(line,58));
