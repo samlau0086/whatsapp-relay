@@ -29,7 +29,7 @@ test("product routes enforce shared media, snapshots, idempotency, and soft dele
   assert.match(server,/订单 #\$\{orderNumber\}/);
   assert.match(server,/SELECT t\.name,t\.color FROM conversation_tags/);
   assert.match(server,/deleted_at=now\(\),updated_at=now\(\)/);
-  assert.match(server,/INSERT INTO order_items\(order_id,position,product_name,product_sku,quantity,unit_amount,weight_amount,weight_unit,image_media_id,product_id,shipping_class_id,shipping_class_name,internal_note_snapshot\)/);
+  assert.match(server,/INSERT INTO order_items\(order_id,position,product_name,product_sku,quantity,unit_amount,weight_amount,weight_unit,image_media_id,product_id,variant_id,shipping_class_id,shipping_class_name,internal_note_snapshot\)/);
   assert.match(server,/product\.create/);
   assert.match(server,/product\.update/);
   assert.match(server,/product\.delete/);
@@ -131,6 +131,20 @@ test("product card sending recovers from a lost response without duplicating the
   assert.match(dialog,/正在确认发送状态/);
   assert.match(server,/product-cards\/batches\/:batchId/);
   assert.match(server,/left\(client_message_id,length\(\$3\)\+1\)=\$3\|\|':'/);
+});
+
+test("variant products persist their selected order-item variant",async()=>{
+  const [migration,server,inbox]=await Promise.all([
+    readFile(new URL("../../../infra/postgres/migrations/063_order_item_variant_snapshot.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+  ]);
+  assert.match(migration,/ADD COLUMN IF NOT EXISTS variant_id uuid REFERENCES product_variants\(id\) ON DELETE SET NULL/);
+  assert.match(migration,/CREATE INDEX IF NOT EXISTS order_items_variant_idx/);
+  assert.match(server,/'variantId',i\.variant_id/);
+  assert.match(server,/productId,item\.variantId\?\?null,shippingClass/);
+  assert.match(inbox,/chooseCatalogVariant/);
+  assert.match(inbox,/variantId:product\.variantId\?String\(product\.variantId\):null/);
 });
 
 test("bulk product editing supports category and shipping class",async()=>{
