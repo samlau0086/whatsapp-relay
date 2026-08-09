@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Pencil, Plus, ShoppingBag, Trash2, UploadCloud, X } from "lucide-react";
+import { ArrowUpRight, Check, Pencil, Plus, ShoppingBag, Trash2, UploadCloud, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { confirmAction } from "./confirmation-ui";
 import {
@@ -682,7 +682,7 @@ export function ProductEditorDialog({
           </div>
           <section className="product-supplier-editor">
             <header><span><b>供应商链接</b><small>仅供内部采购参考，可灵活增删</small></span><button type="button" onClick={()=>setSupplierLinks(all=>[...all,{id:crypto.randomUUID(),label:"",url:""}])} disabled={supplierLinks.length>=30}><Plus size={13}/>添加链接</button></header>
-            {supplierLinks.map(link=><div key={link.id}><input value={link.label} maxLength={120} placeholder="名称，如 1688 供应商" onChange={event=>setSupplierLinks(all=>all.map(item=>item.id===link.id?{...item,label:event.target.value}:item))}/><input type="url" value={link.url} maxLength={2000} placeholder="https://..." onChange={event=>setSupplierLinks(all=>all.map(item=>item.id===link.id?{...item,url:event.target.value}:item))}/><button type="button" aria-label="删除供应商链接" onClick={()=>setSupplierLinks(all=>all.filter(item=>item.id!==link.id))}><Trash2 size={13}/></button></div>)}
+            {supplierLinks.map(link=>{const href=link.url.trim(),openable=/^https?:\/\//i.test(href);return <div key={link.id}><input value={link.label} maxLength={120} placeholder="名称，如 1688 供应商" onChange={event=>setSupplierLinks(all=>all.map(item=>item.id===link.id?{...item,label:event.target.value}:item))}/><input type="url" value={link.url} maxLength={2000} placeholder="https://..." onChange={event=>setSupplierLinks(all=>all.map(item=>item.id===link.id?{...item,url:event.target.value}:item))}/><button type="button" className="supplier-link-open" aria-label="打开供应商链接" title={openable?"打开供应商链接":"请输入完整链接后打开"} disabled={!openable} onClick={()=>window.open(href,"_blank","noopener,noreferrer")}><ArrowUpRight size={13}/></button><button type="button" aria-label="删除供应商链接" onClick={()=>setSupplierLinks(all=>all.filter(item=>item.id!==link.id))}><Trash2 size={13}/></button></div>;})}
           </section>
           <label>
             内部备注 · 仅内部可见
