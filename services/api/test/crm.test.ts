@@ -152,6 +152,7 @@ test("contact profile migration and routes preserve account-scoped contacts",asy
   assert.match(migration,/REFERENCES contacts\(id\) ON DELETE CASCADE/);
   assert.match(migration,/CREATE TABLE IF NOT EXISTS contact_methods/);
   assert.match(migrator,/030_contact_profiles\.sql/);
+  assert.match(migrator,/063_order_item_variant_snapshot\.sql/);
   assert.match(server,/\/api\/v1\/contacts/);
   assert.match(server,/contact\.profile\.update/);
   assert.match(server,/contact\.create/);
