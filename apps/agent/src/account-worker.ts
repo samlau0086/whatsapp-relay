@@ -144,6 +144,8 @@ async function execute(command:Command):Promise<void>{
       if(!subject)throw new Error("Missing group subject");
       if(participants.length<1)throw new Error("At least one participant is required");
       const group=await socket.groupCreate(subject,participants);
+      const metadata=await socket.groupMetadata(group.id);
+      emitGroupSnapshot(init,metadata);
       emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",whatsappMessageId:group.id,completedAt:new Date().toISOString()});
       return;
     }
