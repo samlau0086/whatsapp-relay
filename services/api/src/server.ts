@@ -723,6 +723,36 @@ app.patch("/api/v1/contacts/:id",{preHandler:authenticate},async(request,reply)=
   return contactProfileById(pool,id);
 });
 
+app.patch("/api/v1/contacts/bulk-update",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const body=(request.body??{}) as {contactIds?:unknown;country?:unknown;preferredLanguage?:unknown;timezone?:unknown};
+  const ids=Array.isArray(body.contactIds)?body.contactIds.filter((id):id is string=>typeof id==="string"&&UUID_PATTERN.test(id)):[];
+  if(!ids.length)return reply.code(400).send({error:"contact_ids_required"});
+  if(body.timezone!==undefined&&body.timezone!==null&&String(body.timezone)&&!isValidTimeZone(String(body.timezone)))return reply.code(400).send({error:"invalid_timezone",message:"请输入有效的 IANA 时区"});
+  if(body.preferredLanguage!==undefined&&body.preferredLanguage!==null&&!/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(String(body.preferredLanguage)))return reply.code(400).send({error:"invalid_language"});
+  const fields={country:body.country===undefined?undefined:String(body.country??"").trim()||null,preferredLanguage:body.preferredLanguage===undefined?undefined:String(body.preferredLanguage??"").trim()||null,timezone:body.timezone===undefined?undefined:String(body.timezone??"").trim()||null};
+  if(Object.values(fields).every(value=>value===undefined))return reply.code(400).send({error:"no_changes"});
+  const updated=await transaction(async client=>{const found=await client.query("SELECT id,account_id FROM contacts WHERE id=ANY($1::uuid[]) AND entity_type='person'",[ids]);const allowed=found.rows.filter(row=>canAccessAccount(request.principal,row.account_id)).map(row=>String(row.id));if(!allowed.length)return 0;for(const id of allowed){await client.query("UPDATE contacts SET country=CASE WHEN $2::boolean THEN $3 ELSE country END,preferred_language=CASE WHEN $4::boolean THEN $5 ELSE preferred_language END,timezone=CASE WHEN $6::boolean THEN $7 ELSE timezone END,updated_at=now() WHERE id=$1",[id,fields.country!==undefined,fields.country,fields.preferredLanguage!==undefined,fields.preferredLanguage,fields.timezone!==undefined,fields.timezone]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'contact.bulk_update','contact',$2,$3)",[request.principal!.id,id,JSON.stringify(fields)]);}return allowed.length;});
+  return {updated};
+});
+
+app.post("/api/v1/contacts/create-group",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const body=(request.body??{}) as {contactIds?:unknown;subject?:unknown};
+  const contactIds=Array.isArray(body.contactIds)?body.contactIds.filter((id):id is string=>typeof id==="string"&&UUID_PATTERN.test(id)):[];
+  const subject=String(body.subject??"").trim().slice(0,100);
+  if(!subject)return reply.code(400).send({error:"group_subject_required",message:"请填写群名称"});
+  if(!contactIds.length)return reply.code(400).send({error:"contact_ids_required"});
+  const queued=await transaction(async client=>{const contacts=await client.query("SELECT co.id,co.account_id,co.provider_user_id,a.agent_id,a.transport,a.status FROM contacts co JOIN channel_accounts a ON a.id=co.account_id WHERE co.id=ANY($1::uuid[]) AND co.entity_type='person'",[contactIds]);if(contacts.rowCount!==contactIds.length)return"contacts_not_found" as const;const accountId=String(contacts.rows[0].account_id);if(!canAccessAccount(request.principal,accountId))return"account_forbidden" as const;if(contacts.rows.some(row=>String(row.account_id)!==accountId))return"multiple_accounts" as const;const account=contacts.rows[0];if(account.transport!=="web"||!account.agent_id)return"agent_required" as const;const participantJids=[...new Set(contacts.rows.map(row=>String(row.provider_user_id)).filter(jid=>/^\d{7,15}@s\.whatsapp\.net$/.test(jid)))];if(!participantJids.length)return"invalid_participants" as const;const command=await client.query("INSERT INTO outbound_commands(agent_id,account_id,command,payload) VALUES($1,$2,'create_group',$3) RETURNING id",[account.agent_id,accountId,JSON.stringify({subject,participantJids})]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'contact.group_create','account',$2,$3)",[request.principal!.id,accountId,JSON.stringify({subject,contactIds,participantCount:participantJids.length,commandId:command.rows[0].id})]);return{commandId:String(command.rows[0].id),agentId:String(account.agent_id)};});
+  if(queued==="contacts_not_found")return reply.code(404).send({error:queued});
+  if(queued==="account_forbidden")return reply.code(403).send({error:queued});
+  if(queued==="multiple_accounts")return reply.code(409).send({error:queued,message:"创建群的联系人必须属于同一个 WhatsApp 账号"});
+  if(queued==="agent_required")return reply.code(409).send({error:queued,message:"仅已连接网页版 WhatsApp Agent 的账号支持创建群"});
+  if(queued==="invalid_participants")return reply.code(400).send({error:queued});
+  void dispatchPending(queued.agentId);
+  return reply.code(202).send({commandId:queued.commandId});
+});
+
 app.delete("/api/v1/contacts/:id",{preHandler:authenticate},async(request,reply)=>{
   if(request.principal?.kind!=="user"||!["admin","supervisor"].includes(request.principal.role??""))return reply.code(403).send({error:"supervisor_required",message:"只有管理员或主管可以删除联系人"});
   const principal=request.principal,{id}=request.params as {id:string};

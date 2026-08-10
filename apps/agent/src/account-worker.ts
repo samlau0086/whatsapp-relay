@@ -138,6 +138,15 @@ async function uploadInboundMedia(options:Init,bytes:Buffer,mime:string,fileName
 async function execute(command:Command):Promise<void>{
   if(!socket||!init||!connectionOpen){emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"deferred",errorCode:"account_offline",errorMessage:"WhatsApp account is offline; command remains queued",completedAt:new Date().toISOString()});return;}
   try{
+    if(command.command==="create_group"){
+      const subject=String(command.payload.subject??"").trim().slice(0,100);
+      const participants=Array.isArray(command.payload.participantJids)?[...new Set(command.payload.participantJids.map(String).filter(jid=>/^\d{7,15}@s\.whatsapp\.net$/.test(jid)))]:[];
+      if(!subject)throw new Error("Missing group subject");
+      if(participants.length<1)throw new Error("At least one participant is required");
+      const group=await socket.groupCreate(subject,participants);
+      emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",whatsappMessageId:group.id,completedAt:new Date().toISOString()});
+      return;
+    }
     const type=String(command.payload.type??"text");let content:AnyMessageContent;
     if(type==="text")content={text:String(command.payload.text??"")};else{const media=await downloadOutboundMedia(init,String(command.payload.mediaId??""));const caption=command.payload.text?String(command.payload.text):undefined;if(type==="image")content={image:media.bytes,mimetype:media.mime,caption};else if(type==="video")content={video:media.bytes,mimetype:media.mime,caption};else if(type==="audio")content={audio:media.bytes,mimetype:media.mime,ptt:true};else content={document:media.bytes,mimetype:media.mime,fileName:media.name,caption};}
     if(command.command==="publish_status"){
