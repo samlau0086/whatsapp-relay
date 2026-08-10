@@ -93,6 +93,12 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.match(conversationRoute,/task\.conversation_id=c\.id OR \(task\.conversation_id IS NULL AND task\.contact_id=c\.contact_id\)/);
   assert.match(conversationRoute,/filter==="groups"/);
   assert.match(conversationRoute,/group_contact\.entity_type='group'/);
+  assert.match(conversationRoute,/filter==="groups"\?"AND c\.status NOT IN \('closed','archived'\)/);
+  assert.match(conversationRoute,/filter==="mine"\?"AND c\.status<>'closed'/);
+  assert.match(conversationRoute,/filter==="unassigned"\?"AND c\.status<>'closed'/);
+  assert.match(conversationRoute,/filter==="favorite"\?"AND c\.status<>'closed'/);
+  assert.match(conversationRoute,/filter==="reminders"\?"AND c\.status<>'closed'/);
+  assert.match(conversationRoute,/filter==="all"\|\|!query\.status\?"AND c\.status NOT IN \('closed','archived'\)/);
   assert.doesNotMatch(conversationRoute,/\$10::text IS NULL OR/);
   assert.match(conversationRoute,/parameter_types AS NOT MATERIALIZED/);
   assert.match(conversationRoute,/\$4::text keyword_value,\$9::uuid principal_user_id,\$10::text filter_value,\$11::timestamptz cursor_at,\$12::uuid cursor_id/);
@@ -107,6 +113,14 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.doesNotMatch(countsRoute,/LEFT JOIN LATERAL \(\s*SELECT task\.due_at/);
   assert.doesNotMatch(countsRoute,/WITH base AS MATERIALIZED/);
   assert.match(countsRoute,/co\.entity_type='group'/);
+  assert.match(countsRoute,/COUNT\(\*\) FILTER\(WHERE c\.status NOT IN \('closed','archived'\)\)::int all_count/);
+  assert.match(countsRoute,/COUNT\(\*\) FILTER\(WHERE c\.status<>'closed' AND c\.assigned_user_id=\$7::uuid\)::int mine/);
+  assert.match(countsRoute,/COUNT\(\*\) FILTER\(WHERE c\.status<>'closed' AND c\.assigned_user_id IS NULL\)::int unassigned/);
+  assert.match(countsRoute,/COUNT\(\*\) FILTER\(WHERE c\.status<>'closed' AND c\.favorite\)::int favorite/);
+  assert.match(countsRoute,/co\.entity_type='group' AND c\.status NOT IN \('closed','archived'\)/);
+  assert.match(countsRoute,/task\.conversation_id IS NOT NULL AND task\.assigned_user_id=\$7::uuid AND c\.status<>'closed'/);
+  assert.match(countsRoute,/task\.conversation_id IS NULL AND task\.contact_id IS NOT NULL AND task\.assigned_user_id=\$7::uuid AND c\.status<>'closed'/);
+  assert.match(countsRoute,/linked\.status<>'closed'/);
   const primaryCountQuery=countsRoute.slice(countsRoute.indexOf('pool.query(`SELECT COUNT(*) FILTER'),countsRoute.indexOf('pool.query(`SELECT COUNT(*)::int groups'));
   assert.doesNotMatch(primaryCountQuery,/JOIN contacts/);
   assert.match(countsRoute,/c\.account_id=co\.account_id AND c\.contact_id=co\.id/);
@@ -114,6 +128,12 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.match(countsRoute,/groups:Number\(groupRow\.groups\?\?0\)/);
   const summaryRoute=server.slice(server.indexOf('app.get("/api/v1/conversations/:id/summary"'),server.indexOf('app.get("/api/v1/conversations/:id/group"'));
   assert.match(summaryRoute,/filter==="groups"&&row\.conversation_type==="group"/);
+  assert.match(summaryRoute,/filter==="all"&&row\.status!=="closed"&&row\.status!=="archived"/);
+  assert.match(summaryRoute,/filter==="groups"&&row\.conversation_type==="group"&&row\.status!=="closed"&&row\.status!=="archived"/);
+  assert.match(summaryRoute,/filter==="mine"&&row\.status!=="closed"/);
+  assert.match(summaryRoute,/filter==="unassigned"&&row\.status!=="closed"/);
+  assert.match(summaryRoute,/filter==="favorite"&&row\.status!=="closed"/);
+  assert.match(summaryRoute,/filter==="reminders"&&row\.status!=="closed"/);
 });
 
 test("performance reports retain representative HTTP failure details",async()=>{
