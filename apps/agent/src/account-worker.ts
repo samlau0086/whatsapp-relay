@@ -144,9 +144,12 @@ async function execute(command:Command):Promise<void>{
       if(!subject)throw new Error("Missing group subject");
       if(participants.length<1)throw new Error("At least one participant is required");
       const group=await socket.groupCreate(subject,participants);
-      const metadata=await socket.groupMetadata(group.id);
-      emitGroupSnapshot(init,metadata);
+      // groupCreate already returns the authoritative group identity. Do not turn a
+      // successful WhatsApp create into a failed command because a follow-up metadata
+      // request is temporarily unavailable.
+      emitGroupSnapshot(init,group);
       emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",whatsappMessageId:group.id,completedAt:new Date().toISOString()});
+      void socket.groupMetadata(group.id).then(metadata=>emitGroupSnapshot(init!,metadata)).catch(error=>emit({type:"diagnostic",level:"warn",accountId:init!.accountId,message:"group_metadata_refresh_failed",detail:describeSendError(error)}));
       return;
     }
     const type=String(command.payload.type??"text");let content:AnyMessageContent;

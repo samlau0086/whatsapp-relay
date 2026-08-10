@@ -743,14 +743,25 @@ app.post("/api/v1/contacts/create-group",{preHandler:authenticate},async(request
   const subject=String(body.subject??"").trim().slice(0,100);
   if(!subject)return reply.code(400).send({error:"group_subject_required",message:"请填写群名称"});
   if(!contactIds.length)return reply.code(400).send({error:"contact_ids_required"});
-  const queued=await transaction(async client=>{const contacts=await client.query("SELECT co.id,co.account_id,co.provider_user_id,a.agent_id,a.transport,a.status FROM contacts co JOIN channel_accounts a ON a.id=co.account_id WHERE co.id=ANY($1::uuid[]) AND co.entity_type='person'",[contactIds]);if(contacts.rowCount!==contactIds.length)return"contacts_not_found" as const;const accountId=String(contacts.rows[0].account_id);if(!canAccessAccount(request.principal,accountId))return"account_forbidden" as const;if(contacts.rows.some(row=>String(row.account_id)!==accountId))return"multiple_accounts" as const;const account=contacts.rows[0];if(account.transport!=="web"||!account.agent_id)return"agent_required" as const;const participantJids=[...new Set(contacts.rows.map(row=>String(row.provider_user_id)).filter(jid=>/^\d{7,15}@s\.whatsapp\.net$/.test(jid)))];if(!participantJids.length)return"invalid_participants" as const;const command=await queueGroupCreateCommand(client,{accountId,subject,participantJids});await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'contact.group_create','account',$2,$3)",[request.principal!.id,accountId,JSON.stringify({subject,contactIds,participantCount:participantJids.length,commandId:command.commandId})]);return command;});
+  const queued=await transaction(async client=>{const contacts=await client.query("SELECT co.id,co.account_id,co.provider_user_id,a.agent_id,a.transport,a.status,agent.capabilities FROM contacts co JOIN channel_accounts a ON a.id=co.account_id LEFT JOIN agents agent ON agent.id=a.agent_id WHERE co.id=ANY($1::uuid[]) AND co.entity_type='person'",[contactIds]);if(contacts.rowCount!==contactIds.length)return"contacts_not_found" as const;const accountId=String(contacts.rows[0].account_id);if(!canAccessAccount(request.principal,accountId))return"account_forbidden" as const;if(contacts.rows.some(row=>String(row.account_id)!==accountId))return"multiple_accounts" as const;const account=contacts.rows[0];if(account.transport!=="web"||!account.agent_id)return"agent_required" as const;if(!Array.isArray(account.capabilities)||!account.capabilities.includes("group_chat_v1"))return"agent_upgrade_required" as const;const participantJids=[...new Set(contacts.rows.map(row=>String(row.provider_user_id)).filter(jid=>/^\d{7,15}@s\.whatsapp\.net$/.test(jid)))];if(participantJids.length!==contactIds.length)return"invalid_participants" as const;const command=await queueGroupCreateCommand(client,{accountId,subject,participantJids});await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'contact.group_create','account',$2,$3)",[request.principal!.id,accountId,JSON.stringify({subject,contactIds,participantCount:participantJids.length,commandId:command.commandId})]);return command;});
   if(queued==="contacts_not_found")return reply.code(404).send({error:queued});
   if(queued==="account_forbidden")return reply.code(403).send({error:queued});
   if(queued==="multiple_accounts")return reply.code(409).send({error:queued,message:"创建群的联系人必须属于同一个 WhatsApp 账号"});
   if(queued==="agent_required")return reply.code(409).send({error:queued,message:"仅已连接网页版 WhatsApp Agent 的账号支持创建群"});
+  if(queued==="agent_upgrade_required")return reply.code(409).send({error:queued,message:"请先升级并重启 WhatsApp Agent，再创建群"});
   if(queued==="invalid_participants")return reply.code(400).send({error:queued});
   void dispatchPending(queued.agentId);
   return reply.code(202).send({commandId:queued.commandId});
+});
+
+app.get("/api/v1/contacts/create-group/:commandId",{preHandler:authenticate},async(request,reply)=>{
+  const {commandId}=request.params as {commandId:string};
+  if(!isPostgresUuid(commandId))return reply.code(404).send({error:"not_found"});
+  const command=await pool.query("SELECT oc.id,oc.state,oc.attempt,oc.last_error,oc.completed_at,oc.created_at,oc.payload FROM outbound_commands oc WHERE oc.id=$1 AND oc.command='create_group'",[commandId]);
+  if(!command.rowCount)return reply.code(404).send({error:"not_found"});
+  const account=await pool.query("SELECT account_id FROM outbound_commands WHERE id=$1",[commandId]);
+  if(!account.rowCount||!canAccessAccount(request.principal,account.rows[0].account_id))return reply.code(404).send({error:"not_found"});
+  return command.rows[0];
 });
 
 app.delete("/api/v1/contacts/:id",{preHandler:authenticate},async(request,reply)=>{
