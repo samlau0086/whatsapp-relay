@@ -70,7 +70,7 @@ async function createAccount():Promise<void>{
 
 function startCentral():void{
   const agentId=store.get("agentId")!;const credential=store.get("credential")!;
-  client=new CentralClient(store,baseUrl,agentId,credential,VERSION,`docker-${process.platform}-${process.arch}`,PROTOCOL_VERSION,["publish_status_v1","group_chat_v1"],executeCommand,status=>{store.set("connection",status);console.log(`Central connection: ${status}`);},()=>undefined);
+  client=new CentralClient(store,baseUrl,agentId,credential,VERSION,`docker-${process.platform}-${process.arch}`,PROTOCOL_VERSION,["publish_status_v1","group_chat_v1","group_create_v1"],executeCommand,status=>{store.set("connection",status);console.log(`Central connection: ${status}`);},()=>undefined);
   client.start();
 }
 

@@ -34,6 +34,7 @@ test("group API exposes members and blocks unsupported business automation",asyn
   assert.match(server,/group_participant\.open_direct/);
   assert.match(server,/participant_phone_unavailable/);
   assert.match(server,/group_chat_v1/);
+  assert.match(server,/group_create_v1/);
   assert.match(server,/quotedParticipantJid/);
   assert.match(server,/group_feature_unavailable/);
   assert.match(server,/co\.entity_type='person'/);
