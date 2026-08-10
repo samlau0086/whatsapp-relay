@@ -78,6 +78,15 @@ export async function queueChannelCommand(
   return{commandId:String(command.rows[0].id),sequence:Number(command.rows[0].sequence),agentId:transport==="web"?String(row.agent_id):null,transport,platform};
 }
 
+export async function queueGroupCreateCommand(client:PoolClient,input:{accountId:string;subject:string;participantJids:string[]}):Promise<{commandId:string;sequence:number;agentId:string}> {
+  const found=await client.query("SELECT platform,transport,agent_id FROM channel_accounts WHERE id=$1 FOR UPDATE",[input.accountId]);
+  if(!found.rowCount)throw Object.assign(new Error("account_not_found"),{statusCode:404});
+  const row=found.rows[0];
+  if(row.platform!=="whatsapp"||row.transport!=="web"||!row.agent_id)throw Object.assign(new Error("agent_required"),{statusCode:409});
+  const command=await client.query("INSERT INTO outbound_commands(agent_id,account_id,command,payload) VALUES($1,$2,'create_group',$3) RETURNING id,sequence",[row.agent_id,input.accountId,JSON.stringify({subject:input.subject,participantJids:input.participantJids})]);
+  return{commandId:String(command.rows[0].id),sequence:Number(command.rows[0].sequence),agentId:String(row.agent_id)};
+}
+
 export function isTemplateRequiredError(error:unknown):error is TemplateRequiredError{
   return error instanceof TemplateRequiredError||Boolean(error&&typeof error==="object"&&(error as {code?:string}).code==="template_required");
 }
