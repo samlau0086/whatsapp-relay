@@ -726,7 +726,7 @@ app.patch("/api/v1/contacts/:id",{preHandler:authenticate},async(request,reply)=
 app.patch("/api/v1/contacts/bulk-update",{preHandler:authenticate},async(request,reply)=>{
   if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
   const body=(request.body??{}) as {contactIds?:unknown;country?:unknown;preferredLanguage?:unknown;timezone?:unknown};
-  const ids=Array.isArray(body.contactIds)?body.contactIds.filter((id):id is string=>typeof id==="string"&&UUID_PATTERN.test(id)):[];
+  const ids=Array.isArray(body.contactIds)?body.contactIds.filter((id):id is string=>typeof id==="string"&&isPostgresUuid(id)):[];
   if(!ids.length)return reply.code(400).send({error:"contact_ids_required"});
   if(body.timezone!==undefined&&body.timezone!==null&&String(body.timezone)&&!isValidTimeZone(String(body.timezone)))return reply.code(400).send({error:"invalid_timezone",message:"请输入有效的 IANA 时区"});
   if(body.preferredLanguage!==undefined&&body.preferredLanguage!==null&&!/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(String(body.preferredLanguage)))return reply.code(400).send({error:"invalid_language"});
@@ -739,7 +739,7 @@ app.patch("/api/v1/contacts/bulk-update",{preHandler:authenticate},async(request
 app.post("/api/v1/contacts/create-group",{preHandler:authenticate},async(request,reply)=>{
   if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
   const body=(request.body??{}) as {contactIds?:unknown;subject?:unknown};
-  const contactIds=Array.isArray(body.contactIds)?body.contactIds.filter((id):id is string=>typeof id==="string"&&UUID_PATTERN.test(id)):[];
+  const contactIds=Array.isArray(body.contactIds)?body.contactIds.filter((id):id is string=>typeof id==="string"&&isPostgresUuid(id)):[];
   const subject=String(body.subject??"").trim().slice(0,100);
   if(!subject)return reply.code(400).send({error:"group_subject_required",message:"请填写群名称"});
   if(!contactIds.length)return reply.code(400).send({error:"contact_ids_required"});
