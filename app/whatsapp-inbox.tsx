@@ -1895,6 +1895,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                         <span>{replySuggestionBusy?"生成中…":"回复建议 Agent"}</span>
                       </button>
                       <button
+                        className="composer-tool-icon"
                         onClick={() => setMediaOpen(true)}
                         aria-label="打开媒体与附件"
                         title="媒体与附件"
@@ -1911,6 +1912,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                         <span>素材库</span>
                       </button>
                       <button
+                        className="composer-tool-icon"
                         onClick={() => setProductCardsOpen(true)}
                         aria-label="发送产品卡片"
                         title="发送产品卡片"
@@ -1934,7 +1936,9 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                         </span>
                       </button>
                     </div>
-                    <span>回复给 {active.name}</span>
+                    <span className="composer-recipient" title={`回复给 ${active.name}`}>
+                      回复给 <b>{active.name}</b>
+                    </span>
                   </div>
                   {translationMenuOpen && (
                     <TranslationMenu
