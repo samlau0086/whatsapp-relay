@@ -1,7 +1,7 @@
 "use client";
 
 import {Check,ChevronDown,Menu,PanelLeftClose,PanelLeftOpen,RefreshCw,Search,ShoppingCart,Tag,UserRound,X} from "lucide-react";
-import {useEffect,useMemo,useRef,useState,type KeyboardEvent,type MouseEvent,type RefObject} from "react";
+import {useEffect,useMemo,useRef,useState,type KeyboardEvent,type MouseEvent,type PointerEvent as ReactPointerEvent,type RefObject,type WheelEvent} from "react";
 import {CONVERSATION_DATE_FILTERS,type ConversationCustomerStage,type ConversationDateFilter,type ConversationLatestOrderStatus} from "./conversation-date-filter";
 import type {Conversation} from "./conversation-types";
 import {ConversationVirtualList} from "./conversation-virtual-list";
@@ -19,6 +19,41 @@ export function ConversationPanel({
   effectiveActiveId:string;clock:number;markingUnreadId:string;onSelect:(id:string)=>void;onMenu:(event:MouseEvent,item:Conversation)=>void;onMarkUnread:(id:string)=>void;
   loading:boolean;loadError:string;hasAccounts:boolean;loadingMore:boolean;loadMoreError:string;hasMore:boolean;onLoadMore:()=>void;
 }){
+  const dateTabsRef=useRef<HTMLDivElement>(null);
+  const dateTabsDragRef=useRef({pointerId:-1,startX:0,startScrollLeft:0,moved:false});
+  const onDateTabsPointerDown=(event:ReactPointerEvent<HTMLDivElement>)=>{
+    if(event.pointerType!=="mouse"||event.button!==0)return;
+    const element=dateTabsRef.current;
+    if(!element||element.scrollWidth<=element.clientWidth)return;
+    dateTabsDragRef.current={pointerId:event.pointerId,startX:event.clientX,startScrollLeft:element.scrollLeft,moved:false};
+  };
+  const onDateTabsPointerMove=(event:ReactPointerEvent<HTMLDivElement>)=>{
+    const element=dateTabsRef.current,drag=dateTabsDragRef.current;
+    if(!element||drag.pointerId!==event.pointerId)return;
+    const distance=event.clientX-drag.startX;
+    if(Math.abs(distance)>4&&!drag.moved){
+      drag.moved=true;
+      element.setPointerCapture(event.pointerId);
+      element.classList.add("dragging");
+    }
+    if(!drag.moved)return;
+    event.preventDefault();
+    element.scrollLeft=drag.startScrollLeft-distance;
+  };
+  const finishDateTabsDrag=(event:ReactPointerEvent<HTMLDivElement>)=>{
+    const element=dateTabsRef.current,drag=dateTabsDragRef.current;
+    if(!element||drag.pointerId!==event.pointerId)return;
+    if(element.hasPointerCapture(event.pointerId))element.releasePointerCapture(event.pointerId);
+    element.classList.remove("dragging");
+    drag.pointerId=-1;
+    window.setTimeout(()=>{drag.moved=false;},0);
+  };
+  const onDateTabsWheel=(event:WheelEvent<HTMLDivElement>)=>{
+    const element=dateTabsRef.current;
+    if(!element||element.scrollWidth<=element.clientWidth||Math.abs(event.deltaX)>=Math.abs(event.deltaY))return;
+    event.preventDefault();
+    element.scrollLeft+=event.deltaY;
+  };
   return <section className="conversation-panel">
     <header className="conversation-head">
       <button className="mobile-menu" onClick={onOpenSidebar} aria-label="打开筛选"><Menu size={18}/></button>
@@ -38,7 +73,7 @@ export function ConversationPanel({
         <option value="quotation">报价</option><option value="pending_confirmation">待确认</option><option value="pending_payment">待付款</option><option value="paid">已付款</option><option value="processing">处理中</option><option value="shipped">已发货</option><option value="completed">已完成</option><option value="cancelled">已取消</option>
       </select><ChevronDown size={13}/></label>
     </div>
-    <div className="conversation-date-tabs" role="tablist" aria-label="按最后联系时间筛选会话">
+    <div ref={dateTabsRef} className="conversation-date-tabs" role="tablist" aria-label="按最后联系时间筛选会话" onPointerDown={onDateTabsPointerDown} onPointerMove={onDateTabsPointerMove} onPointerUp={finishDateTabsDrag} onPointerCancel={finishDateTabsDrag} onClickCapture={event=>{if(dateTabsDragRef.current.moved){event.preventDefault();event.stopPropagation();}}} onWheel={onDateTabsWheel}>
       {CONVERSATION_DATE_FILTERS.map(item=><button key={item.value} type="button" role="tab" aria-selected={dateFilter===item.value} tabIndex={dateFilter===item.value?0:-1} className={dateFilter===item.value?"active":""} onClick={()=>onDateFilter(item.value)} onKeyDown={onDateKeyDown}>{item.label}</button>)}
     </div>
     <div className="conversation-list" ref={listRef}>
