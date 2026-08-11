@@ -127,6 +127,17 @@ test("contact aliases stay independent from synchronized WhatsApp names",async()
   assert.doesNotMatch(hub,/UPDATE contacts SET[^\n]*alias=COALESCE\(NULLIF\(EXCLUDED\.display_name/);
 });
 
+test("outbound message echoes cannot replace synchronized contact names",async()=>{
+  const [hub,worker]=await Promise.all([
+    readFile(new URL("../src/agent-hub.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../apps/agent/src/account-worker.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(worker,/const remotePushName\s*=\s*item\.key\.fromMe\s*\?\s*undefined\s*:\s*item\.pushName\s*\?\?\s*undefined/);
+  assert.match(worker,/senderName:\s*remotePushName/);
+  assert.match(hub,/const remoteDisplayName=payload\.direction==="in"\?String\(payload\.senderName\?\?""\)\.trim\(\):""/);
+  assert.match(hub,/displayName:remoteDisplayName/);
+});
+
 test("conversation deletion is privileged and blocks unsafe cascading deletes",async()=>{
   const [server,inbox]=await Promise.all([
     readFile(new URL("../src/server.ts",import.meta.url),"utf8"),

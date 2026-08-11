@@ -83,10 +83,11 @@ async function connect(options:Init):Promise<void>{
       const isGroup=rawJid.endsWith("@g.us");
       const repositoryJid=!isGroup&&rawJid.endsWith("@lid")?await activeSocket.signalRepository.lidMapping.getPNForLID(rawJid):null;
       const jid=isGroup?rawJid:jidNormalizedUser(repositoryJid??await auth.resolveJid(rawJid));
-      if(rawJid.endsWith("@lid")&&jid.endsWith("@s.whatsapp.net"))emitIdentity(options.accountId,rawJid,jid,item.pushName??undefined);
+      const remotePushName=item.key.fromMe?undefined:item.pushName??undefined;
+      if(rawJid.endsWith("@lid")&&jid.endsWith("@s.whatsapp.net"))emitIdentity(options.accountId,rawJid,jid,remotePushName);
       const rawSender=jidNormalizedUser(item.key.participant??(isGroup?undefined:jid));
       const senderJid=rawSender?await resolveUserJid(activeSocket,auth,rawSender):jid;
-      if(rawSender.endsWith("@lid")&&senderJid.endsWith("@s.whatsapp.net"))emitIdentity(options.accountId,rawSender,senderJid,item.pushName??undefined);
+      if(rawSender.endsWith("@lid")&&senderJid.endsWith("@s.whatsapp.net"))emitIdentity(options.accountId,rawSender,senderJid,remotePushName);
       const content=normalizeMessageContent(item.message);if(!content)continue;
       const text=content.conversation??content.extendedTextMessage?.text??content.imageMessage?.caption??content.videoMessage?.caption??content.documentMessage?.caption??content.buttonsResponseMessage?.selectedDisplayText??content.listResponseMessage?.title??undefined;
       const adReferral=externalAdReferral(content);
@@ -101,7 +102,7 @@ async function connect(options:Init):Promise<void>{
         try{const mediaRequestOptions=mediaProxyAgent?({dispatcher:mediaProxyAgent} as unknown as RequestInit):undefined;const bytes=await downloadMediaMessage(item,"buffer",{options:mediaRequestOptions},{logger,reuploadRequest:async(message)=>activeSocket.updateMediaMessage(message)});const mime=content.stickerMessage?.mimetype??content.imageMessage?.mimetype??content.videoMessage?.mimetype??content.audioMessage?.mimetype??content.documentMessage?.mimetype??(sticker?"image/webp":"application/octet-stream");const fileName=sticker?`sticker-${item.key.id}.webp`:content.documentMessage?.fileName??`${item.key.id}.${kind}`;const uploaded=await uploadInboundMedia(options,bytes,mime,fileName);media={uploadId:uploaded.mediaId,mimeType:mime,fileName,size:uploaded.size,sha256:uploaded.sha256,isSticker:sticker};}
         catch(error){emit({type:"diagnostic",level:"warn",accountId:options.accountId,message:"media_upload_failed",detail:String(error)});}
       }
-      emit({type:"event",kind:"message",live:type==="notify",payload:{eventId:`message:${options.accountId}:${item.key.id}`,accountId:options.accountId,whatsappMessageId:item.key.id,chatJid:jid,rawChatJid:rawJid,chatType:isGroup?"group":"direct",senderJid,senderName:item.pushName??undefined,direction:item.key.fromMe?"out":"in",kind,text,adReferral,quotedWhatsappMessageId,quotedParticipantJid,occurredAt:messageTime(item.messageTimestamp),media}});
+      emit({type:"event",kind:"message",live:type==="notify",payload:{eventId:`message:${options.accountId}:${item.key.id}`,accountId:options.accountId,whatsappMessageId:item.key.id,chatJid:jid,rawChatJid:rawJid,chatType:isGroup?"group":"direct",senderJid,senderName:remotePushName,direction:item.key.fromMe?"out":"in",kind,text,adReferral,quotedWhatsappMessageId,quotedParticipantJid,occurredAt:messageTime(item.messageTimestamp),media}});
     }
   })().catch(error=>emit({type:"diagnostic",level:"error",accountId:options.accountId,message:"message_normalize_failed",detail:String(error)}));});
   activeSocket.ev.on("messages.update",(updates)=>{if(generation!==connectionGeneration)return;for(const update of updates){if(!update.key.id||!update.update.status)continue;const mapped=update.update.status>=4?"read":update.update.status>=3?"delivered":"sent";emit({type:"event",kind:"message_status",payload:{eventId:`status:${options.accountId}:${update.key.id}:${mapped}`,accountId:options.accountId,whatsappMessageId:update.key.id,status:mapped,at:new Date().toISOString()}});}});
