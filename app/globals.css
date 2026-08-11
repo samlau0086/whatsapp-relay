@@ -630,16 +630,28 @@ button { color:inherit; }
 /* Comfortable reading sizes for the inbox, conversations and customer details. */
 @media(min-width:1281px){.relay-shell{grid-template-columns:68px clamp(250px,14vw,285px) clamp(370px,19vw,410px) minmax(420px,1fr) clamp(330px,17vw,370px)}}
 @media(min-width:981px) and (max-width:1280px){
-  .relay-shell.filters-hidden{grid-template-columns:60px minmax(400px,1fr)}
+  .relay-shell.filters-hidden{grid-template-columns:60px 300px minmax(400px,1fr)}
   .relay-shell.filters-hidden .filters{display:none}
-  .relay-shell.filters-hidden .conversation-panel{display:none}
+  .relay-shell.filters-hidden .conversation-panel{grid-column:2}
+  .relay-shell.filters-hidden .chat-panel{grid-column:3}
+  .relay-shell.conversation-list-hidden{grid-template-columns:60px 210px minmax(400px,1fr)}
+  .relay-shell.conversation-list-hidden .conversation-panel{display:none}
+  .relay-shell.conversation-list-hidden .chat-panel{grid-column:3}
+  .relay-shell.filters-hidden.conversation-list-hidden{grid-template-columns:60px minmax(400px,1fr)}
+  .relay-shell.filters-hidden.conversation-list-hidden .chat-panel{grid-column:2}
 }
 @media(min-width:1281px){
-  .relay-shell.filters-hidden{grid-template-columns:68px minmax(420px,1fr) clamp(330px,17vw,370px)}
+  .relay-shell.filters-hidden{grid-template-columns:68px clamp(370px,19vw,410px) minmax(420px,1fr) clamp(330px,17vw,370px)}
   .relay-shell.filters-hidden .filters{display:none}
-  .relay-shell.filters-hidden .conversation-panel{display:none}
+  .relay-shell.filters-hidden .conversation-panel{grid-column:2}
+  .relay-shell.filters-hidden .chat-panel{grid-column:3}
+  .relay-shell.conversation-list-hidden{grid-template-columns:68px clamp(250px,14vw,285px) minmax(420px,1fr) clamp(330px,17vw,370px)}
+  .relay-shell.conversation-list-hidden .conversation-panel{display:none}
+  .relay-shell.conversation-list-hidden .chat-panel{grid-column:3}
+  .relay-shell.filters-hidden.conversation-list-hidden{grid-template-columns:68px minmax(420px,1fr) clamp(330px,17vw,370px)}
+  .relay-shell.filters-hidden.conversation-list-hidden .chat-panel{grid-column:2}
 }
-@media(max-width:980px){.filter-toggle{display:none}}
+@media(max-width:980px){.filter-toggle,.conversation-toggle{display:none}}
 .workspace-title .eyebrow,.filters .section-label{font-size:13px}.workspace-title h1{font-size:23px}
 .account-switcher b,.account-status b{font-size:15px}.account-switcher small,.account-status small{font-size:13px}
 .filter-row{height:43px;font-size:15px}.filter-row em{font-size:13px}

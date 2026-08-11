@@ -309,6 +309,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [detailsOpen,setDetailsOpen]=useState(true);
   const [sidebarOpen,setSidebarOpen]=useState(false);
   const [filtersHidden,setFiltersHidden]=useState(false);
+  const [conversationListHidden,setConversationListHidden]=useState(false);
   const [toast,setToast]=useState("");
   const [markingUnreadId,setMarkingUnreadId]=useState("");
   const [retryingMessageId,setRetryingMessageId]=useState("");
@@ -1248,7 +1249,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   if(!apiToken)return <><AccessPortal loading={false} onLogin={()=>setAuthOpen(true)}/>{authOpen&&<LoginDialog connected={false} token="" canClose onClose={()=>setAuthOpen(false)} onLogin={completeLogin} onLogout={logout}/>}</>;
 
   return (
-    <main className={`relay-shell ${filtersHidden ? "filters-hidden" : ""}`}>
+    <main className={`relay-shell ${filtersHidden ? "filters-hidden" : ""} ${conversationListHidden ? "conversation-list-hidden" : ""}`}>
       <ConfirmationHost />
       <PromptHost />
       {toast && (
@@ -1267,14 +1268,24 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
         </button>
         <div className="rail-nav">
           {view === "inbox" && (
-            <button
-              className="rail-button filter-toggle"
-              onClick={() => setFiltersHidden(value => !value)}
-              aria-label={filtersHidden ? "显示筛选栏" : "隐藏筛选栏"}
-              title={filtersHidden ? "显示筛选栏" : "隐藏筛选栏"}
-            >
-              {filtersHidden ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-            </button>
+            <>
+              <button
+                className="rail-button filter-toggle"
+                onClick={() => setFiltersHidden(value => !value)}
+                aria-label={filtersHidden ? "显示筛选栏" : "隐藏筛选栏"}
+                title={filtersHidden ? "显示筛选栏" : "隐藏筛选栏"}
+              >
+                {filtersHidden ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+              </button>
+              <button
+                className="rail-button conversation-toggle"
+                onClick={() => setConversationListHidden(value => !value)}
+                aria-label={conversationListHidden ? "显示会话栏" : "隐藏会话栏"}
+                title={conversationListHidden ? "显示会话栏" : "隐藏会话栏"}
+              >
+                {conversationListHidden ? <PanelLeftOpen size={18} /> : <List size={18} />}
+              </button>
+            </>
           )}
           <button
             className={
