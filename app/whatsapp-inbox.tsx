@@ -1267,26 +1267,6 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           <Sparkles size={19} />
         </button>
         <div className="rail-nav">
-          {view === "inbox" && (
-            <>
-              <button
-                className="rail-button filter-toggle"
-                onClick={() => setFiltersHidden(value => !value)}
-                aria-label={filtersHidden ? "显示筛选栏" : "隐藏筛选栏"}
-                title={filtersHidden ? "显示筛选栏" : "隐藏筛选栏"}
-              >
-                {filtersHidden ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-              </button>
-              <button
-                className="rail-button conversation-toggle"
-                onClick={() => setConversationListHidden(value => !value)}
-                aria-label={conversationListHidden ? "显示会话栏" : "隐藏会话栏"}
-                title={conversationListHidden ? "显示会话栏" : "隐藏会话栏"}
-              >
-                {conversationListHidden ? <PanelLeftOpen size={18} /> : <List size={18} />}
-              </button>
-            </>
-          )}
           <button
             className={
               view === "inbox" && filter === "全部会话"
@@ -1452,13 +1432,24 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                 <span className="eyebrow">工作空间</span>
                 <h1>消息中心</h1>
               </div>
-              <button
-                onClick={() => setNewConversationOpen(true)}
-                aria-label="新建会话"
-                title="新建会话"
-              >
-                <Plus size={16} />
-              </button>
+              <span className="workspace-title-actions">
+                <button
+                  className="column-toggle filter-toggle"
+                  onClick={() => setFiltersHidden(value => !value)}
+                  aria-label={filtersHidden ? "显示筛选栏" : "隐藏筛选栏"}
+                  title={filtersHidden ? "显示筛选栏" : "隐藏筛选栏"}
+                >
+                  {filtersHidden ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+                </button>
+                <button
+                  className="new-conversation-button"
+                  onClick={() => setNewConversationOpen(true)}
+                  aria-label="新建会话"
+                  title="新建会话"
+                >
+                  <Plus size={16} />
+                </button>
+              </span>
             </div>
             <label className="account-switcher">
               <span className="wa-dot">
@@ -1537,7 +1528,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             </section>
           </aside>
 
-          <ConversationPanel filter={filter} subtitle={debouncedQuery||selectedTag||selectedCustomerStage||selectedLatestOrderStatus?`已加载 ${visible.length} 条结果`:`${counts[conversationFilterKey(filter)]} 个真实会话`} query={query} onQuery={setQuery} tags={contextTags} tagId={selectedTag} onTagId={setSelectedTag} onTagOpen={()=>void loadConversationTags(apiToken)} customerStage={selectedCustomerStage} onCustomerStage={setSelectedCustomerStage} latestOrderStatus={selectedLatestOrderStatus} onLatestOrderStatus={setSelectedLatestOrderStatus} onOpenSidebar={()=>setSidebarOpen(true)} onRefresh={()=>void loadWorkspace(apiToken)} dateFilter={dateFilter} onDateFilter={selectDateFilter} onDateKeyDown={handleDateFilterKeyDown} listRef={conversationListRef} sentinelRef={conversationLoadSentinelRef} items={visible} rows={conversationVirtualizer.getVirtualItems()} totalSize={conversationVirtualizer.getTotalSize()} measure={conversationVirtualizer.measureElement} effectiveActiveId={effectiveActiveId} clock={clock} markingUnreadId={markingUnreadId} onSelect={setActiveId} onMenu={openConversationMenu} onMarkUnread={id=>void markConversationUnread(id)} loading={loading} loadError={loadError} hasAccounts={Boolean(accounts.length)} loadingMore={loadingMoreConversations} loadMoreError={loadMoreError} hasMore={Boolean(nextConversationCursor)} onLoadMore={()=>void loadConversations(apiToken,{append:true})}/>
+          <ConversationPanel filter={filter} subtitle={debouncedQuery||selectedTag||selectedCustomerStage||selectedLatestOrderStatus?`已加载 ${visible.length} 条结果`:`${counts[conversationFilterKey(filter)]} 个真实会话`} query={query} onQuery={setQuery} tags={contextTags} tagId={selectedTag} onTagId={setSelectedTag} onTagOpen={()=>void loadConversationTags(apiToken)} customerStage={selectedCustomerStage} onCustomerStage={setSelectedCustomerStage} latestOrderStatus={selectedLatestOrderStatus} onLatestOrderStatus={setSelectedLatestOrderStatus} onOpenSidebar={()=>setSidebarOpen(true)} collapsed={conversationListHidden} onToggleCollapsed={()=>setConversationListHidden(value=>!value)} onRefresh={()=>void loadWorkspace(apiToken)} dateFilter={dateFilter} onDateFilter={selectDateFilter} onDateKeyDown={handleDateFilterKeyDown} listRef={conversationListRef} sentinelRef={conversationLoadSentinelRef} items={visible} rows={conversationVirtualizer.getVirtualItems()} totalSize={conversationVirtualizer.getTotalSize()} measure={conversationVirtualizer.measureElement} effectiveActiveId={effectiveActiveId} clock={clock} markingUnreadId={markingUnreadId} onSelect={setActiveId} onMenu={openConversationMenu} onMarkUnread={id=>void markConversationUnread(id)} loading={loading} loadError={loadError} hasAccounts={Boolean(accounts.length)} loadingMore={loadingMoreConversations} loadMoreError={loadMoreError} hasMore={Boolean(nextConversationCursor)} onLoadMore={()=>void loadConversations(apiToken,{append:true})}/>
 
           <section className="chat-panel">
             {active ? (
