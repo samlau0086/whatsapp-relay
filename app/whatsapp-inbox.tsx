@@ -5,7 +5,7 @@ import {
   Inbox, Info, Languages, Mail, MessageCircle, Mic, MonitorSmartphone, Paperclip, Phone, Plus,
   Pencil, RefreshCw, Search, Send, Settings, ShieldCheck, ShoppingBag, Smile, Sparkles, Star, Trash2, UploadCloud, UserPlus,
   Users, Wifi, WifiOff, X, ClipboardList, ExternalLink, Bot, Brain, BookOpen, MapPin, Copy, CreditCard, LayoutGrid, List, Eye, EyeOff, ReceiptText, Reply, Zap, Tag,
-  Facebook, Instagram, Linkedin, Building2, ArrowRightLeft,
+  Facebook, Instagram, Linkedin, Building2, ArrowRightLeft, PanelLeftClose, PanelLeftOpen,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -308,6 +308,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [replyTo,setReplyTo]=useState<{conversationId:string;message:ChatMessage}|null>(null);
   const [detailsOpen,setDetailsOpen]=useState(true);
   const [sidebarOpen,setSidebarOpen]=useState(false);
+  const [filtersHidden,setFiltersHidden]=useState(false);
   const [toast,setToast]=useState("");
   const [markingUnreadId,setMarkingUnreadId]=useState("");
   const [retryingMessageId,setRetryingMessageId]=useState("");
@@ -1247,7 +1248,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   if(!apiToken)return <><AccessPortal loading={false} onLogin={()=>setAuthOpen(true)}/>{authOpen&&<LoginDialog connected={false} token="" canClose onClose={()=>setAuthOpen(false)} onLogin={completeLogin} onLogout={logout}/>}</>;
 
   return (
-    <main className="relay-shell">
+    <main className={`relay-shell ${filtersHidden ? "filters-hidden" : ""}`}>
       <ConfirmationHost />
       <PromptHost />
       {toast && (
@@ -1265,6 +1266,16 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           <Sparkles size={19} />
         </button>
         <div className="rail-nav">
+          {view === "inbox" && (
+            <button
+              className="rail-button filter-toggle"
+              onClick={() => setFiltersHidden(value => !value)}
+              aria-label={filtersHidden ? "显示筛选栏" : "隐藏筛选栏"}
+              title={filtersHidden ? "显示筛选栏" : "隐藏筛选栏"}
+            >
+              {filtersHidden ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            </button>
+          )}
           <button
             className={
               view === "inbox" && filter === "全部会话"
