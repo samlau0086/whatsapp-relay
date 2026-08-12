@@ -41,6 +41,7 @@ type TranslatedProductName = {
   translated: string;
 };
 type ProductCardMode = "individual" | "combined" | "grid";
+type CurrencyConfig = { code: string; name: string; rate: number };
 const GRID_PRESETS = [2, 3, 4, 5, 8] as const;
 function mapProduct(item: Record<string, unknown>): Product {
   return {
@@ -135,6 +136,8 @@ export function ProductCardSendDialog({
   onSent: (message: string) => void;
 }) {
   const [catalogProducts, setCatalogProducts] = useState<Product[]>([]),
+    [currencies, setCurrencies] = useState<CurrencyConfig[]>([]),
+    [targetCurrency, setTargetCurrency] = useState("USD"),
     [productCache, setProductCache] = useState<Map<string, Product>>(
       () => new Map(),
     ),
@@ -176,6 +179,11 @@ export function ProductCardSendDialog({
   const pendingBatchRef = useRef<{ id: string; fingerprint: string } | null>(
     null,
   );
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => { try { const result = await requestRef.current("/api/v1/currencies", { signal: controller.signal }); onTokenRef.current(result.token); const body = (await result.response.json().catch(() => ({}))) as { currencies?: CurrencyConfig[] }; if (result.response.ok && body.currencies?.length && !controller.signal.aborted) { setCurrencies(body.currencies); setTargetCurrency(body.currencies.some(item => item.code === "USD") ? "USD" : body.currencies[0].code); } } catch {} })();
+    return () => controller.abort();
+  }, []);
   useEffect(() => {
     requestRef.current = request;
     onTokenRef.current = onToken;
@@ -289,6 +297,7 @@ export function ProductCardSendDialog({
   const chosen = selected
       .map((id) => productCache.get(id))
       .filter(Boolean) as Product[],
+    converted = chosen.map((product) => { const source = currencies.find(item => item.code === product.currency)?.rate; const target = currencies.find(item => item.code === targetCurrency)?.rate; const factor = source && target ? target / source : 1; return {...product, currency: targetCurrency, priceTiers: product.priceTiers.map(tier => ({...tier, unitAmount: tier.unitAmount * factor}))}; }),
     gridSize =
       gridPreset === "custom"
         ? { rows: customRows, columns: customColumns }
@@ -500,6 +509,7 @@ export function ProductCardSendDialog({
         mode,
         grid,
         showPrice,
+        targetCurrency,
         caption: outgoingCaption,
         translationSourceText,
         translationTargetLanguage,
@@ -518,6 +528,7 @@ export function ProductCardSendDialog({
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
               clientSendId: crypto.randomUUID(),
+              targetCurrency,
               recipientEmailIds: recipientIds,
               subject,
               messageBody,
@@ -527,6 +538,7 @@ export function ProductCardSendDialog({
                 mode,
                 grid,
                 showPrice,
+                targetCurrency,
               },
             }),
           },
@@ -747,6 +759,13 @@ export function ProductCardSendDialog({
             </div>
             <div className="product-card-options">
               <label>
+                输出币种
+                <select value={targetCurrency} onChange={(event) => setTargetCurrency(event.target.value)} disabled={!currencies.length}>
+                  {currencies.map((item) => <option key={item.code} value={item.code}>{item.code} · {item.name}</option>)}
+                </select>
+                <small>发送前统一换算，默认 USD</small>
+              </label>
+              <label>
                 <input
                   type="radio"
                   checked={mode === "individual"}
@@ -965,7 +984,7 @@ export function ProductCardSendDialog({
               }
             >
               <b>发送预览</b>
-              {chosen
+              {converted
                 .slice(
                   0,
                   mode === "combined" ? 10 : mode === "grid" ? gridCapacity : 3,
