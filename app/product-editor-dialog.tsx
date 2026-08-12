@@ -215,7 +215,9 @@ export function ProductEditorDialog({
     [description, setDescription] = useState(product?.description ?? ""),
     [category, setCategory] = useState(product?.category ?? ""),
     [brand, setBrand] = useState(product?.brand ?? ""),
-    [currency, setCurrency] = useState(product?.currency ?? baseCurrency),
+    [currency, setCurrency] = useState(
+      product?.currency ?? (currencies.some((item) => item.code === "CNY") ? "CNY" : baseCurrency),
+    ),
     [weightAmount,setWeightAmount]=useState(product?.weightAmount?.toString()??""),
     [weightUnit,setWeightUnit]=useState<WeightUnit>(product?.weightUnit??"kg"),
     [shippingClassId,setShippingClassId]=useState(product?.shippingClassId??""),
