@@ -123,7 +123,7 @@ test("status publishing uses the stories JID, a recipient snapshot, and broadcas
   const client=readFileSync(new URL("../dist/central-client.js",import.meta.url),"utf8");
   assert.match(worker,/command\.command\s*===\s*"publish_status"/);
   assert.match(worker,/sendMessage\("status@broadcast",\s*content,\s*\{\s*broadcast:\s*true,\s*statusJidList/);
-  assert.match(client,/capabilities:\s*this\.capabilities/);
+  assert.match(client,/capabilities:\s*this\.options\.capabilities/);
 });
 
 test("stale WhatsApp sockets and stale renderer refreshes cannot overwrite current status", () => {
@@ -170,10 +170,12 @@ test("the central WebSocket uses the configured proxy and reconnects after proxy
   const main=readFileSync(new URL("../dist/main.js",import.meta.url),"utf8");
   const client=readFileSync(new URL("../dist/central-client.js",import.meta.url),"utf8");
   assert.match(client,/HttpsProxyAgent/);
-  assert.match(client,/new HttpsProxyAgent\(this\.proxyUrl\)/);
-  assert.match(client,/agent\s*}\)/);
-  assert.match(main,/resolveProxyUrl\(baseUrl\)/);
-  assert.match(main,/void startCentral\(baseUrl,\s*agentId,\s*credential\)/);
+  assert.match(client,/new HttpsProxyAgent\(this\.options\.proxyUrl\)/);
+  assert.match(client,/constructor\(store,\s*options\)/);
+  assert.match(client,/this\.options\.proxyUrl/);
+  assert.match(main,/function restartCentral\(\)/);
+  assert.match(main,/void connectCentral\(\{ agentId, credential, baseUrl \}\)/);
+  assert.match(main,/resolveProxyUrl\(input\.baseUrl\)/);
 });
 
 test("an enrolled agent can change its central URL without replacing credentials", () => {
@@ -182,7 +184,7 @@ test("an enrolled agent can change its central URL without replacing credentials
   const renderer=readFileSync(new URL("../dist/renderer/index.html",import.meta.url),"utf8");
   assert.match(main,/agent:update-central-url/);
   assert.match(main,/store\.set\("baseUrl", baseUrl\)/);
-  assert.match(main,/startCentral\(baseUrl, agentId, credential\)/);
+  assert.match(main,/restartCentral\(\)/);
   assert.match(preload,/updateCentralUrl/);
   assert.match(renderer,/central-settings-card/);
   assert.match(renderer,/save-central-url/);

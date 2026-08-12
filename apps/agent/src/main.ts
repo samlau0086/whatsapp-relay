@@ -52,7 +52,7 @@ if (!hasSingleInstanceLock) {
     const agentId = store.get("agentId");
     const credential = store.get("credential");
     const baseUrl = store.get("baseUrl");
-    if (agentId && credential && baseUrl) startCentral(baseUrl, agentId, credential);
+    if (agentId && credential && baseUrl) restartCentral();
     for (const account of store.accounts()) await startAccount(account.id, account.name, dataDir);
   });
 }
@@ -172,8 +172,7 @@ ipcMain.handle("proxy:save", async (_event, input: {mode:string;url?:string}) =>
   const url = mode === "manual" ? normalizeManualProxy(input.url ?? "") : "";
   store.set("proxyMode", mode);
   store.set("proxyUrl", url);
-  const agentId=store.get("agentId"),credential=store.get("credential"),baseUrl=store.get("baseUrl");
-  if(agentId&&credential&&baseUrl)void startCentral(baseUrl,agentId,credential);
+  restartCentral();
   for (const [accountId, worker] of workers) {
     intentionalRestarts.add(accountId);
     worker.kill();
@@ -192,7 +191,7 @@ ipcMain.handle("agent:enroll", async (_event, input: {baseUrl:string;code:string
   store.set("baseUrl", input.baseUrl);
   store.set("agentId", data.agentId);
   store.set("credential", data.credential);
-  startCentral(input.baseUrl, data.agentId, data.credential);
+  restartCentral();
   return { ok: true };
 });
 
@@ -203,7 +202,7 @@ ipcMain.handle("agent:update-central-url", async (_event, input: {baseUrl:string
   const baseUrl = normalizeCentralUrl(input.baseUrl);
   store.set("baseUrl", baseUrl);
   store.set("connection", "offline");
-  startCentral(baseUrl, agentId, credential);
+  restartCentral();
   return { ok:true, baseUrl };
 });
 
@@ -268,30 +267,35 @@ ipcMain.handle("account:remove", async (_event, input: {id:string}) => {
   return {ok:true};
 });
 
-async function startCentral(baseUrl: string, agentId: string, credential: string): Promise<void> {
+function restartCentral():void{
+  const agentId=store.get("agentId"),credential=store.get("credential"),baseUrl=store.get("baseUrl");
+  if(!agentId||!credential||!baseUrl)return;
+  void connectCentral({agentId,credential,baseUrl});
+}
+
+async function connectCentral(input:{baseUrl:string;agentId:string;credential:string}): Promise<void> {
   const generation=++centralStartGeneration;
   client?.stop();
   client=undefined;
-  const proxyUrl=await resolveProxyUrl(baseUrl);
+  const proxyUrl=await resolveProxyUrl(input.baseUrl);
   if(generation!==centralStartGeneration)return;
-  const nextClient = new CentralClient(
-    store,
-    baseUrl,
-    agentId,
-    credential,
-    app.getVersion(),
-    `win32-${process.arch}`,
-    PROTOCOL_VERSION,
-    ["publish_status_v1","group_chat_v1","group_create_v1"],
-    executeWorkerCommand,
-    (status) => {
+  const nextClient = new CentralClient(store,{
+    baseUrl:input.baseUrl,
+    agentId:input.agentId,
+    credential:input.credential,
+    agentVersion:app.getVersion(),
+    platform:`win32-${process.arch}`,
+    protocolVersion:PROTOCOL_VERSION,
+    capabilities:["publish_status_v1","group_chat_v1","group_create_v1"],
+    proxyUrl,
+    onCommand:executeWorkerCommand,
+    onStatus:(status) => {
       if (client !== nextClient) return;
       store.set("connection", status);
       window?.webContents.send("agent:event", { type: "central_status", status });
     },
-    ({accountId,chatJid})=>clearAttention(accountId,chatJid),
-    proxyUrl,
-  );
+    onAttentionCleared:({accountId,chatJid})=>clearAttention(accountId,chatJid),
+  });
   client = nextClient;
   nextClient.start();
 }
