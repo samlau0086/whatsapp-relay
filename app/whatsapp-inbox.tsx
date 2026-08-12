@@ -5,7 +5,7 @@ import {
   Inbox, Info, Languages, Mail, MessageCircle, Mic, MonitorSmartphone, Paperclip, Phone, Plus,
   Pencil, RefreshCw, Search, Send, Settings, ShieldCheck, ShoppingBag, Smile, Sparkles, Star, Trash2, UploadCloud, UserPlus,
   Users, Wifi, WifiOff, X, ClipboardList, ExternalLink, Bot, Brain, BookOpen, MapPin, Copy, CreditCard, LayoutGrid, List, Eye, EyeOff, ReceiptText, Reply, Zap, Tag,
-  Facebook, Instagram, Linkedin, Building2, ArrowRightLeft, PanelLeftClose, PanelLeftOpen,
+  Facebook, Instagram, Linkedin, Building2, ArrowRightLeft, PanelLeftClose, PanelLeftOpen, ChevronLeft, ChevronRight,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -107,7 +107,7 @@ type ShippingClass={id:string;name:string;enabled:boolean};
 type ShippingRule={shippingClassId:string|null;shippingClassName:string|null;destinationCountryCode:string|null;destinationProvince:string|null;mode:"quantity"|"weight";firstItemPrice?:number;additionalItemPrice?:number;firstWeight?:number;additionalWeight?:number;weightUnit?:WeightUnit;firstWeightPrice?:number;additionalWeightPrice?:number};
 type ShippingTemplate={id:string;name:string;currency:string;enabled:boolean;isDefault:boolean;version:number;rules:ShippingRule[]};
 type ShippingQuote={template:{id:string;name:string;version:number;currency:string};currency:string;destination:{countryCode:string|null;province:string|null};templateAmount:number;amount:number;breakdown:Array<{shippingClassId:string|null;shippingClassName:string;mode:"quantity"|"weight";quantity:number;weightAmount:number|null;weightUnit:WeightUnit|null;amount:number;orderAmount:number;matchedCountryCode:string|null;matchedProvince:string|null}>;exchange:{rate:number;source:string|null;rateDate:string|null};calculatedAt:string};
-type ProductItem={id:string;sku:string;name:string;description:string;category:string;brand:string;supplierLinks:Array<{label:string;url:string}>;internalNote:string;defaultUnitAmount:number;priceTiers:ProductPriceTier[];currency:string;weightAmount:number|null;weightUnit:WeightUnit|null;shippingClassId:string|null;shippingClass:string|null;imageMediaId:string|null;imageName:string;tags:TagItem[];variants:ProductVariant[];createdAt:string;updatedAt:string};
+type ProductItem={id:string;sku:string;name:string;description:string;category:string;brand:string;supplierLinks:Array<{label:string;url:string;supplyPrice?:number}>;internalNote:string;defaultUnitAmount:number;priceTiers:ProductPriceTier[];currency:string;weightAmount:number|null;weightUnit:WeightUnit|null;shippingClassId:string|null;shippingClass:string|null;imageMediaId:string|null;imageName:string;tags:TagItem[];variants:ProductVariant[];createdAt:string;updatedAt:string};
 type ProductPageCacheEntry={products:ProductItem[];total:number;tags:string[];categories:string[];brands:string[];fetchedAt:number;lastUsed:number};
 type ProductPageResponse={data:Array<Record<string,unknown>>;total:number;tags:string[];categories?:string[];brands?:string[]};
 const PRODUCT_PAGE_CACHE_TTL=60_000;
@@ -323,6 +323,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [newConversationOpen,setNewConversationOpen]=useState(false);
   const [transferConversation,setTransferConversation]=useState<Conversation|null>(null);
   const [mediaOpen,setMediaOpen]=useState(false);
+  const [imageViewerMessageId,setImageViewerMessageId]=useState("");
   const [composerImageBusy,setComposerImageBusy]=useState(false);
   const [composerImageDragging,setComposerImageDragging]=useState(false);
   const [materialLibraryOpen,setMaterialLibraryOpen]=useState(false);
@@ -382,6 +383,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const translationPreference=active?translationPreferences[active.id]??DEFAULT_TRANSLATION_PREFERENCE:DEFAULT_TRANSLATION_PREFERENCE;
   const translationReady=Boolean(active&&translationReadyConversationId===active.id);
   const currentMessages=useMemo(()=>active?messages[active.id]??[]:[],[active,messages]);
+  const conversationImages=useMemo(()=>currentMessages.flatMap(message=>message.attachment?.mime.startsWith("image/")?[{messageId:message.id,attachment:message.attachment}]:[]),[currentMessages]);
   const failedMessageCount=active?Math.max(failedMessageCounts[active.id]??0,currentMessages.filter(message=>message.direction==="out"&&(message.status==="failed"||message.status==="uncertain")).length):0;
   const selectedReply=replyTo?.conversationId===effectiveActiveId?replyTo.message:null;
   const currentEmailActivities=useMemo(()=>active?emailActivities[active.id]??[]:[],[active,emailActivities]);
@@ -1790,6 +1792,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                               token={apiToken}
                               onToken={setApiToken}
                               onReady={keepMessagesAtEnd}
+                              onPreview={() => setImageViewerMessageId(message.id)}
                             />
                           )}{" "}
                           {(translationPreference.enabled ||
@@ -2307,6 +2310,16 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           onToast={setToast}
           onClose={() => setMediaOpen(false)}
           onSend={previewAndSendMediaAsset}
+        />
+      )}
+      {imageViewerMessageId && conversationImages.length > 0 && (
+        <ConversationImageViewer
+          images={conversationImages}
+          selectedMessageId={imageViewerMessageId}
+          token={apiToken}
+          onToken={setApiToken}
+          onClose={() => setImageViewerMessageId("")}
+          onSelect={setImageViewerMessageId}
         />
       )}
       {materialLibraryOpen && active && (
@@ -4477,7 +4490,7 @@ function QueueDiagnostic({message}:{message:ChatMessage}){const diagnostic=messa
 function QuotedMessage({quote,customerName}:{quote:NonNullable<ChatMessage["quoted"]>;customerName:string}){return <div className="quoted-message"><b>{quote.direction==="in"?(quote.senderName||customerName):"我方"}</b><span>{quote.text||kindText(quote.kind)}</span></div>;}
 function participantLabel(jid?:string):string{if(!jid)return"未知成员";const user=jid.split("@")[0].split(":")[0];return jid.endsWith("@s.whatsapp.net")?`+${user}`:user||jid;}
 
-function MessageMedia({attachment,token,onToken,onReady}:{attachment:{id:string;name:string;size:string;mime:string};token:string;onToken:(token:string)=>void;onReady:()=>void}){
+function MessageMedia({attachment,token,onToken,onReady,onPreview}:{attachment:{id:string;name:string;size:string;mime:string};token:string;onToken:(token:string)=>void;onReady:()=>void;onPreview?:()=>void}){
   const [url,setUrl]=useState("");const [error,setError]=useState("");
   const hostRef=useRef<HTMLDivElement>(null),tokenRef=useRef(token),onTokenRef=useRef(onToken),onReadyRef=useRef(onReady);
   useEffect(()=>{tokenRef.current=token;},[token]);
@@ -4506,10 +4519,24 @@ function MessageMedia({attachment,token,onToken,onReady}:{attachment:{id:string;
     return()=>{cancelled=true;observer?.disconnect();if(acquired)releaseMedia(attachment.id);};
   },[attachment.id]);
   if(error)return <div ref={hostRef} className="message-media message-media-error">媒体加载失败 · {error}</div>;if(!url)return <div ref={hostRef} className="message-media message-media-loading">正在加载媒体…</div>;
-  if(attachment.mime.startsWith("image/"))return <div ref={hostRef} className="message-media"><button className="message-media-preview" onClick={()=>window.open(url,"_blank","noopener,noreferrer")} aria-label={`查看图片 ${attachment.name}`}><Image src={url} alt={attachment.name} width={440} height={440} unoptimized onLoad={()=>onReadyRef.current()}/></button></div>;
+  if(attachment.mime.startsWith("image/"))return <div ref={hostRef} className="message-media"><button type="button" className="message-media-preview" onClick={onPreview} aria-label={`查看图片 ${attachment.name}`}><Image src={url} alt={attachment.name} width={440} height={440} unoptimized onLoad={()=>onReadyRef.current()}/></button></div>;
   if(attachment.mime.startsWith("video/"))return <div ref={hostRef} className="message-media"><video src={url} controls preload="metadata" aria-label={attachment.name} onLoadedMetadata={()=>onReadyRef.current()}/></div>;
   if(attachment.mime.startsWith("audio/"))return <div ref={hostRef} className="message-media"><audio src={url} controls preload="metadata" aria-label={attachment.name} onLoadedMetadata={()=>onReadyRef.current()}/></div>;
   return <div ref={hostRef} className="message-media"><button className="attachment-card" onClick={()=>{const link=document.createElement("a");link.href=url;link.download=attachment.name;link.click();}}><span><FileText size={20}/></span><span><b>{attachment.name}</b><small>{attachment.mime} · {attachment.size}</small></span></button></div>;
+}
+
+function ConversationImageViewer({images,selectedMessageId,token,onToken,onClose,onSelect}:{images:Array<{messageId:string;attachment:{id:string;name:string;size:string;mime:string}}>;selectedMessageId:string;token:string;onToken:(token:string)=>void;onClose:()=>void;onSelect:(messageId:string)=>void}){
+  const index=Math.max(0,images.findIndex(item=>item.messageId===selectedMessageId));
+  const item=images[index];
+  const move=useCallback((delta:number)=>{const next=index+delta;if(next>=0&&next<images.length)onSelect(images[next].messageId);},[images,index,onSelect]);
+  useEffect(()=>{const onKey=(event:KeyboardEvent)=>{if(event.key==="Escape")onClose();else if(event.key==="ArrowLeft")move(-1);else if(event.key==="ArrowRight")move(1);};document.addEventListener("keydown",onKey);return()=>document.removeEventListener("keydown",onKey);},[move,onClose]);
+  return <div className="image-viewer-backdrop" role="presentation" onClick={event=>{if(event.target===event.currentTarget)onClose();}}><section className="image-viewer-dialog" role="dialog" aria-modal="true" aria-label={`图片预览 ${index+1}/${images.length}`}><header><span>{item.attachment.name} · {index+1}/{images.length}</span><button type="button" onClick={onClose} aria-label="关闭图片预览"><X size={18}/></button></header><div className="image-viewer-stage"><ConversationImageViewerMedia key={item.attachment.id} attachment={item.attachment} token={token} onToken={onToken}/>{images.length>1&&<><button type="button" className="image-viewer-nav prev" onClick={()=>move(-1)} disabled={index===0} aria-label="上一张图片"><ChevronLeft size={28}/></button><button type="button" className="image-viewer-nav next" onClick={()=>move(1)} disabled={index===images.length-1} aria-label="下一张图片"><ChevronRight size={28}/></button></>}</div></section></div>;
+}
+
+function ConversationImageViewerMedia({attachment,token,onToken}:{attachment:{id:string;name:string;size:string;mime:string};token:string;onToken:(token:string)=>void}){
+  const [url,setUrl]=useState(""),[error,setError]=useState("");
+  useEffect(()=>{let cancelled=false;void acquireMedia(attachment.id,async()=>{const result=await authorizedFetch(`/api/v1/media/${attachment.id}`,token);if(result.token!==token)onToken(result.token);if(!result.response.ok)throw new Error(`HTTP ${result.response.status}`);return result.response.blob();}).then(value=>{if(!cancelled)setUrl(value);}).catch(reason=>{if(!cancelled)setError(reason instanceof Error?reason.message:"媒体加载失败");});return()=>{cancelled=true;releaseMedia(attachment.id);};},[attachment.id,token,onToken]);
+  return error?<p>{error}</p>:url?<Image src={url} alt={attachment.name} width={1400} height={1000} unoptimized/>:<span>正在加载图片…</span>;
 }
 
 function ReplySuggestionDialog({suggestion,busy,onClose,onRethink,onConfirm}:{suggestion:ReplySuggestion;busy:boolean;onClose:()=>void;onRethink:()=>void;onConfirm:()=>void}){
@@ -5860,7 +5887,7 @@ function ProductBulkEditDialog({count,productIds,categories,shippingClasses,toke
 
 const CURRENCIES=DEFAULT_CURRENCY_CONFIG.currencies.map(item=>item.code);
 function mapProductPriceTier(tier:Record<string,unknown>):ProductPriceTier{return{minQuantity:Number(tier.minQuantity),unitAmount:Number(tier.unitAmount),...(tier.costAmount===null||tier.costAmount===undefined?{}:{costAmount:Number(tier.costAmount)}),...(tier.profitMargin===null||tier.profitMargin===undefined?{}:{profitMargin:Number(tier.profitMargin)})};}
-function mapProduct(item:Record<string,unknown>):ProductItem{const priceTiers=Array.isArray(item.priceTiers)?(item.priceTiers as Array<Record<string,unknown>>).map(mapProductPriceTier):[],variants=Array.isArray(item.variants)?(item.variants as Array<Record<string,unknown>>).map(variant=>({id:String(variant.id),attributes:(variant.attributes??{}) as Record<string,string>,sku:String(variant.sku),priceTiers:Array.isArray(variant.priceTiers)?(variant.priceTiers as Array<Record<string,unknown>>).map(mapProductPriceTier):[],imageMediaId:variant.imageMediaId?String(variant.imageMediaId):null})):[];return{id:String(item.id),sku:String(item.sku??""),name:String(item.name),description:String(item.description??""),category:String(item.category??""),brand:String(item.brand??""),supplierLinks:Array.isArray(item.supplierLinks)?(item.supplierLinks as Array<Record<string,unknown>>).map(link=>({label:String(link.label??""),url:String(link.url??"")})):[],internalNote:String(item.internalNote??""),defaultUnitAmount:priceTiers[0]?.unitAmount??Number(item.defaultUnitAmount),priceTiers,currency:String(item.currency),weightAmount:item.weightAmount===null||item.weightAmount===undefined?null:Number(item.weightAmount),weightUnit:item.weightUnit?String(item.weightUnit) as WeightUnit:null,shippingClassId:item.shippingClassId?String(item.shippingClassId):null,shippingClass:item.shippingClass?String(item.shippingClass):null,imageMediaId:item.imageMediaId?String(item.imageMediaId):null,imageName:String(item.imageName??""),tags:Array.isArray(item.tags)?(item.tags as Array<Record<string,unknown>>).map(mapTag):[],variants,createdAt:String(item.createdAt),updatedAt:String(item.updatedAt)};}
+function mapProduct(item:Record<string,unknown>):ProductItem{const priceTiers=Array.isArray(item.priceTiers)?(item.priceTiers as Array<Record<string,unknown>>).map(mapProductPriceTier):[],variants=Array.isArray(item.variants)?(item.variants as Array<Record<string,unknown>>).map(variant=>({id:String(variant.id),attributes:(variant.attributes??{}) as Record<string,string>,sku:String(variant.sku),priceTiers:Array.isArray(variant.priceTiers)?(variant.priceTiers as Array<Record<string,unknown>>).map(mapProductPriceTier):[],imageMediaId:variant.imageMediaId?String(variant.imageMediaId):null})):[];return{id:String(item.id),sku:String(item.sku??""),name:String(item.name),description:String(item.description??""),category:String(item.category??""),brand:String(item.brand??""),supplierLinks:Array.isArray(item.supplierLinks)?(item.supplierLinks as Array<Record<string,unknown>>).map(link=>({label:String(link.label??""),url:String(link.url??""),...(link.supplyPrice===null||link.supplyPrice===undefined?{}:{supplyPrice:Number(link.supplyPrice)})})):[],internalNote:String(item.internalNote??""),defaultUnitAmount:priceTiers[0]?.unitAmount??Number(item.defaultUnitAmount),priceTiers,currency:String(item.currency),weightAmount:item.weightAmount===null||item.weightAmount===undefined?null:Number(item.weightAmount),weightUnit:item.weightUnit?String(item.weightUnit) as WeightUnit:null,shippingClassId:item.shippingClassId?String(item.shippingClassId):null,shippingClass:item.shippingClass?String(item.shippingClass):null,imageMediaId:item.imageMediaId?String(item.imageMediaId):null,imageName:String(item.imageName??""),tags:Array.isArray(item.tags)?(item.tags as Array<Record<string,unknown>>).map(mapTag):[],variants,createdAt:String(item.createdAt),updatedAt:String(item.updatedAt)};}
 
 function ProductImage({
   mediaId,

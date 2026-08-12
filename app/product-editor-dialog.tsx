@@ -24,8 +24,8 @@ type ProductVariant = { id?: string; attributes: Record<string, string>; sku: st
 type VariantDimension = { id: string; name: string; values: string };
 type TierDraft = { id: string; minQuantity: string; unitAmount: string; costAmount: string; profitMargin: string };
 type VariantDraft = { id: string; attributes: Record<string, string>; sku: string; priceTiers: TierDraft[]; imageMediaId: string | null; imageName: string };
-type SupplierLink = { label: string; url: string };
-type SupplierLinkDraft = SupplierLink & { id: string };
+type SupplierLink = { label: string; url: string; supplyPrice?: number };
+type SupplierLinkDraft = { id: string; label: string; url: string; supplyPrice: string };
 type Tag = { id: string; name: string; color: string };
 type Product = {
   id: string;
@@ -228,7 +228,7 @@ export function ProductEditorDialog({
         : [{ minQuantity: 1, unitAmount: 0 }]
       ).map((tier) => tierDraft(tier, !product)),
     ),
-    [supplierLinks,setSupplierLinks]=useState<SupplierLinkDraft[]>(()=>(product?.supplierLinks??[]).map(link=>({...link,id:crypto.randomUUID()}))),
+    [supplierLinks,setSupplierLinks]=useState<SupplierLinkDraft[]>(()=>(product?.supplierLinks??[]).map(link=>({...link,supplyPrice:link.supplyPrice===undefined?"":link.supplyPrice.toFixed(2),id:crypto.randomUUID()}))),
     [internalNote,setInternalNote]=useState(product?.internalNote??""),
     [imageMediaId, setImageMediaId] = useState<string | null>(
       product?.imageMediaId ?? null,
@@ -402,7 +402,7 @@ export function ProductEditorDialog({
       positiveNumber=/^\d+(?:\.\d+)?$/,
       quantities = tiers.map((tier) => Number(tier.minQuantity)),
       invalidInternalPricing=tiers.some(tier=>(tier.costAmount==="")!==(tier.profitMargin==="")||(tier.costAmount!==""&&(!money.test(tier.costAmount)||!/^\d+(?:\.\d{1,4})?$/.test(tier.profitMargin)||calculatedPrice(tier.costAmount,tier.profitMargin)!==Number(tier.unitAmount).toFixed(2)))),
-      normalizedSupplierLinks=supplierLinks.map(link=>({label:link.label.trim(),url:link.url.trim()})).filter(link=>link.label||link.url);
+      normalizedSupplierLinks=supplierLinks.map(link=>({label:link.label.trim(),url:link.url.trim(),...(link.supplyPrice!==""?{supplyPrice:Number(link.supplyPrice)}:{})})).filter(link=>link.label||link.url||link.supplyPrice!==undefined);
     if (
       !name.trim() ||
       !sku.trim() ||
@@ -412,7 +412,7 @@ export function ProductEditorDialog({
           !/^\d+$/.test(tier.minQuantity) || !money.test(tier.unitAmount),
       ) ||
       invalidInternalPricing ||
-      normalizedSupplierLinks.some(link=>!link.url||!/^https?:\/\//i.test(link.url)) ||
+      normalizedSupplierLinks.some(link=>!link.url||!/^https?:\/\//i.test(link.url)||(link.supplyPrice!==undefined&&!money.test(String(link.supplyPrice)))) ||
       (weightAmount!==""&&(!positiveNumber.test(weightAmount)||Number(weightAmount)<=0)) ||
       quantities.some(
         (value, index) =>
@@ -683,8 +683,8 @@ export function ProductEditorDialog({
             ))}
           </div>
           <section className="product-supplier-editor">
-            <header><span><b>供应商链接</b><small>仅供内部采购参考，可灵活增删</small></span><button type="button" onClick={()=>setSupplierLinks(all=>[...all,{id:crypto.randomUUID(),label:"",url:""}])} disabled={supplierLinks.length>=30}><Plus size={13}/>添加链接</button></header>
-            {supplierLinks.map(link=>{const href=link.url.trim(),openable=/^https?:\/\//i.test(href);return <div key={link.id}><input value={link.label} maxLength={120} placeholder="名称，如 1688 供应商" onChange={event=>setSupplierLinks(all=>all.map(item=>item.id===link.id?{...item,label:event.target.value}:item))}/><input type="url" value={link.url} maxLength={2000} placeholder="https://..." onChange={event=>setSupplierLinks(all=>all.map(item=>item.id===link.id?{...item,url:event.target.value}:item))}/><button type="button" className="supplier-link-open" aria-label="打开供应商链接" title={openable?"打开供应商链接":"请输入完整链接后打开"} disabled={!openable} onClick={()=>window.open(href,"_blank","noopener,noreferrer")}><ArrowUpRight size={13}/></button><button type="button" aria-label="删除供应商链接" onClick={()=>setSupplierLinks(all=>all.filter(item=>item.id!==link.id))}><Trash2 size={13}/></button></div>;})}
+            <header><span><b>供应商链接</b><small>仅供内部采购参考，可灵活增删</small></span><button type="button" onClick={()=>setSupplierLinks(all=>[...all,{id:crypto.randomUUID(),label:"",url:"",supplyPrice:""}])} disabled={supplierLinks.length>=30}><Plus size={13}/>添加链接</button></header>
+            {supplierLinks.map(link=>{const href=link.url.trim(),openable=/^https?:\/\//i.test(href);return <div key={link.id}><input value={link.label} maxLength={120} placeholder="名称，如 1688 供应商" onChange={event=>setSupplierLinks(all=>all.map(item=>item.id===link.id?{...item,label:event.target.value}:item))}/><input type="url" value={link.url} maxLength={2000} placeholder="https://..." onChange={event=>setSupplierLinks(all=>all.map(item=>item.id===link.id?{...item,url:event.target.value}:item))}/><input type="number" value={link.supplyPrice} inputMode="decimal" min="0" step="0.01" placeholder={`供应价格 (${currency})`} aria-label="供应价格" onChange={event=>setSupplierLinks(all=>all.map(item=>item.id===link.id?{...item,supplyPrice:event.target.value}:item))}/><button type="button" className="supplier-link-open" aria-label="打开供应商链接" title={openable?"打开供应商链接":"请输入完整链接后打开"} disabled={!openable} onClick={()=>window.open(href,"_blank","noopener,noreferrer")}><ArrowUpRight size={13}/></button><button type="button" aria-label="删除供应商链接" onClick={()=>setSupplierLinks(all=>all.filter(item=>item.id!==link.id))}><Trash2 size={13}/></button></div>;})}
           </section>
           <label>
             内部备注 · 仅内部可见

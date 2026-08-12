@@ -338,6 +338,7 @@ test("products support internal tier pricing, supplier links, and private order-
   assert.match(migration,/to_regclass\('public\.product_variant_price_tiers'\)[\s\S]*cost_amount/);
   assert.match(migration,/internal_note_snapshot/);
   assert.match(schemas,/unit amount must match cost amount and profit margin/);
+  assert.match(schemas,/supplyPrice:moneySchema\.optional\(\)/);
   assert.match(schemas,/value\.costAmount\/\(1-value\.profitMargin\/100\)/);
   const editor=await readFile(new URL("../../../app/product-editor-dialog.tsx",import.meta.url),"utf8");
   assert.match(editor,/cost\/\(1-margin\/100\)/);
@@ -349,6 +350,8 @@ test("products support internal tier pricing, supplier links, and private order-
   assert.match(server,/'internalNote',i\.internal_note_snapshot/);
   assert.match(dialog,/calculatedPrice/);
   assert.match(dialog,/供应商链接/);
+  assert.match(dialog,/aria-label="供应价格"/);
+  assert.match(dialog,/supplyPrice:Number\(link\.supplyPrice\)/);
   assert.match(dialog,/内部备注 · 仅内部可见/);
   assert.match(component,/order-item-internal-note/);
   const cardRoute=server.slice(server.indexOf('app.post("/api/v1/product-cards"'),server.indexOf('app.get("/api/v1/product-cards/batches'));
