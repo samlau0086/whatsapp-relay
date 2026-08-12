@@ -108,6 +108,11 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
     css,
     /\.relay-shell \{ width:100vw; height:100vh; height:100dvh/,
   );
+  assert.match(
+    css,
+    /\.rail \{ height:100%; min-height:0;[^}]*overflow-y:auto;/,
+  );
+  assert.match(css, /\.brand-mark,\.rail-nav,\.rail-bottom \{ flex:0 0 auto; \}/);
   assert.match(css, /border-radius:0; box-shadow:none/);
   assert.match(css, /\.new-conversation-dialog/);
   assert.match(css, /\.media-dialog/);
