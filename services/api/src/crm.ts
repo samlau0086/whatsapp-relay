@@ -50,6 +50,11 @@ export async function ensureCrmTables(db:Queryable):Promise<void>{
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS deleted_at timestamptz");
   await db.query(`CREATE TABLE IF NOT EXISTS contact_addresses (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),contact_id uuid NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,label text NOT NULL,recipient_name text,phone text,address text NOT NULL,created_by uuid REFERENCES users(id) ON DELETE SET NULL,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now())`);
   await db.query("ALTER TABLE contact_addresses ADD COLUMN IF NOT EXISTS is_default boolean NOT NULL DEFAULT false");
+  await db.query("ALTER TABLE contact_addresses ADD COLUMN IF NOT EXISTS city text");
+  await db.query("ALTER TABLE contact_addresses ADD COLUMN IF NOT EXISTS street_line_1 text");
+  await db.query("ALTER TABLE contact_addresses ADD COLUMN IF NOT EXISTS street_line_2 text");
+  await db.query("ALTER TABLE contact_addresses ADD COLUMN IF NOT EXISTS postal_code text");
+  await db.query("UPDATE contact_addresses SET street_line_1=address WHERE street_line_1 IS NULL OR btrim(street_line_1)='' ");
   await db.query(`UPDATE contact_addresses address SET is_default=true WHERE address.id=(SELECT candidate.id FROM contact_addresses candidate WHERE candidate.contact_id=address.contact_id ORDER BY candidate.is_default DESC,candidate.created_at,candidate.id LIMIT 1) AND NOT EXISTS(SELECT 1 FROM contact_addresses current_default WHERE current_default.contact_id=address.contact_id AND current_default.is_default)`);
   await db.query(`WITH ranked AS (SELECT id,row_number() OVER(PARTITION BY contact_id ORDER BY updated_at DESC,id) position FROM contact_addresses WHERE is_default) UPDATE contact_addresses address SET is_default=false FROM ranked WHERE address.id=ranked.id AND ranked.position>1`);
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS address_id uuid REFERENCES contact_addresses(id) ON DELETE SET NULL");
