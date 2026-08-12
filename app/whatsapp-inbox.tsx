@@ -4536,7 +4536,7 @@ function ConversationImageViewer({images,selectedMessageId,token,onToken,onClose
 function ConversationImageViewerMedia({attachment,token,onToken}:{attachment:{id:string;name:string;size:string;mime:string};token:string;onToken:(token:string)=>void}){
   const [url,setUrl]=useState(""),[error,setError]=useState("");
   useEffect(()=>{let cancelled=false;void acquireMedia(attachment.id,async()=>{const result=await authorizedFetch(`/api/v1/media/${attachment.id}`,token);if(result.token!==token)onToken(result.token);if(!result.response.ok)throw new Error(`HTTP ${result.response.status}`);return result.response.blob();}).then(value=>{if(!cancelled)setUrl(value);}).catch(reason=>{if(!cancelled)setError(reason instanceof Error?reason.message:"媒体加载失败");});return()=>{cancelled=true;releaseMedia(attachment.id);};},[attachment.id,token,onToken]);
-  return error?<p>{error}</p>:url?<span className="image-viewer-media"><Image src={url} alt={attachment.name} fill sizes="(max-width: 640px) 100vw, 1100px" unoptimized/></span>:<span>正在加载图片…</span>;
+  return error?<p>{error}</p>:url?<img className="image-viewer-media" src={url} alt={attachment.name}/>:<span>正在加载图片…</span>;
 }
 
 function ReplySuggestionDialog({suggestion,busy,onClose,onRethink,onConfirm}:{suggestion:ReplySuggestion;busy:boolean;onClose:()=>void;onRethink:()=>void;onConfirm:()=>void}){
