@@ -26,6 +26,7 @@ const attentionKeys=new Set<string>();
 const messageNotifications=new Map<string,Notification>();
 let store: AgentStore;
 let client: CentralClient | undefined;
+let centralStartGeneration = 0;
 let masterKey = "";
 let quitting = false;
 const workers = new Map<string, ChildProcess>();
@@ -171,6 +172,8 @@ ipcMain.handle("proxy:save", async (_event, input: {mode:string;url?:string}) =>
   const url = mode === "manual" ? normalizeManualProxy(input.url ?? "") : "";
   store.set("proxyMode", mode);
   store.set("proxyUrl", url);
+  const agentId=store.get("agentId"),credential=store.get("credential"),baseUrl=store.get("baseUrl");
+  if(agentId&&credential&&baseUrl)void startCentral(baseUrl,agentId,credential);
   for (const [accountId, worker] of workers) {
     intentionalRestarts.add(accountId);
     worker.kill();
@@ -265,8 +268,12 @@ ipcMain.handle("account:remove", async (_event, input: {id:string}) => {
   return {ok:true};
 });
 
-function startCentral(baseUrl: string, agentId: string, credential: string): void {
+async function startCentral(baseUrl: string, agentId: string, credential: string): Promise<void> {
+  const generation=++centralStartGeneration;
   client?.stop();
+  client=undefined;
+  const proxyUrl=await resolveProxyUrl(baseUrl);
+  if(generation!==centralStartGeneration)return;
   const nextClient = new CentralClient(
     store,
     baseUrl,
@@ -283,6 +290,7 @@ function startCentral(baseUrl: string, agentId: string, credential: string): voi
       window?.webContents.send("agent:event", { type: "central_status", status });
     },
     ({accountId,chatJid})=>clearAttention(accountId,chatJid),
+    proxyUrl,
   );
   client = nextClient;
   nextClient.start();

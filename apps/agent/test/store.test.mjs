@@ -166,6 +166,16 @@ test("WhatsApp version discovery uses the configured proxy", () => {
   assert.match(worker,/fetchLatestBaileysVersion\(\s*mediaProxyAgent\s*\?\s*\{\s*dispatcher:\s*mediaProxyAgent\s*\}/);
 });
 
+test("the central WebSocket uses the configured proxy and reconnects after proxy changes", () => {
+  const main=readFileSync(new URL("../dist/main.js",import.meta.url),"utf8");
+  const client=readFileSync(new URL("../dist/central-client.js",import.meta.url),"utf8");
+  assert.match(client,/HttpsProxyAgent/);
+  assert.match(client,/new HttpsProxyAgent\(this\.proxyUrl\)/);
+  assert.match(client,/agent\s*}\)/);
+  assert.match(main,/resolveProxyUrl\(baseUrl\)/);
+  assert.match(main,/void startCentral\(baseUrl,\s*agentId,\s*credential\)/);
+});
+
 test("an enrolled agent can change its central URL without replacing credentials", () => {
   const main=readFileSync(new URL("../dist/main.js",import.meta.url),"utf8");
   const preload=readFileSync(new URL("../dist/preload.cjs",import.meta.url),"utf8");
