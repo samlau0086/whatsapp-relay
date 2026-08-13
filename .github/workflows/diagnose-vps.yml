@@ -11,6 +11,10 @@ on:
         description: Optional incoming audio message UUID to transcribe and translate
         required: false
         type: string
+      contact_phone:
+        description: Optional E.164 contact phone for identity diagnostics
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -28,6 +32,7 @@ jobs:
       VPS_DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH || '/opt/relaydesk' }}
       TTS_ACCOUNT_ID: ${{ inputs.tts_account_id }}
       TRANSLATION_MESSAGE_ID: ${{ inputs.translation_message_id }}
+      CONTACT_PHONE: ${{ inputs.contact_phone }}
     steps:
       - name: Configure SSH
         shell: bash
@@ -44,6 +49,9 @@ jobs:
           if test -n "$TRANSLATION_MESSAGE_ID"; then
             [[ "$TRANSLATION_MESSAGE_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
           fi
+          if test -n "$CONTACT_PHONE"; then
+            [[ "$CONTACT_PHONE" =~ ^\+[1-9][0-9]{6,14}$ ]]
+          fi
           install -d -m 700 ~/.ssh
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
@@ -54,11 +62,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            "$VPS_USER@$VPS_HOST" "bash -s -- '$VPS_DEPLOY_PATH' '$TTS_ACCOUNT_ID' '$TRANSLATION_MESSAGE_ID'" <<'REMOTE'
+            "$VPS_USER@$VPS_HOST" "bash -s -- '$VPS_DEPLOY_PATH' '$TTS_ACCOUNT_ID' '$TRANSLATION_MESSAGE_ID' '$CONTACT_PHONE'" <<'REMOTE'
           set -Eeuo pipefail
           root=$1
           tts_account_id=${2:-}
           translation_message_id=${3:-}
+          contact_phone=${4:-}
           cd "$root/current"
 
           echo "Current release: $(basename "$(readlink -f "$root/current")")"
@@ -69,6 +78,21 @@ jobs:
           docker compose -p relaydesk exec -T postgres sh -lc \
             'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT current_database(); SELECT to_regclass('"'"'public.order_items'"'"'),to_regclass('"'"'public.order_fees'"'"'); SELECT string_agg(column_name,'"'"','"'"' ORDER BY column_name) FROM information_schema.columns WHERE table_schema='"'"'public'"'"' AND table_name='"'"'orders'"'"' AND column_name IN ('"'"'status'"'"','"'"'translate_on_send'"'"','"'"'target_language'"'"','"'"'translated_text'"'"','"'"'sent_at'"'"');"' \
             </dev/null
+
+          if test -n "$contact_phone"; then
+            docker compose -p relaydesk exec -T -e CONTACT_PHONE="$contact_phone" postgres sh -lc \
+              'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -P pager=off -v phone="$CONTACT_PHONE" <<'"'"'SQL'"'"
+SELECT co.id,co.account_id,co.provider_user_id,co.phone_e164,quote_nullable(co.display_name) display_name,quote_nullable(co.alias) alias,co.last_seen_at,co.updated_at,c.id conversation_id,c.last_message_direction,c.last_message_at
+FROM contacts co LEFT JOIN conversations c ON c.contact_id=co.id
+WHERE co.phone_e164=:'"'"'phone'"'"' OR co.provider_user_id IN (replace(:'"'"'phone'"'"','"'"'+'"'"','"'"''"'"')||'"'"'@s.whatsapp.net'"'"')
+ORDER BY co.updated_at DESC;
+
+SELECT msg.id,msg.direction,msg.sender_provider_user_id,quote_nullable(msg.sender_display_name) sender_name,msg.status,msg.occurred_at,left(coalesce(msg.text_content,'"'"''"'"'),80) text
+FROM messages msg JOIN conversations c ON c.id=msg.conversation_id JOIN contacts co ON co.id=c.contact_id
+WHERE co.phone_e164=:'"'"'phone'"'"'
+ORDER BY msg.occurred_at DESC,msg.id DESC LIMIT 12;
+SQL' </dev/null
+          fi
 
           diagnostic=$(cat <<'NODE'
           const login = await fetch("http://gateway/api/v1/auth/login", {
