@@ -23,6 +23,7 @@ type Product = {
   id: string;
   sku: string;
   name: string;
+  category: string;
   currency: string;
   defaultUnitAmount: number;
   imageMediaId: string | null;
@@ -48,6 +49,7 @@ function mapProduct(item: Record<string, unknown>): Product {
     id: String(item.id),
     sku: String(item.sku),
     name: String(item.name),
+    category: String(item.category ?? ""),
     currency: String(item.currency),
     defaultUnitAmount: Number(item.defaultUnitAmount),
     imageMediaId: item.imageMediaId ? String(item.imageMediaId) : null,
@@ -136,6 +138,8 @@ export function ProductCardSendDialog({
   onSent: (message: string) => void;
 }) {
   const [catalogProducts, setCatalogProducts] = useState<Product[]>([]),
+    [categories, setCategories] = useState<string[]>([]),
+    [category, setCategory] = useState(""),
     [currencies, setCurrencies] = useState<CurrencyConfig[]>([]),
     [targetCurrency, setTargetCurrency] = useState("USD"),
     [productCache, setProductCache] = useState<Map<string, Product>>(
@@ -253,13 +257,20 @@ export function ProductCardSendDialog({
             setLoading(true);
             try {
               const needle = query.trim(),
-                path = `/api/v1/products?limit=100${needle ? `&q=${encodeURIComponent(needle)}${exactMatch ? "&exact=true" : ""}` : ""}`,
+                params = new URLSearchParams({ limit: "100" });
+              if (needle) {
+                params.set("q", needle);
+                if (exactMatch) params.set("exact", "true");
+              }
+              if (category) params.set("category", category);
+              const path = `/api/v1/products?${params.toString()}`,
                 productResult = await requestRef.current(path, {
                   signal: controller.signal,
                 });
               onTokenRef.current(productResult.token);
               const body = (await productResult.response.json()) as {
                 data?: Array<Record<string, unknown>>;
+                categories?: string[];
                 message?: string;
               };
               if (!productResult.response.ok)
@@ -269,6 +280,7 @@ export function ProductCardSendDialog({
               if (!controller.signal.aborted) {
                 const nextProducts = (body.data ?? []).map(mapProduct);
                 setCatalogProducts(nextProducts);
+                setCategories(body.categories ?? []);
                 setProductCache((current) => {
                   const next = new Map(current);
                   for (const product of nextProducts)
@@ -293,7 +305,7 @@ export function ProductCardSendDialog({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [query, exactMatch]);
+  }, [query, exactMatch, category]);
   const chosen = selected
       .map((id) => productCache.get(id))
       .filter(Boolean) as Product[],
@@ -315,6 +327,24 @@ export function ProductCardSendDialog({
     setSelected((all) =>
       all.includes(id) ? all.filter((item) => item !== id) : [...all, id],
     );
+  }
+  const visibleProductIds = catalogProducts.map((product) => product.id),
+    allVisibleSelected =
+      visibleProductIds.length > 0 &&
+      visibleProductIds.every((id) => selected.includes(id));
+  function toggleAllVisible() {
+    resetTranslationPreview();
+    setSelected((all) => {
+      const visible = new Set(visibleProductIds);
+      if (visibleProductIds.every((id) => all.includes(id)))
+        return all.filter((id) => !visible.has(id));
+      const next = [...all];
+      for (const id of visibleProductIds) {
+        if (next.length >= 50) break;
+        if (!next.includes(id)) next.push(id);
+      }
+      return next;
+    });
   }
   function move(id: string, to: number) {
     resetTranslationPreview();
@@ -655,6 +685,30 @@ export function ProductCardSendDialog({
                   onChange={(event) => setExactMatch(event.target.checked)}
                 />
               </label>
+            </div>
+            <div className="product-card-filter-bar">
+              <select
+                value={category}
+                onChange={(event) => setCategory(event.target.value)}
+                aria-label="按类目筛选产品"
+              >
+                <option value="">全部类目</option>
+                {categories.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  disabled={loading || catalogProducts.length === 0}
+                  onChange={toggleAllVisible}
+                />
+                <span>全选当前结果</span>
+              </label>
+              <small>{catalogProducts.length} 个产品</small>
             </div>
             <div>
               {loading ? (
