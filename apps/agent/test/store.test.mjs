@@ -204,13 +204,30 @@ test("protocol placeholders can be removed without dropping real replies", () =>
   }
 });
 
+test("known contact identities can be replayed once to restore synchronized names", () => {
+  const directory=mkdtempSync(join(tmpdir(),"relaydesk-store-"));
+  const store=new AgentStore(join(directory,"agent.db"));
+  try {
+    store.enqueueEvent("identity-original","contact_identity",{accountId:"account-1",lidJid:"36628034810005@lid",phoneJid:"966547413706@s.whatsapp.net",displayName:"bora"});
+    store.enqueueEvent("identity-empty","contact_identity",{accountId:"account-2",lidJid:"36628034810006@lid",phoneJid:"966547413707@s.whatsapp.net"});
+    assert.equal(store.requeueKnownContactIdentities(),1);
+    const replay=store.pendingEvents().find(event=>event.event_id.startsWith("identity-name-recovery-v1:"));
+    assert.ok(replay);
+    assert.equal(JSON.parse(replay.payload).displayName,"bora");
+    assert.equal(store.requeueKnownContactIdentities(),0);
+  } finally {
+    store.close();
+    rmSync(directory,{recursive:true,force:true});
+  }
+});
+
 test("group chat capability synchronizes metadata and preserves quoted participants",()=>{
   const packageMetadata=JSON.parse(readFileSync(new URL("../package.json",import.meta.url),"utf8"));
   const main=readFileSync(new URL("../dist/main.js",import.meta.url),"utf8");
   const docker=readFileSync(new URL("../dist/docker-main.js",import.meta.url),"utf8");
   const worker=readFileSync(new URL("../dist/account-worker.js",import.meta.url),"utf8");
   const central=readFileSync(new URL("../dist/central-client.js",import.meta.url),"utf8");
-  assert.equal(packageMetadata.version,"0.1.35");
+  assert.equal(packageMetadata.version,"0.1.36");
   assert.match(main,/group_chat_v1/);
   assert.match(docker,/group_chat_v1/);
   assert.match(worker,/groupFetchAllParticipating/);

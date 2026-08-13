@@ -46,6 +46,7 @@ if (!hasSingleInstanceLock) {
     store = new AgentStore(join(dataDir, "relay-agent.db"));
     store.discardRemovedAccountStatusEvents();
     store.discardUnsupportedMessageEvents();
+    store.requeueKnownContactIdentities();
     masterKey = await loadMasterKey(dataDir);
     createWindow();
     createTray();

@@ -50,6 +50,26 @@ export class AgentStore {
     }
     return removed;
   }
+  requeueKnownContactIdentities():number {
+    const rows=this.db.prepare("SELECT payload FROM event_outbox WHERE event_kind='contact_identity' ORDER BY cursor").all() as Array<{payload:string}>;
+    const latest=new Map<string,{accountId:string;lidJid:string;phoneJid:string;displayName:string}>();
+    for(const row of rows){
+      try{
+        const payload=JSON.parse(row.payload) as Record<string,unknown>;
+        const accountId=String(payload.accountId??""),lidJid=String(payload.lidJid??""),phoneJid=String(payload.phoneJid??""),displayName=String(payload.displayName??"").trim();
+        if(!accountId||!/^\d{7,15}@lid$/.test(lidJid)||!/^\d{7,15}@s\.whatsapp\.net$/.test(phoneJid)||!displayName||/^\+?\d+$/.test(displayName))continue;
+        latest.set(`${accountId}:${lidJid}:${phoneJid}`,{accountId,lidJid,phoneJid,displayName});
+      }catch{}
+    }
+    let queued=0;
+    for(const identity of latest.values()){
+      const eventId=`identity-name-recovery-v1:${identity.accountId}:${identity.lidJid}:${identity.phoneJid}`;
+      if(this.hasEvent(eventId))continue;
+      this.enqueueEvent(eventId,"contact_identity",{eventId,...identity,at:new Date().toISOString()});
+      queued++;
+    }
+    return queued;
+  }
   accounts():Array<{id:string;name:string;status:string;last_error:string|null;created_at:string}> { return this.db.prepare("SELECT * FROM accounts ORDER BY created_at").all() as Array<{id:string;name:string;status:string;last_error:string|null;created_at:string}>; }
   setAccountStatus(id:string,status:string,error?:string):void { this.db.prepare("UPDATE accounts SET status=?,last_error=? WHERE id=?").run(status,error??null,id); }
   hasEvent(eventId:string):boolean { return Boolean(this.db.prepare("SELECT 1 FROM event_outbox WHERE event_id=?").get(eventId)); }
