@@ -136,6 +136,9 @@ test("outbound message echoes cannot replace synchronized contact names",async()
   assert.match(worker,/senderName:\s*remotePushName/);
   assert.match(hub,/const remoteDisplayName=payload\.direction==="in"\?String\(payload\.senderName\?\?""\)\.trim\(\):""/);
   assert.match(hub,/displayName:remoteDisplayName/);
+  assert.match(hub,/const usableName=\(value:unknown\)=>\{const name=String\(value\?\?""\)\.trim\(\);return name&&!\/\^\\\+\?\\d\+\$\/\.test\(name\)\?name:null;\}/);
+  assert.match(hub,/const suppliedName=usableName\(payload\.displayName\)/);
+  assert.match(hub,/found\.rows\.map\(row=>usableName\(row\.display_name\)\)\.find/);
 });
 
 test("conversation deletion is privileged and blocks unsafe cascading deletes",async()=>{

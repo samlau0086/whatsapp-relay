@@ -148,8 +148,9 @@ async function mergeContactIdentity(client:import("pg").PoolClient,agentId:strin
   const found=await client.query("SELECT id,provider_user_id,phone_e164,display_name,alias,note,first_name,middle_name,last_name FROM contacts WHERE account_id=$1 AND (provider_user_id=ANY($2::text[]) OR phone_e164=$3) ORDER BY CASE WHEN provider_user_id=$4 THEN 0 WHEN phone_e164=$3 THEN 1 ELSE 2 END,id FOR UPDATE",[accountId,[phoneJid,lidJid],phone,phoneJid]);
   if(!found.rowCount)return null;
   const target=found.rows[0];
-  const suppliedName=typeof payload.displayName==="string"&&!/^\+?\d+$/.test(payload.displayName)?payload.displayName:null;
-  const bestName=suppliedName??found.rows.map(row=>String(row.display_name??"")).find(name=>name&&!/^\+?\d+$/.test(name))??target.display_name??phone;
+  const usableName=(value:unknown)=>{const name=String(value??"").trim();return name&&!/^\+?\d+$/.test(name)?name:null;};
+  const suppliedName=usableName(payload.displayName);
+  const bestName=suppliedName??found.rows.map(row=>usableName(row.display_name)).find((name):name is string=>Boolean(name))??phone;
   const bestAlias=found.rows.map(row=>String(row.alias??"").trim()).find(Boolean)??null;
   for(const source of found.rows.slice(1)){
     await client.query("UPDATE contacts SET note=CASE WHEN NULLIF(btrim(note),'') IS NULL THEN $2 WHEN NULLIF(btrim($2),'') IS NULL OR note=$2 THEN note ELSE note||E'\\n\\n'||$2 END,first_name=COALESCE(NULLIF(first_name,''),$3),middle_name=COALESCE(NULLIF(middle_name,''),$4),last_name=COALESCE(NULLIF(last_name,''),$5),updated_at=now() WHERE id=$1",[target.id,source.note??null,source.first_name??null,source.middle_name??null,source.last_name??null]);
