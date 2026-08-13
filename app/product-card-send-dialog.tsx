@@ -303,7 +303,7 @@ export function ProductCardSendDialog({
         ? { rows: customRows, columns: customColumns }
         : { rows: Number(gridPreset), columns: Number(gridPreset) },
     gridCapacity = gridSize.rows * gridSize.columns,
-    gridOverflow = mode === "grid" && selected.length > gridCapacity;
+    gridPageCount = mode === "grid" ? Math.ceil(selected.length / gridCapacity) : 0;
   const defaultCaption = renderCaptionTemplate(captionTemplate, chosen),
     caption = captionOverride ?? defaultCaption;
   function resetTranslationPreview() {
@@ -391,12 +391,6 @@ export function ProductCardSendDialog({
     if (!selected.length) return;
     if (mode === "combined" && selected.length > 10) {
       setError("合并长图一次最多选择 10 个产品");
-      return;
-    }
-    if (gridOverflow) {
-      setError(
-        `当前 ${gridSize.rows}×${gridSize.columns} 网格最多容纳 ${gridCapacity} 个产品`,
-      );
       return;
     }
     if (channel === "email" && !recipientIds.length) {
@@ -884,10 +878,9 @@ export function ProductCardSendDialog({
                     </label>
                   </div>
                 )}
-                <small className={gridOverflow ? "error" : ""}>
-                  {gridOverflow
-                    ? `已超出 ${gridCapacity} 个产品的容量，请减少产品或增大网格。`
-                    : `按当前排序从左到右、从上到下排列，可容纳 ${gridCapacity} 个产品。`}
+                <small>
+                  按当前排序从左到右、从上到下排列，每张容纳 {gridCapacity} 个产品
+                  {selected.length > 0 && `，将生成 ${gridPageCount} 张网格拼图。`}
                 </small>
               </div>
             )}
@@ -1040,7 +1033,6 @@ export function ProductCardSendDialog({
               unavailable ||
               !selected.length ||
               (mode === "combined" && selected.length > 10) ||
-              gridOverflow ||
               (channel === "email" && (!recipientIds.length || !subject.trim()))
             }
           >

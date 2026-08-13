@@ -178,7 +178,7 @@ test("bulk product editing supports category and shipping class",async()=>{
 
 test("product card sending offers preset and custom grid collages",async()=>{
   const [dialog,server,image]=await Promise.all([readFile(new URL("../../../app/product-card-send-dialog.tsx",import.meta.url),"utf8"),readFile(new URL("../src/server.ts",import.meta.url),"utf8"),readFile(new URL("../src/product-card-image.ts",import.meta.url),"utf8")]);
-  assert.match(dialog,/GRID_PRESETS\s*=\s*\[2,\s*3,\s*4,\s*5,\s*8\]/);assert.match(dialog,/合并为网格拼图/);assert.match(dialog,/自定义/);assert.match(dialog,/gridOverflow/);assert.match(server,/renderProductCardGrid/);assert.match(image,/export async function renderProductCardGrid/);
+  assert.match(dialog,/GRID_PRESETS\s*=\s*\[2,\s*3,\s*4,\s*5,\s*8\]/);assert.match(dialog,/合并为网格拼图/);assert.match(dialog,/自定义/);assert.match(dialog,/gridPageCount/);assert.match(server,/renderProductCardGridPages/);assert.match(server,/clientBatchId}:grid:\$\{index\}/);assert.match(image,/export async function renderProductCardGridPages/);
 });
 
 test("product card captions come from the template and are translated before WhatsApp sending",async()=>{

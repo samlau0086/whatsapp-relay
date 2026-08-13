@@ -24,6 +24,13 @@ export async function renderProductCardGrid(template:ProductCardTemplate,product
   return sharp({create:{width:canvasWidth,height,channels:4,background:"#E9F0EC"}}).composite(composite).png({compressionLevel:9}).toBuffer();
 }
 
+export async function renderProductCardGridPages(template:ProductCardTemplate,products:ProductCardRenderProduct[],showPrice:boolean,rows:number,columns:number):Promise<Buffer[]>{
+  if(!Number.isInteger(rows)||!Number.isInteger(columns)||rows<1||columns<1||rows>10||columns>10)throw new Error("invalid product card grid");
+  const capacity=rows*columns,pages:Buffer[]=[];
+  for(let start=0;start<products.length;start+=capacity)pages.push(await renderProductCardGrid(template,products.slice(start,start+capacity),showPrice,rows,columns));
+  return pages;
+}
+
 async function renderCard(template:ProductCardTemplate,product:ProductCardRenderProduct,showPrice:boolean):Promise<Buffer>{
   const imageData=product.image?(await sharp(product.image).rotate().resize(900,620,{fit:"cover"}).png().toBuffer()).toString("base64"):null;
   const variantImageData=await Promise.all((product.variants??[]).map(async variant=>variant.image?(await sharp(variant.image).rotate().resize(180,180,{fit:"contain",background:"#FFFFFF"}).png().toBuffer()).toString("base64"):null));

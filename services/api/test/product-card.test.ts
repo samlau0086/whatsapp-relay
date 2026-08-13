@@ -3,7 +3,7 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 import sharp from "sharp";
 import { DEFAULT_PRODUCT_CARD_TEMPLATE, productCardTemplateSchema, renderProductCardCaption } from "../src/product-card-template.js";
-import { renderProductCardGrid, renderProductCards } from "../src/product-card-image.js";
+import { renderProductCardGrid, renderProductCardGridPages, renderProductCards } from "../src/product-card-image.js";
 import { productCardSendSchema } from "../src/schemas.js";
 
 test("product pricing and card migration is idempotent and enforces active SKU uniqueness",async()=>{
@@ -31,10 +31,10 @@ test("product card sends accept complete translated product names and reject par
   assert.equal(productCardSendSchema.safeParse({...base,translationTargetLanguage:"zh-CN",translatedProductNames:[...productIds.map((productId,index)=>({productId,name:`译名 ${index+1}`})),{productId:"44444444-4444-4444-8444-444444444444",name:"越界"}]}).success,false);
 });
 
-test("product card sends validate preset and custom grid capacity",()=>{
+test("product card sends accept automatic grid pagination",()=>{
   const productIds=Array.from({length:5},(_,index)=>`${index+1}1111111-1111-4111-8111-111111111111`),base={accountId:"33333333-3333-4333-8333-333333333333",clientBatchId:"batch_grid_123",productIds,mode:"grid" as const,showPrice:true};
   assert.equal(productCardSendSchema.safeParse({...base,grid:{rows:2,columns:3}}).success,true);
-  assert.equal(productCardSendSchema.safeParse({...base,grid:{rows:2,columns:2}}).success,false);
+  assert.equal(productCardSendSchema.safeParse({...base,grid:{rows:2,columns:2}}).success,true);
   assert.equal(productCardSendSchema.safeParse(base).success,false);
   assert.equal(productCardSendSchema.safeParse({...base,grid:{rows:11,columns:1}}).success,false);
 });
@@ -61,4 +61,10 @@ test("product cards render a bounded grid collage",async()=>{
   const product={name:"Grid perfume",sku:"GRID-001",currency:"USD",priceTiers:[{minQuantity:1,unitAmount:25}],tags:[]},grid=await renderProductCardGrid(DEFAULT_PRODUCT_CARD_TEMPLATE,Array.from({length:6},(_,index)=>({...product,sku:`GRID-${index+1}`})),true,2,3),metadata=await sharp(grid).metadata();
   assert.equal(metadata.format,"png");assert.equal(metadata.width,2160);assert.ok((metadata.height??0)>720);
   await assert.rejects(()=>renderProductCardGrid(DEFAULT_PRODUCT_CARD_TEMPLATE,Array.from({length:5},()=>product),true,2,2),/invalid product card grid/);
+});
+
+test("product card grids automatically paginate beyond capacity",async()=>{
+  const product={name:"Grid perfume",sku:"GRID-001",currency:"USD",priceTiers:[{minQuantity:1,unitAmount:25}],tags:[]},pages=await renderProductCardGridPages(DEFAULT_PRODUCT_CARD_TEMPLATE,Array.from({length:9},(_,index)=>({...product,sku:`GRID-${index+1}`})),true,2,2);
+  assert.equal(pages.length,3);
+  for(const page of pages){const metadata=await sharp(page).metadata();assert.equal(metadata.format,"png");assert.equal(metadata.width,2160);}
 });
