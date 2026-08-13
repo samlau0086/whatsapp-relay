@@ -47,6 +47,9 @@ export const messageRetrySchema = z.object({
   clientMessageId: z.string().min(8).max(128),
 });
 
+export const messageCommentSchema=z.object({body:z.string().trim().min(1).max(4000)});
+export const messageCommentVoteSchema=z.object({value:z.union([z.literal(1),z.literal(-1)])});
+
 export const textToSpeechSchema = z.object({
   accountId: z.string().uuid(),
   text: z.string().trim().min(1).max(4096),
