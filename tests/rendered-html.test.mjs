@@ -247,6 +247,8 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.doesNotMatch(component, /className="tag-manager"/);
   assert.match(component, /添加商品/);
   assert.match(component, /Additional fees/);
+  assert.match(component, /order\.shippingAmount!==null/);
+  assert.match(component, /order\.shippingAmount\.toFixed\(2\)/);
   assert.doesNotMatch(component, /AI translation on send/);
   assert.match(component, /defaultTargetLanguage=\{translationPreference\.customerLanguage\}/);
   assert.match(component, /useState\(!isEnglishLanguage\(initialTargetLanguage\)\)/);
