@@ -205,10 +205,15 @@ test("product card search queries the complete product library and preserves sel
     readFile(new URL("../../../app/product-card-send-dialog.tsx",import.meta.url),"utf8"),
     readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
   ]);
-  assert.match(dialog,/q=\$\{encodeURIComponent\(needle\)\}/);
+  assert.match(dialog,/params\.set\("q",\s*needle\)/);
+  assert.match(dialog,/params\.set\("category",\s*category\)/);
   assert.match(dialog,/setProductCache/);
   assert.match(dialog,/productCache\.get\(id\)/);
+  assert.match(dialog,/toggleAllVisible/);
+  assert.match(dialog,/if \(next\.length >= 50\) break/);
+  assert.match(dialog,/all\.filter\(\(id\) => !visible\.has\(id\)\)/);
   assert.match(server,/search_label\.name ILIKE/);
+  assert.match(server,/lower\(p\.category\)=lower\(\$5\)/);
 });
 
 test("product card search can exactly match a complete SKU or product title",async()=>{
@@ -219,7 +224,7 @@ test("product card search can exactly match a complete SKU or product title",asy
   ]);
   assert.match(dialog,/精准匹配/);
   assert.match(dialog,/role="switch"/);
-  assert.match(dialog,/exactMatch\s*\?\s*"&exact=true"/);
+  assert.match(dialog,/if \(exactMatch\) params\.set\("exact",\s*"true"\)/);
   assert.match(server,/lower\(btrim\(p\.name\)\)=lower\(\$1\)/);
   assert.match(server,/lower\(btrim\(p\.sku\)\)=lower\(\$1\)/);
   assert.match(server,/invalid_exact_match/);
