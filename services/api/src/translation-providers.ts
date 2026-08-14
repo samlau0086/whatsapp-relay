@@ -84,25 +84,20 @@ async function requestTranslation(setting:TranslationProviderSetting,input:{text
 }
 
 export async function transcribeAudio(setting:TranslationProviderSetting,input:{bytes:Buffer;fileName:string;mimeType:string;sourceLanguage?:string}):Promise<string>{
-  const form=new FormData();
   const diarized=isDiarizationModel(setting.transcriptionModel);
-  form.append("model",setting.transcriptionModel);
-  // Diarization models only return the speaker-segment JSON format, while the
-  // regular transcription models use the compact { text } response.
-  form.append("response_format",diarized?"diarized_json":"json");
-  if(diarized)form.append("chunking_strategy","auto");
-  const speechLanguage=input.sourceLanguage?.split("-")[0].toLowerCase();
-  if(speechLanguage&&/^[a-z]{2}$/.test(speechLanguage))form.append("language",speechLanguage);
-  form.append("file",new Blob([input.bytes],{type:input.mimeType}),input.fileName);
-  const response=await fetch(`${trimSlash(setting.baseUrl)}/audio/transcriptions`,{
-    method:"POST",
-    headers:{authorization:`Bearer ${setting.apiKey}`},
-    body:form,
-    signal:AbortSignal.timeout(90_000),
-  });
+  const request=async(format:"json"|"diarized_json",includeChunking:boolean)=>{
+    const form=new FormData();form.append("model",setting.transcriptionModel);form.append("response_format",format);
+    const speechLanguage=input.sourceLanguage?.split("-")[0].toLowerCase();
+    if(speechLanguage&&/^[a-z]{2}$/.test(speechLanguage))form.append("language",speechLanguage);
+    if(includeChunking)form.append("chunking_strategy","auto");
+    form.append("file",new Blob([input.bytes],{type:input.mimeType}),input.fileName);
+    return fetch(`${trimSlash(setting.baseUrl)}/audio/transcriptions`,{method:"POST",headers:{authorization:`Bearer ${setting.apiKey}`},body:form,signal:AbortSignal.timeout(90_000)});
+  };
+  let response=await request(diarized?"diarized_json":"json",diarized);
+  if(!response.ok&&diarized&&response.status===400)response=await request("json",false);
   if(!response.ok)throw new Error(`transcription_provider_http_${response.status}:${(await response.text()).slice(0,300)}`);
-  const body=await response.json() as {text?:unknown;segments?:unknown};
-  const transcript=typeof body.text==="string"?body.text:diarized?diarizedTranscript(body.segments):undefined;
+  const raw=await response.text();
+  const transcript=extractTranscript(raw,diarized);
   if(!transcript?.trim())throw new Error("transcription_provider_empty_response");
   return transcript.trim();
 }
@@ -113,6 +108,24 @@ function diarizedTranscript(segments:unknown):string|undefined{
   if(!Array.isArray(segments))return undefined;
   const text=segments.map(segment=>typeof segment==="object"&&segment!==null&&typeof (segment as {text?:unknown}).text==="string"?(segment as {text:string}).text.trim():"").filter(Boolean).join(" ");
   return text||undefined;
+}
+function extractTranscript(raw:string,diarized:boolean):string|undefined{
+  const value=raw.trim();
+  if(!value)return undefined;
+  try{
+    const body=JSON.parse(value) as {text?:unknown;output_text?:unknown;transcript?:unknown;segments?:unknown;data?:unknown;result?:unknown};
+    const direct=[body.text,body.output_text,body.transcript,
+      typeof body.data==="object"&&body.data!==null?(body.data as {text?:unknown}).text:undefined,
+      typeof body.result==="object"&&body.result!==null?(body.result as {text?:unknown}).text:undefined]
+      .find(item=>typeof item==="string"&&item.trim());
+    if(typeof direct==="string")return direct;
+    const segmented=diarizedTranscript(body.segments);
+    if(segmented)return segmented;
+    return typeof body.data==="string"?body.data:typeof body.result==="string"?body.result:undefined;
+  }catch{
+    // Some OpenAI-compatible gateways return the transcript as plain text.
+    return value;
+  }
 }
 function normalizeLanguageTag(value:string){
   const tag=value.trim().replace(/_/g,"-");

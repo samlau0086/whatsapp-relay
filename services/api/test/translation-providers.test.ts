@@ -76,6 +76,18 @@ test("diarization transcription requests diarized JSON and joins speaker segment
   }finally{globalThis.fetch=original;}
 });
 
+test("transcription accepts common compatible-provider response wrappers",async()=>{
+  const original=globalThis.fetch;
+  try{
+    globalThis.fetch=async()=>Response.json({data:{text:"Wrapped transcript"}});
+    const wrapped=await transcribeAudio({provider:"openai_compatible",apiKey:"secret",baseUrl:"https://llm.example/v1",model:"translator-1",transcriptionModel:"speech-1"},{bytes:Buffer.from("voice"),fileName:"voice.ogg",mimeType:"audio/ogg"});
+    assert.equal(wrapped,"Wrapped transcript");
+    globalThis.fetch=async()=>new Response("Plain transcript",{headers:{"content-type":"text/plain"}});
+    const plain=await transcribeAudio({provider:"openai_compatible",apiKey:"secret",baseUrl:"https://llm.example/v1",model:"translator-1",transcriptionModel:"speech-1"},{bytes:Buffer.from("voice"),fileName:"voice.ogg",mimeType:"audio/ogg"});
+    assert.equal(plain,"Plain transcript");
+  }finally{globalThis.fetch=original;}
+});
+
 test("provider failures and empty responses are rejected",async()=>{
   const original=globalThis.fetch;
   try{
