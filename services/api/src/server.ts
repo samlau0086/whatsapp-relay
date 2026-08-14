@@ -27,7 +27,7 @@ import { migrateAgentSchema } from "./migrate-agent.js";
 import { PayPalApiError, PayPalClient, clearPayPalTokenCache, type PayPalEnvironment } from "./paypal.js";
 import { DEFAULT_PAYPAL_ITEM_NAME_TEMPLATE, DEFAULT_PAYPAL_NOTE_TEMPLATE, DEFAULT_PAYPAL_REFERENCE_TEMPLATE, renderPayPalTemplate, validatePayPalTemplate, type PayPalTemplateContext } from "./paypal-template.js";
 import { DEFAULT_PRODUCT_CARD_TEMPLATE, parseProductCardTemplate, productCardTemplateSchema, renderProductCardCaption } from "./product-card-template.js";
-import { renderProductCardGridPages, renderProductCards, type ProductCardRenderProduct } from "./product-card-image.js";
+import { renderProductCardGridPages, renderProductCardGridPdf, renderProductCards, type ProductCardRenderProduct } from "./product-card-image.js";
 import { fetchLatestExchangeRates } from "./exchange-rates.js";
 import { emailShell, ensureEmailTables, escapeHtml, sendProviderTest, verifySmtp, type EmailProvider, type EmailProviderConfig } from "./email.js";
 import { collageTemplateCreateSchema, collageTemplateUpdateSchema, materialGenerateSchema, parseCollageTemplate, productSlotIds, DEFAULT_COLLAGE_TEMPLATE, MATERIAL_PRODUCT_LIMIT, type CollageTemplate } from "./collage-template.js";

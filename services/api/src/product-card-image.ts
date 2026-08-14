@@ -1,9 +1,11 @@
 import sharp from "sharp";
+import { PDFDocument } from "pdf-lib";
 import { wrapLine } from "./order-image.js";
 import type { ProductCardTemplate } from "./product-card-template.js";
 
 export type ProductCardRenderProduct={name:string;sku:string;currency:string;priceTiers:Array<{minQuantity:number;unitAmount:number}>;variants?:Array<{attributes:Record<string,string>;sku:string;priceTiers:Array<{minQuantity:number;unitAmount:number}>;image?:Buffer}>;tags:Array<{name:string}>;image?:Buffer};
 const WIDTH=1080,PADDING=64,CONTENT_WIDTH=WIDTH-PADDING*2;
+const PDF_POINTS_PER_PIXEL=0.75;
 
 export async function renderProductCards(template:ProductCardTemplate,products:ProductCardRenderProduct[],showPrice:boolean):Promise<Buffer>{
   const cards=await Promise.all(products.map(product=>renderCard(template,product,showPrice)));
@@ -29,6 +31,20 @@ export async function renderProductCardGridPages(template:ProductCardTemplate,pr
   const capacity=rows*columns,pages:Buffer[]=[];
   for(let start=0;start<products.length;start+=capacity)pages.push(await renderProductCardGrid(template,products.slice(start,start+capacity),showPrice,rows,columns));
   return pages;
+}
+
+export async function renderProductCardGridPdf(template:ProductCardTemplate,products:ProductCardRenderProduct[],showPrice:boolean,rows:number,columns:number):Promise<Buffer>{
+  const images=await renderProductCardGridPages(template,products,showPrice,rows,columns),document=await PDFDocument.create();
+  document.setTitle(`Product cards (${products.length})`);
+  document.setCreator("RelayDesk");
+  document.setProducer("RelayDesk");
+  for(const png of images){
+    const metadata=await sharp(png).metadata();
+    if(!metadata.width||!metadata.height)throw new Error("product_card_pdf_image_dimensions_missing");
+    const width=metadata.width*PDF_POINTS_PER_PIXEL,height=metadata.height*PDF_POINTS_PER_PIXEL,page=document.addPage([width,height]),image=await document.embedPng(png);
+    page.drawImage(image,{x:0,y:0,width,height});
+  }
+  return Buffer.from(await document.save({useObjectStreams:true}));
 }
 
 async function renderCard(template:ProductCardTemplate,product:ProductCardRenderProduct,showPrice:boolean):Promise<Buffer>{

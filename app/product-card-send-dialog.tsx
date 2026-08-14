@@ -154,6 +154,9 @@ export function ProductCardSendDialog({
     >("2"),
     [customRows, setCustomRows] = useState(2),
     [customColumns, setCustomColumns] = useState(2),
+    [gridOutputFormat, setGridOutputFormat] = useState<"image" | "pdf">(
+      "image",
+    ),
     [showPrice, setShowPrice] = useState(true),
     [translateNames, setTranslateNames] = useState(translationEnabled),
     [channel, setChannel] = useState<"whatsapp" | "email">("whatsapp"),
@@ -532,6 +535,7 @@ export function ProductCardSendDialog({
         productIds: selected,
         mode,
         grid,
+        gridOutputFormat: mode === "grid" ? gridOutputFormat : undefined,
         showPrice,
         targetCurrency,
         caption: outgoingCaption,
@@ -561,6 +565,7 @@ export function ProductCardSendDialog({
                 productIds: selected,
                 mode,
                 grid,
+                gridOutputFormat: mode === "grid" ? gridOutputFormat : undefined,
                 showPrice,
                 targetCurrency,
               },
@@ -590,6 +595,7 @@ export function ProductCardSendDialog({
             productIds: selected,
             mode,
             grid,
+            gridOutputFormat: mode === "grid" ? gridOutputFormat : undefined,
             showPrice,
             caption: outgoingCaption,
             translationSourceText,
@@ -932,9 +938,31 @@ export function ProductCardSendDialog({
                     </label>
                   </div>
                 )}
+                <div className="product-card-grid-output" role="group" aria-label="输出格式">
+                  <span>输出格式</span>
+                  <button
+                    type="button"
+                    className={gridOutputFormat === "image" ? "active" : ""}
+                    aria-pressed={gridOutputFormat === "image"}
+                    onClick={() => setGridOutputFormat("image")}
+                  >
+                    图片
+                  </button>
+                  <button
+                    type="button"
+                    className={gridOutputFormat === "pdf" ? "active" : ""}
+                    aria-pressed={gridOutputFormat === "pdf"}
+                    onClick={() => setGridOutputFormat("pdf")}
+                  >
+                    PDF
+                  </button>
+                </div>
                 <small>
                   按当前排序从左到右、从上到下排列，每张容纳 {gridCapacity} 个产品
-                  {selected.length > 0 && `，将生成 ${gridPageCount} 张网格拼图。`}
+                  {selected.length > 0 &&
+                    (gridOutputFormat === "pdf"
+                      ? `，将生成 1 个包含 ${gridPageCount} 页的 PDF。`
+                      : `，将生成 ${gridPageCount} 张网格拼图。`)}
                 </small>
               </div>
             )}
