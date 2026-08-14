@@ -446,8 +446,8 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
   const [result,groupResult,reminderResult,dueReminderResult]=await Promise.all([
     pool.query(`SELECT COUNT(*) FILTER(WHERE c.status NOT IN ('closed','archived'))::int all_count,COUNT(*) FILTER(WHERE c.status<>'closed' AND c.assigned_user_id=$7::uuid)::int mine,
       COUNT(*) FILTER(WHERE c.status<>'closed' AND c.assigned_user_id IS NULL)::int unassigned,COUNT(*) FILTER(WHERE c.status<>'closed' AND c.favorite)::int favorite,
-      COUNT(*) FILTER(WHERE c.status='closed')::int closed,COUNT(*) FILTER(WHERE c.status='archived')::int archived,COUNT(*) FILTER(WHERE co.whatsapp_blocked_at IS NOT NULL)::int blocked
-    FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN channel_accounts a ON a.id=c.account_id
+      COUNT(*) FILTER(WHERE c.status='closed')::int closed,COUNT(*) FILTER(WHERE c.status='archived')::int archived,COUNT(*) FILTER(WHERE EXISTS(SELECT 1 FROM contacts blocked_contact WHERE blocked_contact.id=c.contact_id AND blocked_contact.whatsapp_blocked_at IS NOT NULL))::int blocked
+    FROM conversations c JOIN channel_accounts a ON a.id=c.account_id
     LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
