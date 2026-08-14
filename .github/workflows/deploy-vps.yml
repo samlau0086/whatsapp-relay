@@ -374,12 +374,16 @@ jobs:
           cd "$release"
           WEB_PORT="$web_port" docker compose -p relaydesk config --quiet
           for attempt in 1 2 3 4 5; do
+            if [ "$attempt" -gt 1 ]; then
+              echo "Recreating MinIO before retrying initialization." >&2
+              WEB_PORT="$web_port" docker compose -p relaydesk up --detach --force-recreate minio
+            fi
             if WEB_PORT="$web_port" docker compose -p relaydesk up --detach --remove-orphans postgres redis minio \
               && WEB_PORT="$web_port" docker compose -p relaydesk up minio-init \
               && WEB_PORT="$web_port" docker compose -p relaydesk up --detach --build --remove-orphans api worker web gateway; then
               break
             fi
-            WEB_PORT="$web_port" docker compose -p relaydesk logs --no-color --tail=100 minio-init || true
+            WEB_PORT="$web_port" docker compose -p relaydesk logs --no-color --tail=100 minio minio-init || true
             if [ "$attempt" -eq 5 ]; then
               echo "Unable to build and start the production stack after $attempt attempts." >&2
               false
