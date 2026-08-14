@@ -2800,6 +2800,10 @@ function CrmDetailsPanel({
     }catch(reason){setError(reason instanceof Error?reason.message:"别名保存失败");}
     finally{setAliasBusy(false);}
   }
+  function beginAliasEdit() {
+    setAliasDraft(active.alias.trim() ? active.alias : active.contactName);
+    setAliasEditing(true);
+  }
   async function deleteConversation() {
     if(!await confirmAction(`会话“${active.name}”的消息记录、备注、提醒、订单和 AI 记录将一并删除，且无法恢复。`,{title:"永久删除此会话？",confirmLabel:"永久删除"}))return;
     setBusy(true);setError("");
@@ -3035,7 +3039,7 @@ function CrmDetailsPanel({
             <input autoFocus value={aliasDraft} maxLength={80} placeholder={active.contactName||active.phone||"输入联系人别名"} onChange={event=>setAliasDraft(event.target.value)} onKeyDown={event=>{if(event.key==="Escape"){setAliasDraft(active.alias);setAliasEditing(false);}}} aria-label="联系人别名"/>
             <button type="submit" disabled={aliasBusy} aria-label="保存别名"><Check size={14}/></button>
             <button type="button" disabled={aliasBusy} onClick={()=>{setAliasDraft(active.alias);setAliasEditing(false);}} aria-label="取消编辑"><X size={14}/></button>
-          </form>:<div className="contact-name"><h2>{active.name}</h2><button className="contact-alias-edit" onClick={()=>setAliasEditing(true)} aria-label="编辑联系人别名" title="编辑别名"><Pencil size={13}/></button></div>}
+          </form>:<div className="contact-name"><h2>{active.name}</h2><button className="contact-alias-edit" onClick={beginAliasEdit} aria-label="编辑联系人别名" title="编辑别名"><Pencil size={13}/></button></div>}
           <p>{active.platform==="messenger"?`Messenger 用户 · ${active.providerUserId}`:(active.phone || "号码待同步")}</p>
           <span className="contact-online">
             <i
