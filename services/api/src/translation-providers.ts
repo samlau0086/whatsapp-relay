@@ -90,6 +90,7 @@ export async function transcribeAudio(setting:TranslationProviderSetting,input:{
   // Diarization models only return the speaker-segment JSON format, while the
   // regular transcription models use the compact { text } response.
   form.append("response_format",diarized?"diarized_json":"json");
+  if(diarized)form.append("chunking_strategy","auto");
   const speechLanguage=input.sourceLanguage?.split("-")[0].toLowerCase();
   if(speechLanguage&&/^[a-z]{2}$/.test(speechLanguage))form.append("language",speechLanguage);
   form.append("file",new Blob([input.bytes],{type:input.mimeType}),input.fileName);

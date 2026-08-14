@@ -72,7 +72,7 @@ test("diarization transcription requests diarized JSON and joins speaker segment
   try{
     const transcript=await transcribeAudio({provider:"openai_compatible",apiKey:"secret",baseUrl:"https://llm.example/v1",model:"translator-1",transcriptionModel:"gpt-4o-transcribe-diarize"},{bytes:Buffer.from("voice"),fileName:"voice.ogg",mimeType:"audio/ogg"});
     assert.equal(transcript,"Hello there");
-    const form=await request!.formData();assert.equal(form.get("response_format"),"diarized_json");
+    const form=await request!.formData();assert.equal(form.get("response_format"),"diarized_json");assert.equal(form.get("chunking_strategy"),"auto");
   }finally{globalThis.fetch=original;}
 });
 
