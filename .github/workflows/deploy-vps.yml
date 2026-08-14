@@ -334,6 +334,13 @@ jobs:
           rollback() {
             status=$?
             trap - ERR
+            if [ -f "$release/compose.yaml" ]; then
+              echo "Recent MinIO initialization logs:" >&2
+              (
+                cd "$release"
+                WEB_PORT="$web_port" docker compose -p relaydesk logs --no-color --tail=100 minio-init
+              ) >&2 || true
+            fi
             if [ "$env_changed" -eq 1 ]; then
               if [ "$had_shared_env" -eq 1 ] && [ -f "$env_backup" ]; then
                 install -m 600 "$env_backup" "$shared_env"
