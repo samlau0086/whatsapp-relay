@@ -85,8 +85,11 @@ async function requestTranslation(setting:TranslationProviderSetting,input:{text
 
 export async function transcribeAudio(setting:TranslationProviderSetting,input:{bytes:Buffer;fileName:string;mimeType:string;sourceLanguage?:string}):Promise<string>{
   const form=new FormData();
+  const diarized=isDiarizationModel(setting.transcriptionModel);
   form.append("model",setting.transcriptionModel);
-  form.append("response_format","json");
+  // Diarization models only return the speaker-segment JSON format, while the
+  // regular transcription models use the compact { text } response.
+  form.append("response_format",diarized?"diarized_json":"json");
   const speechLanguage=input.sourceLanguage?.split("-")[0].toLowerCase();
   if(speechLanguage&&/^[a-z]{2}$/.test(speechLanguage))form.append("language",speechLanguage);
   form.append("file",new Blob([input.bytes],{type:input.mimeType}),input.fileName);
@@ -97,12 +100,19 @@ export async function transcribeAudio(setting:TranslationProviderSetting,input:{
     signal:AbortSignal.timeout(90_000),
   });
   if(!response.ok)throw new Error(`transcription_provider_http_${response.status}:${(await response.text()).slice(0,300)}`);
-  const body=await response.json() as {text?:string};
-  if(!body.text?.trim())throw new Error("transcription_provider_empty_response");
-  return body.text.trim();
+  const body=await response.json() as {text?:unknown;segments?:unknown};
+  const transcript=typeof body.text==="string"?body.text:diarized?diarizedTranscript(body.segments):undefined;
+  if(!transcript?.trim())throw new Error("transcription_provider_empty_response");
+  return transcript.trim();
 }
 
 function trimSlash(value:string){return value.replace(/\/+$/,"");}
+function isDiarizationModel(model:string){return /(?:^|[-_])diari[sz]e(?:$|[-_])/i.test(model.trim());}
+function diarizedTranscript(segments:unknown):string|undefined{
+  if(!Array.isArray(segments))return undefined;
+  const text=segments.map(segment=>typeof segment==="object"&&segment!==null&&typeof (segment as {text?:unknown}).text==="string"?(segment as {text:string}).text.trim():"").filter(Boolean).join(" ");
+  return text||undefined;
+}
 function normalizeLanguageTag(value:string){
   const tag=value.trim().replace(/_/g,"-");
   if(!/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(tag))throw new Error("translation_provider_invalid_source_language");
