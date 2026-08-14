@@ -353,6 +353,17 @@ function parseConversationCursor(value:string|undefined):{sortAt:string;id:strin
   }catch{return"invalid";}
 }
 
+function countBlockedConversations(params:unknown[]){
+  return pool.query(`SELECT COUNT(*)::int blocked
+    FROM contacts co JOIN conversations c ON c.account_id=co.account_id AND c.contact_id=co.id JOIN channel_accounts a ON a.id=c.account_id
+    LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
+    WHERE co.whatsapp_blocked_at IS NOT NULL AND (a.transport='cloud' OR a.agent_id IS NOT NULL)
+      AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
+      AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
+      AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
+  `,params);
+}
+
 app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,reply) => {
   const query=request.query as ConversationQuery,limit=Math.min(100,Math.max(1,Number(query.limit)||40));
   if(query.accountId&&!canAccessAccount(request.principal,query.accountId))return reply.code(403).send({error:"account_forbidden"});
@@ -436,6 +447,7 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
   const range=parseConversationRange(query);if(!range)return reply.code(400).send({error:"invalid_conversation_date_range"});
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null,accountIds=request.principal?.accountIds??null;
   const countParams=[query.accountId??null,accountIds,range.from,range.before,query.unreplied==="true",query.before??null,principalUserId];
+  const blockedPromise=countBlockedConversations(countParams.slice(0,6));
   const dueReminderPromise=request.principal?.kind==="user"?pool.query(`SELECT task.id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164,co.provider_user_id) display_name,task.due_at remind_at
     FROM tasks task JOIN contacts co ON co.id=task.contact_id
     WHERE task.assigned_user_id=$1 AND task.status NOT IN ('completed','cancelled','failed') AND task.due_at<=now()
@@ -446,7 +458,7 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
   const [result,groupResult,reminderResult,dueReminderResult]=await Promise.all([
     pool.query(`SELECT COUNT(*) FILTER(WHERE c.status NOT IN ('closed','archived'))::int all_count,COUNT(*) FILTER(WHERE c.status<>'closed' AND c.assigned_user_id=$7::uuid)::int mine,
       COUNT(*) FILTER(WHERE c.status<>'closed' AND c.assigned_user_id IS NULL)::int unassigned,COUNT(*) FILTER(WHERE c.status<>'closed' AND c.favorite)::int favorite,
-      COUNT(*) FILTER(WHERE c.status='closed')::int closed,COUNT(*) FILTER(WHERE c.status='archived')::int archived,COUNT(*) FILTER(WHERE EXISTS(SELECT 1 FROM contacts blocked_contact WHERE blocked_contact.id=c.contact_id AND blocked_contact.whatsapp_blocked_at IS NOT NULL))::int blocked
+      COUNT(*) FILTER(WHERE c.status='closed')::int closed,COUNT(*) FILTER(WHERE c.status='archived')::int archived
     FROM conversations c JOIN channel_accounts a ON a.id=c.account_id
     LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
@@ -484,8 +496,8 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
     ) reminder_conversations`,countParams),
     dueReminderPromise
   ]);
-  const row=result.rows[0]??{},groupRow=groupResult.rows[0]??{},reminderRow=reminderResult.rows[0]??{},dueReminders=dueReminderResult.rows;
-  return{all:Number(row.all_count??0),groups:Number(groupRow.groups??0),mine:Number(row.mine??0),unassigned:Number(row.unassigned??0),favorite:Number(row.favorite??0),closed:Number(row.closed??0),archived:Number(row.archived??0),blocked:Number(row.blocked??0),reminders:Number(reminderRow.reminders??0),dueReminders};
+  const blockedResult=await blockedPromise,row=result.rows[0]??{},groupRow=groupResult.rows[0]??{},reminderRow=reminderResult.rows[0]??{},blockedRow=blockedResult.rows[0]??{},dueReminders=dueReminderResult.rows;
+  return{all:Number(row.all_count??0),groups:Number(groupRow.groups??0),mine:Number(row.mine??0),unassigned:Number(row.unassigned??0),favorite:Number(row.favorite??0),closed:Number(row.closed??0),archived:Number(row.archived??0),blocked:Number(blockedRow.blocked??0),reminders:Number(reminderRow.reminders??0),dueReminders};
 });
 
 app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(request,reply)=>{
