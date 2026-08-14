@@ -3,14 +3,41 @@
 import {useId,useMemo,useState,type KeyboardEvent} from "react";
 
 export const LANGUAGES=[
-  ["zh-CN","简体中文"],["zh-TW","繁體中文"],["en","English"],["en-US","English (US)"],["en-GB","English (UK)"],
-  ["ms","Bahasa Melayu"],["id","Bahasa Indonesia"],["th","ไทย"],["vi","Tiếng Việt"],["ja","日本語"],["ko","한국어"],
-  ["es","Español"],["fr","Français"],["de","Deutsch"],["it","Italiano"],["pt","Português"],["pt-BR","Português (Brasil)"],["ru","Русский"],
-  ["ar","العربية"],["hi","हिन्दी"],["tr","Türkçe"],["nl","Nederlands"],["pl","Polski"],
+  ["zh-CN","简体中文","Simplified Chinese"],["zh-TW","繁體中文","Traditional Chinese"],
+  ["en","English"],["en-US","English (US)"],["en-GB","English (UK)"],
+  ["id","Bahasa Indonesia","Indonesian"],["ms","Bahasa Melayu","Malay"],["fil","Filipino"],["jv","Basa Jawa","Javanese"],
+  ["th","ไทย","Thai"],["vi","Tiếng Việt","Vietnamese"],["km","ខ្មែរ","Khmer"],["lo","ລາວ","Lao"],["my","မြန်မာ","Burmese"],
+  ["ja","日本語","Japanese"],["ko","한국어","Korean"],["mn","Монгол","Mongolian"],
+  ["hi","हिन्दी","Hindi"],["bn","বাংলা","Bengali"],["gu","ગુજરાતી","Gujarati"],["kn","ಕನ್ನಡ","Kannada"],
+  ["ml","മലയാളം","Malayalam"],["mr","मराठी","Marathi"],["ne","नेपाली","Nepali"],["pa","ਪੰਜਾਬੀ","Punjabi"],
+  ["si","සිංහල","Sinhala"],["ta","தமிழ்","Tamil"],["te","తెలుగు","Telugu"],["ur","اردو","Urdu"],
+  ["kk","Қазақша","Kazakh"],["ky","Кыргызча","Kyrgyz"],["uz","Oʻzbekcha","Uzbek"],
+  ["es","Español","Spanish"],["fr","Français","French"],["de","Deutsch","German"],["it","Italiano","Italian"],
+  ["pt","Português","Portuguese"],["pt-BR","Português (Brasil)","Brazilian Portuguese"],["nl","Nederlands","Dutch"],
+  ["ca","Català","Catalan"],["eu","Euskara","Basque"],["gl","Galego","Galician"],
+  ["da","Dansk","Danish"],["fi","Suomi","Finnish"],["is","Íslenska","Icelandic"],["no","Norsk","Norwegian"],["sv","Svenska","Swedish"],
+  ["et","Eesti","Estonian"],["lv","Latviešu","Latvian"],["lt","Lietuvių","Lithuanian"],
+  ["pl","Polski","Polish"],["cs","Čeština","Czech"],["sk","Slovenčina","Slovak"],["sl","Slovenščina","Slovenian"],
+  ["hu","Magyar","Hungarian"],["ro","Română","Romanian"],["bg","Български","Bulgarian"],["el","Ελληνικά","Greek"],
+  ["hr","Hrvatski","Croatian"],["bs","Bosanski","Bosnian"],["sr","Српски","Serbian"],["sq","Shqip","Albanian"],["mk","Македонски","Macedonian"],
+  ["ru","Русский","Russian"],["uk","Українська","Ukrainian"],["be","Беларуская","Belarusian"],
+  ["ga","Gaeilge","Irish"],["cy","Cymraeg","Welsh"],["mt","Malti","Maltese"],
+  ["ar","العربية","Arabic"],["he","עברית","Hebrew"],["fa","فارسی","Persian Farsi"],["tr","Türkçe","Turkish"],
+  ["az","Azərbaycanca","Azerbaijani"],["hy","Հայերեն","Armenian"],["ka","ქართული","Georgian"],["ku","Kurdî","Kurdish"],
+  ["ps","پښتو","Pashto"],["sd","سنڌي","Sindhi"],
+  ["af","Afrikaans"],["am","አማርኛ","Amharic"],["ha","Hausa"],["sw","Kiswahili","Swahili"],
+  ["so","Soomaali","Somali"],["xh","isiXhosa","Xhosa"],["yo","Yorùbá","Yoruba"],["zu","isiZulu","Zulu"],
 ] as const;
 
 export function languageName(code:string){return LANGUAGES.find(item=>item[0]===code)?.[1]??code;}
-const LANGUAGE_COUNTRIES:Record<string,string>={zh:"CN",en:"US",ms:"MY",id:"ID",th:"TH",vi:"VN",ja:"JP",ko:"KR",es:"ES",fr:"FR",de:"DE",it:"IT",pt:"PT",ru:"RU",ar:"SA",hi:"IN",tr:"TR",nl:"NL",pl:"PL"};
+const LANGUAGE_COUNTRIES:Record<string,string>={
+  zh:"CN",en:"US",id:"ID",ms:"MY",fil:"PH",jv:"ID",th:"TH",vi:"VN",km:"KH",lo:"LA",my:"MM",ja:"JP",ko:"KR",mn:"MN",
+  hi:"IN",bn:"BD",gu:"IN",kn:"IN",ml:"IN",mr:"IN",ne:"NP",pa:"IN",si:"LK",ta:"IN",te:"IN",ur:"PK",kk:"KZ",ky:"KG",uz:"UZ",
+  es:"ES",fr:"FR",de:"DE",it:"IT",pt:"PT",nl:"NL",ca:"ES",eu:"ES",gl:"ES",da:"DK",fi:"FI",is:"IS",no:"NO",sv:"SE",
+  et:"EE",lv:"LV",lt:"LT",pl:"PL",cs:"CZ",sk:"SK",sl:"SI",hu:"HU",ro:"RO",bg:"BG",el:"GR",hr:"HR",bs:"BA",sr:"RS",sq:"AL",mk:"MK",
+  ru:"RU",uk:"UA",be:"BY",ga:"IE",cy:"GB",mt:"MT",ar:"SA",he:"IL",fa:"IR",tr:"TR",az:"AZ",hy:"AM",ka:"GE",ku:"IQ",ps:"AF",sd:"PK",
+  af:"ZA",am:"ET",ha:"NG",sw:"KE",so:"SO",xh:"ZA",yo:"NG",zu:"ZA",
+};
 export function languageShortCode(code:string){return code.split("-")[0]?.toUpperCase()??code.toUpperCase();}
 export function languageCountryCode(code:string){
   const [language,...parts]=code.split("-"),region=parts.find(part=>/^[A-Za-z]{2}$/.test(part)),country=(region??LANGUAGE_COUNTRIES[language.toLowerCase()])?.toUpperCase();
@@ -23,7 +50,7 @@ export function LanguageFlagIcon({code,className=""}:{code:string;className?:str
 
 export function LanguagePicker({value,onChange,label="搜索并选择语言",allowEmpty=false,placeholder="搜索语言名称或代码"}:{value:string;onChange:(value:string)=>void;label?:string;allowEmpty?:boolean;placeholder?:string}){
   const listboxId=useId(),[open,setOpen]=useState(false),[query,setQuery]=useState(""),[highlighted,setHighlighted]=useState(-1);
-  const visible=useMemo(()=>{const term=query.trim().toLocaleLowerCase();return LANGUAGES.filter(([code,name])=>!term||`${name} ${code}`.toLocaleLowerCase().includes(term));},[query]);
+  const visible=useMemo(()=>{const term=query.trim().toLocaleLowerCase();return LANGUAGES.filter(([code,name,searchTerms])=>!term||`${name} ${code} ${searchTerms??""}`.toLocaleLowerCase().includes(term));},[query]);
   function choose(code:string){onChange(code);setOpen(false);setQuery("");setHighlighted(-1);}
   function openPicker(){setOpen(true);setQuery("");setHighlighted(Math.max(0,LANGUAGES.findIndex(([code])=>code===value)));}
   function onKeyDown(event:KeyboardEvent<HTMLInputElement>){

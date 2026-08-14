@@ -536,6 +536,11 @@ test("translation language picker supports search and keyboard selection", async
   assert.match(picker,/type="search"/);
   assert.match(picker,/role="combobox"/);
   assert.match(picker,/\$\{name\} \$\{code\}/);
+  assert.match(picker,/\["lv","Latviešu","Latvian"\]/);
+  assert.match(picker,/\["bn","বাংলা","Bengali"\]/);
+  assert.match(picker,/\["sw","Kiswahili","Swahili"\]/);
+  assert.match(picker,/searchTerms\?\?""/);
+  assert.match(picker,/lv:"LV"/);
   assert.match(picker,/event\.key==="ArrowDown"/);
   assert.match(picker,/event\.key==="Enter"/);
   assert.match(picker,/没有匹配语言/);
