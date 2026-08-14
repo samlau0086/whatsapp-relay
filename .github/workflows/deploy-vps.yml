@@ -370,6 +370,7 @@ jobs:
             if WEB_PORT="$web_port" docker compose -p relaydesk up --detach --build --remove-orphans; then
               break
             fi
+            WEB_PORT="$web_port" docker compose -p relaydesk logs --no-color --tail=100 minio-init || true
             if [ "$attempt" -eq 5 ]; then
               echo "Unable to build and start the production stack after $attempt attempts." >&2
               false
