@@ -23,7 +23,7 @@ export type PaymentProfileSnapshot={
   methodId:string;methodType:string;methodName:string;
   profileId:string;profileName:string;environment:PayPalEnvironment|null;
   summary:string;publicFields:PaymentPublicField[];instructions:string;
-  paypalFeeRatePercent:number;paypalFixedFee:number;
+  paypalFeeRatePercent:number;paypalFixedFee:number;paypalFeeLabel:string;
 };
 export type PayPalProfileSetting={
   profileId:string;environment:PayPalEnvironment;clientId:string;clientSecret:string;
@@ -35,7 +35,7 @@ const PROFILE_SELECT=`SELECT
   p.id,p.method_id,p.name,p.enabled,p.public_fields,p.instructions,p.environment,
   p.sandbox_client_id_encrypted,p.sandbox_client_secret_encrypted,
   p.live_client_id_encrypted,p.live_client_secret_encrypted,
-  p.reference_template,p.note_template,p.item_name_template,p.paypal_fee_rate_percent,p.paypal_fixed_fee,p.created_at,p.updated_at,p.deleted_at,
+  p.reference_template,p.note_template,p.item_name_template,p.paypal_fee_rate_percent,p.paypal_fixed_fee,p.paypal_fee_label,p.created_at,p.updated_at,p.deleted_at,
   m.type method_type,m.name method_name,m.enabled method_enabled,m.sort_order,m.deleted_at method_deleted_at
 FROM payment_profiles p JOIN payment_methods m ON m.id=p.method_id`;
 
@@ -54,6 +54,7 @@ export function paymentProfileSnapshot(row:Record<string,unknown>):PaymentProfil
     instructions:String(row.instructions??""),
     paypalFeeRatePercent:row.method_type==="paypal"?Number(row.paypal_fee_rate_percent??0):0,
     paypalFixedFee:row.method_type==="paypal"?Number(row.paypal_fixed_fee??0):0,
+    paypalFeeLabel:row.method_type==="paypal"?String(row.paypal_fee_label??"PayPal 手续费"):"",
   };
 }
 
@@ -71,6 +72,7 @@ function profileResponse(row:Record<string,unknown>,admin=false):Record<string,u
       itemNameTemplate:String(row.item_name_template??DEFAULT_PAYPAL_ITEM_NAME_TEMPLATE),
       paypalFeeRatePercent:Number(row.paypal_fee_rate_percent??0),
       paypalFixedFee:Number(row.paypal_fixed_fee??0),
+      paypalFeeLabel:String(row.paypal_fee_label??"PayPal 手续费"),
       createdAt:row.created_at,updatedAt:row.updated_at,
     }:{}),
   };
@@ -155,17 +157,17 @@ export async function registerPaymentMethodRoutes(app:FastifyInstance):Promise<v
     if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});const parsed=paymentProfileCreateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
     const {methodId}=request.params as {methodId:string},method=await pool.query("SELECT type FROM payment_methods WHERE id=$1 AND deleted_at IS NULL",[methodId]);if(!method.rowCount)return reply.code(404).send({error:"not_found"});
     const validated=await validateAndPrepareProfile(method.rows[0].type,parsed.data,undefined,reply);if(!validated)return;
-    const saved=await pool.query(`INSERT INTO payment_profiles(method_id,name,enabled,public_fields,instructions,environment,sandbox_client_id_encrypted,sandbox_client_secret_encrypted,live_client_id_encrypted,live_client_secret_encrypted,reference_template,note_template,item_name_template,paypal_fee_rate_percent,paypal_fixed_fee,created_by,updated_by)
-      VALUES($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16) RETURNING *`,[methodId,parsed.data.name,parsed.data.enabled,JSON.stringify(parsed.data.publicFields),parsed.data.instructions,validated.environment,validated.sandboxId,validated.sandboxSecret,validated.liveId,validated.liveSecret,parsed.data.referenceTemplate,parsed.data.noteTemplate,parsed.data.itemNameTemplate,method.rows[0].type==="paypal"?parsed.data.paypalFeeRatePercent:0,method.rows[0].type==="paypal"?parsed.data.paypalFixedFee:0,request.principal.id]);
+    const saved=await pool.query(`INSERT INTO payment_profiles(method_id,name,enabled,public_fields,instructions,environment,sandbox_client_id_encrypted,sandbox_client_secret_encrypted,live_client_id_encrypted,live_client_secret_encrypted,reference_template,note_template,item_name_template,paypal_fee_rate_percent,paypal_fixed_fee,paypal_fee_label,created_by,updated_by)
+      VALUES($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17) RETURNING *`,[methodId,parsed.data.name,parsed.data.enabled,JSON.stringify(parsed.data.publicFields),parsed.data.instructions,validated.environment,validated.sandboxId,validated.sandboxSecret,validated.liveId,validated.liveSecret,parsed.data.referenceTemplate,parsed.data.noteTemplate,parsed.data.itemNameTemplate,method.rows[0].type==="paypal"?parsed.data.paypalFeeRatePercent:0,method.rows[0].type==="paypal"?parsed.data.paypalFixedFee:0,method.rows[0].type==="paypal"?parsed.data.paypalFeeLabel:"",request.principal.id]);
     clearPayPalTokenCache();await audit(request.principal.id,"payment_profile.create","payment_profile",saved.rows[0].id,{methodId,type:method.rows[0].type});return reply.code(201).send(profileResponse({...saved.rows[0],method_id:methodId,method_type:method.rows[0].type,method_name:""},true));
   });
 
   app.patch("/api/v1/admin/payment-methods/:methodId/profiles/:profileId",{preHandler:authenticate},async(request,reply)=>{
     if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});const parsed=paymentProfileUpdateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
     const {methodId,profileId}=request.params as {methodId:string;profileId:string},current=await pool.query(`${PROFILE_SELECT} WHERE p.id=$1 AND p.method_id=$2 AND p.deleted_at IS NULL AND m.deleted_at IS NULL`,[profileId,methodId]);if(!current.rowCount)return reply.code(404).send({error:"not_found"});
-    const row=current.rows[0],merged={name:parsed.data.name??row.name,enabled:parsed.data.enabled??row.enabled,publicFields:parsed.data.publicFields??fields(row.public_fields),instructions:parsed.data.instructions??row.instructions,environment:parsed.data.environment??row.environment,referenceTemplate:parsed.data.referenceTemplate??row.reference_template,noteTemplate:parsed.data.noteTemplate??row.note_template,itemNameTemplate:parsed.data.itemNameTemplate??row.item_name_template,paypalFeeRatePercent:parsed.data.paypalFeeRatePercent??Number(row.paypal_fee_rate_percent??0),paypalFixedFee:parsed.data.paypalFixedFee??Number(row.paypal_fixed_fee??0),...parsed.data};
+    const row=current.rows[0],merged={name:parsed.data.name??row.name,enabled:parsed.data.enabled??row.enabled,publicFields:parsed.data.publicFields??fields(row.public_fields),instructions:parsed.data.instructions??row.instructions,environment:parsed.data.environment??row.environment,referenceTemplate:parsed.data.referenceTemplate??row.reference_template,noteTemplate:parsed.data.noteTemplate??row.note_template,itemNameTemplate:parsed.data.itemNameTemplate??row.item_name_template,paypalFeeRatePercent:parsed.data.paypalFeeRatePercent??Number(row.paypal_fee_rate_percent??0),paypalFixedFee:parsed.data.paypalFixedFee??Number(row.paypal_fixed_fee??0),paypalFeeLabel:parsed.data.paypalFeeLabel??String(row.paypal_fee_label??"PayPal 手续费"),...parsed.data};
     const validated=await validateAndPrepareProfile(row.method_type,merged,row,reply);if(!validated)return;
-    const saved=await pool.query(`UPDATE payment_profiles SET name=$3,enabled=$4,public_fields=$5::jsonb,instructions=$6,environment=$7,sandbox_client_id_encrypted=$8,sandbox_client_secret_encrypted=$9,live_client_id_encrypted=$10,live_client_secret_encrypted=$11,reference_template=$12,note_template=$13,item_name_template=$14,paypal_fee_rate_percent=$15,paypal_fixed_fee=$16,updated_by=$17,updated_at=now() WHERE id=$1 AND method_id=$2 RETURNING *`,[profileId,methodId,merged.name,merged.enabled,JSON.stringify(merged.publicFields),merged.instructions,validated.environment,validated.sandboxId,validated.sandboxSecret,validated.liveId,validated.liveSecret,merged.referenceTemplate,merged.noteTemplate,merged.itemNameTemplate,row.method_type==="paypal"?merged.paypalFeeRatePercent:0,row.method_type==="paypal"?merged.paypalFixedFee:0,request.principal.id]);
+    const saved=await pool.query(`UPDATE payment_profiles SET name=$3,enabled=$4,public_fields=$5::jsonb,instructions=$6,environment=$7,sandbox_client_id_encrypted=$8,sandbox_client_secret_encrypted=$9,live_client_id_encrypted=$10,live_client_secret_encrypted=$11,reference_template=$12,note_template=$13,item_name_template=$14,paypal_fee_rate_percent=$15,paypal_fixed_fee=$16,paypal_fee_label=$17,updated_by=$18,updated_at=now() WHERE id=$1 AND method_id=$2 RETURNING *`,[profileId,methodId,merged.name,merged.enabled,JSON.stringify(merged.publicFields),merged.instructions,validated.environment,validated.sandboxId,validated.sandboxSecret,validated.liveId,validated.liveSecret,merged.referenceTemplate,merged.noteTemplate,merged.itemNameTemplate,row.method_type==="paypal"?merged.paypalFeeRatePercent:0,row.method_type==="paypal"?merged.paypalFixedFee:0,row.method_type==="paypal"?merged.paypalFeeLabel:"",request.principal.id]);
     clearPayPalTokenCache();await audit(request.principal.id,"payment_profile.update","payment_profile",profileId,{methodId,credentialsChanged:Boolean(parsed.data.sandboxClientId||parsed.data.sandboxClientSecret||parsed.data.liveClientId||parsed.data.liveClientSecret)});return profileResponse({...saved.rows[0],method_type:row.method_type,method_name:row.method_name},true);
   });
 

@@ -4,3 +4,10 @@ ALTER TABLE payment_profiles
 
 ALTER TABLE order_fees
   ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'manual';
+
+UPDATE order_fees fee
+SET source='paypal'
+FROM orders order_record
+WHERE fee.order_id=order_record.id
+  AND fee.name='PayPal 手续费'
+  AND COALESCE(order_record.payment_profile_snapshot->>'methodType','')='paypal';

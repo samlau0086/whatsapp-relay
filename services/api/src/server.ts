@@ -56,7 +56,7 @@ function orderFeesWithPayPalFee(fees:OrderSummaryFee[],items:OrderSummaryItem[],
   if(paymentProfile?.methodType!=="paypal")return manual;
   const netAmount=calculateOrderTotal(items,fees,shippingAmount);
   const amount=calculatePayPalFee(netAmount,paymentProfile.paypalFeeRatePercent,paymentProfile.paypalFixedFee);
-  return amount>0?[...manual,{name:PAYPAL_FEE_NAME,amount,source:"paypal"}]:manual;
+  return amount>0?[...manual,{name:paymentProfile.paypalFeeLabel||PAYPAL_FEE_NAME,amount,source:"paypal"}]:manual;
 }
 
 await app.register(cors, { origin:config.CORS_ORIGIN, credentials:true });
