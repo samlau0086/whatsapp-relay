@@ -292,11 +292,17 @@ async function processCommandResult(agentId: string, frame: AgentFrame): Promise
       return;
     }
     if(!["succeeded","failed","uncertain"].includes(outcome))throw new Error("invalid_command_outcome");
-    const command = await client.query("UPDATE outbound_commands SET state=$3,completed_at=now(),last_error=$4 WHERE id=$1 AND agent_id=$2 RETURNING message_id", [frame.commandId,agentId,outcome === "succeeded" ? "completed" : outcome,frame.errorMessage ?? null]);
-    if (!command.rowCount || !command.rows[0].message_id) return;
+    const command = await client.query("UPDATE outbound_commands SET state=$3,completed_at=now(),last_error=$4 WHERE id=$1 AND agent_id=$2 AND state='dispatched' RETURNING message_id,account_id,command,payload", [frame.commandId,agentId,outcome === "succeeded" ? "completed" : outcome,frame.errorMessage ?? null]);
+    if (!command.rowCount) return;
+    const commandRow=command.rows[0];
+    if(outcome==="succeeded"&&["block_contact","unblock_contact"].includes(String(commandRow.command))){
+      const payload=(commandRow.payload??{}) as {toJid?:unknown;actorId?:unknown},toJid=String(payload.toJid??""),actorId=String(payload.actorId??"");
+      if(/^\d{7,15}@s\.whatsapp\.net$/.test(toJid))await client.query("UPDATE contacts SET whatsapp_blocked_at=CASE WHEN $3 THEN now() ELSE NULL END,whatsapp_blocked_by=CASE WHEN $3 THEN NULLIF($4,'')::uuid ELSE NULL END,updated_at=now() WHERE account_id=$1 AND provider_user_id=$2",[commandRow.account_id,toJid,commandRow.command==="block_contact",actorId]);
+    }
+    if (!commandRow.message_id) return;
     const status = frame.outcome === "succeeded" ? "sent" : frame.outcome === "uncertain" ? "uncertain" : "failed";
-    await client.query("UPDATE messages SET status=$2::delivery_status,provider_message_id=COALESCE($3::text,provider_message_id),failure_code=CASE WHEN $2::delivery_status IN ('failed'::delivery_status,'uncertain'::delivery_status) THEN $4::text ELSE NULL END,failure_message=CASE WHEN $2::delivery_status IN ('failed'::delivery_status,'uncertain'::delivery_status) THEN $5::text ELSE NULL END WHERE id=$1", [command.rows[0].message_id,status,frame.whatsappMessageId ?? null,frame.errorCode ?? null,frame.errorMessage ?? null]);
-    const updated = await client.query("SELECT id,conversation_id,account_id,status,provider_message_id FROM messages WHERE id=$1", [command.rows[0].message_id]);
+    await client.query("UPDATE messages SET status=$2::delivery_status,provider_message_id=COALESCE($3::text,provider_message_id),failure_code=CASE WHEN $2::delivery_status IN ('failed'::delivery_status,'uncertain'::delivery_status) THEN $4::text ELSE NULL END,failure_message=CASE WHEN $2::delivery_status IN ('failed'::delivery_status,'uncertain'::delivery_status) THEN $5::text ELSE NULL END WHERE id=$1", [commandRow.message_id,status,frame.whatsappMessageId ?? null,frame.errorCode ?? null,frame.errorMessage ?? null]);
+    const updated = await client.query("SELECT id,conversation_id,account_id,status,provider_message_id FROM messages WHERE id=$1", [commandRow.message_id]);
     await createWebhookEvent(client,"message.status_changed",updated.rows[0].id,updated.rows[0]);
   });
 }

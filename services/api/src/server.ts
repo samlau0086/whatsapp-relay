@@ -1,6 +1,6 @@
 import { randomBytes, createHash } from "node:crypto";
 import type { PoolClient } from "pg";
-import Fastify from "fastify";
+import Fastify,{type FastifyReply,type FastifyRequest} from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import websocket from "@fastify/websocket";
@@ -37,7 +37,7 @@ import { registerTaskRoutes } from "./task-routes.js";
 import {registerStatusRoutes} from "./status-routes.js";
 import {registerWhatsAppCloudRoutes} from "./whatsapp-cloud.js";
 import {registerMessengerRoutes} from "./messenger.js";
-import {isMessengerReplyWindowClosedError,isTemplateRequiredError,queueChannelCommand,queueGroupCreateCommand} from "./whatsapp-outbound.js";
+import {isMessengerReplyWindowClosedError,isTemplateRequiredError,queueChannelCommand,queueGroupCreateCommand,queueWhatsAppBlockCommand} from "./whatsapp-outbound.js";
 import {registerBrowserEvents} from "./browser-events.js";
 import {isPostgresUuid} from "./conversation-cursor.js";
 import { paypalProfileSetting, registerPaymentMethodRoutes, resolvePaymentProfile, type PaymentProfileSnapshot } from "./payment-methods.js";
@@ -332,9 +332,9 @@ app.get("/api/v1/accounts", { preHandler:authenticate }, async (request) => {
   return { data:result.rows };
 });
 
-type ConversationFilter="all"|"groups"|"mine"|"unassigned"|"favorite"|"closed"|"archived"|"reminders";
+type ConversationFilter="all"|"groups"|"mine"|"unassigned"|"favorite"|"closed"|"archived"|"reminders"|"blocked";
 type ConversationQuery={accountId?:string;status?:string;q?:string;tagId?:string;customerStage?:string;latestOrderStatus?:string;filter?:string;limit?:string;before?:string;cursor?:string;lastMessageFrom?:string;lastMessageBefore?:string;unreplied?:string};
-const CONVERSATION_FILTERS=new Set<ConversationFilter>(["all","groups","mine","unassigned","favorite","closed","archived","reminders"]);
+const CONVERSATION_FILTERS=new Set<ConversationFilter>(["all","groups","mine","unassigned","favorite","closed","archived","reminders","blocked"]);
 const CONVERSATION_CUSTOMER_STAGES=new Set(["new","considering","qualified","won","lost"]);
 const CONVERSATION_ORDER_STATUSES=new Set(["none","any","quotation","pending_confirmation","pending_payment","paid","processing","shipped","completed","cancelled"]);
 
@@ -383,7 +383,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
     WHERE (COALESCE(search_contact.alias,'') || ' ' || COALESCE(search_contact.display_name,'') || ' ' || COALESCE(search_contact.phone_e164,'') || ' ' || search_contact.provider_user_id) ILIKE '%'||$4||'%'
   ),`:"";
   const candidateSource=keyword?"search_conversations c":"conversations c";
-  const candidateFilter=filter==="closed"?"AND c.status='closed'":filter==="archived"?"AND c.status='archived'":filter==="groups"?"AND c.status NOT IN ('closed','archived') AND EXISTS(SELECT 1 FROM contacts group_contact WHERE group_contact.id=c.contact_id AND group_contact.entity_type='group')":filter==="mine"?"AND c.status<>'closed' AND c.assigned_user_id=$9::uuid":filter==="unassigned"?"AND c.status<>'closed' AND c.assigned_user_id IS NULL":filter==="favorite"?"AND c.status<>'closed' AND c.favorite":filter==="reminders"?"AND c.status<>'closed'":filter==="all"||!query.status?"AND c.status NOT IN ('closed','archived')":"";
+  const candidateFilter=filter==="closed"?"AND c.status='closed'":filter==="archived"?"AND c.status='archived'":filter==="blocked"?"AND EXISTS(SELECT 1 FROM contacts blocked_contact WHERE blocked_contact.id=c.contact_id AND blocked_contact.whatsapp_blocked_at IS NOT NULL)":filter==="groups"?"AND c.status NOT IN ('closed','archived') AND EXISTS(SELECT 1 FROM contacts group_contact WHERE group_contact.id=c.contact_id AND group_contact.entity_type='group')":filter==="mine"?"AND c.status<>'closed' AND c.assigned_user_id=$9::uuid":filter==="unassigned"?"AND c.status<>'closed' AND c.assigned_user_id IS NULL":filter==="favorite"?"AND c.status<>'closed' AND c.favorite":filter==="reminders"?"AND c.status<>'closed'":filter==="all"||!query.status?"AND c.status NOT IN ('closed','archived')":"";
   const latestOrderJoin=query.latestOrderStatus?"LEFT JOIN LATERAL (SELECT business_status FROM orders WHERE conversation_id=c.id AND deleted_at IS NULL ORDER BY created_at DESC,id DESC LIMIT 1) latest_order ON true":"";
   const latestOrderFilter=query.latestOrderStatus==="none"?"AND latest_order.business_status IS NULL":query.latestOrderStatus==="any"?"AND latest_order.business_status IS NOT NULL":query.latestOrderStatus?"AND latest_order.business_status=$16::text":"";
   const candidateCursor=!cursor?"":reminderMode?"AND (reminder_task.due_at>$11 OR (reminder_task.due_at=$11 AND c.id<$12::uuid))":`AND (${latestSort}<$11 OR (${latestSort}=$11 AND c.id<$12::uuid))`;
@@ -414,7 +414,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
     LIMIT $13
   )
     SELECT c.id,c.status,c.favorite,c.unread_count,CASE WHEN c.summary_updated_at IS NOT NULL THEN c.last_message_at ELSE m.occurred_at END last_message_at,c.created_at,c.service_window_expires_at,c.service_window_expires_at reply_window_expires_at,c.assigned_user_id,c.customer_stage,
-      co.id contact_id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164,co.provider_user_id) display_name,co.alias,co.display_name contact_name,co.phone_e164,co.provider_user_id,co.avatar_url,
+      co.id contact_id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164,co.provider_user_id) display_name,co.alias,co.display_name contact_name,co.phone_e164,co.provider_user_id,co.avatar_url,co.whatsapp_blocked_at IS NOT NULL blocked,
       CASE WHEN co.entity_type='group' THEN 'group' ELSE 'direct' END conversation_type,wg.group_jid,wg.subject group_subject,wg.participant_count group_participant_count,wg.active group_active,c.last_message_sender_name,
       (SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) primary_email,
       COALESCE((SELECT json_agg(json_build_object('id',method.id,'type',method.type,'label',method.label,'value',method.value) ORDER BY method.position,method.id) FROM contact_methods method WHERE method.contact_id=co.id),'[]'::json) contact_methods,
@@ -446,8 +446,8 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
   const [result,groupResult,reminderResult,dueReminderResult]=await Promise.all([
     pool.query(`SELECT COUNT(*) FILTER(WHERE c.status NOT IN ('closed','archived'))::int all_count,COUNT(*) FILTER(WHERE c.status<>'closed' AND c.assigned_user_id=$7::uuid)::int mine,
       COUNT(*) FILTER(WHERE c.status<>'closed' AND c.assigned_user_id IS NULL)::int unassigned,COUNT(*) FILTER(WHERE c.status<>'closed' AND c.favorite)::int favorite,
-      COUNT(*) FILTER(WHERE c.status='closed')::int closed,COUNT(*) FILTER(WHERE c.status='archived')::int archived
-    FROM conversations c JOIN channel_accounts a ON a.id=c.account_id
+      COUNT(*) FILTER(WHERE c.status='closed')::int closed,COUNT(*) FILTER(WHERE c.status='archived')::int archived,COUNT(*) FILTER(WHERE co.whatsapp_blocked_at IS NOT NULL)::int blocked
+    FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN channel_accounts a ON a.id=c.account_id
     LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
@@ -485,7 +485,7 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
     dueReminderPromise
   ]);
   const row=result.rows[0]??{},groupRow=groupResult.rows[0]??{},reminderRow=reminderResult.rows[0]??{},dueReminders=dueReminderResult.rows;
-  return{all:Number(row.all_count??0),groups:Number(groupRow.groups??0),mine:Number(row.mine??0),unassigned:Number(row.unassigned??0),favorite:Number(row.favorite??0),closed:Number(row.closed??0),archived:Number(row.archived??0),reminders:Number(reminderRow.reminders??0),dueReminders};
+  return{all:Number(row.all_count??0),groups:Number(groupRow.groups??0),mine:Number(row.mine??0),unassigned:Number(row.unassigned??0),favorite:Number(row.favorite??0),closed:Number(row.closed??0),archived:Number(row.archived??0),blocked:Number(row.blocked??0),reminders:Number(reminderRow.reminders??0),dueReminders};
 });
 
 app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(request,reply)=>{
@@ -500,7 +500,7 @@ app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(requ
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null;
   const result=await pool.query(`SELECT c.id,c.status,c.favorite,c.unread_count,CASE WHEN c.summary_updated_at IS NOT NULL THEN c.last_message_at ELSE m.occurred_at END last_message_at,
     c.created_at,c.service_window_expires_at,c.service_window_expires_at reply_window_expires_at,c.assigned_user_id,c.customer_stage,co.id contact_id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164,co.provider_user_id) display_name,
-    co.alias,co.display_name contact_name,co.phone_e164,co.provider_user_id,co.avatar_url,(SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) primary_email,
+    co.alias,co.display_name contact_name,co.phone_e164,co.provider_user_id,co.avatar_url,co.whatsapp_blocked_at IS NOT NULL blocked,(SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) primary_email,
     CASE WHEN co.entity_type='group' THEN 'group' ELSE 'direct' END conversation_type,wg.group_jid,wg.subject group_subject,wg.participant_count group_participant_count,wg.active group_active,c.last_message_sender_name,
     COALESCE((SELECT json_agg(json_build_object('id',method.id,'type',method.type,'label',method.label,'value',method.value) ORDER BY method.position,method.id) FROM contact_methods method WHERE method.contact_id=co.id),'[]'::json) contact_methods,
     a.id account_id,a.display_name account_name,a.status account_status,a.transport,a.platform,mp.page_id,COALESCE(c.last_message_text,m.text_content) last_message,
@@ -528,7 +528,7 @@ app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(requ
     &&(!keyword||[row.display_name,row.phone_e164,row.last_message].some(value=>String(value??"").toLocaleLowerCase().includes(keyword)))
     &&(legacyBefore===null||lastAt!==null&&lastAt<legacyBefore)&&(from===null||lastAt!==null&&lastAt>=from)&&(before===null||lastAt!==null&&lastAt<before)
     &&(query.unreplied!=="true"||row.last_message_direction==="in")
-    &&((!filter&&Boolean(query.status))||(!filter&&row.status!=="closed"&&row.status!=="archived")||(filter==="all"&&row.status!=="closed"&&row.status!=="archived")||(filter==="groups"&&row.conversation_type==="group"&&row.status!=="closed"&&row.status!=="archived")||(filter==="mine"&&row.status!=="closed"&&row.assigned_user_id===principalUserId)||(filter==="unassigned"&&row.status!=="closed"&&!row.assigned_user_id)||(filter==="favorite"&&row.status!=="closed"&&row.favorite)||(filter==="closed"&&row.status==="closed")||(filter==="archived"&&row.status==="archived")||(filter==="reminders"&&row.status!=="closed"&&row.remind_at));
+    &&((!filter&&Boolean(query.status))||(!filter&&row.status!=="closed"&&row.status!=="archived")||(filter==="all"&&row.status!=="closed"&&row.status!=="archived")||(filter==="blocked"&&row.blocked)||(filter==="groups"&&row.conversation_type==="group"&&row.status!=="closed"&&row.status!=="archived")||(filter==="mine"&&row.status!=="closed"&&row.assigned_user_id===principalUserId)||(filter==="unassigned"&&row.status!=="closed"&&!row.assigned_user_id)||(filter==="favorite"&&row.status!=="closed"&&row.favorite)||(filter==="closed"&&row.status==="closed")||(filter==="archived"&&row.status==="archived")||(filter==="reminders"&&row.status!=="closed"&&row.remind_at));
   return{data:row,matches:Boolean(matches)};
 });
 
@@ -586,6 +586,38 @@ app.patch("/api/v1/conversations/:id", { preHandler:authenticate }, async (reque
   if(["closed","archived"].includes(updated.rows[0].status)||["won","lost"].includes(updated.rows[0].customer_stage))await pool.query("UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error='conversation_no_longer_eligible' WHERE conversation_id=$1 AND state='pending' AND kind IN ('reply','followup')",[id]);
   await pool.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'conversation.update','conversation',$2,$3)",[request.principal.id,id,JSON.stringify(body)]);
   return updated.rows[0];
+});
+
+async function queueConversationBlock(request:FastifyRequest,reply:FastifyReply,action:"block"|"unblock"){
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const principal=request.principal,{id}=request.params as {id:string};
+  const result=await transaction(async client=>{
+    const current=await client.query("SELECT c.account_id,co.provider_user_id,co.entity_type,a.platform,a.transport,agent.capabilities FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN channel_accounts a ON a.id=c.account_id LEFT JOIN agents agent ON agent.id=a.agent_id WHERE c.id=$1 FOR UPDATE OF c,co,a",[id]);
+    if(!current.rowCount||!canAccessAccount(principal,current.rows[0].account_id))return{status:"not_found" as const};
+    const row=current.rows[0],toJid=String(row.provider_user_id??"");
+    if(row.entity_type==="group")return{status:"group_unsupported" as const};
+    if(row.platform!=="whatsapp"||row.transport!=="web")return{status:"unsupported" as const};
+    if(!Array.isArray(row.capabilities)||!row.capabilities.includes("contact_block_v1"))return{status:"agent_upgrade_required" as const};
+    if(!/^\d{7,15}@s\.whatsapp\.net$/.test(toJid))return{status:"invalid_contact" as const};
+    const command=await queueWhatsAppBlockCommand(client,{accountId:String(row.account_id),toJid,action,actorId:principal.id});
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,$2,'conversation',$3,$4)",[principal.id,action==="block"?"conversation.block":"conversation.unblock",id,JSON.stringify({accountId:row.account_id,toJid,commandId:command.commandId})]);
+    return{status:"queued" as const,...command};
+  });
+  if(result.status==="not_found")return reply.code(404).send({error:"not_found"});
+  if(result.status==="group_unsupported")return reply.code(409).send({error:"group_feature_unavailable",message:"群聊不能管理黑名单"});
+  if(result.status==="unsupported")return reply.code(409).send({error:"contact_block_unsupported",message:"只有已连接的网页版 WhatsApp 账号支持黑名单管理"});
+  if(result.status==="agent_upgrade_required")return reply.code(409).send({error:"agent_upgrade_required",message:"请升级并重新连接 WhatsApp Agent 后再管理黑名单"});
+  if(result.status==="invalid_contact")return reply.code(409).send({error:"invalid_contact",message:"该联系人没有可用的 WhatsApp 手机号"});
+  void dispatchPending(result.agentId);
+  return reply.code(202).send(result);
+}
+
+app.post("/api/v1/conversations/:id/block", {preHandler:authenticate}, async(request,reply)=>{
+  return queueConversationBlock(request,reply,"block");
+});
+
+app.delete("/api/v1/conversations/:id/block", {preHandler:authenticate}, async(request,reply)=>{
+  return queueConversationBlock(request,reply,"unblock");
 });
 
 app.post("/api/v1/conversations/:id/transfer", {preHandler:authenticate}, async(request,reply)=>{
@@ -680,10 +712,11 @@ app.post("/api/v1/contacts",{preHandler:authenticate},async(request,reply)=>{
 });
 
 app.get("/api/v1/contacts",{preHandler:authenticate},async(request,reply)=>{
-  const query=request.query as {q?:string;accountId?:string;limit?:string;offset?:string};
+  const query=request.query as {q?:string;accountId?:string;blacklist?:string;limit?:string;offset?:string};
   if(query.accountId&&!canAccessAccount(request.principal,query.accountId))return reply.code(403).send({error:"account_forbidden"});
+  if(query.blacklist!==undefined&&query.blacklist!=="true"&&query.blacklist!=="false")return reply.code(400).send({error:"invalid_blacklist_filter"});
   const limit=Math.min(100,Math.max(1,Number(query.limit??30)||30)),offset=Math.max(0,Number(query.offset??0)||0),accountIds=request.principal?.accountIds??null;
-  const result=await pool.query(`SELECT co.id,co.account_id,a.display_name account_name,a.platform,co.provider_user_id,co.alias,co.display_name contact_name,co.first_name,co.middle_name,co.last_name,co.company_name,co.job_title,co.country,co.province,co.city,co.phone_e164,co.avatar_url,co.note,co.timezone,co.preferred_language,co.birthday_month,co.birthday_day,co.birthday_year,co.updated_at,c.id conversation_id,c.last_message_at,COUNT(*) OVER()::int total_count,
+  const result=await pool.query(`SELECT co.id,co.account_id,a.display_name account_name,a.platform,co.provider_user_id,co.alias,co.display_name contact_name,co.first_name,co.middle_name,co.last_name,co.company_name,co.job_title,co.country,co.province,co.city,co.phone_e164,co.avatar_url,co.note,co.timezone,co.preferred_language,co.birthday_month,co.birthday_day,co.birthday_year,co.whatsapp_blocked_at,co.updated_at,c.id conversation_id,c.last_message_at,COUNT(*) OVER()::int total_count,
     COALESCE(email_list.emails,'[]'::json) emails,COALESCE(method_list.methods,'[]'::json) methods,COALESCE(address_list.addresses,'[]'::json) addresses,COALESCE(date_list.special_dates,'[]'::json) special_dates
     FROM contacts co JOIN channel_accounts a ON a.id=co.account_id LEFT JOIN conversations c ON c.contact_id=co.id
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',email.id,'label',email.label,'email',email.email,'isPrimary',email.is_primary) ORDER BY email.position,email.id) emails FROM contact_emails email WHERE email.contact_id=co.id)email_list ON true
@@ -691,7 +724,8 @@ app.get("/api/v1/contacts",{preHandler:authenticate},async(request,reply)=>{
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',address.id,'label',address.label,'recipientName',address.recipient_name,'phone',address.phone,'address',address.address,'countryCode',address.country_code,'province',address.province,'city',address.city,'street1',COALESCE(address.street_line_1,address.address),'street2',address.street_line_2,'postalCode',address.postal_code,'isDefault',address.is_default) ORDER BY address.is_default DESC,address.created_at,address.id) addresses FROM contact_addresses address WHERE address.contact_id=co.id)address_list ON true
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',d.id,'kind',d.kind,'label',d.label,'month',d.month,'day',d.day,'year',d.year,'leadDays',d.lead_days) ORDER BY d.month,d.day,d.id) special_dates FROM contact_special_dates d WHERE d.contact_id=co.id)date_list ON true
     WHERE co.entity_type='person' AND ($1::uuid IS NULL OR co.account_id=$1) AND ($2::uuid[] IS NULL OR co.account_id=ANY($2)) AND ($3::text IS NULL OR co.alias ILIKE '%'||$3||'%' OR co.display_name ILIKE '%'||$3||'%' OR co.first_name ILIKE '%'||$3||'%' OR co.middle_name ILIKE '%'||$3||'%' OR co.last_name ILIKE '%'||$3||'%' OR co.company_name ILIKE '%'||$3||'%' OR co.job_title ILIKE '%'||$3||'%' OR co.country ILIKE '%'||$3||'%' OR co.province ILIKE '%'||$3||'%' OR co.city ILIKE '%'||$3||'%' OR co.phone_e164 ILIKE '%'||$3||'%' OR co.provider_user_id ILIKE '%'||$3||'%' OR EXISTS(SELECT 1 FROM contact_emails e WHERE e.contact_id=co.id AND (e.email ILIKE '%'||$3||'%' OR e.label ILIKE '%'||$3||'%')) OR EXISTS(SELECT 1 FROM contact_methods m WHERE m.contact_id=co.id AND (m.value ILIKE '%'||$3||'%' OR m.label ILIKE '%'||$3||'%')))
-    ORDER BY c.last_message_at DESC NULLS LAST,co.updated_at DESC,co.id LIMIT $4 OFFSET $5`,[query.accountId??null,accountIds,query.q?.trim()||null,limit,offset]);
+      AND ($4::boolean IS NULL OR (co.whatsapp_blocked_at IS NOT NULL)=$4::boolean)
+    ORDER BY c.last_message_at DESC NULLS LAST,co.updated_at DESC,co.id LIMIT $5 OFFSET $6`,[query.accountId??null,accountIds,query.q?.trim()||null,query.blacklist===undefined?null:query.blacklist==="true",limit,offset]);
   return{data:result.rows.map(mapContactRow),total:Number(result.rows[0]?.total_count??0),hasMore:offset+result.rows.length<Number(result.rows[0]?.total_count??0),nextOffset:offset+result.rows.length};
 });
 
@@ -1857,12 +1891,12 @@ type CustomerAddressInput={label:string;recipientName?:string;phone?:string;addr
 function mapContactRow(row:Record<string,unknown>){
   const emails=Array.isArray(row.emails)?row.emails as Array<{id:string;label:string;email:string;isPrimary:boolean}>:[],methods=Array.isArray(row.methods)?row.methods as Array<{id:string;type:string;label:string;value:string}>:[],addresses=Array.isArray(row.addresses)?row.addresses:[],specialDates=Array.isArray(row.special_dates)?row.special_dates:[];
   const zone=resolveContactTimeZone(String(row.phone_e164??""),row.timezone?String(row.timezone):null);
-  return{id:String(row.id),accountId:String(row.account_id),accountName:String(row.account_name??""),platform:String(row.platform??"whatsapp"),providerUserId:String(row.provider_user_id??""),alias:String(row.alias??""),contactName:String(row.contact_name??""),firstName:String(row.first_name??""),middleName:String(row.middle_name??""),lastName:String(row.last_name??""),companyName:String(row.company_name??""),jobTitle:String(row.job_title??""),country:String(row.country??""),province:String(row.province??""),city:String(row.city??""),name:String(row.alias||row.contact_name||row.phone_e164||row.provider_user_id||"未知联系人"),phone:String(row.phone_e164??""),avatarUrl:row.avatar_url?`/api/v1/contacts/${row.id}/avatar`:null,note:String(row.note??""),timezone:row.timezone?String(row.timezone):null,preferredLanguage:row.preferred_language?String(row.preferred_language):null,effectiveTimezone:zone.timeZone,timezoneSource:zone.source,inferredCountry:zone.country,birthday:row.birthday_month?{month:Number(row.birthday_month),day:Number(row.birthday_day),year:row.birthday_year?Number(row.birthday_year):null}:null,specialDates,emails,primaryEmail:primaryContactEmail(emails),methods,addresses,conversationId:row.conversation_id?String(row.conversation_id):null,hasConversation:Boolean(row.conversation_id),lastMessageAt:row.last_message_at?String(row.last_message_at):null,updatedAt:String(row.updated_at??"")};
+  return{id:String(row.id),accountId:String(row.account_id),accountName:String(row.account_name??""),platform:String(row.platform??"whatsapp"),providerUserId:String(row.provider_user_id??""),alias:String(row.alias??""),contactName:String(row.contact_name??""),firstName:String(row.first_name??""),middleName:String(row.middle_name??""),lastName:String(row.last_name??""),companyName:String(row.company_name??""),jobTitle:String(row.job_title??""),country:String(row.country??""),province:String(row.province??""),city:String(row.city??""),name:String(row.alias||row.contact_name||row.phone_e164||row.provider_user_id||"未知联系人"),phone:String(row.phone_e164??""),avatarUrl:row.avatar_url?`/api/v1/contacts/${row.id}/avatar`:null,note:String(row.note??""),timezone:row.timezone?String(row.timezone):null,preferredLanguage:row.preferred_language?String(row.preferred_language):null,effectiveTimezone:zone.timeZone,timezoneSource:zone.source,inferredCountry:zone.country,birthday:row.birthday_month?{month:Number(row.birthday_month),day:Number(row.birthday_day),year:row.birthday_year?Number(row.birthday_year):null}:null,specialDates,emails,primaryEmail:primaryContactEmail(emails),methods,addresses,conversationId:row.conversation_id?String(row.conversation_id):null,hasConversation:Boolean(row.conversation_id),lastMessageAt:row.last_message_at?String(row.last_message_at):null,blockedAt:row.whatsapp_blocked_at?String(row.whatsapp_blocked_at):null,updatedAt:String(row.updated_at??"")};
 }
 
 async function contactProfileById(db:typeof pool|PoolClient,id:string){
   const [contact,emails,methods,addresses,specialDates]=await Promise.all([
-    db.query("SELECT co.id,co.account_id,a.display_name account_name,a.platform,co.provider_user_id,co.alias,co.display_name contact_name,co.first_name,co.middle_name,co.last_name,co.company_name,co.job_title,co.country,co.province,co.city,co.phone_e164,co.avatar_url,co.note,co.timezone,co.preferred_language,co.birthday_month,co.birthday_day,co.birthday_year,co.updated_at,c.id conversation_id,c.last_message_at FROM contacts co JOIN channel_accounts a ON a.id=co.account_id LEFT JOIN conversations c ON c.contact_id=co.id WHERE co.id=$1 AND co.entity_type='person'",[id]),
+    db.query("SELECT co.id,co.account_id,a.display_name account_name,a.platform,co.provider_user_id,co.alias,co.display_name contact_name,co.first_name,co.middle_name,co.last_name,co.company_name,co.job_title,co.country,co.province,co.city,co.phone_e164,co.avatar_url,co.note,co.timezone,co.preferred_language,co.birthday_month,co.birthday_day,co.birthday_year,co.whatsapp_blocked_at,co.updated_at,c.id conversation_id,c.last_message_at FROM contacts co JOIN channel_accounts a ON a.id=co.account_id LEFT JOIN conversations c ON c.contact_id=co.id WHERE co.id=$1 AND co.entity_type='person'",[id]),
     db.query("SELECT id,label,email,is_primary \"isPrimary\" FROM contact_emails WHERE contact_id=$1 ORDER BY position,id",[id]),
     db.query("SELECT id,type,label,value FROM contact_methods WHERE contact_id=$1 ORDER BY position,id",[id]),
     db.query("SELECT id,label,recipient_name \"recipientName\",phone,address,country_code \"countryCode\",province,city,COALESCE(street_line_1,address) \"street1\",street_line_2 \"street2\",postal_code \"postalCode\",is_default \"isDefault\" FROM contact_addresses WHERE contact_id=$1 ORDER BY is_default DESC,created_at,id",[id]),

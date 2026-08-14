@@ -1,5 +1,5 @@
 export type ConversationDateFilter="all"|"today"|"yesterday"|"day3"|"day5"|"day7"|"day15plus"|"unreplied";
-export type ConversationListFilter="all"|"groups"|"mine"|"unassigned"|"favorite"|"closed"|"archived"|"reminders";
+export type ConversationListFilter="all"|"groups"|"mine"|"unassigned"|"favorite"|"closed"|"archived"|"reminders"|"blocked";
 export type ConversationCustomerStage="new"|"considering"|"qualified"|"won"|"lost";
 export type ConversationLatestOrderStatus="none"|"any"|"quotation"|"pending_confirmation"|"pending_payment"|"paid"|"processing"|"shipped"|"completed"|"cancelled";
 export type ConversationListOptions={filter?:ConversationListFilter;accountId?:string;q?:string;tagId?:string;customerStage?:ConversationCustomerStage;latestOrderStatus?:ConversationLatestOrderStatus;cursor?:string;limit?:number};

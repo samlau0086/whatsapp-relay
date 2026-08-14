@@ -6,7 +6,7 @@ export type Conversation = {
   id:string;name:string;initials:string;color:string;account:string;accountId:string;phone:string;providerUserId:string;
   contactId:string;alias:string;contactName:string;primaryEmail:string;contactMethods:ContactMethod[];
   preview:string;lastDirection:"in"|"out"|null;lastMessageStatus:ConversationMessageStatus|null;time:string;unread:number;accountStatus:string;assignedUserId:string|null;
-  lastMessageAt:string|null;favorite:boolean;conversationStatus:string;customerStage:string;tags:TagItem[];remindAt:string|null;
+  lastMessageAt:string|null;favorite:boolean;blocked:boolean;conversationStatus:string;customerStage:string;tags:TagItem[];remindAt:string|null;
   platform:"whatsapp"|"messenger";pageId:string|null;transport:"web"|"cloud";serviceWindowExpiresAt:string|null;replyWindowExpiresAt:string|null;
   conversationType:"direct"|"group";groupJid:string|null;groupParticipantCount:number;groupActive:boolean;
 };

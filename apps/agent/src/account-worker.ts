@@ -162,6 +162,13 @@ async function execute(command:Command):Promise<void>{
       void socket.groupMetadata(group.id).then(metadata=>emitGroupSnapshot(init!,metadata)).catch(error=>emit({type:"diagnostic",level:"warn",accountId:init!.accountId,message:"group_metadata_refresh_failed",detail:describeSendError(error)}));
       return;
     }
+    if(command.command==="block_contact"||command.command==="unblock_contact"){
+      const toJid=String(command.payload.toJid??"");
+      if(!/^\d{7,15}@s\.whatsapp\.net$/.test(toJid))throw new Error("Invalid WhatsApp contact JID");
+      await socket.updateBlockStatus(toJid,command.command==="block_contact"?"block":"unblock");
+      emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",completedAt:new Date().toISOString()});
+      return;
+    }
     const type=String(command.payload.type??"text");let content:AnyMessageContent;
     if(type==="text")content={text:String(command.payload.text??"")};else{const media=await downloadOutboundMedia(init,String(command.payload.mediaId??""));const caption=command.payload.text?String(command.payload.text):undefined;if(type==="image")content={image:media.bytes,mimetype:media.mime,caption};else if(type==="video")content={video:media.bytes,mimetype:media.mime,caption};else if(type==="audio")content={audio:media.bytes,mimetype:media.mime,ptt:true};else content={document:media.bytes,mimetype:media.mime,fileName:media.name,caption};}
     if(command.command==="publish_status"){

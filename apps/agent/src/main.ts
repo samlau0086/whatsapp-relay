@@ -287,7 +287,7 @@ async function connectCentral(input:{baseUrl:string;agentId:string;credential:st
     agentVersion:app.getVersion(),
     platform:`win32-${process.arch}`,
     protocolVersion:PROTOCOL_VERSION,
-    capabilities:["publish_status_v1","group_chat_v1","group_create_v1"],
+    capabilities:["publish_status_v1","group_chat_v1","group_create_v1","contact_block_v1"],
     proxyUrl,
     onCommand:executeWorkerCommand,
     onStatus:(status) => {
