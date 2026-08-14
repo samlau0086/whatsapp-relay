@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import sharp from "sharp";
+import { PDFDocument } from "pdf-lib";
 import { DEFAULT_PRODUCT_CARD_TEMPLATE, productCardTemplateSchema, renderProductCardCaption } from "../src/product-card-template.js";
-import { renderProductCardGrid, renderProductCardGridPages, renderProductCards } from "../src/product-card-image.js";
+import { renderProductCardGrid, renderProductCardGridPages, renderProductCardGridPdf, renderProductCards } from "../src/product-card-image.js";
 import { productCardSendSchema } from "../src/schemas.js";
 
 test("product pricing and card migration is idempotent and enforces active SKU uniqueness",async()=>{
@@ -37,6 +38,8 @@ test("product card sends accept automatic grid pagination",()=>{
   assert.equal(productCardSendSchema.safeParse({...base,grid:{rows:2,columns:2}}).success,true);
   assert.equal(productCardSendSchema.safeParse(base).success,false);
   assert.equal(productCardSendSchema.safeParse({...base,grid:{rows:11,columns:1}}).success,false);
+  assert.equal(productCardSendSchema.safeParse({...base,grid:{rows:2,columns:2},gridOutputFormat:"pdf"}).success,true);
+  assert.equal(productCardSendSchema.safeParse({...base,mode:"individual",grid:undefined,gridOutputFormat:"pdf"}).success,false);
 });
 
 test("product cards render priced, unpriced, and combined PNG output",async()=>{
@@ -67,4 +70,10 @@ test("product card grids automatically paginate beyond capacity",async()=>{
   const product={name:"Grid perfume",sku:"GRID-001",currency:"USD",priceTiers:[{minQuantity:1,unitAmount:25}],tags:[]},pages=await renderProductCardGridPages(DEFAULT_PRODUCT_CARD_TEMPLATE,Array.from({length:9},(_,index)=>({...product,sku:`GRID-${index+1}`})),true,2,2);
   assert.equal(pages.length,3);
   for(const page of pages){const metadata=await sharp(page).metadata();assert.equal(metadata.format,"png");assert.equal(metadata.width,2160);}
+});
+
+test("product card grid PDF contains every rendered grid page",async()=>{
+  const product={name:"Grid perfume",sku:"GRID-001",currency:"USD",priceTiers:[{minQuantity:1,unitAmount:25}],tags:[]},pdf=await renderProductCardGridPdf(DEFAULT_PRODUCT_CARD_TEMPLATE,Array.from({length:9},(_,index)=>({...product,sku:`GRID-${index+1}`})),true,2,2),document=await PDFDocument.load(pdf);
+  assert.equal(pdf.subarray(0,5).toString(),"%PDF-");
+  assert.equal(document.getPageCount(),3);
 });
