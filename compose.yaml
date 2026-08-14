@@ -26,7 +26,20 @@ services:
     depends_on: { minio: { condition: service_healthy } }
     env_file: .env
     entrypoint: ["/bin/sh","-c"]
-    command: ["set -eu; mc alias set relay http://minio:9000 \"$$MINIO_ROOT_USER\" \"$$MINIO_ROOT_PASSWORD\"; mc mb --ignore-existing \"relay/$$S3_BUCKET\""]
+    command:
+      - |
+        set -eu
+        attempt=1
+        until mc alias set relay http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do
+          if [ "$$attempt" -ge 15 ]; then
+            echo "MinIO API did not accept connections after 30 seconds." >&2
+            exit 1
+          fi
+          echo "Waiting for MinIO API ($$attempt/15)..." >&2
+          attempt=$$((attempt + 1))
+          sleep 2
+        done
+        mc mb --ignore-existing "relay/$$S3_BUCKET"
   api:
     build:
       context: .
