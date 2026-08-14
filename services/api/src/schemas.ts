@@ -338,6 +338,8 @@ export const paymentProfileCreateSchema=z.object({
   referenceTemplate:z.string().trim().min(1).max(500).default("Order #{{orderNumber}}"),
   noteTemplate:z.string().trim().max(4000).default("{{orderNotes}}"),
   itemNameTemplate:z.string().trim().min(1).max(500).default("{{productName}}"),
+  paypalFeeRatePercent:z.coerce.number().min(0).max(99.9999).default(0),
+  paypalFixedFee:moneySchema.default(0),
 });
 export const paymentProfileUpdateSchema=paymentProfileCreateSchema.partial().refine(value=>Object.keys(value).length>0,"at least one field is required");
 export const paymentSendSchema=z.object({clientSendId:z.string().uuid()});
