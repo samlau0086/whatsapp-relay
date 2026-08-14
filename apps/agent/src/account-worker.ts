@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import makeWASocket, { Browsers, BufferJSON, DisconnectReason, downloadMediaMessage, fetchLatestBaileysVersion, initAuthCreds, jidNormalizedUser, normalizeMessageContent, proto, type AnyMessageContent, type AuthenticationState, type GroupMetadata, type GroupParticipant, type SignalDataTypeMap } from "@whiskeysockets/baileys";
+import makeWASocket, { Browsers, BufferJSON, DisconnectReason, downloadMediaMessage, fetchLatestBaileysVersion, initAuthCreds, jidNormalizedUser, normalizeMessageContent, proto, type AnyMessageContent, type AuthenticationState, type GroupMetadata, type GroupParticipant, type SignalDataTypeMap, type WAMessage } from "@whiskeysockets/baileys";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { pino } from "pino";
 import { ProxyAgent as UndiciProxyAgent } from "undici";
@@ -99,8 +99,8 @@ async function connect(options:Init):Promise<void>{
       await auth.saveMessage(item.key.id,item.message);
       let media:Record<string,unknown>|undefined;
       if(["image","video","audio","document"].includes(kind)){
-        try{const mediaRequestOptions=mediaProxyAgent?({dispatcher:mediaProxyAgent} as unknown as RequestInit):undefined;const bytes=await downloadMediaMessage(item,"buffer",{options:mediaRequestOptions},{logger,reuploadRequest:async(message)=>activeSocket.updateMediaMessage(message)});const mime=content.stickerMessage?.mimetype??content.imageMessage?.mimetype??content.videoMessage?.mimetype??content.audioMessage?.mimetype??content.documentMessage?.mimetype??(sticker?"image/webp":"application/octet-stream");const fileName=sticker?`sticker-${item.key.id}.webp`:content.documentMessage?.fileName??`${item.key.id}.${kind}`;const uploaded=await uploadInboundMedia(options,bytes,mime,fileName);media={uploadId:uploaded.mediaId,mimeType:mime,fileName,size:uploaded.size,sha256:uploaded.sha256,isSticker:sticker};}
-        catch(error){emit({type:"diagnostic",level:"warn",accountId:options.accountId,message:"media_upload_failed",detail:String(error)});}
+        try{const mediaRequestOptions=mediaProxyAgent?({dispatcher:mediaProxyAgent} as unknown as RequestInit):undefined;const bytes=await downloadInboundMessageMedia(item,mediaRequestOptions,logger,activeSocket);const mime=content.stickerMessage?.mimetype??content.imageMessage?.mimetype??content.videoMessage?.mimetype??content.audioMessage?.mimetype??content.documentMessage?.mimetype??(sticker?"image/webp":"application/octet-stream");const fileName=sticker?`sticker-${item.key.id}.webp`:content.documentMessage?.fileName??`${item.key.id}.${kind}`;const uploaded=await uploadInboundMedia(options,bytes,mime,fileName);media={uploadId:uploaded.mediaId,mimeType:mime,fileName,size:uploaded.size,sha256:uploaded.sha256,isSticker:sticker};}
+        catch(error){emit({type:"diagnostic",level:"warn",accountId:options.accountId,message:"inbound_media_capture_failed",detail:`${kind}:${String(error)}`.slice(0,500)});}
       }
       emit({type:"event",kind:"message",live:type==="notify",payload:{eventId:`message:${options.accountId}:${item.key.id}`,accountId:options.accountId,whatsappMessageId:item.key.id,chatJid:jid,rawChatJid:rawJid,chatType:isGroup?"group":"direct",senderJid,senderName:remotePushName,direction:item.key.fromMe?"out":"in",kind,text,adReferral,quotedWhatsappMessageId,quotedParticipantJid,occurredAt:messageTime(item.messageTimestamp),media}});
     }
@@ -126,6 +126,15 @@ function disconnectReason(error:unknown):string{
   const target=value?.data?.address&&value.data.port?` ${value.data.address}:${value.data.port}`:"";
   const message=value?.message??String(error??"connection_closed");
   return `${status?`[${status}] `:""}${code?`${code}: `:""}${message}${target}`.replace(/\s+/g," ").slice(0,300);
+}
+
+async function downloadInboundMessageMedia(item:WAMessage,options:RequestInit|undefined,logger:NonNullable<Parameters<typeof downloadMediaMessage>[3]>["logger"],activeSocket:ReturnType<typeof makeWASocket>):Promise<Buffer>{
+  let lastError:unknown;
+  for(let attempt=0;attempt<3;attempt++){
+    try{return await downloadMediaMessage(item,"buffer",{options},{logger,reuploadRequest:async(message)=>activeSocket.updateMediaMessage(message)});}
+    catch(error){lastError=error;if(attempt<2)await new Promise(resolve=>setTimeout(resolve,2_000*(attempt+1)));}
+  }
+  throw lastError;
 }
 
 async function uploadInboundMedia(options:Init,bytes:Buffer,mime:string,fileName:string):Promise<{mediaId:string;size:number;sha256:string}>{
