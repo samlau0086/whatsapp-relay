@@ -5,7 +5,7 @@ import {CONVERSATION_DATE_FILTERS,conversationCountsPath,conversationDateRange,c
 import {isPostgresUuid} from "../src/conversation-cursor.js";
 
 test("conversation date filters expose the requested tabs and default all range",()=>{
-  assert.deepEqual(CONVERSATION_DATE_FILTERS.map(item=>item.label),["全部","今天","昨天","3天","5天","7天","15天及以上","未回复"]);
+  assert.deepEqual(CONVERSATION_DATE_FILTERS.map(item=>item.label),["全部","今天","昨天","3天","5天","7天","15天及以上","未回复","发送失败"]);
   assert.deepEqual(conversationDateRange("all",new Date(2026,6,26,12)),{});
 });
 
@@ -29,6 +29,7 @@ test("conversation date ranges cross month and year boundaries using calendar ar
 test("conversation list path only adds date parameters for an active date filter",()=>{
   assert.equal(conversationListPath("all"),"/api/v1/conversations?limit=40");
   assert.equal(conversationListPath("unreplied"),"/api/v1/conversations?limit=40&unreplied=true");
+  assert.equal(conversationListPath("sendFailed"),"/api/v1/conversations?limit=40&sendFailed=true");
   const path=conversationListPath("today",new Date(2026,6,26,12));
   assert.match(path,/limit=40&lastMessageFrom=/);
   assert.match(path,/&lastMessageBefore=/);
@@ -61,6 +62,8 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.match(server,/invalid_conversation_date_range/);
   assert.match(server,/COALESCE\(c\.last_message_direction,m\.direction\)='in'/);
   assert.match(server,/invalid_unreplied_filter/);
+  assert.match(server,/invalid_send_failed_filter/);
+  assert.match(server,/failed_message\.direction='out' AND failed_message\.status='failed'/);
   assert.match(server,/invalid_conversation_filter/);
   assert.match(server,/invalid_cursor/);
   assert.match(server,/invalid_tag_filter/);
@@ -114,17 +117,17 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.doesNotMatch(countsRoute,/WITH base AS MATERIALIZED/);
   assert.match(countsRoute,/co\.entity_type='group'/);
   assert.match(countsRoute,/COUNT\(\*\) FILTER\(WHERE c\.status NOT IN \('closed','archived'\)\)::int all_count/);
-  assert.match(countsRoute,/COUNT\(\*\) FILTER\(WHERE c\.status<>'closed' AND c\.assigned_user_id=\$7::uuid\)::int mine/);
+  assert.match(countsRoute,/COUNT\(\*\) FILTER\(WHERE c\.status<>'closed' AND c\.assigned_user_id=\$8::uuid\)::int mine/);
   assert.match(countsRoute,/COUNT\(\*\) FILTER\(WHERE c\.status<>'closed' AND c\.assigned_user_id IS NULL\)::int unassigned/);
   assert.match(countsRoute,/COUNT\(\*\) FILTER\(WHERE c\.status<>'closed' AND c\.favorite\)::int favorite/);
   assert.match(countsRoute,/co\.entity_type='group' AND c\.status NOT IN \('closed','archived'\)/);
-  assert.match(countsRoute,/task\.conversation_id IS NOT NULL AND task\.assigned_user_id=\$7::uuid AND c\.status<>'closed'/);
-  assert.match(countsRoute,/task\.conversation_id IS NULL AND task\.contact_id IS NOT NULL AND task\.assigned_user_id=\$7::uuid AND c\.status<>'closed'/);
+  assert.match(countsRoute,/task\.conversation_id IS NOT NULL AND task\.assigned_user_id=\$8::uuid AND c\.status<>'closed'/);
+  assert.match(countsRoute,/task\.conversation_id IS NULL AND task\.contact_id IS NOT NULL AND task\.assigned_user_id=\$8::uuid AND c\.status<>'closed'/);
   assert.match(countsRoute,/linked\.status<>'closed'/);
   const primaryCountQuery=countsRoute.slice(countsRoute.indexOf('pool.query(`SELECT COUNT(*) FILTER'),countsRoute.indexOf('pool.query(`SELECT COUNT(*)::int groups'));
   assert.doesNotMatch(primaryCountQuery,/JOIN contacts/);
   assert.match(countsRoute,/c\.account_id=co\.account_id AND c\.contact_id=co\.id/);
-  assert.match(countsRoute,/co\.entity_type='group'[\s\S]*?countParams\.slice\(0,6\)/);
+  assert.match(countsRoute,/co\.entity_type='group'[\s\S]*?countParams\.slice\(0,7\)/);
   assert.match(countsRoute,/groups:Number\(groupRow\.groups\?\?0\)/);
   const summaryRoute=server.slice(server.indexOf('app.get("/api/v1/conversations/:id/summary"'),server.indexOf('app.get("/api/v1/conversations/:id/group"'));
   assert.match(summaryRoute,/filter==="groups"&&row\.conversation_type==="group"/);
@@ -172,6 +175,7 @@ test("conversation summaries, events, and startup runner are wired",async()=>{
   assert.match(migration,/REFERENCING NEW TABLE AS new_messages/);
   assert.match(migration,/relay_conversation_changes/);
   assert.match(migrator,/040_conversation_summaries_events\.sql/);
+  assert.match(migrator,/068_conversation_failed_message_filter\.sql/);
   assert.match(events,/\/api\/v1\/events\/ticket/);
   assert.match(events,/LISTEN/);
   assert.match(backfill,/conversations_summary_sort_idx ON conversations\(\(COALESCE\(last_message_at,created_at\)\) DESC,id DESC\)/);

@@ -1,4 +1,4 @@
-export type ConversationDateFilter="all"|"today"|"yesterday"|"day3"|"day5"|"day7"|"day15plus"|"unreplied";
+export type ConversationDateFilter="all"|"today"|"yesterday"|"day3"|"day5"|"day7"|"day15plus"|"unreplied"|"sendFailed";
 export type ConversationListFilter="all"|"groups"|"mine"|"unassigned"|"favorite"|"closed"|"archived"|"reminders"|"blocked";
 export type ConversationCustomerStage="new"|"considering"|"qualified"|"won"|"lost";
 export type ConversationLatestOrderStatus="none"|"any"|"quotation"|"pending_confirmation"|"pending_payment"|"paid"|"processing"|"shipped"|"completed"|"cancelled";
@@ -13,10 +13,11 @@ export const CONVERSATION_DATE_FILTERS:Array<{value:ConversationDateFilter;label
   {value:"day7",label:"7天"},
   {value:"day15plus",label:"15天及以上"},
   {value:"unreplied",label:"未回复"},
+  {value:"sendFailed",label:"发送失败"},
 ];
 
 export function conversationDateRange(filter:ConversationDateFilter,now=new Date()):{from?:string;before?:string}{
-  if(filter==="all"||filter==="unreplied")return{};
+  if(filter==="all"||filter==="unreplied"||filter==="sendFailed")return{};
   const today=new Date(now.getFullYear(),now.getMonth(),now.getDate());
   const tomorrow=new Date(today);tomorrow.setDate(today.getDate()+1);
   if(filter==="today")return{from:today.toISOString(),before:tomorrow.toISOString()};
@@ -40,6 +41,7 @@ export function conversationListPath(filter:ConversationDateFilter,now=new Date(
   if(options.latestOrderStatus)params.set("latestOrderStatus",options.latestOrderStatus);
   if(options.cursor)params.set("cursor",options.cursor);
   if(filter==="unreplied")params.set("unreplied","true");
+  if(filter==="sendFailed")params.set("sendFailed","true");
   const range=conversationDateRange(filter,now);
   if(range.from)params.set("lastMessageFrom",range.from);
   if(range.before)params.set("lastMessageBefore",range.before);
@@ -50,6 +52,7 @@ export function conversationCountsPath(filter:ConversationDateFilter,now=new Dat
   const params=new URLSearchParams();
   if(accountId)params.set("accountId",accountId);
   if(filter==="unreplied")params.set("unreplied","true");
+  if(filter==="sendFailed")params.set("sendFailed","true");
   const range=conversationDateRange(filter,now);
   if(range.from)params.set("lastMessageFrom",range.from);
   if(range.before)params.set("lastMessageBefore",range.before);
