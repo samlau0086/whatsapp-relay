@@ -328,6 +328,7 @@ test("API startup applies the latest product schema to persistent databases",asy
   assert.match(runner,/027_product_description\.sql/);
   assert.match(runner,/047_product_category_brand\.sql/);
   assert.match(runner,/062_product_internal_pricing\.sql/);
+  assert.match(runner,/070_product_gallery\.sql/);
 });
 
 test("products support internal tier pricing, supplier links, and private order-note snapshots",async()=>{
