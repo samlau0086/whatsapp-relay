@@ -1,0 +1,73 @@
+{
+  "name": "@relaydesk/windows-agent",
+  "version": "0.1.37",
+  "description": "RelayDesk local Windows executor for reliable WhatsApp account synchronization",
+  "author": "RelayDesk",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "npm run build && electron .",
+    "build": "node scripts/generate-icon.mjs && tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "start:docker": "node dist/docker-main.js",
+    "test:store": "npm run build && node --test test/store.test.mjs",
+    "test:preload": "npm run build && electron scripts/preload-smoke-main.mjs",
+    "start": "electron .",
+    "package:win": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "verify:package": "node scripts/verify-package.mjs"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "7.0.0-rc13",
+    "https-proxy-agent": "7.0.6",
+    "pino": "9.7.0",
+    "qrcode": "1.5.4",
+    "undici": "7.28.0",
+    "ws": "8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.30",
+    "@types/qrcode": "1.5.6",
+    "@types/ws": "8.18.1",
+    "electron": "43.1.0",
+    "electron-builder": "26.15.3",
+    "sharp": "0.35.3",
+    "typescript": "5.8.3"
+  },
+  "build": {
+    "appId": "com.relaydesk.agent",
+    "productName": "RelayDesk Agent",
+    "artifactName": "RelayDesk-Agent-${version}-${arch}.${ext}",
+    "asar": true,
+    "asarUnpack": [
+      "dist/account-worker.js"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "src/assets/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "installerIcon": "src/assets/icon.ico",
+      "uninstallerIcon": "src/assets/icon.ico",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true
+    }
+  }
+}
