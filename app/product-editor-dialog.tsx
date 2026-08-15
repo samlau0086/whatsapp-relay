@@ -27,6 +27,7 @@ type VariantDraft = { id: string; attributes: Record<string, string>; sku: strin
 type SupplierLink = { label: string; url: string; supplyPrice?: number };
 type SupplierLinkDraft = { id: string; label: string; url: string; supplyPrice: string };
 type Tag = { id: string; name: string; color: string };
+type GalleryImage = Pick<ProductImageAsset, "id" | "fileName">;
 type Product = {
   id: string;
   sku: string;
@@ -41,6 +42,7 @@ type Product = {
   shippingClass: string | null;
   imageMediaId: string | null;
   imageName: string;
+  galleryImages?: GalleryImage[];
   priceTiers: Tier[];
   supplierLinks: SupplierLink[];
   internalNote: string;
@@ -234,6 +236,7 @@ export function ProductEditorDialog({
       product?.imageMediaId ?? null,
     ),
     [imageName, setImageName] = useState(product?.imageName ?? ""),
+    [galleryImages, setGalleryImages] = useState<GalleryImage[]>(() => product?.galleryImages?.length ? product.galleryImages : product?.imageMediaId ? [{ id: product.imageMediaId, fileName: product.imageName }] : []),
     [variantDimensions, setVariantDimensions] = useState<VariantDimension[]>(() => {
       const names = [...new Set((product?.variants ?? []).flatMap((variant) => Object.keys(variant.attributes)))];
       return names.map((name) => ({ id: crypto.randomUUID(), name, values: [...new Set((product?.variants ?? []).map((variant) => variant.attributes[name]).filter(Boolean))].join(", ") }));
@@ -439,7 +442,8 @@ export function ProductEditorDialog({
         weightAmount:weightAmount===""?null:Number(weightAmount),
         weightUnit:weightAmount===""?null:weightUnit,
         shippingClassId:product?.shippingClassId&&!shippingClasses.some(item=>item.id===product.shippingClassId)?undefined:shippingClassId||null,
-        imageMediaId,
+        imageMediaId: galleryImages[0]?.id ?? null,
+        galleryMediaIds: galleryImages.map((image) => image.id),
         priceTiers: tiers.map((tier) => ({
           minQuantity: Number(tier.minQuantity),
           unitAmount: Number(tier.unitAmount),
@@ -479,8 +483,9 @@ export function ProductEditorDialog({
       setImagePickerOpen(false);
       return;
     }
-    setImageMediaId(asset.id);
-    setImageName(asset.fileName);
+    setGalleryImages((images) => images.some((image) => image.id === asset.id) || images.length >= 12 ? images : [...images, { id: asset.id, fileName: asset.fileName }]);
+    setImageMediaId((current) => current ?? asset.id);
+    setImageName((current) => current || asset.fileName);
     setImagePickerOpen(false);
   }
   function generateVariantCombinations() {
@@ -737,38 +742,9 @@ export function ProductEditorDialog({
               </select>
             </label>
           </div>
-          <label className="product-image-input">
-            产品图片 · 可选
-            <button type="button" onClick={() => setImagePickerOpen(true)}>
-              <UploadCloud size={14} />
-              {imageName || "从媒体与附件中选择"}
-            </button>
-          </label>
-          {imageMediaId && (
-            <div className="product-dialog-image-preview">
-              <MediaImagePreview
-                mediaId={imageMediaId}
-                alt={imageName || name || "产品图片预览"}
-                request={request}
-                onToken={onToken}
-                className="product-image"
-              />
-              <span title={imageName}>{imageName || "当前产品图片"}</span>
-            </div>
-          )}
-          {imageMediaId && (
-            <button
-              type="button"
-              className="product-image-remove"
-              onClick={() => {
-                setImageMediaId(null);
-                setImageName("");
-              }}
-            >
-              <Trash2 size={11} />
-              移除图片
-            </button>
-          )}
+          <label className="product-image-input">产品相册 · 可选（最多 12 张）</label>
+          {galleryImages.length > 0 && <div className="product-gallery-editor">{galleryImages.map((image, index) => <div className="product-gallery-item" key={image.id}><MediaImagePreview mediaId={image.id} alt={image.fileName || `${name || "产品"}图片 ${index + 1}`} request={request} onToken={onToken} className="product-image"/><span title={image.fileName}>{index === 0 ? `封面 · ${image.fileName || "未命名图片"}` : image.fileName || "未命名图片"}</span><button type="button" aria-label={`移除相册图片 ${index + 1}`} title="移除图片" onClick={() => setGalleryImages((images) => { const next = images.filter((item) => item.id !== image.id); setImageMediaId(next[0]?.id ?? null); setImageName(next[0]?.fileName ?? ""); return next; })}><Trash2 size={13}/></button></div>)}</div>}
+          <button type="button" className="product-gallery-add" onClick={() => setImagePickerOpen(true)} disabled={galleryImages.length >= 12}><UploadCloud size={14}/>{galleryImages.length ? "添加相册图片" : "从媒体与附件中添加图片"}</button>
           <section className="product-variant-editor">
             <button type="button" className="secondary-action variant-inherit-generate" onClick={generateVariantCombinations}><Plus size={13} />按父 SKU 和阶梯价生成组合</button>
             <header><span><b>产品变体</b><small>添加规格和值后自动生成组合，每个组合可设置独立 SKU、价格和图片。</small></span><button type="button" onClick={() => setVariantDimensions((items) => [...items, { id: crypto.randomUUID(), name: "", values: "" }])}><Plus size={13} />添加规格</button></header>

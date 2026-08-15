@@ -3,7 +3,7 @@ import { PDFDocument } from "pdf-lib";
 import { wrapLine } from "./order-image.js";
 import type { ProductCardTemplate } from "./product-card-template.js";
 
-export type ProductCardRenderProduct={name:string;sku:string;currency:string;priceTiers:Array<{minQuantity:number;unitAmount:number}>;variants?:Array<{attributes:Record<string,string>;sku:string;priceTiers:Array<{minQuantity:number;unitAmount:number}>;image?:Buffer}>;tags:Array<{name:string}>;image?:Buffer};
+export type ProductCardRenderProduct={name:string;sku:string;currency:string;priceTiers:Array<{minQuantity:number;unitAmount:number}>;variants?:Array<{attributes:Record<string,string>;sku:string;priceTiers:Array<{minQuantity:number;unitAmount:number}>;image?:Buffer}>;tags:Array<{name:string}>;image?:Buffer;gallery?:Buffer[]};
 const WIDTH=1080,PADDING=64,CONTENT_WIDTH=WIDTH-PADDING*2;
 const PDF_POINTS_PER_PIXEL=0.75;
 
@@ -49,6 +49,7 @@ export async function renderProductCardGridPdf(template:ProductCardTemplate,prod
 
 async function renderCard(template:ProductCardTemplate,product:ProductCardRenderProduct,showPrice:boolean):Promise<Buffer>{
   const imageData=product.image?(await sharp(product.image).rotate().resize(900,620,{fit:"cover"}).png().toBuffer()).toString("base64"):null;
+  const galleryData=await Promise.all((product.gallery??[]).slice(0,6).map(async image=>(await sharp(image).rotate().resize(420,300,{fit:"cover"}).png().toBuffer()).toString("base64")));
   const variantImageData=await Promise.all((product.variants??[]).map(async variant=>variant.image?(await sharp(variant.image).rotate().resize(180,180,{fit:"contain",background:"#FFFFFF"}).png().toBuffer()).toString("base64"):null));
   const fragments:string[]=[];let y=36;
   for(const block of template.blocks){
@@ -58,6 +59,13 @@ async function renderCard(template:ProductCardTemplate,product:ProductCardRender
       const height=block.imageSize==="small"?240:block.imageSize==="medium"?360:520,bg=block.backgroundColor??"#F2F6F4";
       fragments.push(`<rect x="${PADDING}" y="${y}" width="${CONTENT_WIDTH}" height="${height}" rx="22" fill="${escapeXml(bg)}"/>`);
       if(imageData){const fit=block.imageFit==="contain"?"xMidYMid meet":"xMidYMid slice";fragments.push(`<image x="${PADDING}" y="${y}" width="${CONTENT_WIDTH}" height="${height}" preserveAspectRatio="${fit}" href="data:image/png;base64,${imageData}"/>`);}else fragments.push(`<text x="540" y="${y+height/2+12}" text-anchor="middle" font-family="Noto Sans,Noto Sans CJK SC,sans-serif" font-size="30" fill="#829087">PRODUCT</text>`);
+      y+=height+18;continue;
+    }
+    if(block.type==="productGallery"){
+      if(!galleryData.length&&block.showPlaceholder===false)continue;
+      const cellHeight=block.imageSize==="small"?150:block.imageSize==="medium"?210:280,columns=galleryData.length>1?2:1,rows=Math.max(1,Math.ceil(Math.max(galleryData.length,1)/columns)),gap=12,height=rows*cellHeight+(rows-1)*gap,bg=block.backgroundColor??"#F2F6F4",fit=block.imageFit==="contain"?"xMidYMid meet":"xMidYMid slice",cellWidth=(CONTENT_WIDTH-(columns-1)*gap)/columns;
+      fragments.push(`<rect x="${PADDING}" y="${y}" width="${CONTENT_WIDTH}" height="${height}" rx="22" fill="${escapeXml(bg)}"/>`);
+      if(galleryData.length)galleryData.forEach((data,index)=>{const left=PADDING+(index%columns)*(cellWidth+gap),top=y+Math.floor(index/columns)*(cellHeight+gap);fragments.push(`<image x="${left}" y="${top}" width="${cellWidth}" height="${cellHeight}" preserveAspectRatio="${fit}" href="data:image/png;base64,${data}"/>`);});else fragments.push(`<text x="540" y="${y+height/2+12}" text-anchor="middle" font-family="Noto Sans,Noto Sans CJK SC,sans-serif" font-size="30" fill="#829087">GALLERY</text>`);
       y+=height+18;continue;
     }
     if(block.type==="divider"){fragments.push(`<line x1="${PADDING}" y1="${y+10}" x2="${WIDTH-PADDING}" y2="${y+10}" stroke="#DCE7E1" stroke-width="3"/>`);y+=34;continue;}
