@@ -10,7 +10,7 @@ import { centralMediaAuthorizationError, describeSendError, isCentralMediaAuthor
 type Init = {type:"init";accountId:string;dataDir:string;masterKey:string;baseUrl:string;credential:string;proxyUrl?:string};
 type Command = {type:"command";sequence:number;commandId:string;command:string;payload:Record<string,unknown>};
 type Control = {type:"shutdown";logout?:boolean}|{type:"reconnect"};
-let socket:ReturnType<typeof makeWASocket>|undefined;let init:Init|undefined;let sendChain=Promise.resolve();let reconnectAttempt=0;let reconnectTimer:NodeJS.Timeout|undefined;let connectionOpen=false;let connectionGeneration=0;let mediaProxyAgent:UndiciProxyAgent|undefined;let messageCache:Awaited<ReturnType<typeof encryptedAuthState>>|undefined;const groupRefreshTimers=new Map<string,NodeJS.Timeout>();
+let socket:ReturnType<typeof makeWASocket>|undefined;let init:Init|undefined;let sendChain=Promise.resolve();let reconnectAttempt=0;let reconnectTimer:NodeJS.Timeout|undefined;let connectionOpen=false;let connectionGeneration=0;let mediaProxyAgent:UndiciProxyAgent|undefined;let messageCache:Awaited<ReturnType<typeof encryptedAuthState>>|undefined;const groupRefreshTimers=new Map<string,NodeJS.Timeout>();const chatEphemeralExpirations=new Map<string,number>();const chatJidAliases=new Map<string,string>();
 const emit=(message:unknown):void=>{process.send?.(message);};
 const emitIdentity=(accountId:string,lid:string,pn:string,displayName?:string):void=>{const lidJid=jidNormalizedUser(lid),phoneJid=jidNormalizedUser(pn);if(!lidJid.endsWith("@lid")||!phoneJid.endsWith("@s.whatsapp.net"))return;emit({type:"event",kind:"contact_identity",payload:{eventId:`identity:${accountId}:${lidJid}:${phoneJid}`,accountId,lidJid,phoneJid,displayName,at:new Date().toISOString()}});};
 setInterval(()=>emit({type:"worker_heartbeat",at:new Date().toISOString()}),10_000).unref();
@@ -34,6 +34,7 @@ async function shutdown(logout:boolean):Promise<void>{
 async function connect(options:Init):Promise<void>{
   const generation=++connectionGeneration;
   for(const timer of groupRefreshTimers.values())clearTimeout(timer);groupRefreshTimers.clear();
+  chatEphemeralExpirations.clear();chatJidAliases.clear();
   if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=undefined;}
   const previousSocket=socket;socket=undefined;connectionOpen=false;
   try{previousSocket?.end(undefined);}catch{}
@@ -42,7 +43,7 @@ async function connect(options:Init):Promise<void>{
   const auth=await encryptedAuthState(join(options.dataDir,options.accountId),Buffer.from(options.masterKey,"hex"));
   if(generation!==connectionGeneration)return;
   messageCache=auth;
-  for(const mapping of await auth.listLidMappings())emitIdentity(options.accountId,mapping.lid,mapping.pn);
+  for(const mapping of await auth.listLidMappings()){rememberChatJidAlias(mapping.lid,mapping.pn);emitIdentity(options.accountId,mapping.lid,mapping.pn);}
   const proxyAgent=options.proxyUrl?new HttpsProxyAgent(options.proxyUrl):undefined;
   // The version lookup is hosted on GitHub, which may be unreachable directly
   // on networks where WhatsApp itself also requires the configured proxy. If it
@@ -56,8 +57,10 @@ async function connect(options:Init):Promise<void>{
   const activeSocket=makeWASocket({version,auth:auth.state,logger,browser:Browsers.windows("RelayDesk Agent"),connectTimeoutMs:60_000,syncFullHistory:false,markOnlineOnConnect:false,generateHighQualityLinkPreview:false,agent:proxyAgent,fetchAgent:proxyAgent,getMessage:async key=>key.id?auth.getMessage(key.id):undefined});
   socket=activeSocket;
   activeSocket.ev.on("creds.update",auth.saveCreds);
-  activeSocket.ev.on("lid-mapping.update",({lid,pn})=>{if(generation!==connectionGeneration)return;void auth.saveLidMapping(lid,pn);emitIdentity(options.accountId,lid,pn);});
-  activeSocket.ev.on("messaging-history.set",({lidPnMappings})=>{if(generation!==connectionGeneration)return;for(const mapping of lidPnMappings??[])emitIdentity(options.accountId,mapping.lid,mapping.pn);});
+  activeSocket.ev.on("lid-mapping.update",({lid,pn})=>{if(generation!==connectionGeneration)return;rememberChatJidAlias(lid,pn);void auth.saveLidMapping(lid,pn);emitIdentity(options.accountId,lid,pn);});
+  activeSocket.ev.on("messaging-history.set",({chats,lidPnMappings})=>{if(generation!==connectionGeneration)return;rememberChatEphemeralExpirations(chats);for(const mapping of lidPnMappings??[]){rememberChatJidAlias(mapping.lid,mapping.pn);emitIdentity(options.accountId,mapping.lid,mapping.pn);}});
+  activeSocket.ev.on("chats.upsert",chats=>{if(generation===connectionGeneration)rememberChatEphemeralExpirations(chats);});
+  activeSocket.ev.on("chats.update",chats=>{if(generation===connectionGeneration)rememberChatEphemeralExpirations(chats);});
   activeSocket.ev.on("connection.update",({connection,lastDisconnect,qr})=>{
     if(generation!==connectionGeneration)return;
     if(qr)emit({type:"qr",accountId:options.accountId,qr});
@@ -128,6 +131,22 @@ function disconnectReason(error:unknown):string{
   return `${status?`[${status}] `:""}${code?`${code}: `:""}${message}${target}`.replace(/\s+/g," ").slice(0,300);
 }
 
+function rememberChatEphemeralExpirations(chats:ReadonlyArray<{id?:string|null;ephemeralExpiration?:number|null}>):void{
+  for(const chat of chats){
+    const jid=jidNormalizedUser(chat.id??undefined);if(!jid||chat.ephemeralExpiration===undefined)continue;
+    const expiration=Number(chat.ephemeralExpiration??0);
+    const alias=chatJidAliases.get(jid);
+    if(Number.isFinite(expiration)&&expiration>0){chatEphemeralExpirations.set(jid,expiration);if(alias)chatEphemeralExpirations.set(alias,expiration);}else{chatEphemeralExpirations.delete(jid);if(alias)chatEphemeralExpirations.delete(alias);}
+  }
+}
+
+function rememberChatJidAlias(first:string,second:string):void{
+  const left=jidNormalizedUser(first),right=jidNormalizedUser(second);if(!left||!right)return;
+  chatJidAliases.set(left,right);chatJidAliases.set(right,left);
+  const expiration=chatEphemeralExpirations.get(left)??chatEphemeralExpirations.get(right);
+  if(expiration){chatEphemeralExpirations.set(left,expiration);chatEphemeralExpirations.set(right,expiration);}
+}
+
 async function downloadInboundMessageMedia(item:WAMessage,options:RequestInit|undefined,logger:NonNullable<Parameters<typeof downloadMediaMessage>[3]>["logger"],activeSocket:ReturnType<typeof makeWASocket>):Promise<Buffer>{
   let lastError:unknown;
   for(let attempt=0;attempt<3;attempt++){
@@ -195,7 +214,9 @@ async function execute(command:Command):Promise<void>{
     const quotedMessage=quotedId?(await messageCache?.getMessage(quotedId))??{conversation:String(command.payload.quotedText??"[message]")}:undefined;
     const quotedParticipantJid=String(command.payload.quotedParticipantJid??"");
     const quoted=quotedMessage?{key:{remoteJid:toJid,id:quotedId,fromMe:command.payload.quotedDirection==="out",participant:quotedParticipantJid||undefined},message:quotedMessage}:undefined;
-    const sent=await waitForSendConfirmation(socket.sendMessage(toJid,content,quoted?{quoted}:undefined),30_000);if(sent?.key.id&&sent.message)await messageCache?.saveMessage(sent.key.id,sent.message);emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",whatsappMessageId:sent?.key.id,completedAt:new Date().toISOString()});
+    const ephemeralExpiration=chatEphemeralExpirations.get(jidNormalizedUser(toJid));
+    const sendOptions={...(quoted?{quoted}:{}),...(ephemeralExpiration?{ephemeralExpiration}:{})};
+    const sent=await waitForSendConfirmation(socket.sendMessage(toJid,content,sendOptions),30_000);if(sent?.key.id&&sent.message)await messageCache?.saveMessage(sent.key.id,sent.message);emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",whatsappMessageId:sent?.key.id,completedAt:new Date().toISOString()});
   }catch(error){const errorMessage=describeSendError(error);if(isSendConfirmationTimeout(error)){const options=init;connectionOpen=false;emit({type:"diagnostic",level:"error",accountId:options.accountId,message:"send_confirmation_timeout_reconnecting",detail:errorMessage});emit({type:"status",accountId:options.accountId,status:"offline",reason:errorMessage});emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"uncertain",errorCode:"send_confirmation_timeout",errorMessage:`${errorMessage}; connection is being rebuilt`,completedAt:new Date().toISOString()});void connect(options);return;}if(isCentralMediaAuthorizationError(error)){emit({type:"diagnostic",level:"warn",accountId:init.accountId,message:"central_media_authorization_pending",detail:errorMessage});emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"deferred",errorCode:"central_media_authorization_pending",errorMessage:"Center media authorization is temporarily unavailable; command remains queued",completedAt:new Date().toISOString()});return;}if(isTransientSendConnectionError(error)){const options=init;connectionOpen=false;emit({type:"diagnostic",level:"warn",accountId:options.accountId,message:"send_deferred_after_transient_error",detail:errorMessage});emit({type:"status",accountId:options.accountId,status:"offline",reason:errorMessage});emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"deferred",errorCode:"transient_send_error",errorMessage:`Temporary send failure (${errorMessage}); command remains queued while the connection is rebuilt`,completedAt:new Date().toISOString()});void connect(options);return;}emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"failed",errorCode:"whatsapp_rejected",errorMessage,completedAt:new Date().toISOString()});}
 }
 

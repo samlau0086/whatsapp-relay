@@ -20,8 +20,15 @@ test("manual reply suggestion combines conversation context and assigned knowled
   assert.match(engine, /translateReviewAnalysisToChinese/);
   assert.match(engine, /Simplified Chinese only/);
   assert.match(engine, /This is a rethink request/);
+  assert.match(engine, /buildReplyTimingContext/);
+  assert.match(engine, /hoursSinceLastContact/);
+  assert.match(engine, /Use replyTiming as authoritative timing context/);
+  assert.match(engine, /reply_suggestion_instructions/);
   assert.match(server, /\/api\/v1\/conversations\/:id\/reply-suggestion/);
+  assert.match(server, /reply_suggestion_instructions/);
   assert.match(ui, /回复建议 Agent/);
+  assert.match(ui, /自动考虑距上次联系的时间/);
+  assert.match(ui, /专属策略（可选）/);
   assert.match(ui, /Agent 分析说明/);
   assert.match(ui, /重新思考/);
   assert.match(ui, /JSON\.stringify\(\{previousReply\}\)/);

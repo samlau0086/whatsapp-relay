@@ -118,6 +118,17 @@ test("inbound WhatsApp replies are normalized before entering the durable outbox
   assert.match(client,/cursor: event\.cursor/);
 });
 
+test("outbound messages inherit each chat's disappearing-message duration",()=>{
+  const worker=readFileSync(new URL("../dist/account-worker.js",import.meta.url),"utf8");
+  assert.match(worker,/messaging-history\.set".*chats.*lidPnMappings.*rememberChatEphemeralExpirations/s);
+  assert.match(worker,/chats\.upsert.*rememberChatEphemeralExpirations/s);
+  assert.match(worker,/chats\.update.*rememberChatEphemeralExpirations/s);
+  assert.match(worker,/chat\.ephemeralExpiration === undefined/);
+  assert.match(worker,/rememberChatJidAlias/);
+  assert.match(worker,/ephemeralExpiration\s*=\s*chatEphemeralExpirations\.get\(jidNormalizedUser\(toJid\)\)/);
+  assert.match(worker,/socket\.sendMessage\(toJid,\s*content,\s*sendOptions\)/);
+});
+
 test("status publishing uses the stories JID, a recipient snapshot, and broadcast mode",()=>{
   const worker=readFileSync(new URL("../dist/account-worker.js",import.meta.url),"utf8");
   const client=readFileSync(new URL("../dist/central-client.js",import.meta.url),"utf8");

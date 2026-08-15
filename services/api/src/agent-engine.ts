@@ -163,6 +163,53 @@ export function isReplySourceCurrent(
   );
 }
 
+type ReplyTimingMessage = {
+  direction?: unknown;
+  occurred_at?: unknown;
+};
+
+export function buildReplyTimingContext(
+  messages: ReplyTimingMessage[],
+  now = new Date(),
+): {
+  generatedAt: string;
+  lastContactAt: string | null;
+  hoursSinceLastContact: number | null;
+  lastCustomerMessageAt: string | null;
+  hoursSinceLastCustomerMessage: number | null;
+  lastBusinessMessageAt: string | null;
+  hoursSinceLastBusinessMessage: number | null;
+} {
+  const validDate = (value: unknown): Date | null => {
+    const date = value instanceof Date ? value : new Date(String(value ?? ""));
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+  const latest = (direction?: "in" | "out"): Date | null => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (direction && messages[index]?.direction !== direction) continue;
+      const date = validDate(messages[index]?.occurred_at);
+      if (date) return date;
+    }
+    return null;
+  };
+  const elapsedHours = (date: Date | null): number | null =>
+    date
+      ? Math.round(Math.max(0, now.getTime() - date.getTime()) / 360_000) / 10
+      : null;
+  const lastContact = latest();
+  const lastCustomerMessage = latest("in");
+  const lastBusinessMessage = latest("out");
+  return {
+    generatedAt: now.toISOString(),
+    lastContactAt: lastContact?.toISOString() ?? null,
+    hoursSinceLastContact: elapsedHours(lastContact),
+    lastCustomerMessageAt: lastCustomerMessage?.toISOString() ?? null,
+    hoursSinceLastCustomerMessage: elapsedHours(lastCustomerMessage),
+    lastBusinessMessageAt: lastBusinessMessage?.toISOString() ?? null,
+    hoursSinceLastBusinessMessage: elapsedHours(lastBusinessMessage),
+  };
+}
+
 export function groundOrderNumberReply(
   decision: AgentDecision,
   latestCustomerText: string,
@@ -910,7 +957,9 @@ export async function generateSalesReplySuggestion(
             co.alias,co.display_name,co.first_name,co.middle_name,co.last_name,co.note,co.preferred_language,co.timezone,
             co.birthday_month,co.birthday_day,co.birthday_year,
             COALESCE(s.persona,'You are a helpful, concise relationship assistant.') persona,
-            COALESCE(s.reply_language,'auto') reply_language,COALESCE(mem.summary,'') summary,
+            COALESCE(s.reply_language,'auto') reply_language,
+            COALESCE(s.reply_suggestion_instructions,'') reply_suggestion_instructions,
+            COALESCE(mem.summary,'') summary,
             COALESCE((SELECT json_agg(t.name ORDER BY lower(t.name)) FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id),'[]'::json) tags
      FROM conversations c
      JOIN contacts co ON co.id=c.contact_id
@@ -937,6 +986,7 @@ export async function generateSalesReplySuggestion(
   ]);
   const ordered = messages.rows.reverse();
   if (!ordered.length) throw new Error("conversation_has_no_messages");
+  const timingContext = buildReplyTimingContext(ordered);
   const latestInbound = ordered
     .filter((item) => item.direction === "in")
     .at(-1) ?? null;
@@ -995,6 +1045,8 @@ export async function generateSalesReplySuggestion(
       messages: ordered,
       chunks,
       customerProfile,
+      timingContext,
+      suggestionInstructions: String(cfg.reply_suggestion_instructions ?? ""),
       previousReply: previousReply.trim().slice(0, 8_000),
     });
     if (!decision.reply.trim()) throw new Error("agent_provider_empty_suggestion");
@@ -1020,6 +1072,7 @@ export async function generateSalesReplySuggestion(
           : "",
         facts.rowCount || cfg.summary ? "客户记忆" : "",
         ordered.length ? "聊天记录" : "",
+        timingContext.lastContactAt ? "联系间隔" : "",
         orders.rowCount ? "订单记录" : "",
         chunks.length ? "知识库" : "",
       ].filter(Boolean),
@@ -1126,6 +1179,8 @@ async function generateDecision(
     orders: unknown[];
     messages: unknown[];
     customerProfile?: unknown;
+    timingContext?: unknown;
+    suggestionInstructions?: string;
     previousReply?: string;
     chunks: Array<{
       id: string;
@@ -1137,7 +1192,7 @@ async function generateDecision(
 ): Promise<AgentDecision> {
   const salesGuidance =
     input.kind === "sales_suggestion"
-      ? "You are drafting a sales-assist suggestion for a human agent. Personalize naturally with the supplied customer profile when relevant, including the known customer name; never awkwardly repeat the name or expose internal notes. Move the conversation toward the next reasonable buying step by addressing the customer's current need, reducing a real objection, and ending with one clear, low-pressure call to action. Prefer a useful question when intent, quantity, budget, timing, or product fit is unclear. Do not use fake urgency, pressure, unsupported discounts, or claims not grounded in the supplied context. For this task, reason must be a concise Simplified Chinese review note of 2-4 sentences explaining which customer, conversation, order, or knowledge signals shaped the reply and why the proposed next step is appropriate. Give an auditable decision summary, not hidden chain-of-thought."
+      ? `You are drafting a sales-assist suggestion for a human agent. Personalize naturally with the supplied customer profile when relevant, including the known customer name; never awkwardly repeat the name or expose internal notes. Move the conversation toward the next reasonable buying step by addressing the customer's current need, reducing a real objection, and ending with one clear, low-pressure call to action. Prefer a useful question when intent, quantity, budget, timing, or product fit is unclear. Use replyTiming as authoritative timing context. Consider the elapsed time since the latest contact, customer message, and business message: continue naturally after a short gap, but after a long gap briefly re-establish context and avoid wording that assumes the prior exchange just happened. Never state an exact elapsed duration unless it is useful and natural. Do not use fake urgency, pressure, unsupported discounts, or claims not grounded in the supplied context. For this task, reason must be a concise Simplified Chinese review note of 2-4 sentences explaining which customer, timing, conversation, order, or knowledge signals shaped the reply and why the proposed next step is appropriate. Give an auditable decision summary, not hidden chain-of-thought.${input.suggestionInstructions?.trim() ? ` Follow these workspace-specific reply suggestion instructions unless they conflict with safety or supplied facts: ${input.suggestionInstructions.trim().slice(0, 4_000)}` : ""}`
       : "";
   const autonomy =
     input.mode === "full"
@@ -1206,6 +1261,7 @@ async function generateDecision(
               : "Answer latestCustomerMessage only",
           latestCustomerMessage: input.sourceMessage,
           customerProfile: input.customerProfile ?? null,
+          replyTiming: input.timingContext ?? null,
           previousReply: input.previousReply || null,
           memorySummary: input.summary,
           facts: input.facts,

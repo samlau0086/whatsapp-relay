@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { agentRunKind, captionOrderDetailsImage, chunkText, compactMemoryMessages, detectOrderDetailsLanguage, groundOrderDetailsImageReply, groundOrderNumberReply, isConversationAgentActive, isConversationJobEligible, isPredominantlyChinese, isReplySourceCurrent, isWithinBusinessHours, passesAutoReplyGate, resolveOrderDetailsImage, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
+import { agentRunKind, buildReplyTimingContext, captionOrderDetailsImage, chunkText, compactMemoryMessages, detectOrderDetailsLanguage, groundOrderDetailsImageReply, groundOrderNumberReply, isConversationAgentActive, isConversationJobEligible, isPredominantlyChinese, isReplySourceCurrent, isWithinBusinessHours, passesAutoReplyGate, resolveOrderDetailsImage, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
 
 test("chunkText creates bounded overlapping chunks",()=>{
   const input=("A paragraph with useful knowledge. ").repeat(120);
@@ -65,6 +65,16 @@ test("reply suggestion analysis requires predominantly Chinese text",()=>{
   assert.equal(isPredominantlyChinese("客户已经确认了产品兴趣，建议下一步询问数量并推进报价。"),true);
   assert.equal(isPredominantlyChinese("The customer is interested and should be asked for order details."),false);
   assert.equal(isPredominantlyChinese("客户 ok, next step is order details and confirmation"),false);
+});
+
+test("reply suggestions receive explicit elapsed contact timing",()=>{
+  const timing=buildReplyTimingContext([
+    {direction:"in",occurred_at:"2026-08-10T08:00:00.000Z"},
+    {direction:"out",occurred_at:"2026-08-10T10:00:00.000Z"},
+  ],new Date("2026-08-11T10:30:00.000Z"));
+  assert.equal(timing.hoursSinceLastContact,24.5);
+  assert.equal(timing.hoursSinceLastCustomerMessage,26.5);
+  assert.equal(timing.hoursSinceLastBusinessMessage,24.5);
 });
 
 test("late reply jobs cannot answer a newer customer message",()=>{
