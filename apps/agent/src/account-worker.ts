@@ -145,9 +145,20 @@ async function uploadInboundMedia(options:Init,bytes:Buffer,mime:string,fileName
   throw lastError;
 }
 
+async function uploadContactAvatar(options:Init,contactId:string,bytes:Buffer,mime:string):Promise<void>{
+  const form=new FormData();form.append("file",new Blob([bytes],{type:mime}),"avatar");const response=await fetch(new URL(`/agent/contacts/${contactId}/avatar?accountId=${encodeURIComponent(options.accountId)}`,options.baseUrl),{method:"POST",headers:{authorization:`Bearer ${options.credential}`},body:form,signal:AbortSignal.timeout(120_000)});if(!response.ok)throw new Error(`Avatar upload failed (HTTP ${response.status}: ${(await response.text()).slice(0,160)})`);
+}
+
 async function execute(command:Command):Promise<void>{
   if(!socket||!init||!connectionOpen){emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"deferred",errorCode:"account_offline",errorMessage:"WhatsApp account is offline; command remains queued",completedAt:new Date().toISOString()});return;}
   try{
+    if(command.command==="sync_contact_avatar"){
+      const contactId=String(command.payload.contactId??""),toJid=String(command.payload.toJid??"");
+      if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(contactId)||!/^\d{7,15}@s\.whatsapp\.net$/.test(toJid))throw new Error("Invalid contact avatar request");
+      const url=await socket.profilePictureUrl(toJid,"image").catch(()=>undefined);if(!url){emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",completedAt:new Date().toISOString()});return;}
+      const avatarRequestOptions=mediaProxyAgent?({dispatcher:mediaProxyAgent} as unknown as RequestInit):undefined;const response=await fetch(url,{...avatarRequestOptions,signal:AbortSignal.timeout(30_000)});if(!response.ok)throw new Error(`Avatar download failed (HTTP ${response.status})`);const mime=(response.headers.get("content-type")??"").split(";",1)[0].toLowerCase();if(!["image/jpeg","image/png","image/webp"].includes(mime))throw new Error("Unsupported avatar image type");const length=Number(response.headers.get("content-length")??0);if(length>5*1024*1024)throw new Error("Avatar image is too large");const bytes=Buffer.from(await response.arrayBuffer());if(bytes.length>5*1024*1024)throw new Error("Avatar image is too large");
+      await uploadContactAvatar(init,contactId,bytes,mime);emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",completedAt:new Date().toISOString()});return;
+    }
     if(command.command==="create_group"){
       const subject=String(command.payload.subject??"").trim().slice(0,100);
       const participants=Array.isArray(command.payload.participantJids)?[...new Set(command.payload.participantJids.map(String).filter(jid=>/^\d{7,15}@s\.whatsapp\.net$/.test(jid)))]:[];

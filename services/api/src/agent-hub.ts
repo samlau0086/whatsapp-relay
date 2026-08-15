@@ -192,8 +192,8 @@ export async function ingestNormalizedMessage(client: import("pg").PoolClient, p
   if(String(payload.kind??"text")==="text"&&!payload.text&&!payload.media&&!payload.adReferral)return;
   const accountId = String(payload.accountId);
   const account=source.transport==="cloud"
-    ?await client.query("SELECT id FROM channel_accounts WHERE id=$1 AND platform='whatsapp' AND transport='cloud'",[accountId])
-    :await client.query("SELECT id FROM channel_accounts WHERE id=$1 AND platform='whatsapp' AND agent_id=$2 AND transport='web'",[accountId,source.agentId]);
+    ?await client.query("SELECT id,agent_id,'[]'::jsonb capabilities FROM channel_accounts WHERE id=$1 AND platform='whatsapp' AND transport='cloud'",[accountId])
+    :await client.query("SELECT a.id,a.agent_id,COALESCE(g.capabilities,'[]'::jsonb) capabilities FROM channel_accounts a JOIN agents g ON g.id=a.agent_id WHERE a.id=$1 AND a.platform='whatsapp' AND a.agent_id=$2 AND a.transport='web'",[accountId,source.agentId]);
   if(!account.rowCount)throw new Error("message_account_not_owned_by_agent");
   if(chatJid.endsWith("@g.us")){
     if(source.transport==="cloud")return;
@@ -219,7 +219,7 @@ export async function ingestNormalizedMessage(client: import("pg").PoolClient, p
   const rawChatJid=String(payload.rawChatJid??"");
   const remoteDisplayName=payload.direction==="in"?String(payload.senderName??"").trim():"";
   const mergedContactId=source.agentId&&phone&&rawChatJid.endsWith("@lid")?await mergeContactIdentity(client,source.agentId,{accountId,lidJid:rawChatJid,phoneJid:chatJid,displayName:remoteDisplayName}):null;
-  const contact = mergedContactId?await client.query("UPDATE contacts SET display_name=COALESCE(NULLIF($2,''),display_name),last_seen_at=now() WHERE id=$1 RETURNING id",[mergedContactId,remoteDisplayName]):await client.query("INSERT INTO contacts(account_id,provider_user_id,phone_e164,display_name,last_seen_at) VALUES($1,$2,$3,$4,now()) ON CONFLICT(account_id,provider_user_id) DO UPDATE SET phone_e164=COALESCE(contacts.phone_e164,EXCLUDED.phone_e164),display_name=COALESCE(NULLIF($5,''),contacts.display_name),last_seen_at=now() RETURNING id", [accountId,chatJid,phone,remoteDisplayName||phone||chatJid.split("@")[0],remoteDisplayName]);
+  const contact = mergedContactId?await client.query("UPDATE contacts SET display_name=COALESCE(NULLIF($2,''),display_name),last_seen_at=now() WHERE id=$1 RETURNING id,avatar_url",[mergedContactId,remoteDisplayName]):await client.query("INSERT INTO contacts(account_id,provider_user_id,phone_e164,display_name,last_seen_at) VALUES($1,$2,$3,$4,now()) ON CONFLICT(account_id,provider_user_id) DO UPDATE SET phone_e164=COALESCE(contacts.phone_e164,EXCLUDED.phone_e164),display_name=COALESCE(NULLIF($5,''),contacts.display_name),last_seen_at=now() RETURNING id,avatar_url", [accountId,chatJid,phone,remoteDisplayName||phone||chatJid.split("@")[0],remoteDisplayName]);
   const conversation = await client.query("INSERT INTO conversations(account_id,contact_id,unread_count,service_window_expires_at) VALUES($1,$2,CASE WHEN $3='in' THEN 1 ELSE 0 END,CASE WHEN $3='in' AND $4='cloud' THEN $5::timestamptz+interval '24 hours' END) ON CONFLICT(account_id,contact_id) DO UPDATE SET unread_count=conversations.unread_count+CASE WHEN $3='in' THEN 1 ELSE 0 END,status='open',service_window_expires_at=CASE WHEN $3='in' AND $4='cloud' THEN GREATEST(conversations.service_window_expires_at,EXCLUDED.service_window_expires_at) ELSE conversations.service_window_expires_at END RETURNING id", [accountId,contact.rows[0].id,payload.direction,source.transport??"web",payload.occurredAt]);
   const media=payload.media as {uploadId?:string}|undefined;
   const providerMetadata={...(payload.quotedWhatsappMessageId?{quotedWhatsappMessageId:payload.quotedWhatsappMessageId}:{}),...(payload.adReferral&&typeof payload.adReferral==="object"?{adReferral:payload.adReferral}:{})};
@@ -228,6 +228,8 @@ export async function ingestNormalizedMessage(client: import("pg").PoolClient, p
   if (message.rowCount){
     await client.query("UPDATE messages SET quoted_message_id=$1 WHERE account_id=$2 AND conversation_id=$3 AND quoted_message_id IS NULL AND provider_payload->>'quotedWhatsappMessageId'=$4",[message.rows[0].id,accountId,conversation.rows[0].id,payload.whatsappMessageId]);
     await createWebhookEvent(client,"message.received",message.rows[0].id,{ ...payload,platform:"whatsapp",providerMessageId:payload.whatsappMessageId,platformMessageId:message.rows[0].id,conversationId:conversation.rows[0].id });
+    const capabilities=Array.isArray(account.rows[0].capabilities)?account.rows[0].capabilities.map(String):[];
+    if(payload.direction==="in"&&!contact.rows[0].avatar_url&&source.agentId&&capabilities.includes("contact_avatar_sync_v1"))await client.query("INSERT INTO outbound_commands(agent_id,account_id,command,payload) SELECT $1,$2,'sync_contact_avatar',$3::jsonb WHERE NOT EXISTS(SELECT 1 FROM outbound_commands WHERE account_id=$2 AND command='sync_contact_avatar' AND payload->>'contactId'=$4 AND state IN ('pending','dispatched'))",[source.agentId,accountId,JSON.stringify({contactId:String(contact.rows[0].id),toJid:chatJid}),String(contact.rows[0].id)]);
     if(payload.direction==="in"&&(payload.kind==="text"||payload.kind==="audio"))await enqueueInboundAgentWork(client,conversation.rows[0].id,message.rows[0].id);
   }
 }
