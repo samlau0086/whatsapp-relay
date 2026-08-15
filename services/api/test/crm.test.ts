@@ -197,6 +197,20 @@ test("contact preferred language is persisted and exposed to the detail sidebar"
   assert.match(inbox,/languageShortCode\(details\.contact\.preferredLanguage\)/);
 });
 
+test("contact blocking is available from conversation and contact workflows",async()=>{
+  const [server,inbox]=await Promise.all([
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+  ]);
+  assert.match(server,/a\.platform,a\.transport,co\.provider_user_id/);
+  assert.match(server,/transport:String\(row\.transport\?\?"web"\)/);
+  assert.match(inbox,/function ConversationContextMenu/);
+  assert.match(inbox,/async function toggleContactBlock/);
+  assert.match(inbox,/async function toggleBlock\(contact:ContactProfile\)/);
+  assert.match(inbox,/contact-profile-edit contact-block-button/);
+  assert.match(inbox,/contact\.transport==="web"/);
+});
+
 test("contact avatars reuse the account media picker",async()=>{
   const [inbox,mediaDialog]=await Promise.all([
     readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
