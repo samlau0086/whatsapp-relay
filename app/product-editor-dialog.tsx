@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight, Check, Pencil, Plus, ShoppingBag, Trash2, UploadCloud, X } from "lucide-react";
+import { ArrowUpRight, Check, Copy, Pencil, Plus, ShoppingBag, Trash2, UploadCloud, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { confirmAction } from "./confirmation-ui";
 import {
@@ -494,6 +494,21 @@ export function ProductEditorDialog({
       return { id: crypto.randomUUID(), attributes, sku: [sku.trim(), suffix].filter(Boolean).join("-"), priceTiers: parentTiers.map((tier) => ({ ...tier, id: crypto.randomUUID() })), imageMediaId: null, imageName: "" };
     }));
   }
+  function syncVariantTiersFromParent(variantIndex: number) {
+    setVariantRows((rows) =>
+      rows.map((row, index) =>
+        index === variantIndex
+          ? {
+              ...row,
+              priceTiers: tiers.map((tier) => ({
+                ...tier,
+                id: crypto.randomUUID(),
+              })),
+            }
+          : row,
+      ),
+    );
+  }
   return (
     <>
       <div
@@ -764,6 +779,7 @@ export function ProductEditorDialog({
                 <header>
                   <span>{Object.entries(variant.attributes).map(([key, value]) => `${key}: ${value}`).join(" / ")}</span>
                   <input value={variant.sku} placeholder="变体 SKU" onChange={(event) => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, sku: event.target.value } : row))} />
+                  <button type="button" className="variant-sync-tiers" title="用父体当前的数量档位、报价、成本和利润率覆盖此变体" onClick={() => syncVariantTiersFromParent(index)}><Copy size={13} />从父体同步</button>
                   <button type="button" onClick={() => { setVariantImageIndex(index); setImagePickerOpen(true); }}>{variant.imageName || (variant.imageMediaId ? "更换图片" : "选择图片")}</button>
                   <button type="button" aria-label="删除变体" onClick={() => setVariantRows((rows) => rows.filter((_, rowIndex) => rowIndex !== index))}><Trash2 size={13} /></button>
                 </header>
@@ -774,6 +790,7 @@ export function ProductEditorDialog({
                     <button type="button" aria-label="移除变体图片" onClick={() => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, imageMediaId: null, imageName: "" } : row))}><Trash2 size={12} />移除图片</button>
                   </div>
                 )}
+                <div className="product-variant-tier-headings" aria-hidden="true"><span>起购数量</span><span>单件价格</span><span>成本 · 内部</span><span>利润率 % · 内部</span><span /></div>
                 <div className="product-variant-tier-list">{variant.priceTiers.map((tier, tierIndex) => <div key={tier.id}><input value={tier.minQuantity} disabled={tierIndex === 0} inputMode="numeric" placeholder="起购量" onChange={(event) => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, priceTiers: row.priceTiers.map((item, itemIndex) => itemIndex === tierIndex ? updateTierDraft(item,"minQuantity",event.target.value) : item) } : row))} /><input value={tier.unitAmount} inputMode="decimal" placeholder="单价" onChange={(event) => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, priceTiers: row.priceTiers.map((item, itemIndex) => itemIndex === tierIndex ? updateTierDraft(item,"unitAmount",event.target.value) : item) } : row))} /><input value={tier.costAmount} inputMode="decimal" placeholder="成本" onChange={(event) => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, priceTiers: row.priceTiers.map((item, itemIndex) => itemIndex === tierIndex ? updateTierDraft(item,"costAmount",event.target.value) : item) } : row))} /><input type="number" value={tier.profitMargin} inputMode="decimal" min="0" max="99.9999" step="0.0001" placeholder="利润率 %" onChange={(event) => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, priceTiers: row.priceTiers.map((item, itemIndex) => itemIndex === tierIndex ? updateTierDraft(item,"profitMargin",event.target.value) : item) } : row))} />{tierIndex > 0 && <button type="button" aria-label="删除价格档位" onClick={() => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, priceTiers: row.priceTiers.filter((_, itemIndex) => itemIndex !== tierIndex) } : row))}><Trash2 size={13} /></button>}</div>)}</div>
                 <button type="button" className="variant-add-tier" onClick={() => setVariantRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, priceTiers: [...row.priceTiers, { id: crypto.randomUUID(), minQuantity: String((Number(row.priceTiers.at(-1)?.minQuantity) || 1) + 1), unitAmount: "", costAmount: "", profitMargin: "" }] } : row))}><Plus size={13} />添加价格档位</button>
               </div>
