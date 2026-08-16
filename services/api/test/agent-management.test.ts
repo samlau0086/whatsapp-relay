@@ -36,6 +36,8 @@ test("agent management routes and legacy demo cleanup are shipped", async () => 
   assert.match(hub,/unsupported_event_kind/);
   assert.match(hub,/event\.kind==="contact_identity"/);
   assert.match(hub,/mergeContactIdentity/);
+  assert.match(hub,/COALESCE\(g\.capabilities,'\{\}'::text\[\]\) capabilities/);
+  assert.doesNotMatch(hub,/COALESCE\(g\.capabilities,'\[\]'::jsonb\)/);
   assert.match(hub,/UPDATE messages SET conversation_id=\$1 WHERE conversation_id=\$2/);
   assert.match(hub,/UPDATE messages SET sender_contact_id=\$1 WHERE sender_contact_id=\$2/);
   assert.match(hub,/status=\$2::wa_account_status/);

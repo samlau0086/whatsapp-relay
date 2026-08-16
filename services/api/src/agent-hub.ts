@@ -192,8 +192,8 @@ export async function ingestNormalizedMessage(client: import("pg").PoolClient, p
   if(String(payload.kind??"text")==="text"&&!payload.text&&!payload.media&&!payload.adReferral)return;
   const accountId = String(payload.accountId);
   const account=source.transport==="cloud"
-    ?await client.query("SELECT id,agent_id,'[]'::jsonb capabilities FROM channel_accounts WHERE id=$1 AND platform='whatsapp' AND transport='cloud'",[accountId])
-    :await client.query("SELECT a.id,a.agent_id,COALESCE(g.capabilities,'[]'::jsonb) capabilities FROM channel_accounts a JOIN agents g ON g.id=a.agent_id WHERE a.id=$1 AND a.platform='whatsapp' AND a.agent_id=$2 AND a.transport='web'",[accountId,source.agentId]);
+    ?await client.query("SELECT id,agent_id,'{}'::text[] capabilities FROM channel_accounts WHERE id=$1 AND platform='whatsapp' AND transport='cloud'",[accountId])
+    :await client.query("SELECT a.id,a.agent_id,COALESCE(g.capabilities,'{}'::text[]) capabilities FROM channel_accounts a JOIN agents g ON g.id=a.agent_id WHERE a.id=$1 AND a.platform='whatsapp' AND a.agent_id=$2 AND a.transport='web'",[accountId,source.agentId]);
   if(!account.rowCount)throw new Error("message_account_not_owned_by_agent");
   if(chatJid.endsWith("@g.us")){
     if(source.transport==="cloud")return;
