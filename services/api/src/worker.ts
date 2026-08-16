@@ -65,13 +65,9 @@ async function retryWebhook(item:Delivery,error:string,status?:number,body?:stri
 
 async function requeueCommands():Promise<void>{
   await transaction(async client=>{
-    await client.query(`WITH requeued AS (
-      UPDATE outbound_commands oc SET state='pending',available_at=now()+interval '5 seconds',claimed_at=NULL,last_error='Agent disconnected before confirmation'
-      FROM channel_accounts a WHERE a.id=oc.account_id AND a.transport='web' AND oc.status_post_id IS NULL AND oc.state='dispatched' AND oc.claimed_at<now()-interval '2 minutes' AND oc.attempt<5 RETURNING oc.message_id
-    ) UPDATE messages SET status='queued' WHERE id IN (SELECT message_id FROM requeued WHERE message_id IS NOT NULL) AND status='dispatching'`);
     await client.query(`WITH stopped AS (
       UPDATE outbound_commands oc SET state='uncertain',completed_at=now(),last_error='No execution confirmation; automatic retry stopped to prevent duplicates'
-      FROM channel_accounts a WHERE a.id=oc.account_id AND a.transport='web' AND oc.status_post_id IS NULL AND oc.state='dispatched' AND oc.claimed_at<now()-interval '2 minutes' AND oc.attempt>=5 RETURNING oc.message_id
+      FROM channel_accounts a WHERE a.id=oc.account_id AND a.transport='web' AND oc.status_post_id IS NULL AND oc.state='dispatched' AND oc.claimed_at<now()-interval '2 minutes' RETURNING oc.message_id
     ) UPDATE messages SET status='uncertain' WHERE id IN (SELECT message_id FROM stopped WHERE message_id IS NOT NULL) AND status='dispatching'`);
     await client.query(`WITH stopped AS (
       UPDATE outbound_commands oc SET state='uncertain',completed_at=now(),last_error='Cloud API execution confirmation was interrupted; automatic retry stopped to prevent duplicates'
