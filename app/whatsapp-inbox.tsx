@@ -208,7 +208,7 @@ type ChatMessage = {
   id:string; direction:"in"|"out"; kind:string; text:string; time:string;occurredAt?:string;
   senderJid?:string;senderName?:string;
   platform?:"whatsapp"|"messenger";providerMessageId?:string;pageId?:string;
-  quoted?:{id:string;direction:"in"|"out";kind:string;text:string;senderName?:string};
+  quoted?:{id:string;direction:"in"|"out";kind:string;text:string;senderName?:string;attachment?:{id:string;name:string;mime:string}};
   adReferral?:{source?:string;sourceId?:string;sourceUrl?:string;headline?:string;body?:string;mediaType?:string;thumbnailUrl?:string;mediaUrl?:string;ctwaClid?:string};
   translationSourceText?:string;
   translationTargetLanguage?:string;
@@ -631,6 +631,27 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       else setToast("消息加载失败，正在等待下次同步");
     }finally{if(older)setLoadingOlderConversationId(current=>current===conversationId?"":current);}
   },[effectiveActiveId,logout,setMessageCursor]);
+
+  const jumpToQuotedMessage=useCallback(async(messageId:string)=>{
+    if(!active||!apiToken)return;
+    const targetId=`message-${messageId}`;
+    const focusTarget=()=>{
+      const target=document.getElementById(targetId);
+      if(!target)return false;
+      target.scrollIntoView({behavior:"smooth",block:"center"});
+      target.classList.remove("message-jump-highlight");
+      void target.offsetWidth;
+      target.classList.add("message-jump-highlight");
+      return true;
+    };
+    if(focusTarget())return;
+    while(messageCursorsRef.current[active.id]){
+      await loadMessages(apiToken,active.id,false,{older:true});
+      await new Promise<void>(resolve=>window.requestAnimationFrame(()=>window.requestAnimationFrame(()=>resolve())));
+      if(focusTarget())return;
+    }
+    setToast("未找到被引用的消息");
+  },[active,apiToken,loadMessages]);
 
   const getConversationEventUrl=useCallback(async()=>{
     const result=await authorizedFetch("/api/v1/events/ticket",apiToken,{method:"POST"});
@@ -1740,6 +1761,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                     currentMessages.map((message) => (
                       <article
                         key={message.id}
+                        id={`message-${message.id}`}
                         className={`message-row ${message.direction}`}
                       >
                         {message.direction === "in" && (
@@ -1787,6 +1809,9 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                             <QuotedMessage
                               quote={message.quoted}
                               customerName={active.name}
+                              token={apiToken}
+                              onToken={setApiToken}
+                              onJump={()=>void jumpToQuotedMessage(message.quoted!.id)}
                             />
                           )}{" "}
                           {message.adReferral&&<AdReferralCard referral={message.adReferral}/>}
@@ -4538,7 +4563,7 @@ function mapAdReferral(value:unknown):ChatMessage["adReferral"]{
 }
 function mapTag(item:Record<string,unknown>):TagItem{return{id:String(item.id),name:String(item.name??"标签"),color:String(item.color??"#DFF5E8")};}
 function mapMessageComment(item:Record<string,unknown>):MessageComment{return{id:String(item.id),body:String(item.body??""),userId:String(item.user_id??""),authorName:String(item.author_name??"团队成员"),createdAt:String(item.created_at??""),updatedAt:String(item.updated_at??""),score:Number(item.score??0),viewerVote:Number(item.viewer_vote??0)};}
-function mapMessage(item:Record<string,unknown>):ChatMessage {const kind=String(item.kind??"text"),mediaId=String(item.media_id??""),occurredAt=String(item.occurred_at),quotedId=String(item.quoted_message_id??""),commandId=String(item.command_id??""),adReferral=mapAdReferral(item.ad_referral);return{id:String(item.id),direction:item.direction as "in"|"out",kind,text:String(item.text_content??(mediaId?"":kindText(kind))),senderJid:item.sender_jid?String(item.sender_jid):undefined,senderName:item.sender_name?String(item.sender_name):undefined,platform:item.platform==="messenger"?"messenger":"whatsapp",providerMessageId:item.provider_message_id?String(item.provider_message_id):undefined,pageId:item.page_id?String(item.page_id):undefined,quoted:quotedId?{id:quotedId,direction:item.quoted_direction as "in"|"out",kind:String(item.quoted_kind??"text"),text:String(item.quoted_text_content??item.quoted_file_name??kindText(String(item.quoted_kind??"text"))),senderName:item.quoted_sender_name?String(item.quoted_sender_name):undefined}:undefined,adReferral,translationSourceText:item.translation_source_text?String(item.translation_source_text):undefined,translationTargetLanguage:item.translation_target_language?String(item.translation_target_language):undefined,failureMessage:item.failure_message?String(item.failure_message):undefined,queueDiagnostic:item.direction==="out"?{commandId,state:String(item.command_state??""),attempt:Number(item.command_attempt??0),lastError:String(item.command_last_error??""),availableAt:String(item.command_available_at??""),claimedAt:String(item.command_claimed_at??""),createdAt:String(item.command_created_at??""),accountStatus:String(item.account_status??""),agentStatus:String(item.agent_status??""),agentLastSeenAt:String(item.agent_last_seen_at??"")}:undefined,cachedTranslationText:item.cached_translation_text?String(item.cached_translation_text):undefined,cachedTranslationLanguage:item.cached_translation_language?String(item.cached_translation_language):undefined,cachedTranslationSourceLanguage:item.cached_translation_source_language?String(item.cached_translation_source_language):undefined,cachedTranscriptionText:item.cached_transcription_text?String(item.cached_transcription_text):undefined,time:formatMessageTime(occurredAt),occurredAt,status:item.status as ChatMessage["status"],attachment:item.file_name&&mediaId?{id:mediaId,name:String(item.file_name),mime:String(item.mime_type??"文件"),size:formatBytes(Number(item.byte_size??0))}:undefined,comments:Array.isArray(item.comments)?item.comments.map(value=>mapMessageComment(value as Record<string,unknown>)):[]};}
+function mapMessage(item:Record<string,unknown>):ChatMessage {const kind=String(item.kind??"text"),mediaId=String(item.media_id??""),occurredAt=String(item.occurred_at),quotedId=String(item.quoted_message_id??""),quotedMediaId=String(item.quoted_media_id??""),quotedKind=String(item.quoted_kind??"text"),commandId=String(item.command_id??""),adReferral=mapAdReferral(item.ad_referral);return{id:String(item.id),direction:item.direction as "in"|"out",kind,text:String(item.text_content??(mediaId?"":kindText(kind))),senderJid:item.sender_jid?String(item.sender_jid):undefined,senderName:item.sender_name?String(item.sender_name):undefined,platform:item.platform==="messenger"?"messenger":"whatsapp",providerMessageId:item.provider_message_id?String(item.provider_message_id):undefined,pageId:item.page_id?String(item.page_id):undefined,quoted:quotedId?{id:quotedId,direction:item.quoted_direction as "in"|"out",kind:quotedKind,text:String(item.quoted_text_content??""),senderName:item.quoted_sender_name?String(item.quoted_sender_name):undefined,attachment:quotedMediaId?{id:quotedMediaId,name:String(item.quoted_file_name??kindText(quotedKind)),mime:String(item.quoted_mime_type??"")}:undefined}:undefined,adReferral,translationSourceText:item.translation_source_text?String(item.translation_source_text):undefined,translationTargetLanguage:item.translation_target_language?String(item.translation_target_language):undefined,failureMessage:item.failure_message?String(item.failure_message):undefined,queueDiagnostic:item.direction==="out"?{commandId,state:String(item.command_state??""),attempt:Number(item.command_attempt??0),lastError:String(item.command_last_error??""),availableAt:String(item.command_available_at??""),claimedAt:String(item.command_claimed_at??""),createdAt:String(item.command_created_at??""),accountStatus:String(item.account_status??""),agentStatus:String(item.agent_status??""),agentLastSeenAt:String(item.agent_last_seen_at??"")}:undefined,cachedTranslationText:item.cached_translation_text?String(item.cached_translation_text):undefined,cachedTranslationLanguage:item.cached_translation_language?String(item.cached_translation_language):undefined,cachedTranslationSourceLanguage:item.cached_translation_source_language?String(item.cached_translation_source_language):undefined,cachedTranscriptionText:item.cached_transcription_text?String(item.cached_transcription_text):undefined,time:formatMessageTime(occurredAt),occurredAt,status:item.status as ChatMessage["status"],attachment:item.file_name&&mediaId?{id:mediaId,name:String(item.file_name),mime:String(item.mime_type??"文件"),size:formatBytes(Number(item.byte_size??0))}:undefined,comments:Array.isArray(item.comments)?item.comments.map(value=>mapMessageComment(value as Record<string,unknown>)):[]};}
 
 function messageQuote(message:ChatMessage):NonNullable<ChatMessage["quoted"]>{return{id:message.id,direction:message.direction,kind:message.kind,text:message.text||message.attachment?.name||kindText(message.kind)};}
 function mapEmailActivity(item:Record<string,unknown>):EmailActivity{return{id:String(item.id),subject:String(item.subject),recipients:Array.isArray(item.recipients)?item.recipients.map(value=>{const recipient=value as Record<string,unknown>;return{email:String(recipient.email),label:String(recipient.label??"")};}):[],contentType:String(item.content_type),status:String(item.status) as EmailActivity["status"],attempt:Number(item.attempt??0),lastError:String(item.last_error??""),createdAt:String(item.created_at),senderName:String(item.sender_name??""),attachmentCount:Number(item.attachment_count??0)};}
@@ -4587,7 +4612,13 @@ function AccountStatus({initials,color,name,detail,online=false}:{initials:strin
 function MessageStatus({status}:{status?:ChatMessage["status"]}){if(status==="queued"||status==="dispatching")return <span className="message-state queued"><Clock3 size={12}/>{status==="queued"?"排队中":"发送中"}</span>;if(status==="failed"||status==="uncertain")return <span className="message-state failed"><X size={12}/>{status==="failed"?"失败":"待确认"}</span>;if(status==="read")return <span className="message-state read"><CheckCheck size={13}/>已读</span>;if(status==="delivered")return <span className="message-state"><CheckCheck size={13}/>已送达</span>;return <span className="message-state"><Check size={13}/>已发送</span>;}
 function QueueDiagnostic({message}:{message:ChatMessage}){const diagnostic=message.queueDiagnostic;if(!diagnostic?.commandId)return <small className="message-queue-diagnostic warning"><Info size={11}/>未找到发送命令，请刷新页面后重试</small>;const agentOnline=diagnostic.agentStatus==="online",accountOnline=diagnostic.accountStatus==="online",label=message.status==="dispatching"?"Agent 已接收，正在执行":!agentOnline?"等待 Agent 上线":!accountOnline?"等待 WhatsApp 账号上线":diagnostic.lastError?"等待自动重试":"等待 Agent 接收";const detail=[`命令 ${diagnostic.commandId.slice(0,8)}`,`尝试 ${diagnostic.attempt}`,diagnostic.lastError||"",diagnostic.agentLastSeenAt?`Agent 最近运行 ${formatDateTime(diagnostic.agentLastSeenAt)}`:""].filter(Boolean).join(" · ");return <small className={`message-queue-diagnostic ${agentOnline&&accountOnline?"":"warning"}`}><Info size={11}/><span><b>{label}</b><em>{detail}</em></span></small>;}
 
-function QuotedMessage({quote,customerName}:{quote:NonNullable<ChatMessage["quoted"]>;customerName:string}){return <div className="quoted-message"><b>{quote.direction==="in"?(quote.senderName||customerName):"我方"}</b><span>{quote.text||kindText(quote.kind)}</span></div>;}
+function QuotedMessage({quote,customerName,token,onToken,onJump}:{quote:NonNullable<ChatMessage["quoted"]>;customerName:string;token?:string;onToken?:((token:string)=>void);onJump?:()=>void}){
+  const image=quote.kind==="image"||quote.attachment?.mime.startsWith("image/");
+  const hasImagePreview=Boolean(image&&quote.attachment&&token&&onToken);
+  const content=<>{hasImagePreview&&<ProductImage mediaId={quote.attachment!.id} token={token!} onToken={onToken!} alt={quote.attachment!.name} className="quoted-message-image" preview/>}<span>{quote.text||kindText(quote.kind)}</span>{quote.attachment?.name&&<small>{image?"图片":quote.attachment.name}</small>}</>;
+  if(!onJump)return <div className="quoted-message"><b>{quote.direction==="in"?(quote.senderName||customerName):"我方"}</b>{content}</div>;
+  return <button type="button" className="quoted-message quoted-message-link" onClick={onJump} title="跳转到被引用的消息"><b>{quote.direction==="in"?(quote.senderName||customerName):"我方"}</b>{content}</button>;
+}
 function participantLabel(jid?:string):string{if(!jid)return"未知成员";const user=jid.split("@")[0].split(":")[0];return jid.endsWith("@s.whatsapp.net")?`+${user}`:user||jid;}
 
 function MessageMedia({attachment,token,onToken,onReady,onPreview}:{attachment:{id:string;name:string;size:string;mime:string};token:string;onToken:(token:string)=>void;onReady:()=>void;onPreview?:()=>void}){

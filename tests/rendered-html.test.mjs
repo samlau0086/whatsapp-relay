@@ -423,6 +423,23 @@ test("inbox supports replying to a specific WhatsApp message", async () => {
   assert.match(css,/\.composer-reply-preview\{/);
 });
 
+test("quoted messages render media previews and can jump to their source", async () => {
+  const [component,api,css]=await Promise.all([
+    readFile(new URL("../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../services/api/src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../app/globals.css",import.meta.url),"utf8"),
+  ]);
+  assert.match(component,/quoted_media_id/);
+  assert.match(component,/const jumpToQuotedMessage=useCallback/);
+  assert.match(component,/onJump=\{\(\)=>void jumpToQuotedMessage\(message\.quoted!\.id\)\}/);
+  assert.match(component,/className="quoted-message quoted-message-link"/);
+  assert.match(component,/className="quoted-message-image"/);
+  assert.match(api,/quoted_media\.id quoted_media_id/);
+  assert.match(api,/quoted_media\.mime_type quoted_mime_type/);
+  assert.match(css,/\.message-jump-highlight/);
+  assert.match(css,/\.quoted-message-image/);
+});
+
 test("conversation tag dropdown exposes management actions without redundant helper text", async () => {
   const component = await readFile(new URL("../app/whatsapp-inbox.tsx", import.meta.url), "utf8");
   assert.match(component, /className="tag-option-actions"/);
