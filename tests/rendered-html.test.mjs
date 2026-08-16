@@ -561,7 +561,7 @@ test("translation language picker supports search and keyboard selection", async
   assert.match(picker,/event\.key==="ArrowDown"/);
   assert.match(picker,/event\.key==="Enter"/);
   assert.match(picker,/没有匹配语言/);
-  assert.match(inbox,/import \{LanguageFlagIcon,LanguagePicker,languageName,languageShortCode\} from "\.\/language-picker"/);
+  assert.match(inbox,/import \{(?:LANGUAGES,)?LanguageFlagIcon,LanguagePicker,languageName,languageShortCode\} from "\.\/language-picker"/);
   assert.match(picker,/className=\{`language-flag fi fi-\$\{country\}/);
   assert.match(inbox,/<LanguageFlagIcon code=\{details\.contact\.preferredLanguage\}/);
   assert.match(statusCenter,/import \{LanguagePicker,languageName\} from "\.\/language-picker"/);

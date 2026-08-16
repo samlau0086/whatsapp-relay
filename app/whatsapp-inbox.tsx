@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { getCountry as getCountryTimezones } from "countries-and-timezones";
+import { countries as COUNTRIES } from "countries-list";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 import Image from "next/image";
 import Link from "next/link";
@@ -27,7 +29,7 @@ import { CollageGenerateDialog, ProductWorkspace } from "./collage-materials";
 import { MaterialLibrarySendDialog } from "./material-library-send-dialog";
 import { TaskCenter } from "./task-center";
 import {StatusCenter} from "./status-center";
-import {LanguageFlagIcon,LanguagePicker,languageName,languageShortCode} from "./language-picker";
+import {LANGUAGES,LanguageFlagIcon,LanguagePicker,languageName,languageShortCode} from "./language-picker";
 import {CountryPicker} from "./country-picker";
 import { conversationCountsPath, conversationListPath, conversationSummaryPath, type ConversationCustomerStage, type ConversationDateFilter, type ConversationLatestOrderStatus, type ConversationListFilter } from "./conversation-date-filter";
 import { QUICK_REPLY_VARIABLES, quickReplyVariableNames, renderQuickReplyVariables, type QuickReplyVariable, type QuickReplyVariableValues } from "./quick-reply-variables";
@@ -4345,11 +4347,25 @@ const PHONE_RECOMMENDATIONS:Record<string,ContactRecommendation>={
   "212":{countryCode:"MA",countryName:"摩洛哥",timeZone:"Africa/Casablanca",language:"ar"},"222":{countryCode:"MR",countryName:"毛里塔尼亚",timeZone:"Africa/Nouakchott",language:"ar"},"234":{countryCode:"NG",countryName:"尼日利亚",timeZone:"Africa/Lagos",language:"en"},"254":{countryCode:"KE",countryName:"肯尼亚",timeZone:"Africa/Nairobi",language:"en"},"351":{countryCode:"PT",countryName:"葡萄牙",timeZone:"Europe/Lisbon",language:"pt"},"358":{countryCode:"FI",countryName:"芬兰",timeZone:"Europe/Helsinki",language:"fi"},"380":{countryCode:"UA",countryName:"乌克兰",timeZone:"Europe/Kyiv",language:"uk"},"420":{countryCode:"CZ",countryName:"捷克",timeZone:"Europe/Prague",language:"cs"},"852":{countryCode:"HK",countryName:"中国香港",timeZone:"Asia/Hong_Kong",language:"zh-TW"},"853":{countryCode:"MO",countryName:"中国澳门",timeZone:"Asia/Macau",language:"zh-TW"},"855":{countryCode:"KH",countryName:"柬埔寨",timeZone:"Asia/Phnom_Penh",language:"km"},"880":{countryCode:"BD",countryName:"孟加拉国",timeZone:"Asia/Dhaka",language:"bn"},"886":{countryCode:"TW",countryName:"中国台湾",timeZone:"Asia/Taipei",language:"zh-TW"},"966":{countryCode:"SA",countryName:"沙特阿拉伯",timeZone:"Asia/Riyadh",language:"ar"},"967":{countryCode:"YE",countryName:"也门",timeZone:"Asia/Aden",language:"ar"},"971":{countryCode:"AE",countryName:"阿联酋",timeZone:"Asia/Dubai",language:"ar"},"972":{countryCode:"IL",countryName:"以色列",timeZone:"Asia/Jerusalem",language:"he"},"974":{countryCode:"QA",countryName:"卡塔尔",timeZone:"Asia/Qatar",language:"ar"}
 };
 const COUNTRY_DISPLAY_NAMES=new Intl.DisplayNames(["zh-CN"],{type:"region"});
+const AVAILABLE_LANGUAGE_CODES=new Set<string>(LANGUAGES.map(([code])=>code));
+function normalizeRecommendedLanguage(code:string,countryCode:string){
+  const normalized=code.toLowerCase();
+  if(normalized==="zh")return["HK","MO","TW"].includes(countryCode)?"zh-TW":"zh-CN";
+  if(normalized==="tl")return"fil";
+  if(normalized==="nb"||normalized==="nn")return"no";
+  return normalized;
+}
+function inferCountryRecommendation(countryCode:string):ContactRecommendation|null{
+  const code=countryCode.trim().toUpperCase();
+  if(!/^[A-Z]{2}$/.test(code))return null;
+  const defaults=Object.values(PHONE_RECOMMENDATIONS).find(item=>item.countryCode===code);
+  const country=COUNTRIES[code as keyof typeof COUNTRIES];
+  const language=defaults?.language??country?.languages.map(item=>normalizeRecommendedLanguage(item,code)).find(item=>AVAILABLE_LANGUAGE_CODES.has(item))??null;
+  return{countryCode:code,countryName:COUNTRY_DISPLAY_NAMES.of(code)??code,timeZone:defaults?.timeZone??getCountryTimezones(code)?.timezones[0]??null,language};
+}
 function inferContactRecommendation(phone:string):ContactRecommendation|null{
   const countryCode=parsePhoneNumberFromString(phone)?.country;
-  if(!countryCode)return null;
-  const defaults=Object.values(PHONE_RECOMMENDATIONS).find(item=>item.countryCode===countryCode);
-  return{countryCode,countryName:COUNTRY_DISPLAY_NAMES.of(countryCode)??countryCode,timeZone:defaults?.timeZone??null,language:defaults?.language??null};
+  return countryCode?inferCountryRecommendation(countryCode):null;
 }
 function timezoneOffsetLabel(timeZone:string,date=new Date()){
   try{
@@ -5911,7 +5927,7 @@ function ContactAddressDialog({contactId,token,onToken,onClose,onSaved}:{contact
 function ContactEditDialog({contactId,token,onToken,onClose,onSaved}:{contactId:string;token:string;onToken:(token:string)=>void;onClose:()=>void;onSaved:(profile:ContactProfile)=>Promise<void>}){
   const [profile,setProfile]=useState<ContactProfile|null>(null),[alias,setAlias]=useState(""),[firstName,setFirstName]=useState(""),[middleName,setMiddleName]=useState(""),[lastName,setLastName]=useState(""),[companyName,setCompanyName]=useState(""),[jobTitle,setJobTitle]=useState(""),[country,setCountry]=useState(""),[province,setProvince]=useState(""),[city,setCity]=useState(""),[phone,setPhone]=useState(""),[note,setNote]=useState(""),[timezone,setTimezone]=useState(""),[preferredLanguage,setPreferredLanguage]=useState(""),[birthday,setBirthday]=useState<ContactDate|null>(null),[specialDates,setSpecialDates]=useState<ContactSpecialDate[]>([]),[emails,setEmails]=useState<ContactEmail[]>([]),[methods,setMethods]=useState<ContactMethod[]>([]),[avatarFile,setAvatarFile]=useState<File|null>(null),[avatarPickerOpen,setAvatarPickerOpen]=useState(false),[removeAvatar,setRemoveAvatar]=useState(false),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState("");
   const phoneRecommendation=inferContactRecommendation(phone);
-  const countryRecommendation=country?Object.values(PHONE_RECOMMENDATIONS).find(item=>item.countryCode===country.trim().toUpperCase())??null:null;
+  const countryRecommendation=country?inferCountryRecommendation(country):null;
   const avatarPreview=useMemo(()=>avatarFile?URL.createObjectURL(avatarFile):"",[avatarFile]);useEffect(()=>()=>{if(avatarPreview)URL.revokeObjectURL(avatarPreview);},[avatarPreview]);
   const request=useCallback((path:string,init?:RequestInit)=>authorizedFetch(path,token,init),[token]);
   async function selectAvatar(asset:ProductImageAsset){setError("");try{const result=await request(`/api/v1/media/${asset.id}`);if(result.token!==token)onToken(result.token);if(!result.response.ok)throw new Error(`头像读取失败（HTTP ${result.response.status}）`);const blob=await result.response.blob();setAvatarFile(new File([blob],asset.fileName,{type:asset.mimeType}));setRemoveAvatar(false);setAvatarPickerOpen(false);}catch(reason){setError(reason instanceof Error?reason.message:"头像读取失败");}}
