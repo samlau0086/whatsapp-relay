@@ -63,7 +63,7 @@ test("reply context is normalized, persisted, and resolved before dispatch",asyn
   assert.match(server,/quotedProviderMessageId:String\(row\.provider_message_id\)/);
   assert.match(server,/quotedWhatsappMessageId:conversation\.rows\[0\]\.platform==="whatsapp"\?String\(row\.provider_message_id\):undefined/);
   assert.match(agent,/context=>context\?\.stanzaId/);
-  assert.match(agent,/const sendOptions=\{\.\.\.\(quoted\?\{quoted\}:\{\}\),\.\.\.\(ephemeralExpiration\?\{ephemeralExpiration\}:\{\}\)\}/);
+  assert.match(agent,/const sendOptions=\{\.\.\.\(quoted\?\{quoted\}:\{\}\),\.\.\.\(ephemeralSetting\?\{ephemeralExpiration:ephemeralSetting\.expiration\}:\{\}\)\}/);
   assert.match(agent,/socket\.sendMessage\(toJid,content,sendOptions\)/);
 });
 

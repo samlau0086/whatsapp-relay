@@ -125,7 +125,9 @@ test("outbound messages inherit each chat's disappearing-message duration",()=>{
   assert.match(worker,/chats\.update.*rememberChatEphemeralExpirations/s);
   assert.match(worker,/chat\.ephemeralExpiration === undefined/);
   assert.match(worker,/rememberChatJidAlias/);
-  assert.match(worker,/ephemeralExpiration\s*=\s*chatEphemeralExpirations\.get\(jidNormalizedUser\(toJid\)\)/);
+  assert.match(worker,/ephemeralSetting\s*=\s*chatEphemeralSettings\.get\(jidNormalizedUser\(toJid\)\)/);
+  assert.match(worker,/ephemeralSettingTimestamp:\s*ephemeralSetting\.settingTimestamp/);
+  assert.match(worker,/disappearingMode:\s*ephemeralSetting\.disappearingMode/);
   assert.match(worker,/socket\.sendMessage\(toJid,\s*content,\s*sendOptions\)/);
 });
 
