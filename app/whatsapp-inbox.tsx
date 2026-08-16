@@ -3115,7 +3115,7 @@ function CrmDetailsPanel({
             {statusText(active.accountStatus)}
           </span>
           {details?.contact&&<ContactLocalTime contact={details.contact}/>}
-          {details?.contact?.preferredLanguage&&<div className="contact-preferred-language" title={`偏好语言：${languageName(details.contact.preferredLanguage)}`}><LanguageFlagIcon code={details.contact.preferredLanguage}/><b>{languageShortCode(details.contact.preferredLanguage)}</b></div>}
+          {details?.contact?.preferredLanguage&&<div className="contact-preferred-language" title={`偏好语言：${languageName(details.contact.preferredLanguage)}`}><LanguageFlagIcon code={details.contact.preferredLanguage} countryCode={details.contact.country}/><b>{languageShortCode(details.contact.preferredLanguage)}</b></div>}
           {details?.contact?.primaryEmail&&<p className="contact-primary-email"><Mail size={12}/>{details.contact.primaryEmail}</p>}
           {details?.contact?.methods.filter(method=>!isSocialContactMethod(method.type)).slice(0,2).map((method,index)=><p className="contact-method-summary" key={`${method.type}-${index}`}>{method.label||contactMethodName(method.type)}：{method.value}</p>)}
           {details?.contact&&<ContactSocialLinks methods={details.contact.methods}/>}

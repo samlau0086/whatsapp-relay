@@ -43,8 +43,9 @@ export function languageCountryCode(code:string){
   const [language,...parts]=code.split("-"),region=parts.find(part=>/^[A-Za-z]{2}$/.test(part)),country=(region??LANGUAGE_COUNTRIES[language.toLowerCase()])?.toUpperCase();
   return country?.toLowerCase()??null;
 }
-export function LanguageFlagIcon({code,className=""}:{code:string;className?:string}){
-  const country=languageCountryCode(code);
+export function LanguageFlagIcon({code,countryCode,className=""}:{code:string;countryCode?:string;className?:string}){
+  const explicitCountry=countryCode?.trim().toUpperCase();
+  const country=/^[A-Z]{2}$/.test(explicitCountry??"")?explicitCountry.toLowerCase():languageCountryCode(code);
   return country?<span className={`language-flag fi fi-${country} ${className}`.trim()} role="img" aria-label={`${country.toUpperCase()} 国旗`}/>:<span className={`language-flag-fallback ${className}`.trim()} aria-hidden="true">🌐</span>;
 }
 
