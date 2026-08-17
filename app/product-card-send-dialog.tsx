@@ -1190,7 +1190,7 @@ function ProductPricingPreview({ product }: { product: Product }) {
               <div key={tier.minQuantity}>
                 <span>{group.sku}</span>
                 <span>{tier.minQuantity}+</span>
-                <span>{product.currency} {tier.unitAmount.toFixed(2)}</span>
+                <span>{tier.unitAmount.toFixed(2)} {product.currency}/PC</span>
               </div>
             ))}
           </div>

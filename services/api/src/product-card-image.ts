@@ -112,7 +112,7 @@ async function renderCard(template:ProductCardTemplate,product:ProductCardRender
           const skuLines=wrapLine(row.sku,showImage?17:25).slice(0,2),skuStartY=rowY+rowHeight/2-(skuLines.length-1)*12;
           skuLines.forEach((line,lineIndex)=>fragments.push(`<text x="${skuX+14}" y="${skuStartY+lineIndex*24+8}" font-family="Noto Sans,Noto Sans CJK SC,sans-serif" font-size="20" font-weight="600" fill="${escapeXml(color)}">${escapeXml(line)}</text>`));
           fragments.push(`<text x="${qtyX+14}" y="${rowY+rowHeight/2+8}" font-family="Noto Sans,Noto Sans CJK SC,sans-serif" font-size="20" font-weight="600" fill="${escapeXml(color)}">${escapeXml(`${row.tier.minQuantity}+`)}</text>`);
-          fragments.push(`<text x="${priceX+14}" y="${rowY+rowHeight/2+8}" font-family="Noto Sans,Noto Sans CJK SC,sans-serif" font-size="20" font-weight="600" fill="${escapeXml(color)}">${escapeXml(`${product.currency} ${row.tier.unitAmount.toFixed(2)}`)}</text>`);
+          fragments.push(`<text x="${priceX+14}" y="${rowY+rowHeight/2+8}" font-family="Noto Sans,Noto Sans CJK SC,sans-serif" font-size="20" font-weight="600" fill="${escapeXml(color)}">${escapeXml(`${row.tier.unitAmount.toFixed(2)} ${product.currency}/PC`)}</text>`);
           if(index<group.rows.length-1)fragments.push(`<line x1="${tableX}" y1="${rowY+rowHeight}" x2="${tableX+tableWidth}" y2="${rowY+rowHeight}" stroke="${lineColor}"/>`);
         });
         const tableBottom=tableY+headerHeight+group.rows.length*rowHeight;
