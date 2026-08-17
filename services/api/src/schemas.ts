@@ -108,7 +108,7 @@ export const newConversationSchema = z.object({
     z.object({type:z.literal("template"),template:messageTemplateSchema}),
   ]).optional(),
   clientMessageId: z.string().min(8).max(128),
-}).refine(value=>Boolean(value.firstMessage||value.message),{path:["message"],message:"firstMessage or message is required"});
+});
 
 export const customerStageSchema=z.enum(["new","considering","qualified","won","lost"]);
 export const conversationTransferSchema=z.object({accountId:z.string().uuid()});
