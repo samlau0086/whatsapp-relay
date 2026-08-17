@@ -19,7 +19,7 @@ import { isBrowserCompatibleVideo, normalizeBrowserVideo } from "./video-normali
 import { calculateOrderTotal, canManageSharedRecord, ensureCrmTables, primaryContactEmail, type OrderSummaryFee, type OrderSummaryItem } from "./crm.js";
 import { renderTemplateOrderImage } from "./order-image.js";
 import { renderTemplateOrderPdf } from "./order-pdf.js";
-import { DEFAULT_IMAGE_ORDER_TEMPLATE, DEFAULT_PDF_ORDER_TEMPLATE, DEFAULT_TEXT_ORDER_TEMPLATE, orderTemplateSchema, orderTemplateUpdateSchema, parseOrderTemplate, parseTranslatedSemanticOrder, renderSemanticOrder, renderTextOrder, serializeSemanticOrder, type OrderTemplateFormat } from "./order-template.js";
+import { DEFAULT_CI_ORDER_TEMPLATE, DEFAULT_IMAGE_ORDER_TEMPLATE, DEFAULT_PDF_ORDER_TEMPLATE, DEFAULT_PI_ORDER_TEMPLATE, DEFAULT_SC_ORDER_TEMPLATE, DEFAULT_TEXT_ORDER_TEMPLATE, orderTemplateSchema, orderTemplateUpdateSchema, parseOrderTemplate, parseTranslatedSemanticOrder, renderSemanticOrder, renderTextOrder, serializeSemanticOrder, type OrderTemplateFormat } from "./order-template.js";
 import { allocateOrderNumber, isValidTimeZone, orderNumberPreview, validateOrderNumberTemplate } from "./order-number.js";
 import { resolveContactTimeZone } from "./contact-timezone.js";
 import { generateSalesReplySuggestion, pauseAgentForHuman } from "./agent-engine.js";
@@ -1329,18 +1329,18 @@ app.post("/api/v1/orders/:orderId/payment-send",{preHandler:authenticate},async(
 
 app.get("/api/v1/admin/order-templates",{preHandler:authenticate},async(request,reply)=>{
   if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
-  const result=await pool.query("SELECT text_template,image_template,pdf_template,updated_at FROM order_settings WHERE singleton=true"),row=result.rows[0]??{};
+  const result=await pool.query("SELECT text_template,image_template,pdf_template,sc_template,pi_template,ci_template,updated_at FROM order_settings WHERE singleton=true"),row=result.rows[0]??{};
   if(row.text_template&&!orderTemplateSchema.safeParse(row.text_template).success)request.log.error("Invalid stored text order template; using default");
   if(row.image_template&&!orderTemplateSchema.safeParse(row.image_template).success)request.log.error("Invalid stored image order template; using default");
   if(row.pdf_template&&!orderTemplateSchema.safeParse(row.pdf_template).success)request.log.error("Invalid stored PDF order template; using default");
-  return{textTemplate:parseOrderTemplate(row.text_template??DEFAULT_TEXT_ORDER_TEMPLATE,"text"),imageTemplate:parseOrderTemplate(row.image_template??DEFAULT_IMAGE_ORDER_TEMPLATE,"image"),pdfTemplate:parseOrderTemplate(row.pdf_template??DEFAULT_PDF_ORDER_TEMPLATE,"pdf"),updatedAt:row.updated_at??null};
+  return{textTemplate:parseOrderTemplate(row.text_template??DEFAULT_TEXT_ORDER_TEMPLATE,"text"),imageTemplate:parseOrderTemplate(row.image_template??DEFAULT_IMAGE_ORDER_TEMPLATE,"image"),pdfTemplate:parseOrderTemplate(row.pdf_template??DEFAULT_PDF_ORDER_TEMPLATE,"pdf"),scTemplate:parseOrderTemplate(row.sc_template??DEFAULT_SC_ORDER_TEMPLATE,"sc"),piTemplate:parseOrderTemplate(row.pi_template??DEFAULT_PI_ORDER_TEMPLATE,"pi"),ciTemplate:parseOrderTemplate(row.ci_template??DEFAULT_CI_ORDER_TEMPLATE,"ci"),updatedAt:row.updated_at??null};
 });
 
 app.put("/api/v1/admin/order-templates/:format",{preHandler:authenticate},async(request,reply)=>{
   if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
-  const {format}=request.params as {format:string};if(format!=="text"&&format!=="image"&&format!=="pdf")return reply.code(404).send({error:"not_found"});
+  const {format}=request.params as {format:string};if(!["text","image","pdf","sc","pi","ci"].includes(format))return reply.code(404).send({error:"not_found"});
   const parsed=orderTemplateUpdateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
-  const column=format==="text"?"text_template":format==="pdf"?"pdf_template":"image_template",saved=await pool.query(`UPDATE order_settings SET ${column}=$1::jsonb,updated_by=$2,updated_at=now() WHERE singleton=true RETURNING updated_at`,[JSON.stringify(parsed.data),request.principal.id]);
+  const column=({text:"text_template",image:"image_template",pdf:"pdf_template",sc:"sc_template",pi:"pi_template",ci:"ci_template"} as Record<string,string>)[format],saved=await pool.query(`UPDATE order_settings SET ${column}=$1::jsonb,updated_by=$2,updated_at=now() WHERE singleton=true RETURNING updated_at`,[JSON.stringify(parsed.data),request.principal.id]);
   await auditCrm(request.principal.id,"order.template.update","order_settings","workspace",{format,blockCount:parsed.data.blocks.length});
   return{format,template:parsed.data,updatedAt:saved.rows[0]?.updated_at??null};
 });
@@ -1509,6 +1509,26 @@ app.post("/api/v1/conversations/:conversationId/orders/:orderId/send",{preHandle
   const queued=await transaction(async client=>{const locked=await client.query("SELECT deleted_at FROM orders WHERE id=$1 FOR UPDATE",[orderId]);if(!locked.rowCount||locked.rows[0].deleted_at)return null;const existing=await client.query("SELECT id FROM messages WHERE account_id=$1 AND client_message_id=$2",[order.account_id,requestMessageId]);if(existing.rowCount)return{messageId:existing.rows[0].id,format:parsed.data.format,deduplicated:true};const kind=parsed.data.format==="image"?"image":parsed.data.format==="pdf"?"document":"text",caption=parsed.data.format==="text"?outgoingText:`Order #${String(order.display_order_number)}`;const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,translation_source_text,translation_target_language,media_id,status,occurred_at) VALUES($1,$2,$3,$4,'out',$5,$6,$7,$8,$9,'queued',now()) RETURNING id,status",[conversationId,order.account_id,principal.id,requestMessageId,kind,caption,parsed.data.format==="text"&&shouldTranslate?sourceText:null,parsed.data.format==="text"&&shouldTranslate?targetLanguage:null,renderedMediaId]);await queueOrderCommand(client,order,conversationId,message.rows[0].id,requestMessageId,kind,caption,renderedMediaId??undefined);
     await client.query("UPDATE orders SET status='queued',send_format=$2,summary_message_id=$3,rendered_media_id=$4,translated_text=$5,sent_at=now() WHERE id=$1",[orderId,parsed.data.format,message.rows[0].id,renderedMediaId,shouldTranslate?outgoingText:null]);await client.query("UPDATE conversations SET status='open',closed_at=NULL WHERE id=$1",[conversationId]);await pauseAgentForHuman(client,conversationId);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'order.send','order',$2,$3)",[principal.id,orderId,JSON.stringify({conversationId,resend:order.status!=="draft",format:parsed.data.format,translated:shouldTranslate,targetLanguage:shouldTranslate?targetLanguage:null,productImageCount:itemResult.rows.filter(item=>item.image_media_id).length})]);return{messageId:message.rows[0].id,format:parsed.data.format,deduplicated:false};});
   if(!queued)return reply.code(404).send({error:"not_found"});if(order.agent_id)void dispatchPending(order.agent_id);return reply.code(202).send({orderId,orderNumber:String(order.display_order_number),messageId:queued.messageId,status:"queued",format:queued.format,deduplicated:queued.deduplicated});
+});
+
+app.get("/api/v1/orders/:orderId/documents/:document",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const {orderId,document}=request.params as {orderId:string;document:string};
+  if(!["sc","pi","ci"].includes(document))return reply.code(404).send({error:"not_found"});
+  const found=await pool.query("SELECT o.id,o.display_order_number,o.business_status,o.currency,o.description,o.shipping_address_snapshot,o.payment_profile_snapshot,c.account_id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164,co.provider_user_id) customer_name,co.phone_e164 customer_phone FROM orders o JOIN conversations c ON c.id=o.conversation_id JOIN contacts co ON co.id=c.contact_id WHERE o.id=$1 AND o.deleted_at IS NULL",[orderId]);
+  if(!found.rowCount||!canAccessAccount(request.principal,found.rows[0].account_id))return reply.code(404).send({error:"not_found"});
+  const [itemsResult,feesResult,settingsResult]=await Promise.all([
+    pool.query("SELECT i.product_name name,i.product_sku sku,i.quantity,i.unit_amount,m.object_key FROM order_items i LEFT JOIN media m ON m.id=i.image_media_id WHERE i.order_id=$1 ORDER BY i.position",[orderId]),
+    pool.query("SELECT name,amount FROM (SELECT name,amount,position FROM order_fees WHERE order_id=$1 UNION ALL SELECT 'Shipping',shipping_amount,32767 FROM orders WHERE id=$1 AND shipping_amount IS NOT NULL) listed ORDER BY position",[orderId]),
+    pool.query("SELECT sc_template,pi_template,ci_template FROM order_settings WHERE singleton=true"),
+  ]);
+  const row=found.rows[0],items:OrderSummaryItem[]=itemsResult.rows.map(item=>({name:String(item.name),sku:String(item.sku??""),quantity:Number(item.quantity),unitAmount:Number(item.unit_amount)})),fees:OrderSummaryFee[]=feesResult.rows.map(fee=>({name:String(fee.name),amount:Number(fee.amount)}));
+  const defaults={sc:DEFAULT_SC_ORDER_TEMPLATE,pi:DEFAULT_PI_ORDER_TEMPLATE,ci:DEFAULT_CI_ORDER_TEMPLATE},raw=settingsResult.rows[0]?.[`${document}_template`],template=parseOrderTemplate(raw??defaults[document as keyof typeof defaults],document as OrderTemplateFormat),context={orderNumber:String(row.display_order_number),businessStatus:String(row.business_status??"quotation") as Parameters<typeof renderSemanticOrder>[1]["businessStatus"],currency:String(row.currency),customerName:String(row.customer_name??""),customerPhone:String(row.customer_phone??""),description:String(row.description??""),items,fees,address:row.shipping_address_snapshot??null,paymentProfile:row.payment_profile_snapshot??null};
+  try{
+    const products=await Promise.all(itemsResult.rows.map(async item=>{if(!item.object_key)return{name:String(item.name)};const object=await s3.send(new GetObjectCommand({Bucket:config.S3_BUCKET,Key:String(item.object_key)}));return{name:String(item.name),image:object.Body?Buffer.from(await object.Body.transformToByteArray()):undefined};}));
+    const bytes=await renderTemplateOrderPdf(template,renderSemanticOrder(template,context),products),fileName=`${document.toUpperCase()}-${safeFileName(String(row.display_order_number))}.pdf`;
+    return reply.header("Content-Type","application/pdf").header("Content-Disposition",`attachment; filename="${fileName}"`).send(bytes);
+  }catch(error){request.log.error({orderId,document,error:String(error)},"Order document download failed");return reply.code(502).send({error:"order_document_failed",message:"订单单据生成失败"});}
 });
 
 app.delete("/api/v1/conversations/:conversationId/orders/:orderId",{preHandler:authenticate},async(request,reply)=>{

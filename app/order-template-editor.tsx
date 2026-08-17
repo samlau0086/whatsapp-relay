@@ -3,7 +3,7 @@
 import { ArrowDown, ArrowUp, Check, GripVertical, Plus, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-export type TemplateFormat="text"|"image"|"pdf";
+export type TemplateFormat="text"|"image"|"pdf"|"sc"|"pi"|"ci";
 type BlockType="orderHeader"|"itemList"|"feeList"|"total"|"paymentSummary"|"shippingAddress"|"notes"|"divider"|"customText";
 type OrderBusinessStatus="quotation"|"pending_confirmation"|"pending_payment"|"paid"|"processing"|"shipped"|"completed"|"cancelled";
 type Block={id:string;type:BlockType;label?:string;text?:string;statusLabels?:Partial<Record<OrderBusinessStatus,string>>;bold?:boolean;italic?:boolean;strikethrough?:boolean;monospace?:boolean;blankAfter?:boolean;fontSize?:"small"|"medium"|"large";textColor?:string;backgroundColor?:string;align?:"left"|"center"|"right";itemTemplate?:string;showProductImages?:boolean;imageSize?:"small"|"medium"|"large"};
@@ -32,7 +32,7 @@ export function OrderTemplateEditor({format,request,onToken,onToast,onDirtyChang
   const serialized=JSON.stringify(template),dirty=Boolean(saved&&serialized!==saved),selected=template.blocks.find(block=>block.id===selectedId)??template.blocks[0];
   useEffect(()=>onDirtyChange(dirty),[dirty,onDirtyChange]);
   useEffect(()=>{const before=(event:BeforeUnloadEvent)=>{if(dirty){event.preventDefault();event.returnValue="";}};window.addEventListener("beforeunload",before);return()=>window.removeEventListener("beforeunload",before);},[dirty]);
-  const load=useCallback(async()=>{setLoading(true);setError("");try{const result=await request("/api/v1/admin/order-templates");onToken(result.token);const body=await result.response.json() as {textTemplate?:OrderTemplate;imageTemplate?:OrderTemplate;pdfTemplate?:OrderTemplate;message?:string};if(!result.response.ok)throw new Error(body.message??`HTTP ${result.response.status}`);const value=(format==="text"?body.textTemplate:format==="pdf"?body.pdfTemplate:body.imageTemplate)??fallback;setTemplate(value);setSaved(JSON.stringify(value));setSelectedId(value.blocks[0]?.id??"");}catch(reason){setError(reason instanceof Error?reason.message:"模板加载失败");}finally{setLoading(false);}},[format,request,onToken,fallback]);
+  const load=useCallback(async()=>{setLoading(true);setError("");try{const result=await request("/api/v1/admin/order-templates");onToken(result.token);const body=await result.response.json() as Record<string,unknown>&{message?:string};if(!result.response.ok)throw new Error(body.message??`HTTP ${result.response.status}`);const key=format==="text"?"textTemplate":format==="image"?"imageTemplate":format==="pdf"?"pdfTemplate":`${format}Template`;const value=(body[key] as OrderTemplate|undefined)??fallback;setTemplate(value);setSaved(JSON.stringify(value));setSelectedId(value.blocks[0]?.id??"");}catch(reason){setError(reason instanceof Error?reason.message:"模板加载失败");}finally{setLoading(false);}},[format,request,onToken,fallback]);
   useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer);},[load]);
   const change=(patch:Partial<Block>)=>setTemplate(value=>({...value,blocks:value.blocks.map(block=>block.id===selected?.id?{...block,...patch}:block)}));
   const move=(id:string,to:number)=>setTemplate(value=>{const from=value.blocks.findIndex(block=>block.id===id);if(from<0||to<0||to>=value.blocks.length||from===to)return value;const blocks=[...value.blocks],[block]=blocks.splice(from,1);blocks.splice(to,0,block);return{...value,blocks};});

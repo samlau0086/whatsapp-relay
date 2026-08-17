@@ -4,7 +4,7 @@ import { ORDER_BUSINESS_STATUSES } from "./schemas.js";
 
 export const ORDER_BLOCK_TYPES=["orderHeader","itemList","feeList","total","paymentSummary","shippingAddress","notes","divider","customText"] as const;
 export type OrderBlockType=typeof ORDER_BLOCK_TYPES[number];
-export type OrderTemplateFormat="text"|"image"|"pdf";
+export type OrderTemplateFormat="text"|"image"|"pdf"|"sc"|"pi"|"ci";
 export type OrderTemplateBlock={
   id:string;type:OrderBlockType;label?:string;text?:string;
   statusLabels?:Partial<Record<OrderBusinessStatus,string>>;
@@ -77,10 +77,14 @@ export const DEFAULT_IMAGE_ORDER_TEMPLATE:OrderTemplate={version:1,blocks:[
   {id:"notes",type:"notes",label:"Notes:",fontSize:"small",textColor:"#20372D",backgroundColor:"#FFFAF0",align:"left"},
 ]};
 export const DEFAULT_PDF_ORDER_TEMPLATE:OrderTemplate=structuredClone(DEFAULT_IMAGE_ORDER_TEMPLATE);
+function documentTemplate(label:string):OrderTemplate{const template=structuredClone(DEFAULT_PDF_ORDER_TEMPLATE);const header=template.blocks.find(block=>block.type==="orderHeader");if(header){header.label=label;header.statusLabels=Object.fromEntries(ORDER_BUSINESS_STATUSES.map(status=>[status,label]));}return template;}
+export const DEFAULT_SC_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Sales Contract");
+export const DEFAULT_PI_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Proforma Invoice");
+export const DEFAULT_CI_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Commercial Invoice");
 
 export function parseOrderTemplate(value:unknown,format:OrderTemplateFormat):OrderTemplate{
   const normalized=normalizeOrderTemplate(value,format),parsed=orderTemplateSchema.safeParse(normalized);
-  return parsed.success?parsed.data:(format==="text"?DEFAULT_TEXT_ORDER_TEMPLATE:format==="pdf"?DEFAULT_PDF_ORDER_TEMPLATE:DEFAULT_IMAGE_ORDER_TEMPLATE);
+  return parsed.success?parsed.data:(format==="text"?DEFAULT_TEXT_ORDER_TEMPLATE:format==="pdf"?DEFAULT_PDF_ORDER_TEMPLATE:format==="sc"?DEFAULT_SC_ORDER_TEMPLATE:format==="pi"?DEFAULT_PI_ORDER_TEMPLATE:format==="ci"?DEFAULT_CI_ORDER_TEMPLATE:DEFAULT_IMAGE_ORDER_TEMPLATE);
 }
 
 function normalizeOrderTemplate(value:unknown,format:OrderTemplateFormat):unknown{
