@@ -253,6 +253,7 @@ const orderContentSchema=z.object({
   weightUnit:z.enum(WEIGHT_UNITS).default("kg"),
   paymentProfileId:z.string().uuid().nullable().optional(),
   description:z.string().trim().max(2000).optional().transform(value=>value||undefined),
+  internalComment:z.string().trim().max(2000).optional().transform(value=>value||undefined),
   translateOnSend:z.boolean().default(false),
   targetLanguage:languageCodeSchema.optional(),
   items:z.array(orderItemSchema).min(1).max(50),

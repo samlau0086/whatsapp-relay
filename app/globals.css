@@ -634,6 +634,7 @@ button { color:inherit; }
 .order-row-actions button{width:34px;height:34px}.order-load-more{height:40px;font-size:13px}
 .order-details-meta dt{font-size:12px}.order-details-meta dd{font-size:13px}
 .order-details-items h3{font-size:15px}.order-details-items b,.order-details-items strong{font-size:13px}.order-details-items small{font-size:12px}
+.order-details-product{display:grid!important;grid-template-columns:42px minmax(0,1fr) auto;justify-content:initial!important}.order-details-product-image{width:42px;height:42px;border-radius:6px;overflow:hidden;background:#eef4f1}.order-details-product-image img{width:100%;height:100%;object-fit:cover}.order-details-internal-comment{border:1px solid #b9dec8;background:#eef9f2}.order-internal-comment{display:block;margin-top:10px;color:#21724d}.order-internal-comment textarea{border-color:#b9dec8;background:#fbfffc}
 .order-details-notes b{font-size:13px}.order-details-notes p{font-size:12px!important;line-height:1.55}
 .order-settings-form>label{font-size:13px}.order-settings-form>label input{font-size:13px}.order-settings-form>label small{font-size:12px}
 .order-variable-buttons button{font-size:12px}.order-number-preview span{font-size:12px}.order-number-preview b{font-size:14px}
