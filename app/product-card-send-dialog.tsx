@@ -28,6 +28,7 @@ type Product = {
   defaultUnitAmount: number;
   imageMediaId: string | null;
   priceTiers: Array<{ minQuantity: number; unitAmount: number }>;
+  variants: Array<{ attributes: Record<string, string>; sku: string; imageMediaId: string | null; priceTiers: Array<{ minQuantity: number; unitAmount: number }> }>;
   tags: Array<{ id: string; name: string; color: string }>;
 };
 type ContactEmail = {
@@ -57,6 +58,16 @@ function mapProduct(item: Record<string, unknown>): Product {
       ? (item.priceTiers as Array<Record<string, unknown>>).map((tier) => ({
           minQuantity: Number(tier.minQuantity),
           unitAmount: Number(tier.unitAmount),
+        }))
+      : [],
+    variants: Array.isArray(item.variants)
+      ? (item.variants as Array<Record<string, unknown>>).map((variant) => ({
+          attributes: (variant.attributes ?? {}) as Record<string, string>,
+          sku: String(variant.sku),
+          imageMediaId: variant.imageMediaId ? String(variant.imageMediaId) : null,
+          priceTiers: Array.isArray(variant.priceTiers)
+            ? (variant.priceTiers as Array<Record<string, unknown>>).map((tier) => ({ minQuantity: Number(tier.minQuantity), unitAmount: Number(tier.unitAmount) }))
+            : [],
         }))
       : [],
     tags: Array.isArray(item.tags) ? (item.tags as Product["tags"]) : [],
@@ -312,7 +323,7 @@ export function ProductCardSendDialog({
   const chosen = selected
       .map((id) => productCache.get(id))
       .filter(Boolean) as Product[],
-    converted = chosen.map((product) => { const source = currencies.find(item => item.code === product.currency)?.rate; const target = currencies.find(item => item.code === targetCurrency)?.rate; const factor = source && target ? target / source : 1; return {...product, currency: targetCurrency, priceTiers: product.priceTiers.map(tier => ({...tier, unitAmount: tier.unitAmount * factor}))}; }),
+    converted = chosen.map((product) => { const source = currencies.find(item => item.code === product.currency)?.rate; const target = currencies.find(item => item.code === targetCurrency)?.rate; const factor = source && target ? target / source : 1; return {...product, currency: targetCurrency, priceTiers: product.priceTiers.map(tier => ({...tier, unitAmount: tier.unitAmount * factor})),variants:product.variants.map(variant=>({...variant,priceTiers:variant.priceTiers.map(tier=>({...tier,unitAmount:tier.unitAmount*factor}))}))}; }),
     gridSize =
       gridPreset === "custom"
         ? { rows: customRows, columns: customColumns }
@@ -1068,13 +1079,7 @@ export function ProductCardSendDialog({
                   <div key={product.id}>
                     <strong>{product.name}</strong>
                     <span>SKU: {product.sku}</span>
-                    {showPrice &&
-                      product.priceTiers.map((tier) => (
-                        <small key={tier.minQuantity}>
-                          {tier.minQuantity}+ · {product.currency}{" "}
-                          {tier.unitAmount.toFixed(2)} / 件
-                        </small>
-                      ))}
+                    {showPrice && <ProductPricingPreview product={product} />}
                   </div>
                 ))}
               {chosen.length >
@@ -1159,6 +1164,38 @@ export function ProductCardSendDialog({
           />
         )}
       </section>
+    </div>
+  );
+}
+
+function ProductPricingPreview({ product }: { product: Product }) {
+  const groups = product.variants.length
+    ? product.variants.map((variant) => ({
+        title:
+          Object.entries(variant.attributes)
+            .map(([key, value]) => `${key}: ${value}`)
+            .join(" / ") || variant.sku,
+        sku: variant.sku,
+        tiers: variant.priceTiers,
+      }))
+    : [{ title: "", sku: product.sku, tiers: product.priceTiers }];
+  return (
+    <div className="product-card-send-price-preview">
+      {groups.filter((group) => group.tiers.length).map((group) => (
+        <section key={group.sku}>
+          {group.title && <b>{group.title}</b>}
+          <div className="product-card-send-price-table">
+            <span>SKU</span><span>QTY</span><span>Price</span>
+            {group.tiers.map((tier) => (
+              <div key={tier.minQuantity}>
+                <span>{group.sku}</span>
+                <span>{tier.minQuantity}+</span>
+                <span>{product.currency} {tier.unitAmount.toFixed(2)}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ))}
     </div>
   );
 }

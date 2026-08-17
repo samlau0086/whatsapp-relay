@@ -141,7 +141,8 @@ test("product cards load variant media and render all variant price tiers",async
   assert.match(server,/LEFT JOIN media vm ON vm\.id=v\.image_media_id AND vm\.status='ready'/);
   assert.match(server,/loadProductCardImage\(variant\.objectKey\)/);
   assert.match(image,/variantImageData/);
-  assert.match(image,/product\.variants\.flatMap/);
+  assert.match(image,/const groups=product\.variants\?\.length\?product\.variants\.map/);
+  assert.match(image,/Object\.entries\(variant\.attributes\)/);
   assert.match(image,/\["SKU",skuX,skuWidth\],\["QTY",qtyX,qtyWidth\],\["Price",priceX,priceWidth\]/);
   assert.match(image,/const showImage=Boolean\(product\.variants\?\.some/);
   assert.doesNotMatch(image,/variant\.priceTiers\[0\]/);
