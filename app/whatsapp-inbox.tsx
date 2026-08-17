@@ -30,7 +30,7 @@ import { MaterialLibrarySendDialog } from "./material-library-send-dialog";
 import { TaskCenter } from "./task-center";
 import {StatusCenter} from "./status-center";
 import {LANGUAGES,LanguageFlagIcon,LanguagePicker,languageName,languageShortCode} from "./language-picker";
-import {CountryPicker} from "./country-picker";
+import {countryLabel,CountryPicker} from "./country-picker";
 import { conversationCountsPath, conversationListPath, conversationSummaryPath, type ConversationCustomerStage, type ConversationDateFilter, type ConversationLatestOrderStatus, type ConversationListFilter } from "./conversation-date-filter";
 import { QUICK_REPLY_VARIABLES, quickReplyVariableNames, renderQuickReplyVariables, type QuickReplyVariable, type QuickReplyVariableValues } from "./quick-reply-variables";
 import { confirmAction, ConfirmationHost, promptAction, PromptHost } from "./confirmation-ui";
@@ -3118,7 +3118,7 @@ function CrmDetailsPanel({
             {statusText(active.accountStatus)}
           </span>
           {details?.contact&&<ContactLocalTime contact={details.contact}/>}
-          {details?.contact?.preferredLanguage&&<div className="contact-preferred-language" title={`偏好语言：${languageName(details.contact.preferredLanguage)}`}><LanguageFlagIcon code={details.contact.preferredLanguage} countryCode={details.contact.country}/><b>{languageShortCode(details.contact.preferredLanguage)}</b></div>}
+          {details?.contact?.preferredLanguage&&<div className="contact-preferred-language"><LanguageFlagIcon code={details.contact.preferredLanguage} countryCode={details.contact.country} title={details.contact.country?countryLabel(details.contact.country):undefined}/><b>{languageShortCode(details.contact.preferredLanguage)}</b></div>}
           {details?.contact?.primaryEmail&&<p className="contact-primary-email"><Mail size={12}/>{details.contact.primaryEmail}</p>}
           {details?.contact?.methods.filter(method=>!isSocialContactMethod(method.type)).slice(0,2).map((method,index)=><p className="contact-method-summary" key={`${method.type}-${index}`}>{method.label||contactMethodName(method.type)}：{method.value}</p>)}
           {details?.contact&&<ContactSocialLinks methods={details.contact.methods}/>}

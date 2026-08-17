@@ -14,7 +14,7 @@ export const COUNTRY_OPTIONS:CountryOption[]=COUNTRY_CODES.map(code=>{
   return{code,chinese,english,searchText:`${code} ${chinese} ${english}`.toLocaleLowerCase()};
 });
 
-function countryLabel(code:string){
+export function countryLabel(code:string){
   const country=COUNTRY_OPTIONS.find(item=>item.code===code.toUpperCase());
   return country?`${country.chinese} · ${country.english}`:code;
 }

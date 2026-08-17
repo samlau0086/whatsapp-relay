@@ -193,7 +193,7 @@ test("contact preferred language is persisted and exposed to the detail sidebar"
   assert.match(server,/preferredLanguage:row\.preferred_language/);
   assert.match(inbox,/label="搜索联系人偏好语言"/);
   assert.match(inbox,/className="contact-preferred-language"/);
-  assert.match(inbox,/<LanguageFlagIcon code=\{details\.contact\.preferredLanguage\} countryCode=\{details\.contact\.country\}\/>/);
+  assert.match(inbox,/<LanguageFlagIcon code=\{details\.contact\.preferredLanguage\} countryCode=\{details\.contact\.country\} title=\{details\.contact\.country\?countryLabel\(details\.contact\.country\):undefined\}\/>/);
   assert.match(inbox,/languageShortCode\(details\.contact\.preferredLanguage\)/);
 });
 

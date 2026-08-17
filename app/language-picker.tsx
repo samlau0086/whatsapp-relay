@@ -43,10 +43,10 @@ export function languageCountryCode(code:string){
   const [language,...parts]=code.split("-"),region=parts.find(part=>/^[A-Za-z]{2}$/.test(part)),country=(region??LANGUAGE_COUNTRIES[language.toLowerCase()])?.toUpperCase();
   return country?.toLowerCase()??null;
 }
-export function LanguageFlagIcon({code,countryCode,className=""}:{code:string;countryCode?:string;className?:string}){
+export function LanguageFlagIcon({code,countryCode,title,className=""}:{code:string;countryCode?:string;title?:string;className?:string}){
   const explicitCountry=countryCode?.trim().toUpperCase();
   const country=/^[A-Z]{2}$/.test(explicitCountry??"")?explicitCountry.toLowerCase():languageCountryCode(code);
-  return country?<span className={`language-flag fi fi-${country} ${className}`.trim()} role="img" aria-label={`${country.toUpperCase()} 国旗`}/>:<span className={`language-flag-fallback ${className}`.trim()} aria-hidden="true">🌐</span>;
+  return country?<span className={`language-flag fi fi-${country} ${className}`.trim()} role="img" title={title} aria-label={title||`${country.toUpperCase()} 国旗`}/>:<span className={`language-flag-fallback ${className}`.trim()} title={title} aria-hidden="true">🌐</span>;
 }
 
 export function LanguagePicker({value,onChange,label="搜索并选择语言",allowEmpty=false,placeholder="搜索语言名称或代码"}:{value:string;onChange:(value:string)=>void;label?:string;allowEmpty?:boolean;placeholder?:string}){
