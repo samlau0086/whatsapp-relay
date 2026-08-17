@@ -3021,15 +3021,15 @@ function CrmDetailsPanel({
     }catch(reason){setError(reason instanceof Error?reason.message:"订单状态更新失败");}
     finally{setStatusOrderId("");}
   }
-  async function downloadOrderDocument(order:OrderItem,document:"sc"|"pi"|"ci"){
+  async function downloadOrderDocument(order:OrderItem,documentType:"sc"|"pi"|"ci"){
     setBusy(true);setError("");
     try{
-      const result=await authorizedFetch(`/api/v1/orders/${order.id}/documents/${document}`,token);
+      const result=await authorizedFetch(`/api/v1/orders/${order.id}/documents/${documentType}`,token);
       if(result.token!==token)onToken(result.token);
       if(!result.response.ok)throw new Error(`单据下载失败（HTTP ${result.response.status}）`);
       const url=URL.createObjectURL(await result.response.blob()),link=document.createElement("a");
-      link.href=url;link.download=`${document.toUpperCase()}-${order.orderNumber}.pdf`;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),0);
-      onToast(`${document.toUpperCase()} 已下载`);
+      link.href=url;link.download=`${documentType.toUpperCase()}-${order.orderNumber}.pdf`;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),0);
+      onToast(`${documentType.toUpperCase()} 已下载`);
     }catch(reason){setError(reason instanceof Error?reason.message:"单据下载失败");}
     finally{setBusy(false);}
   }
