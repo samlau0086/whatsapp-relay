@@ -45,6 +45,8 @@ test("migration and routes preserve snapshots and isolate PayPal profiles",async
   assert.match(migration,/payment_profile_snapshot jsonb/);
   assert.match(migration,/legacy_paypal_default/);
   assert.match(server,/\/api\/v1\/orders\/:orderId\/payment-send/);
+  assert.match(server,/\/api\/v1\/orders\/:orderId\/payment-request\/send[\s\S]*paymentSendSchema\.safeParse\(request\.body\)/);
+  assert.match(server,/paypal:\$\{row\.payment_request_id\}:\$\{parsed\.data\.clientSendId\}/);
   assert.match(server,/resolvePaymentProfile\(client,parsed\.data\.paymentProfileId\)/);
   assert.match(module,/sandbox_client_id_encrypted/);
   assert.match(module,/live_client_id_encrypted/);
