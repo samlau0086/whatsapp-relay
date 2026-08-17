@@ -2749,6 +2749,7 @@ function CrmDetailsPanel({
     [editOrderTarget, setEditOrderTarget] = useState<OrderItem | null>(null),
     [sendOrderTarget, setSendOrderTarget] = useState<OrderSendTarget | null>(null),
     [paymentOrderTarget, setPaymentOrderTarget] = useState<OrderItem | null>(null),
+    [orderDocumentMenu,setOrderDocumentMenu]=useState<{orderId:string;documentType:"sc"|"pi"|"ci"}|null>(null),
     [statusOrderId,setStatusOrderId]=useState(""),
     [contactEditing, setContactEditing] = useState(false),
     [addressEditing, setAddressEditing] = useState(false),
@@ -3051,6 +3052,16 @@ function CrmDetailsPanel({
     }catch(reason){setError(reason instanceof Error?reason.message:"单据下载失败");}
     finally{setBusy(false);}
   }
+  async function sendOrderDocument(order:OrderItem,documentType:"sc"|"pi"|"ci"){
+    setBusy(true);setError("");
+    try{
+      const result=await authorizedFetch(`/api/v1/conversations/${active.id}/orders/${order.id}/documents/${documentType}/send`,token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({clientSendId:crypto.randomUUID()})});
+      if(result.token!==token)onToken(result.token);
+      if(!result.response.ok)throw new Error(`单据发送失败（HTTP ${result.response.status}）`);
+      setOrderDocumentMenu(null);onToast(`${documentType.toUpperCase()} 文档已进入发送队列`);
+    }catch(reason){setError(reason instanceof Error?reason.message:"单据发送失败");}
+    finally{setBusy(false);}
+  }
   async function sendOrder(order: OrderItem, format: "text" | "image" | "pdf", translate: boolean, targetLanguage?: string, email?:{recipientEmailIds:string[];subject:string;messageBody:string}) {
     setBusy(true);
     setError("");
@@ -3217,7 +3228,7 @@ function CrmDetailsPanel({
                           <CreditCard size={12} />
                           {order.paymentRequest?"付款详情":order.paymentProfile?"付款说明":"选择收款"}
                         </button>
-                        {(["sc","pi","ci"] as const).map(document=><button key={document} className="order-payment" disabled={busy} onClick={()=>void downloadOrderDocument(order,document)} aria-label={`下载订单 #${order.orderNumber} 的 ${document.toUpperCase()} 单据`} title={`下载 ${document.toUpperCase()} PDF`}><FileDown size={12}/>{document.toUpperCase()}</button>)}
+                        {(["sc","pi","ci"] as const).map(documentType=>{const open=orderDocumentMenu?.orderId===order.id&&orderDocumentMenu.documentType===documentType;return <div className="order-document-menu" key={documentType}><button className="order-payment" disabled={busy} onClick={()=>setOrderDocumentMenu(open?null:{orderId:order.id,documentType})} aria-expanded={open} aria-haspopup="menu" title={`${documentType.toUpperCase()} 文档操作`}><FileDown size={12}/>{documentType.toUpperCase()}</button>{open&&<div role="menu"><button role="menuitem" disabled={busy} onClick={()=>void sendOrderDocument(order,documentType)}><Send size={12}/>发送</button><button role="menuitem" disabled={busy} onClick={()=>{setOrderDocumentMenu(null);void downloadOrderDocument(order,documentType);}}><FileDown size={12}/>下载</button></div>}</div>;})}
                         <button
                           className="order-edit"
                           disabled={busy}
