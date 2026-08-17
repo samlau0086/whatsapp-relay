@@ -27,6 +27,10 @@ test("manual reply suggestion combines conversation context and assigned knowled
   assert.match(engine, /Relative promises such as "tomorrow"/);
   assert.match(engine, /follow conversationState\.requiredAction instead of blindly answering latestCustomerMessage/);
   assert.match(engine, /reply_suggestion_instructions/);
+  assert.match(engine, /retrieveProducts/);
+  assert.match(engine, /extractProductSkuCandidates/);
+  assert.match(engine, /productCatalog/);
+  assert.match(engine, /product_price_tiers/);
   assert.match(server, /\/api\/v1\/conversations\/:id\/reply-suggestion/);
   assert.match(server, /reply_suggestion_instructions/);
   assert.match(ui, /回复建议 Agent/);

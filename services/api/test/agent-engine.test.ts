@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { agentRunKind, buildReplyTimingContext, buildSalesSuggestionConversationState, captionOrderDetailsImage, chunkText, compactMemoryMessages, detectOrderDetailsLanguage, groundOrderDetailsImageReply, groundOrderNumberReply, isConversationAgentActive, isConversationJobEligible, isPredominantlyChinese, isReplySourceCurrent, isWithinBusinessHours, passesAutoReplyGate, resolveOrderDetailsImage, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
+import { agentRunKind, buildReplyTimingContext, buildSalesSuggestionConversationState, captionOrderDetailsImage, chunkText, compactMemoryMessages, detectOrderDetailsLanguage, extractProductSkuCandidates, groundOrderDetailsImageReply, groundOrderNumberReply, isConversationAgentActive, isConversationJobEligible, isPredominantlyChinese, isReplySourceCurrent, isWithinBusinessHours, passesAutoReplyGate, resolveOrderDetailsImage, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
 
 test("chunkText creates bounded overlapping chunks",()=>{
   const input=("A paragraph with useful knowledge. ").repeat(120);
@@ -85,6 +85,11 @@ test("reply suggestions follow up when the business sent the latest message",()=
   assert.equal(state.requiredAction,"follow_up_after_business_message");
   assert.equal(state.latestMessage?.id,"business");
   assert.equal(state.timing.hoursSinceLastContact,71);
+});
+
+test("product catalog lookup extracts SKU candidates from customer text",()=>{
+  assert.deepEqual(extractProductSkuCandidates("Can I get KF-217 and bag_001?"),["kf-217","bag_001"]);
+  assert.deepEqual(extractProductSkuCandidates("Need the premium collection"),[]);
 });
 
 test("late reply jobs cannot answer a newer customer message",()=>{
