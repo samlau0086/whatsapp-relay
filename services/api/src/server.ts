@@ -1171,6 +1171,7 @@ app.get("/api/v1/conversations/:id/details",{preHandler:authenticate},async(requ
     pool.query("SELECT ca.id,ca.label,ca.recipient_name,ca.phone,ca.address,ca.country_code,ca.province,ca.city,COALESCE(ca.street_line_1,ca.address) street1,ca.street_line_2 street2,ca.postal_code,ca.is_default,ca.created_at,ca.updated_at FROM contact_addresses ca JOIN conversations c ON c.contact_id=ca.contact_id WHERE c.id=$1 ORDER BY ca.is_default DESC,ca.created_at,ca.id",[id]),
     contactProfileById(pool,conversation.rows[0].contact_id),
   ]);
+  await attachInternalOrderItemCosts(orders.rows);
   const businessStatuses=await pool.query("SELECT id,business_status FROM orders WHERE conversation_id=$1 AND deleted_at IS NULL",[id]),businessStatusById=new Map(businessStatuses.rows.map(row=>[String(row.id),String(row.business_status)]));
   for(const order of orders.rows)order.business_status=businessStatusById.get(String(order.id))??"quotation";
   return{customerStage:conversation.rows[0].customer_stage,contact,tags:tags.rows,notes:notes.rows,reminder:reminder.rows[0]??null,orders:orders.rows,addresses:addresses.rows};
@@ -1224,6 +1225,7 @@ app.get("/api/v1/orders",{preHandler:authenticate},async(request,reply)=>{
     LEFT JOIN LATERAL (SELECT json_build_object('id',pr.id,'invoiceId',pr.provider_request_id,'url',pr.payment_url,'status',pr.status,'amount',pr.amount,'currency',pr.currency,'environment',pr.environment,'createdAt',pr.created_at,'lastSyncedAt',pr.last_synced_at) payment_request FROM order_payment_requests pr WHERE pr.order_id=o.id AND pr.is_current ORDER BY pr.created_at DESC LIMIT 1)payment ON true
     WHERE o.deleted_at IS NULL AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::text IS NULL OR o.status=$2) AND ($3::text IS NULL OR o.display_order_number ILIKE '%'||$3||'%' OR co.alias ILIKE '%'||$3||'%' OR co.display_name ILIKE '%'||$3||'%' OR co.phone_e164 ILIKE '%'||$3||'%') AND ($4::date IS NULL OR o.created_at >= $4::date) AND ($5::date IS NULL OR o.created_at < $5::date + interval '1 day') AND ($6::timestamptz IS NULL OR (o.created_at,o.id)<($6::timestamptz,$7::uuid)) AND ($8::uuid[] IS NULL OR c.account_id=ANY($8))
     ORDER BY o.created_at DESC,o.id DESC LIMIT $9`,[query.accountId??null,query.status??null,query.q?.trim()||null,query.dateFrom??null,query.dateTo??null,cursorDate,cursorId,accountIds,limit+1]);
+  await attachInternalOrderItemCosts(result.rows);
   const hasMore=result.rows.length>limit,data=result.rows.slice(0,limit),last=data[data.length-1];
   return{data,nextCursor:hasMore&&last?Buffer.from(JSON.stringify({createdAt:last.created_at,id:last.id}),"utf8").toString("base64url"):null,total:Number(data[0]?.total_count??0)};
 });
@@ -2023,6 +2025,14 @@ async function orderVariantSnapshot(client:PoolClient,item:OrderProductInput):Pr
   const label=Object.entries(attributes).map(([key,value])=>`${key}: ${value}`).join(" / ");
   const unitAmount=[...tiers].reverse().find(tier=>item.quantity>=tier.minQuantity)?.unitAmount??tiers[0]?.unitAmount??item.unitAmount;
   return {...item,name:label?`${item.name} (${label})`:item.name,sku:String(row.sku),unitAmount,imageMediaId:row.image_media_id?String(row.image_media_id):item.imageMediaId};
+}
+
+async function attachInternalOrderItemCosts(orders:Array<Record<string,unknown>>):Promise<void>{
+  const items=orders.flatMap(order=>Array.isArray(order.items)?order.items as Array<Record<string,unknown>>:[]),ids=items.map(item=>String(item.id)).filter(Boolean);
+  if(!ids.length)return;
+  const result=await pool.query(`SELECT i.id,COALESCE(vt.cost_amount,pt.cost_amount) cost_amount,p.currency cost_currency FROM order_items i LEFT JOIN products p ON p.id=i.product_id LEFT JOIN LATERAL (SELECT cost_amount FROM product_variant_price_tiers WHERE variant_id=i.variant_id AND min_quantity<=i.quantity ORDER BY min_quantity DESC LIMIT 1) vt ON true LEFT JOIN LATERAL (SELECT cost_amount FROM product_price_tiers WHERE product_id=i.product_id AND min_quantity<=i.quantity ORDER BY min_quantity DESC LIMIT 1) pt ON true WHERE i.id=ANY($1::uuid[])`,[ids]);
+  const costs=new Map(result.rows.map(row=>[String(row.id),{costAmount:row.cost_amount===null?null:Number(row.cost_amount),costCurrency:row.cost_currency===null?null:String(row.cost_currency)}]));
+  for(const item of items){const cost=costs.get(String(item.id));item.costAmount=cost?.costAmount??null;item.costCurrency=cost?.costCurrency??null;}
 }
 
 function safeFileName(value:string):string{return value.replace(/[^A-Za-z0-9._-]+/g,"-").replace(/^-+|-+$/g,"").slice(0,100)||"order";}

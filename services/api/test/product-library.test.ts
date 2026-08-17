@@ -363,6 +363,8 @@ test("products support internal tier pricing, supplier links, and private order-
   assert.match(dialog,/supplyPrice:Number\(link\.supplyPrice\)/);
   assert.match(dialog,/内部备注 · 仅内部可见/);
   assert.match(component,/order-item-internal-note/);
+  assert.match(component,/order-item-cost/);
+  assert.match(server,/attachInternalOrderItemCosts/);
   const cardRoute=server.slice(server.indexOf('app.post("/api/v1/product-cards"'),server.indexOf('app.get("/api/v1/product-cards/batches'));
   const orderRender=server.slice(server.indexOf('app.post("/api/v1/conversations/:conversationId/orders/:orderId/send"'),server.indexOf('app.post("/api/v1/conversations/:id/orders"'));
   assert.doesNotMatch(cardRoute,/internal_note|supplier_links|cost_amount|profit_margin/);
