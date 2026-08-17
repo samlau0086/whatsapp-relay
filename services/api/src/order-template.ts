@@ -2,8 +2,10 @@ import { z } from "zod";
 import { calculateOrderTotal, type OrderSummaryFee, type OrderSummaryItem } from "./crm.js";
 import { ORDER_BUSINESS_STATUSES } from "./schemas.js";
 
-export const ORDER_BLOCK_TYPES=["orderHeader","itemList","feeList","total","paymentSummary","shippingAddress","notes","divider","customText"] as const;
+export const ORDER_BLOCK_TYPES=["orderHeader","itemList","feeList","total","paymentSummary","shippingAddress","contactInfo","notes","divider","customText"] as const;
 export type OrderBlockType=typeof ORDER_BLOCK_TYPES[number];
+export const CONTACT_INFO_FIELDS=["name","firstName","lastName","company","location","email","phone"] as const;
+export type ContactInfoField=typeof CONTACT_INFO_FIELDS[number];
 export type OrderTemplateFormat="text"|"image"|"pdf"|"sc"|"pi"|"ci";
 export type OrderTemplateBlock={
   id:string;type:OrderBlockType;label?:string;text?:string;
@@ -11,6 +13,7 @@ export type OrderTemplateBlock={
   bold?:boolean;italic?:boolean;strikethrough?:boolean;monospace?:boolean;blankAfter?:boolean;
   fontSize?:"small"|"medium"|"large";textColor?:string;backgroundColor?:string;align?:"left"|"center"|"right";
   itemTemplate?:string;showProductImages?:boolean;imageSize?:"small"|"medium"|"large";
+  contactFields?:ContactInfoField[];
 };
 export type OrderTemplate={version:1;blocks:OrderTemplateBlock[]};
 export type OrderBusinessStatus=typeof ORDER_BUSINESS_STATUSES[number];
@@ -19,6 +22,7 @@ export type OrderTemplateContext={
   items:OrderSummaryItem[];fees:OrderSummaryFee[];
   address?:{label?:string;recipientName?:string;phone?:string;address?:string}|null;
   paymentProfile?:{summary?:string}|null;
+  contact?:{firstName?:string|null;lastName?:string|null;companyName?:string|null;country?:string|null;province?:string|null;city?:string|null;email?:string|null}|null;
 };
 export type SemanticOrderBlock={id:string;type:OrderBlockType;lines:string[]};
 
@@ -32,6 +36,7 @@ const blockSchema=z.object({
   bold:z.boolean().optional(),italic:z.boolean().optional(),strikethrough:z.boolean().optional(),monospace:z.boolean().optional(),blankAfter:z.boolean().optional(),
   fontSize:z.enum(["small","medium","large"]).optional(),textColor:color.optional(),backgroundColor:color.optional(),align:z.enum(["left","center","right"]).optional(),
   itemTemplate:z.string().min(1).max(500).optional(),showProductImages:z.boolean().optional(),imageSize:z.enum(["small","medium","large"]).optional(),
+  contactFields:z.array(z.enum(CONTACT_INFO_FIELDS)).min(1).max(CONTACT_INFO_FIELDS.length).optional(),
 }).strict().superRefine((block,ctx)=>{
   if(block.type==="customText"){
     if(!block.text?.trim())ctx.addIssue({code:"custom",path:["text"],message:"customText requires text"});
@@ -51,7 +56,7 @@ const blockSchema=z.object({
 });
 
 export const orderTemplateSchema=z.object({version:z.literal(1),blocks:z.array(blockSchema).min(2).max(30)}).strict().superRefine((template,ctx)=>{
-  const singleton:OrderBlockType[]=["orderHeader","itemList","feeList","total","paymentSummary","shippingAddress","notes"];
+  const singleton:OrderBlockType[]=["orderHeader","itemList","feeList","total","paymentSummary","shippingAddress","contactInfo","notes"];
   for(const type of singleton){const count=template.blocks.filter(block=>block.type===type).length;if(count>1)ctx.addIssue({code:"custom",path:["blocks"],message:`${type} may only appear once`});}
   for(const type of ["itemList","total","paymentSummary"] as const)if(!template.blocks.some(block=>block.type===type))ctx.addIssue({code:"custom",path:["blocks"],message:`${type} is required`});
   if(new Set(template.blocks.map(block=>block.id)).size!==template.blocks.length)ctx.addIssue({code:"custom",path:["blocks"],message:"block ids must be unique"});
@@ -77,7 +82,7 @@ export const DEFAULT_IMAGE_ORDER_TEMPLATE:OrderTemplate={version:1,blocks:[
   {id:"notes",type:"notes",label:"Notes:",fontSize:"small",textColor:"#20372D",backgroundColor:"#FFFAF0",align:"left"},
 ]};
 export const DEFAULT_PDF_ORDER_TEMPLATE:OrderTemplate=structuredClone(DEFAULT_IMAGE_ORDER_TEMPLATE);
-function documentTemplate(label:string):OrderTemplate{const template=structuredClone(DEFAULT_PDF_ORDER_TEMPLATE);const header=template.blocks.find(block=>block.type==="orderHeader");if(header){header.label=label;header.statusLabels=Object.fromEntries(ORDER_BUSINESS_STATUSES.map(status=>[status,label]));}return template;}
+function documentTemplate(label:string):OrderTemplate{const template=structuredClone(DEFAULT_PDF_ORDER_TEMPLATE);const header=template.blocks.find(block=>block.type==="orderHeader");if(header){header.label=label;header.statusLabels=Object.fromEntries(ORDER_BUSINESS_STATUSES.map(status=>[status,label]));}const totalIndex=template.blocks.findIndex(block=>block.type==="total");template.blocks.splice(totalIndex<0?template.blocks.length:totalIndex,0,{id:"contact-info",type:"contactInfo",label:"Customer:",fontSize:"small",textColor:"#20372D",backgroundColor:"#F6F9F7",align:"left",contactFields:["name","firstName","lastName","company","location","email","phone"]});return template;}
 export const DEFAULT_SC_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Sales Contract");
 export const DEFAULT_PI_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Proforma Invoice");
 export const DEFAULT_CI_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Commercial Invoice");
@@ -113,6 +118,12 @@ export function renderSemanticOrder(template:OrderTemplate,context:OrderTemplate
     else if(block.type==="total")lines=[`${label}${label?" ":""}${total}`];
     else if(block.type==="paymentSummary"){if(!context.paymentProfile?.summary)return[];lines=[`${label}${label?" ":""}${context.paymentProfile.summary}`];}
     else if(block.type==="shippingAddress"){if(!address)return[];lines=[...(label?[label]:[]),address];}
+    else if(block.type==="contactInfo"){
+      const contact=context.contact??{},location=[contact.country,contact.province,contact.city].filter(Boolean).join(", ");
+      const fields:Record<ContactInfoField,[string,string]>={name:["Name",context.customerName],firstName:["First name",contact.firstName??""],lastName:["Last name",contact.lastName??""],company:["Company",contact.companyName??""],location:["Location",location],email:["Email",contact.email??""],phone:["Phone",context.customerPhone]};
+      const values=(block.contactFields?.length?block.contactFields:CONTACT_INFO_FIELDS).map(field=>fields[field]).filter(([,value])=>Boolean(value));
+      if(!values.length)return[];lines=[...(label?[label]:[]),...values.map(([field,value])=>`${field}: ${value}`)];
+    }
     else if(block.type==="notes"){if(!context.description)return[];lines=[`${label}${label?" ":""}${context.description}`];}
     else if(block.type==="divider")lines=["────────────────"];
     else if(block.type==="customText")lines=replace(block.text??"").split("\n");
@@ -151,4 +162,4 @@ function renderOrderItem(template:string|undefined,item:OrderSummaryItem,index:n
   };
   return(template?.trim()||DEFAULT_ORDER_ITEM_TEMPLATE).replace(/{{\s*([A-Za-z]+)\s*}}/g,(_,name:string)=>variables[name]??"");
 }
-function defaultLabel(type:OrderBlockType):string{return({orderHeader:"Order",itemList:"Items:",feeList:"Additional fees:",total:"Total:",paymentSummary:"Payment:",shippingAddress:"Shipping address:",notes:"Notes:",divider:"",customText:""})[type];}
+function defaultLabel(type:OrderBlockType):string{return({orderHeader:"Order",itemList:"Items:",feeList:"Additional fees:",total:"Total:",paymentSummary:"Payment:",shippingAddress:"Shipping address:",contactInfo:"Customer:",notes:"Notes:",divider:"",customText:""})[type];}

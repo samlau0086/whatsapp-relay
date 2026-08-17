@@ -3,7 +3,7 @@ import test from "node:test";
 import sharp from "sharp";
 import { renderTemplateOrderImage } from "../src/order-image.js";
 import { renderTemplateOrderPdf } from "../src/order-pdf.js";
-import { DEFAULT_IMAGE_ORDER_TEMPLATE, DEFAULT_TEXT_ORDER_TEMPLATE, orderTemplateSchema, parseTranslatedSemanticOrder, renderSemanticOrder, renderTextOrder, serializeSemanticOrder } from "../src/order-template.js";
+import { DEFAULT_IMAGE_ORDER_TEMPLATE, DEFAULT_SC_ORDER_TEMPLATE, DEFAULT_TEXT_ORDER_TEMPLATE, orderTemplateSchema, parseTranslatedSemanticOrder, renderSemanticOrder, renderTextOrder, serializeSemanticOrder } from "../src/order-template.js";
 
 const context={orderNumber:"20260720-001",businessStatus:"pending_confirmation" as const,currency:"USD",customerName:"Alex",customerPhone:"+8613800000000",description:"Handle *carefully*",items:[{name:"Perfume _limited_",sku:"PERFUME-001",quantity:2,unitAmount:49.75},{name:"Gift box",sku:"GIFT-001",quantity:1,unitAmount:8}],fees:[{name:"Shipping",amount:6.5}],address:{recipientName:"Alex",phone:"+8613800000000",address:"88 Market Street"}};
 
@@ -38,6 +38,19 @@ test("semantic and WhatsApp rendering follow order and hide empty optional block
   assert.match(text,/^\*Order #20260720-001\*/);
   assert.match(text,/Perfume _\u200blimited_\u200b/);
   assert.match(text,/\*Total: USD 107\.50\*/);
+});
+
+test("contact information blocks render selected populated profile fields",()=>{
+  const template={version:1 as const,blocks:[{id:"items",type:"itemList" as const},{id:"contact",type:"contactInfo" as const,label:"Buyer:",contactFields:["name","firstName","lastName","company","location","email","phone"]},{id:"total",type:"total" as const},{id:"payment",type:"paymentSummary" as const}]};
+  assert.equal(orderTemplateSchema.safeParse(template).success,true);
+  const contact=renderSemanticOrder(template,{...context,contact:{firstName:"Alex",lastName:"Chen",companyName:"Acme Trading",country:"China",city:"Shanghai",email:"alex@example.com"}}).find(block=>block.type==="contactInfo");
+  assert.deepEqual(contact?.lines,["Buyer:","Name: Alex","First name: Alex","Last name: Chen","Company: Acme Trading","Location: China, Shanghai","Email: alex@example.com","Phone: +8613800000000"]);
+});
+
+test("SC templates include a contact information block by default",()=>{
+  const contact=DEFAULT_SC_ORDER_TEMPLATE.blocks.find(block=>block.type==="contactInfo");
+  assert.ok(contact);
+  assert.deepEqual(contact.contactFields,["name","firstName","lastName","company","location","email","phone"]);
 });
 
 test("translation markers round-trip and reject damaged output",()=>{
