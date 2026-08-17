@@ -22,7 +22,10 @@ test("manual reply suggestion combines conversation context and assigned knowled
   assert.match(engine, /This is a rethink request/);
   assert.match(engine, /buildReplyTimingContext/);
   assert.match(engine, /hoursSinceLastContact/);
-  assert.match(engine, /Use replyTiming as authoritative timing context/);
+  assert.match(engine, /conversationState\.currentTime and replyTiming as authoritative time context/);
+  assert.match(engine, /follow_up_after_business_message/);
+  assert.match(engine, /Relative promises such as "tomorrow"/);
+  assert.match(engine, /follow conversationState\.requiredAction instead of blindly answering latestCustomerMessage/);
   assert.match(engine, /reply_suggestion_instructions/);
   assert.match(server, /\/api\/v1\/conversations\/:id\/reply-suggestion/);
   assert.match(server, /reply_suggestion_instructions/);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { agentRunKind, buildReplyTimingContext, captionOrderDetailsImage, chunkText, compactMemoryMessages, detectOrderDetailsLanguage, groundOrderDetailsImageReply, groundOrderNumberReply, isConversationAgentActive, isConversationJobEligible, isPredominantlyChinese, isReplySourceCurrent, isWithinBusinessHours, passesAutoReplyGate, resolveOrderDetailsImage, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
+import { agentRunKind, buildReplyTimingContext, buildSalesSuggestionConversationState, captionOrderDetailsImage, chunkText, compactMemoryMessages, detectOrderDetailsLanguage, groundOrderDetailsImageReply, groundOrderNumberReply, isConversationAgentActive, isConversationJobEligible, isPredominantlyChinese, isReplySourceCurrent, isWithinBusinessHours, passesAutoReplyGate, resolveOrderDetailsImage, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
 
 test("chunkText creates bounded overlapping chunks",()=>{
   const input=("A paragraph with useful knowledge. ").repeat(120);
@@ -75,6 +75,16 @@ test("reply suggestions receive explicit elapsed contact timing",()=>{
   assert.equal(timing.hoursSinceLastContact,24.5);
   assert.equal(timing.hoursSinceLastCustomerMessage,26.5);
   assert.equal(timing.hoursSinceLastBusinessMessage,24.5);
+});
+
+test("reply suggestions follow up when the business sent the latest message",()=>{
+  const state=buildSalesSuggestionConversationState([
+    {id:"customer",direction:"in",text_content:"I will pay tomorrow",occurred_at:"2026-08-14T03:58:00.000Z"},
+    {id:"business",direction:"out",text_content:"Talk to you tomorrow",occurred_at:"2026-08-14T03:59:00.000Z"},
+  ],new Date("2026-08-17T03:00:00.000Z"));
+  assert.equal(state.requiredAction,"follow_up_after_business_message");
+  assert.equal(state.latestMessage?.id,"business");
+  assert.equal(state.timing.hoursSinceLastContact,71);
 });
 
 test("late reply jobs cannot answer a newer customer message",()=>{
