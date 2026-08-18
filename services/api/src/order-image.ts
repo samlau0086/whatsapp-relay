@@ -48,13 +48,13 @@ export async function renderTemplateOrderImage(template:OrderTemplate,blocks:Sem
   for(const block of blocks){
     const definition=definitions.get(block.id);if(!definition)continue;
     if((block.type==="customImage"||block.type==="imageText")&&customImages.has(block.id)){
-      const data=customImages.get(block.id)!;const imageWidth=definition.imageSize==="small"?220:definition.imageSize==="large"?520:360;
+      const data=customImages.get(block.id)!;const imageWidth=definition.imageSize==="small"?180:definition.imageSize==="large"?480:320;const imageHeight=definition.imageSize==="small"?140:definition.imageSize==="large"?360:240;
       const textLines=block.type==="imageText"?block.lines.flatMap(line=>wrapLine(line,42)):[];const textHeight=textLines.length?textLines.length*30+24:0;
-      const vertical=definition.imageLayout==="top"||definition.imageLayout==="bottom",height=vertical?240+textHeight+34:Math.max(240,textHeight+24),blockY=y;
+      const vertical=definition.imageLayout==="top"||definition.imageLayout==="bottom",height=vertical?imageHeight+textHeight+34:Math.max(imageHeight,textHeight+24),blockY=y;
       fragments.push(`<rect x="${PADDING}" y="${blockY}" width="${CONTENT_WIDTH}" height="${height}" rx="16" fill="${escapeXml(definition.backgroundColor??"#FFFFFF")}" stroke="#E0EAE5"/>`);
-      const imageX=vertical?PADDING+(CONTENT_WIDTH-imageWidth)/2:(definition.imageLayout==="right"?WIDTH-PADDING-imageWidth-18:PADDING+18),imageY=definition.imageLayout==="bottom"?blockY+height-240-12:blockY+12;
-      fragments.push(`<image x="${imageX}" y="${imageY}" width="${imageWidth}" height="240" preserveAspectRatio="xMidYMid meet" href="data:image/png;base64,${data}"/>`);
-      if(textLines.length){const tx=vertical?WIDTH/2:(definition.imageLayout==="right"?PADDING+24:PADDING+imageWidth+36),ty=vertical?(definition.imageLayout==="bottom"?blockY+24:blockY+264):blockY+34,anchor=vertical?"middle":"start";textLines.forEach((line,index)=>fragments.push(`<text x="${tx}" y="${ty+index*30}" text-anchor="${anchor}" font-family="Noto Sans,Noto Sans CJK SC,sans-serif" font-size="${fontSize}" fill="${escapeXml(definition.textColor??"#20372D")}">${escapeXml(line)}</text>`));}
+      const imageX=vertical?PADDING+(CONTENT_WIDTH-imageWidth)/2:(definition.imageLayout==="right"?WIDTH-PADDING-imageWidth-18:PADDING+18),imageY=definition.imageLayout==="bottom"?blockY+height-imageHeight-12:blockY+12;
+      fragments.push(`<image x="${imageX}" y="${imageY}" width="${imageWidth}" height="${imageHeight}" preserveAspectRatio="xMidYMid meet" href="data:image/png;base64,${data}"/>`);
+      if(textLines.length){const tx=vertical?WIDTH/2:(definition.imageLayout==="right"?PADDING+24:PADDING+imageWidth+36),ty=vertical?(definition.imageLayout==="bottom"?blockY+24:blockY+imageHeight+24):blockY+34,anchor=vertical?"middle":"start";textLines.forEach((line,index)=>fragments.push(`<text x="${tx}" y="${ty+index*30}" text-anchor="${anchor}" font-family="Noto Sans,Noto Sans CJK SC,sans-serif" font-size="${fontSize}" fill="${escapeXml(definition.textColor??"#20372D")}">${escapeXml(line)}</text>`));}
       y+=height+18;continue;
     }
     const fontSize=definition.fontSize==="large"?34:definition.fontSize==="small"?22:27,lineHeight=fontSize+14;
