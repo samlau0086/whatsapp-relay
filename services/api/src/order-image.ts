@@ -42,9 +42,21 @@ export async function renderOrderImage(summary:string,products:OrderImageProduct
 export async function renderTemplateOrderImage(template:OrderTemplate,blocks:SemanticOrderBlock[],products:OrderImageProduct[]):Promise<Buffer>{
   const definitions=new Map(template.blocks.map(block=>[block.id,block]));
   const prepared=await Promise.all(products.map(async product=>product.image?(await sharp(product.image).rotate().resize(240,240,{fit:"cover"}).png().toBuffer()).toString("base64"):null));
+  const customImages=new Map<string,string>();
+  await Promise.all(template.blocks.filter(block=>block.imageUrl).map(async block=>{try{const response=await fetch(block.imageUrl!,{signal:AbortSignal.timeout(8000)});if(!response.ok)return;const data=await sharp(Buffer.from(await response.arrayBuffer())).rotate().resize(360,240,{fit:"inside"}).png().toBuffer();customImages.set(block.id,data.toString("base64"));}catch{}}));
   let y=48;const fragments:string[]=[];
   for(const block of blocks){
     const definition=definitions.get(block.id);if(!definition)continue;
+    if((block.type==="customImage"||block.type==="imageText")&&customImages.has(block.id)){
+      const data=customImages.get(block.id)!;const imageWidth=definition.imageSize==="small"?220:definition.imageSize==="large"?520:360;
+      const textLines=block.type==="imageText"?block.lines.flatMap(line=>wrapLine(line,42)):[];const textHeight=textLines.length?textLines.length*30+24:0;
+      const vertical=definition.imageLayout==="top"||definition.imageLayout==="bottom",height=vertical?240+textHeight+34:Math.max(240,textHeight+24),blockY=y;
+      fragments.push(`<rect x="${PADDING}" y="${blockY}" width="${CONTENT_WIDTH}" height="${height}" rx="16" fill="${escapeXml(definition.backgroundColor??"#FFFFFF")}" stroke="#E0EAE5"/>`);
+      const imageX=vertical?PADDING+(CONTENT_WIDTH-imageWidth)/2:(definition.imageLayout==="right"?WIDTH-PADDING-imageWidth-18:PADDING+18),imageY=definition.imageLayout==="bottom"?blockY+height-240-12:blockY+12;
+      fragments.push(`<image x="${imageX}" y="${imageY}" width="${imageWidth}" height="240" preserveAspectRatio="xMidYMid meet" href="data:image/png;base64,${data}"/>`);
+      if(textLines.length){const tx=vertical?WIDTH/2:(definition.imageLayout==="right"?PADDING+24:PADDING+imageWidth+36),ty=vertical?(definition.imageLayout==="bottom"?blockY+24:blockY+264):blockY+34,anchor=vertical?"middle":"start";textLines.forEach((line,index)=>fragments.push(`<text x="${tx}" y="${ty+index*30}" text-anchor="${anchor}" font-family="Noto Sans,Noto Sans CJK SC,sans-serif" font-size="${fontSize}" fill="${escapeXml(definition.textColor??"#20372D")}">${escapeXml(line)}</text>`));}
+      y+=height+18;continue;
+    }
     const fontSize=definition.fontSize==="large"?34:definition.fontSize==="small"?22:27,lineHeight=fontSize+14;
     const color=definition.textColor??"#20372D",background=definition.backgroundColor??"#FFFFFF",align=definition.align??"left";
     const imageSize=definition.imageSize==="large"?160:definition.imageSize==="small"?88:124;

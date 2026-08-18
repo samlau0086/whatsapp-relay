@@ -2,13 +2,13 @@ import { z } from "zod";
 import { calculateOrderTotal, type OrderSummaryFee, type OrderSummaryItem } from "./crm.js";
 import { ORDER_BUSINESS_STATUSES } from "./schemas.js";
 
-export const ORDER_BLOCK_TYPES=["orderHeader","itemList","feeList","total","paymentSummary","shippingAddress","contactInfo","notes","divider","customText"] as const;
+export const ORDER_BLOCK_TYPES=["orderHeader","itemList","feeList","total","paymentSummary","shippingAddress","contactInfo","notes","divider","customText","customImage","imageText"] as const;
 export type OrderBlockType=typeof ORDER_BLOCK_TYPES[number];
 export const CONTACT_INFO_FIELDS=["name","firstName","lastName","company","location","email","phone"] as const;
 export type ContactInfoField=typeof CONTACT_INFO_FIELDS[number];
 export type OrderTemplateFormat="text"|"image"|"pdf"|"sc"|"pi"|"ci";
 export type OrderTemplateBlock={
-  id:string;type:OrderBlockType;label?:string;text?:string;
+  id:string;type:OrderBlockType;label?:string;text?:string;imageUrl?:string;imageLayout?:"left"|"right"|"top"|"bottom";
   statusLabels?:Partial<Record<OrderBusinessStatus,string>>;
   bold?:boolean;italic?:boolean;strikethrough?:boolean;monospace?:boolean;blankAfter?:boolean;
   fontSize?:"small"|"medium"|"large";textColor?:string;backgroundColor?:string;align?:"left"|"center"|"right";
@@ -31,7 +31,7 @@ export const DEFAULT_ORDER_ITEM_TEMPLATE="{{index}}. {{title}} x {{quantity}} - 
 export const DEFAULT_ORDER_STATUS_LABELS:Record<OrderBusinessStatus,string>={quotation:"Quotation",pending_confirmation:"Order",pending_payment:"Payment Due",paid:"Paid Order",processing:"Order",shipped:"Shipped Order",completed:"Completed Order",cancelled:"Cancelled Order"};
 const ORDER_ITEM_VARIABLES=new Set(["index","title","sku","quantity","price","subtotal"]);
 const blockSchema=z.object({
-  id:z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/),type:z.enum(ORDER_BLOCK_TYPES),label:z.string().max(80).optional(),text:z.string().max(1000).optional(),
+  id:z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/),type:z.enum(ORDER_BLOCK_TYPES),label:z.string().max(80).optional(),text:z.string().max(1000).optional(),imageUrl:z.string().url().max(2000).optional(),imageLayout:z.enum(["left","right","top","bottom"]).optional(),
   statusLabels:z.object(Object.fromEntries(ORDER_BUSINESS_STATUSES.map(status=>[status,z.string().trim().min(1).max(80)])) as Record<OrderBusinessStatus,z.ZodString>).partial().optional(),
   bold:z.boolean().optional(),italic:z.boolean().optional(),strikethrough:z.boolean().optional(),monospace:z.boolean().optional(),blankAfter:z.boolean().optional(),
   fontSize:z.enum(["small","medium","large"]).optional(),textColor:color.optional(),backgroundColor:color.optional(),align:z.enum(["left","center","right"]).optional(),
@@ -44,6 +44,10 @@ const blockSchema=z.object({
     const allowed=new Set(["{{orderNumber}}","{{customerName}}","{{customerPhone}}","{{currency}}","{{total}}","{{address}}","{{recipientName}}","{{recipientPhone}}","{{notes}}"]);
     for(const variable of variables)if(!allowed.has(variable.replace(/\s/g,"")))ctx.addIssue({code:"custom",path:["text"],message:`unsupported variable: ${variable}`});
     if(/{{|}}/.test((block.text??"").replace(/{{\s*[^{}]+\s*}}/g,"")))ctx.addIssue({code:"custom",path:["text"],message:"invalid variable syntax"});
+  }
+  if(block.type==="customImage"||block.type==="imageText"){
+    if(!block.imageUrl)ctx.addIssue({code:"custom",path:["imageUrl"],message:"image block requires imageUrl"});
+    if(block.type==="imageText"&&!block.text?.trim())ctx.addIssue({code:"custom",path:["text"],message:"imageText requires text"});
   }
   if(block.type==="itemList"&&block.itemTemplate!==undefined){
     const variables=block.itemTemplate.match(/{{\s*[^{}]+\s*}}/g)??[];
@@ -127,6 +131,7 @@ export function renderSemanticOrder(template:OrderTemplate,context:OrderTemplate
     else if(block.type==="notes"){if(!context.description)return[];lines=[`${label}${label?" ":""}${context.description}`];}
     else if(block.type==="divider")lines=["────────────────"];
     else if(block.type==="customText")lines=replace(block.text??"").split("\n");
+    else if(block.type==="imageText")lines=replace(block.text??"").split("\n");
     return[{id:block.id,type:block.type,lines}];
   });
 }
@@ -162,4 +167,4 @@ function renderOrderItem(template:string|undefined,item:OrderSummaryItem,index:n
   };
   return(template?.trim()||DEFAULT_ORDER_ITEM_TEMPLATE).replace(/{{\s*([A-Za-z]+)\s*}}/g,(_,name:string)=>variables[name]??"");
 }
-function defaultLabel(type:OrderBlockType):string{return({orderHeader:"Order",itemList:"Items:",feeList:"Additional fees:",total:"Total:",paymentSummary:"Payment:",shippingAddress:"Shipping address:",contactInfo:"Customer:",notes:"Notes:",divider:"",customText:""})[type];}
+function defaultLabel(type:OrderBlockType):string{return({orderHeader:"Order",itemList:"Items:",feeList:"Additional fees:",total:"Total:",paymentSummary:"Payment:",shippingAddress:"Shipping address:",contactInfo:"Customer:",notes:"Notes:",divider:"",customText:"",customImage:"",imageText:""})[type];}
