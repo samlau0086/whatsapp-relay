@@ -353,7 +353,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [messageCommentDrafts,setMessageCommentDrafts]=useState<Record<string,string>>({});
   const [editingMessageComment,setEditingMessageComment]=useState<{messageId:string;commentId:string;body:string}|null>(null);
   const [messageCommentBusy,setMessageCommentBusy]=useState("");
-  const [translationPreview,setTranslationPreview]=useState<{source:string;translated:string;targetLanguage:string;media?:{asset:MediaAsset;throwOnFailure:boolean;includeReply:boolean;followingAssets:MediaAsset[]}}|null>(null);
+  const [translationPreview,setTranslationPreview]=useState<{source:string;translated:string;targetLanguage:string;conversationId:string;accountId:string;media?:{asset:MediaAsset;throwOnFailure:boolean;includeReply:boolean;followingAssets:MediaAsset[]}}|null>(null);
   const [translatingDraft,setTranslatingDraft]=useState(false);
   const [translationError,setTranslationError]=useState("");
   const [replySuggestionBusy,setReplySuggestionBusy]=useState(false);
@@ -986,7 +986,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     if(translationPreference.enabled){
       if(!translationConfigured){setToast("AI 翻译暂不可用，请联系管理员配置 Provider");return;}
       setTranslatingDraft(true);setTranslationError("");
-      try{const targetLanguage=translationPreference.customerLanguage,result=await authorizedFetch("/api/v1/translations/preview",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:source,targetLanguage,conversationId:active.id})});if(result.token!==apiToken)setApiToken(result.token);const body=await result.response.json().catch(()=>({})) as {translatedText?:string;message?:string};if(!result.response.ok||!body.translatedText)throw new Error(body.message??"翻译失败");setTranslationPreview({source,translated:body.translatedText,targetLanguage});}catch(reason){setTranslationError(reason instanceof Error?reason.message:"翻译失败");setToast("AI 翻译失败，原文未发送");}finally{setTranslatingDraft(false);}return;
+      try{const targetLanguage=translationPreference.customerLanguage,conversationId=active.id,accountId=active.accountId,result=await authorizedFetch("/api/v1/translations/preview",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:source,targetLanguage,conversationId})});if(result.token!==apiToken)setApiToken(result.token);const body=await result.response.json().catch(()=>({})) as {translatedText?:string;message?:string};if(!result.response.ok||!body.translatedText)throw new Error(body.message??"翻译失败");setTranslationPreview({source,translated:body.translatedText,targetLanguage,conversationId,accountId});}catch(reason){setTranslationError(reason instanceof Error?reason.message:"翻译失败");setToast("AI 翻译失败，原文未发送");}finally{setTranslatingDraft(false);}return;
     }
     await queueTextMessage(source);
   }
@@ -995,18 +995,22 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     text: string,
     translationSourceText?: string,
     translationTargetLanguage?: string,
+    targetConversationId?: string,
+    targetAccountId?: string,
   ) {
-    if (!active || !apiToken || !text.trim()) return;
+    const conversationId=targetConversationId??active?.id;
+    const accountId=targetAccountId??active?.accountId;
+    if (!conversationId || !accountId || !apiToken || !text.trim()) return;
     const clientMessageId = crypto.randomUUID(),
-      quoted = selectedReply ? messageQuote(selectedReply) : undefined;
+      quoted = conversationId===effectiveActiveId&&selectedReply ? messageQuote(selectedReply) : undefined;
     setDraft("");
     setReplyTo(null);
     setTranslationPreview(null);
     setTranslationError("");
     setMessages((all) => ({
       ...all,
-      [active.id]: [
-        ...(all[active.id] ?? []),
+      [conversationId]: [
+        ...(all[conversationId] ?? []),
         {
           id: clientMessageId,
           direction: "out",
@@ -1025,8 +1029,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        accountId: active.accountId,
-        conversationId: active.id,
+        accountId,
+        conversationId,
         clientMessageId,
         type: "text",
         text,
@@ -1187,14 +1191,16 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     }
   }
 
-  async function sendMediaAsset(asset:MediaAsset,caption:string,throwOnFailure=false,includeReply=true,translationSourceText?:string,translationTargetLanguage?:string){
-    if(!active||!apiToken)return;
-    if(active.platform==="messenger"&&caption.trim()){const message="Messenger 媒体首版不支持 caption，请先单独发送文字";setToast(message);if(throwOnFailure)throw new Error(message);return;}
-    const kind=mediaKind(asset.mimeType),clientMessageId=crypto.randomUUID(),quoted=includeReply&&selectedReply?messageQuote(selectedReply):undefined;setDraft("");setReplyTo(null);
-    setMessages(all=>({...all,[active.id]:[...(all[active.id]??[]),{id:clientMessageId,direction:"out",kind,text:caption,translationSourceText,translationTargetLanguage,quoted,platform:active.platform,pageId:active.pageId??undefined,time:formatTime(new Date()),status:"queued",attachment:{id:asset.id,name:asset.fileName,mime:asset.mimeType,size:formatBytes(asset.size)},comments:[]}]}));
-    const queued=await authorizedFetch("/api/v1/messages",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId:active.accountId,conversationId:active.id,clientMessageId,type:kind,text:caption||undefined,mediaId:asset.id,...(translationSourceText?{translationSourceText}:{}),...(translationTargetLanguage?{translationTargetLanguage}:{}),...(quoted?{quotedMessageId:quoted.id}:{})})});if(queued.token!==apiToken)setApiToken(queued.token);
-    if(!queued.response.ok){const body=await queued.response.json().catch(()=>({})) as {error?:string};const message=body.error==="agent_upgrade_required"?"请先升级 Windows Agent 后再使用指定回复":`附件消息入队失败（HTTP ${queued.response.status}）`;setToast(message);setMessages(all=>({...all,[active.id]:(all[active.id]??[]).map(item=>item.id===clientMessageId?{...item,status:"failed"}:item)}));if(throwOnFailure)throw new Error(message);return;}
-    setMediaOpen(false);setMaterialLibraryOpen(false);setToast(active.accountStatus==="online"?"附件已进入发送队列":"账号离线，附件已持久化排队");void loadMessages(queued.token,active.id);
+  async function sendMediaAsset(asset:MediaAsset,caption:string,throwOnFailure=false,includeReply=true,translationSourceText?:string,translationTargetLanguage?:string,targetConversationId?:string,targetAccountId?:string){
+    const target=targetConversationId?conversations.find(item=>item.id===targetConversationId)??(active?.id===targetConversationId?active:null):active;
+    const conversationId=targetConversationId??target?.id,accountId=targetAccountId??target?.accountId;
+    if(!conversationId||!accountId||!apiToken)return;
+    if(target?.platform==="messenger"&&caption.trim()){const message="Messenger 媒体首版不支持 caption，请先单独发送文字";setToast(message);if(throwOnFailure)throw new Error(message);return;}
+    const kind=mediaKind(asset.mimeType),clientMessageId=crypto.randomUUID(),quoted=conversationId===effectiveActiveId&&includeReply&&selectedReply?messageQuote(selectedReply):undefined;setDraft("");setReplyTo(null);
+    setMessages(all=>({...all,[conversationId]:[...(all[conversationId]??[]),{id:clientMessageId,direction:"out",kind,text:caption,translationSourceText,translationTargetLanguage,quoted,platform:target?.platform??"whatsapp",pageId:target?.pageId??undefined,time:formatTime(new Date()),status:"queued",attachment:{id:asset.id,name:asset.fileName,mime:asset.mimeType,size:formatBytes(asset.size)},comments:[]}]}));
+    const queued=await authorizedFetch("/api/v1/messages",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId,conversationId,clientMessageId,type:kind,text:caption||undefined,mediaId:asset.id,...(translationSourceText?{translationSourceText}:{}),...(translationTargetLanguage?{translationTargetLanguage}:{}),...(quoted?{quotedMessageId:quoted.id}:{})})});if(queued.token!==apiToken)setApiToken(queued.token);
+    if(!queued.response.ok){const body=await queued.response.json().catch(()=>({})) as {error?:string};const message=body.error==="agent_upgrade_required"?"请先升级 Windows Agent 后再使用指定回复":`附件消息入队失败（HTTP ${queued.response.status}）`;setToast(message);setMessages(all=>({...all,[conversationId]:(all[conversationId]??[]).map(item=>item.id===clientMessageId?{...item,status:"failed"}:item)}));if(throwOnFailure)throw new Error(message);return;}
+    setMediaOpen(false);setMaterialLibraryOpen(false);setToast(target?.accountStatus==="online"?"附件已进入发送队列":"账号离线，附件已持久化排队");void loadMessages(queued.token,conversationId);
   }
 
   async function previewAndSendMediaAsset(asset:MediaAsset,caption:string,throwOnFailure=false,includeReply=true,followingAssets:MediaAsset[]=[]){
@@ -1207,7 +1213,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       if(result.token!==apiToken)setApiToken(result.token);
       const body=await result.response.json().catch(()=>({})) as {translatedText?:string;message?:string};
       if(!result.response.ok||!body.translatedText)throw new Error(body.message??"翻译失败");
-      setTranslationPreview({source,translated:body.translatedText,targetLanguage,media:{asset,throwOnFailure,includeReply,followingAssets}});
+      setTranslationPreview({source,translated:body.translatedText,targetLanguage,conversationId:active.id,accountId:active.accountId,media:{asset,throwOnFailure,includeReply,followingAssets}});
     }catch(reason){const message=reason instanceof Error?reason.message:"翻译失败";setTranslationError(message);setToast("AI 翻译失败，附件未发送");if(throwOnFailure)throw reason;}
     finally{setTranslatingDraft(false);}
   }
@@ -2546,9 +2552,9 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           onClose={() => setTranslationPreview(null)}
           onConfirm={(text) => void (async()=>{
             const preview=translationPreview;setTranslationPreview(null);
-            if(!preview.media){await queueTextMessage(text,preview.source,preview.targetLanguage);return;}
-            await sendMediaAsset(preview.media.asset,text,preview.media.throwOnFailure,preview.media.includeReply,preview.source,preview.targetLanguage);
-            for(const asset of preview.media.followingAssets)await sendMediaAsset(asset,"",true,false);
+            if(!preview.media){await queueTextMessage(text,preview.source,preview.targetLanguage,preview.conversationId,preview.accountId);return;}
+            await sendMediaAsset(preview.media.asset,text,preview.media.throwOnFailure,preview.media.includeReply,preview.source,preview.targetLanguage,preview.conversationId,preview.accountId);
+            for(const asset of preview.media.followingAssets)await sendMediaAsset(asset,"",true,false,undefined,undefined,preview.conversationId,preview.accountId);
           })()}
         />
       )}
