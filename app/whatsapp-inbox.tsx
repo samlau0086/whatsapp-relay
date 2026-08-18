@@ -42,6 +42,8 @@ import { convertWeight, formatWeight, WEIGHT_UNITS, type WeightUnit } from "./we
 
 const API_URL = (process.env.NEXT_PUBLIC_RELAY_API_URL ?? "").replace(/\/$/, "");
 const REMEMBER_LOGIN_KEY="relayRememberLogin";
+const FILTERS_HIDDEN_KEY="relayFiltersHidden";
+const CONVERSATION_LIST_HIDDEN_KEY="relayConversationListHidden";
 const COLORS = ["#6b4f3a", "#305f72", "#9b5f72", "#477a62", "#705b86"];
 const PRODUCT_PAGE_SIZES = [24,32,36,48,64] as const;
 const CONTACT_PAGE_SIZES = [24,32,48,64] as const;
@@ -316,6 +318,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [sidebarOpen,setSidebarOpen]=useState(false);
   const [filtersHidden,setFiltersHidden]=useState(false);
   const [conversationListHidden,setConversationListHidden]=useState(false);
+  const [columnPreferencesReady,setColumnPreferencesReady]=useState(false);
   const [toast,setToast]=useState("");
   const [markingUnreadId,setMarkingUnreadId]=useState("");
   const [retryingMessageId,setRetryingMessageId]=useState("");
@@ -773,6 +776,20 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     void Promise.all([loadConversations(apiToken),loadConversationCounts(apiToken)]);
   },[view,apiToken,dateFilter,filter,selectedAccount,debouncedQuery,selectedTag,selectedCustomerStage,selectedLatestOrderStatus,loadConversations,loadConversationCounts]);
   useEffect(()=>{const timer=window.setTimeout(()=>{if(window.matchMedia("(max-width: 1280px)").matches)setDetailsOpen(false);},0);return()=>window.clearTimeout(timer);},[]);
+  useEffect(()=>{
+    const readBoolean=(key:string)=>window.localStorage.getItem(key)==="1";
+    setFiltersHidden(readBoolean(FILTERS_HIDDEN_KEY));
+    setConversationListHidden(readBoolean(CONVERSATION_LIST_HIDDEN_KEY));
+    setColumnPreferencesReady(true);
+  },[]);
+  useEffect(()=>{
+    if(!columnPreferencesReady)return;
+    window.localStorage.setItem(FILTERS_HIDDEN_KEY,filtersHidden?"1":"0");
+  },[columnPreferencesReady,filtersHidden]);
+  useEffect(()=>{
+    if(!columnPreferencesReady)return;
+    window.localStorage.setItem(CONVERSATION_LIST_HIDDEN_KEY,conversationListHidden?"1":"0");
+  },[columnPreferencesReady,conversationListHidden]);
 
   useEffect(()=>{
     const root=conversationListRef.current,target=conversationLoadSentinelRef.current;
@@ -1323,9 +1340,39 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   if(!apiToken)return <><AccessPortal loading={false} onLogin={()=>setAuthOpen(true)}/>{authOpen&&<LoginDialog connected={false} token="" canClose onClose={()=>setAuthOpen(false)} onLogin={completeLogin} onLogout={logout}/>}</>;
 
   return (
-    <main className={`relay-shell ${filtersHidden ? "filters-hidden" : ""} ${conversationListHidden ? "conversation-list-hidden" : ""}`}>
+    <main className={`relay-shell ${filtersHidden ? "filters-hidden" : ""} ${conversationListHidden ? "conversation-list-hidden" : ""} ${!detailsOpen || !active ? "details-hidden" : ""}`}>
       <ConfirmationHost />
       <PromptHost />
+      {view === "inbox" && (
+        <>
+          <button
+            className="edge-column-toggle edge-column-toggle-left edge-filter-toggle"
+            onClick={() => setFiltersHidden(value => !value)}
+            aria-label={filtersHidden ? "显示筛选栏" : "隐藏筛选栏"}
+            title={filtersHidden ? "显示筛选栏" : "隐藏筛选栏"}
+          >
+            {filtersHidden ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+          </button>
+          <button
+            className="edge-column-toggle edge-column-toggle-left edge-conversation-toggle"
+            onClick={() => setConversationListHidden(value => !value)}
+            aria-label={conversationListHidden ? "显示会话栏" : "隐藏会话栏"}
+            title={conversationListHidden ? "显示会话栏" : "隐藏会话栏"}
+          >
+            {conversationListHidden ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+          </button>
+          {(!detailsOpen || !active) && (
+            <button
+              className="edge-column-toggle edge-column-toggle-right edge-details-toggle"
+              onClick={() => setDetailsOpen(true)}
+              aria-label="显示联系人详情"
+              title="显示联系人详情"
+            >
+              <Info size={16} />
+            </button>
+          )}
+        </>
+      )}
       {toast && (
         <div className="toast">
           <Check size={15} />
