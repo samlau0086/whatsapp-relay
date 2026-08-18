@@ -378,6 +378,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const messageInitialLoadKeyRef=useRef("");
   const messagePaginationDepthRef=useRef(new Map<string,number>());
   const messageStickToBottomRef=useRef(true);
+  const selectedConversationRef=useRef<Conversation|null>(null);
   const translationLoadSequence=useRef(0);
   const previousTranslationTargetLanguageRef=useRef<string|null>(null);
   const workspaceLoadSequence=useRef(0);
@@ -391,8 +392,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const userId=user?.id??tokenSubject(apiToken);
   const counts=conversationCounts;
   const visible=conversations;
-  const effectiveActiveId=visible.some(item=>item.id===activeId)?activeId:(visible[0]?.id??"");
-  const active=visible.find(item=>item.id===effectiveActiveId)??null;
+  const effectiveActiveId=activeId||visible[0]?.id||"";
+  const active=visible.find(item=>item.id===effectiveActiveId)??(selectedConversationRef.current?.id===effectiveActiveId?selectedConversationRef.current:null);
   const translationPreference=active?translationPreferences[active.id]??DEFAULT_TRANSLATION_PREFERENCE:DEFAULT_TRANSLATION_PREFERENCE;
   const translationReady=Boolean(active&&translationReadyConversationId===active.id);
   const currentMessages=useMemo(()=>active?messages[active.id]??[]:[],[active,messages]);
@@ -401,6 +402,15 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const selectedReply=replyTo?.conversationId===effectiveActiveId?replyTo.message:null;
   const currentEmailActivities=useMemo(()=>active?emailActivities[active.id]??[]:[],[active,emailActivities]);
   const latestMessageId=currentMessages.at(-1)?.id??"";
+  const selectConversation=useCallback((conversationId:string)=>{
+    const item=visible.find(value=>value.id===conversationId);
+    if(item)selectedConversationRef.current=item;
+    setActiveId(conversationId);
+  },[visible]);
+  useEffect(()=>{
+    const item=activeId?visible.find(value=>value.id===activeId):undefined;
+    if(item)selectedConversationRef.current=item;
+  },[activeId,visible]);
   const conversationVirtualizer=useVirtualizer({count:visible.length,getScrollElement:()=>conversationListRef.current,estimateSize:()=>91,overscan:6,getItemKey:index=>visible[index]?.id??index});
   const taskRequest=useCallback((path:string,init?:RequestInit)=>authorizedFetch(path,apiToken,init),[apiToken]);
   const scrollMessagesToEnd=useCallback(()=>{
@@ -499,7 +509,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     conversationAbortRef.current?.abort();conversationCursorRef.current=null;
     accountsLoadedForRef.current="";conversationLoadKeyRef.current="";messageInitialLoadKeyRef.current="";messageCursorsRef.current={};messagePaginationDepthRef.current.clear();messageStickToBottomRef.current=true;
     notificationBaseline.current.clear();notificationBaselineReady.current=false;
-    dateFilterRef.current="all";setDateFilter("all");setApiToken("");setUser(null);setAccounts([]);setConversations([]);setConversationCounts(EMPTY_CONVERSATION_COUNTS);setNextConversationCursor(null);setMessages({});setMessageCursors({});setLoadingOlderConversationId("");setOlderMessageErrors({});setFailedMessageCounts({});setEmailActivities({});setMessageTranslations({});setTranslationPreferences({});setTranslationReadyConversationId("");setActiveId("");setSelectedTag("");setContextTags([]);setAuthOpen(false);setSessionReady(true);setLoading(false);
+    dateFilterRef.current="all";setDateFilter("all");setApiToken("");setUser(null);setAccounts([]);setConversations([]);setConversationCounts(EMPTY_CONVERSATION_COUNTS);setNextConversationCursor(null);setMessages({});setMessageCursors({});setLoadingOlderConversationId("");setOlderMessageErrors({});setFailedMessageCounts({});setEmailActivities({});setMessageTranslations({});setTranslationPreferences({});setTranslationReadyConversationId("");selectedConversationRef.current=null;setActiveId("");setSelectedTag("");setContextTags([]);setAuthOpen(false);setSessionReady(true);setLoading(false);
   },[]);
 
   const loadAccounts=useCallback(async(token:string)=>{
@@ -571,7 +581,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
         const firstIds=new Set(mapped.map(item=>item.id)),merged=[...mapped,...current.filter(item=>!firstIds.has(item.id))];
         return merged.sort((a,b)=>conversationFilterKey(filter)==="reminders"?new Date(a.remindAt??8640000000000000).getTime()-new Date(b.remindAt??8640000000000000).getTime():(new Date(b.lastMessageAt??0).getTime()-new Date(a.lastMessageAt??0).getTime())||b.id.localeCompare(a.id));
       });
-      setActiveId(previous=>previous||mapped[0]?.id||"");
+      setActiveId(previous=>{
+        if(previous)return previous;
+        const first=mapped[0];
+        if(first)selectedConversationRef.current=first;
+        return first?.id||"";
+      });
     }catch(error){
       if((error as {name?:string}).name==="AbortError")return;
       if(sequence===workspaceLoadSequence.current){const message=error instanceof Error?error.message:"会话数据加载失败";if(append)setLoadMoreError(message);else setLoadError(message);}
@@ -853,7 +868,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   }
 
   function openConversationMenu(event:React.MouseEvent,item:Conversation){
-    event.preventDefault();event.stopPropagation();setActiveId(item.id);
+    event.preventDefault();event.stopPropagation();selectConversation(item.id);
     const width=244,height=390,padding=10;
     setConversationMenu({conversation:item,x:Math.max(padding,Math.min(event.clientX,window.innerWidth-width-padding)),y:Math.max(padding,Math.min(event.clientY,window.innerHeight-height-padding)),section:"root"});
   }
@@ -1656,7 +1671,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             </section>
           </aside>
 
-          <ConversationPanel filter={filter} subtitle={debouncedQuery||selectedTag||selectedCustomerStage||selectedLatestOrderStatus?`已加载 ${visible.length} 条结果`:`${counts[conversationFilterKey(filter)]} 个真实会话`} query={query} onQuery={setQuery} tags={contextTags} tagId={selectedTag} onTagId={setSelectedTag} onTagOpen={()=>void loadConversationTags(apiToken)} customerStage={selectedCustomerStage} onCustomerStage={setSelectedCustomerStage} latestOrderStatus={selectedLatestOrderStatus} onLatestOrderStatus={setSelectedLatestOrderStatus} onOpenSidebar={()=>setSidebarOpen(true)} collapsed={conversationListHidden} onToggleCollapsed={()=>setConversationListHidden(value=>!value)} onRefresh={()=>void loadWorkspace(apiToken)} dateFilter={dateFilter} onDateFilter={selectDateFilter} onDateKeyDown={handleDateFilterKeyDown} listRef={conversationListRef} sentinelRef={conversationLoadSentinelRef} items={visible} rows={conversationVirtualizer.getVirtualItems()} totalSize={conversationVirtualizer.getTotalSize()} measure={conversationVirtualizer.measureElement} effectiveActiveId={effectiveActiveId} clock={clock} markingUnreadId={markingUnreadId} onSelect={setActiveId} onMenu={openConversationMenu} onMarkUnread={id=>void markConversationUnread(id)} loading={loading} loadError={loadError} hasAccounts={Boolean(accounts.length)} loadingMore={loadingMoreConversations} loadMoreError={loadMoreError} hasMore={Boolean(nextConversationCursor)} onLoadMore={()=>void loadConversations(apiToken,{append:true})}/>
+          <ConversationPanel filter={filter} subtitle={debouncedQuery||selectedTag||selectedCustomerStage||selectedLatestOrderStatus?`已加载 ${visible.length} 条结果`:`${counts[conversationFilterKey(filter)]} 个真实会话`} query={query} onQuery={setQuery} tags={contextTags} tagId={selectedTag} onTagId={setSelectedTag} onTagOpen={()=>void loadConversationTags(apiToken)} customerStage={selectedCustomerStage} onCustomerStage={setSelectedCustomerStage} latestOrderStatus={selectedLatestOrderStatus} onLatestOrderStatus={setSelectedLatestOrderStatus} onOpenSidebar={()=>setSidebarOpen(true)} collapsed={conversationListHidden} onToggleCollapsed={()=>setConversationListHidden(value=>!value)} onRefresh={()=>void loadWorkspace(apiToken)} dateFilter={dateFilter} onDateFilter={selectDateFilter} onDateKeyDown={handleDateFilterKeyDown} listRef={conversationListRef} sentinelRef={conversationLoadSentinelRef} items={visible} rows={conversationVirtualizer.getVirtualItems()} totalSize={conversationVirtualizer.getTotalSize()} measure={conversationVirtualizer.measureElement} effectiveActiveId={effectiveActiveId} clock={clock} markingUnreadId={markingUnreadId} onSelect={selectConversation} onMenu={openConversationMenu} onMarkUnread={id=>void markConversationUnread(id)} loading={loading} loadError={loadError} hasAccounts={Boolean(accounts.length)} loadingMore={loadingMoreConversations} loadMoreError={loadMoreError} hasMore={Boolean(nextConversationCursor)} onLoadMore={()=>void loadConversations(apiToken,{append:true})}/>
 
           <section className="chat-panel">
             {active ? (
