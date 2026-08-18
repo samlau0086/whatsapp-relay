@@ -30,6 +30,9 @@ test("product card sends accept complete translated product names and reject par
   assert.equal(productCardSendSchema.safeParse({...base,translationTargetLanguage:"zh-CN",translatedProductNames:[{productId:productIds[0],name:"译名"}]}).success,false);
   assert.equal(productCardSendSchema.safeParse({...base,translationTargetLanguage:"zh-CN",translatedProductNames:productIds.map(()=>({productId:productIds[0],name:"重复"}))}).success,false);
   assert.equal(productCardSendSchema.safeParse({...base,translationTargetLanguage:"zh-CN",translatedProductNames:[...productIds.map((productId,index)=>({productId,name:`译名 ${index+1}`})),{productId:"44444444-4444-4444-8444-444444444444",name:"越界"}]}).success,false);
+  const translatedTemplate={...DEFAULT_PRODUCT_CARD_TEMPLATE,blocks:DEFAULT_PRODUCT_CARD_TEMPLATE.blocks.map(block=>block.id==="prices"?{...block,label:"价格"}:block)};
+  assert.equal(productCardSendSchema.safeParse({...base,translationTargetLanguage:"zh-CN",translatedTemplate}).success,true);
+  assert.equal(productCardSendSchema.safeParse({...base,translatedTemplate}).success,false);
 });
 
 test("product card sends accept automatic grid pagination",()=>{

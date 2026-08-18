@@ -42,6 +42,7 @@ type TranslatedProductName = {
   source: string;
   translated: string;
 };
+type ProductCardTemplate = { version: 1; captionTemplate: string; blocks: Array<Record<string, unknown>> };
 type ProductCardMode = "individual" | "combined" | "grid";
 type CurrencyConfig = { code: string; name: string; rate: number };
 const GRID_PRESETS = [2, 3, 4, 5, 8] as const;
@@ -170,6 +171,8 @@ export function ProductCardSendDialog({
     ),
     [showPrice, setShowPrice] = useState(true),
     [translateNames, setTranslateNames] = useState(translationEnabled),
+    [translateTemplate, setTranslateTemplate] = useState(false),
+    [cardTemplate, setCardTemplate] = useState<ProductCardTemplate | null>(null),
     [channel, setChannel] = useState<"whatsapp" | "email">("whatsapp"),
     [emails, setEmails] = useState<ContactEmail[]>([]),
     [recipientIds, setRecipientIds] = useState<string[]>([]),
@@ -185,6 +188,7 @@ export function ProductCardSendDialog({
       source: string;
       translated: string;
       names: TranslatedProductName[];
+      template?: ProductCardTemplate;
     } | null>(null),
     [loading, setLoading] = useState(true),
     [busy, setBusy] = useState(false),
@@ -215,13 +219,11 @@ export function ProductCardSendDialog({
           { signal: controller.signal },
         );
         onTokenRef.current(result.token);
-        const body = (await result.response.json().catch(() => ({}))) as {
-          template?: { captionTemplate?: string };
-        };
-        if (result.response.ok && !controller.signal.aborted)
-          setCaptionTemplate(
-            body.template?.captionTemplate ?? "{{productCount}} products",
-          );
+        const body = (await result.response.json().catch(() => ({}))) as { template?: ProductCardTemplate };
+        if (result.response.ok && !controller.signal.aborted) {
+          setCardTemplate(body.template ?? null);
+          setCaptionTemplate(body.template?.captionTemplate ?? "{{productCount}} products");
+        }
       } catch {}
     })();
     return () => controller.abort();
@@ -431,6 +433,7 @@ export function ProductCardSendDialog({
     translatedCaption?: string,
     translationSourceText?: string,
     translatedProductNames?: TranslatedProductName[],
+    translatedTemplate?: ProductCardTemplate,
   ) {
     if (!selected.length) return;
     if (mode === "combined" && selected.length > 10) {
@@ -443,13 +446,16 @@ export function ProductCardSendDialog({
     }
     const email = channel === "email",
       sourceCaption = caption.trim();
-    const shouldTranslateCaption = Boolean(sourceCaption && translationEnabled),
-      shouldTranslateNames = translateNames && chosen.length > 0;
+    const shouldTranslateCaption = Boolean(sourceCaption && (translationEnabled || (translateTemplate && captionOverride === null))),
+      shouldTranslateNames = translateNames && chosen.length > 0,
+      templateFields = translateTemplate && cardTemplate ? productCardTemplateTextFields(cardTemplate) : [],
+      shouldTranslateTemplate = templateFields.length > 0;
     if (
       !email &&
       translatedCaption === undefined &&
       translatedProductNames === undefined &&
-      (shouldTranslateCaption || shouldTranslateNames)
+      translatedTemplate === undefined &&
+      (shouldTranslateCaption || shouldTranslateNames || shouldTranslateTemplate)
     ) {
       if (!translationConfigured) {
         setError("AI 翻译暂不可用，请联系管理员配置 Provider");
@@ -458,7 +464,7 @@ export function ProductCardSendDialog({
       setTranslating(true);
       setError("");
       try {
-        const [captionResult, nameResult] = await Promise.all([
+        const [captionResult, nameResult, templateResults] = await Promise.all([
           shouldTranslateCaption
             ? requestJsonWithTimeout(
                 "/api/v1/translations/preview",
@@ -484,6 +490,13 @@ export function ProductCardSendDialog({
                 45_000,
               )
             : Promise.resolve(null),
+          shouldTranslateTemplate
+            ? Promise.all(templateFields.map((field) => requestJsonWithTimeout(
+                "/api/v1/translations/preview",
+                { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: field.text, targetLanguage }) },
+                45_000,
+              )))
+            : Promise.resolve([]),
         ]);
         if (
           captionResult &&
@@ -503,6 +516,8 @@ export function ProductCardSendDialog({
           throw new Error(
             String(nameResult.body.message ?? "产品名称翻译失败"),
           );
+        if (templateResults.some((item) => !item.result.response.ok || !item.body.translatedText))
+          throw new Error("产品卡片模板翻译失败");
         setTranslationPreview({
           source: sourceCaption,
           translated: captionResult
@@ -515,6 +530,9 @@ export function ProductCardSendDialog({
                 translated: String((translatedNames as unknown[])[index]),
               }))
             : [],
+          template: shouldTranslateTemplate && cardTemplate
+            ? applyProductCardTemplateTranslations(cardTemplate, templateFields, templateResults.map((item) => String(item.body.translatedText)))
+            : undefined,
         });
       } catch (reason) {
         setError(
@@ -536,7 +554,7 @@ export function ProductCardSendDialog({
       name: item.translated.trim(),
     }));
     const translationTargetLanguage =
-      translationSourceText || outgoingNames?.length
+      translationSourceText || outgoingNames?.length || translatedTemplate
         ? targetLanguage
         : undefined;
     const grid = mode === "grid" ? gridSize : undefined,
@@ -553,6 +571,7 @@ export function ProductCardSendDialog({
         translationSourceText,
         translationTargetLanguage,
         translatedProductNames: outgoingNames,
+        translatedTemplate,
       }),
       pending = pendingBatchRef.current,
       clientBatchId =
@@ -612,6 +631,7 @@ export function ProductCardSendDialog({
             translationSourceText,
             translationTargetLanguage,
             translatedProductNames: outgoingNames,
+            translatedTemplate,
           }),
         },
         15_000,
@@ -861,6 +881,22 @@ export function ProductCardSendDialog({
                   onChange={(event) => setShowPrice(event.target.checked)}
                 />
                 显示阶梯价格
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  checked={translateTemplate}
+                  disabled={channel === "email" || !cardTemplate}
+                  onChange={(event) => {
+                    setTranslateTemplate(event.target.checked);
+                    resetTranslationPreview();
+                  }}
+                />
+                自动翻译产品卡片文字
+                {channel === "whatsapp" && (
+                  <small>翻译模板中的标签和自定义文字为 {targetLanguageName}，不含产品名称</small>
+                )}
               </label>
               <label>
                 <input
@@ -1136,7 +1172,7 @@ export function ProductCardSendDialog({
             ) : (translationEnabled &&
                 channel === "whatsapp" &&
                 caption.trim()) ||
-              (translateNames && channel === "whatsapp") ? (
+              ((translateNames || translateTemplate) && channel === "whatsapp") ? (
               <>
                 <Languages size={14} />
                 翻译并预览
@@ -1159,7 +1195,7 @@ export function ProductCardSendDialog({
             onClose={() => setTranslationPreview(null)}
             onConfirm={(text, names) => {
               setTranslationPreview(null);
-              void send(text, translationPreview.source || undefined, names);
+              void send(text, translationPreview.source || undefined, names, translationPreview.template);
             }}
           />
         )}
@@ -1300,6 +1336,40 @@ function ProductCardTranslationConfirm({
       </section>
     </div>
   );
+}
+
+type ProductCardTemplateTextField = {
+  blockIndex: number;
+  key: "label" | "text";
+  text: string;
+};
+
+function productCardTemplateTextFields(template: ProductCardTemplate): ProductCardTemplateTextField[] {
+  return template.blocks.flatMap((block, blockIndex) =>
+    (["label", "text"] as const).flatMap((key) => {
+      const text = typeof block[key] === "string" ? String(block[key]).trim() : "";
+      return text ? [{ blockIndex, key, text }] : [];
+    }),
+  );
+}
+
+function applyProductCardTemplateTranslations(
+  template: ProductCardTemplate,
+  fields: ProductCardTemplateTextField[],
+  translations: string[],
+): ProductCardTemplate {
+  const translated = new Map(fields.map((field, index) => [`${field.blockIndex}:${field.key}`, translations[index]]));
+  return {
+    ...template,
+    blocks: template.blocks.map((block, blockIndex) => {
+      const next = { ...block };
+      for (const key of ["label", "text"] as const) {
+        const value = translated.get(`${blockIndex}:${key}`)?.trim();
+        if (value) next[key] = value;
+      }
+      return next;
+    }),
+  };
 }
 
 function renderCaptionTemplate(template: string, products: Product[]): string {

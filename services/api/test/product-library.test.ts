@@ -197,9 +197,12 @@ test("product card captions come from the template and are translated before Wha
   assert.match(dialog,/\/api\/v1\/translations\/product-names\/preview/);
   assert.match(dialog,/确认产品卡片翻译/);
   assert.match(dialog,/自动翻译产品名称/);
+  assert.match(dialog,/自动翻译产品卡片文字/);
+  assert.match(dialog,/translatedTemplate/);
   assert.match(dialog,/translationSourceText/);
   assert.match(dialog,/translationTargetLanguage/);
   assert.match(server,/renderProductCardCaption/);
+  assert.match(server,/parsed\.data\.translatedTemplate\?\?storedTemplate/);
   assert.match(server,/text_content,translation_source_text,translation_target_language,media_id/);
 });
 
