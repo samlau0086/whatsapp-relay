@@ -986,7 +986,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     if(translationPreference.enabled){
       if(!translationConfigured){setToast("AI 翻译暂不可用，请联系管理员配置 Provider");return;}
       setTranslatingDraft(true);setTranslationError("");
-      try{const targetLanguage=translationPreference.customerLanguage,result=await authorizedFetch("/api/v1/translations/preview",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:source,targetLanguage})});if(result.token!==apiToken)setApiToken(result.token);const body=await result.response.json().catch(()=>({})) as {translatedText?:string;message?:string};if(!result.response.ok||!body.translatedText)throw new Error(body.message??"翻译失败");setTranslationPreview({source,translated:body.translatedText,targetLanguage});}catch(reason){setTranslationError(reason instanceof Error?reason.message:"翻译失败");setToast("AI 翻译失败，原文未发送");}finally{setTranslatingDraft(false);}return;
+      try{const targetLanguage=translationPreference.customerLanguage,result=await authorizedFetch("/api/v1/translations/preview",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:source,targetLanguage,conversationId:active.id})});if(result.token!==apiToken)setApiToken(result.token);const body=await result.response.json().catch(()=>({})) as {translatedText?:string;message?:string};if(!result.response.ok||!body.translatedText)throw new Error(body.message??"翻译失败");setTranslationPreview({source,translated:body.translatedText,targetLanguage});}catch(reason){setTranslationError(reason instanceof Error?reason.message:"翻译失败");setToast("AI 翻译失败，原文未发送");}finally{setTranslatingDraft(false);}return;
     }
     await queueTextMessage(source);
   }
@@ -1203,7 +1203,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     if(!translationConfigured){const message="AI 翻译暂不可用，请联系管理员配置 Provider";setToast(message);if(throwOnFailure)throw new Error(message);return;}
     setTranslatingDraft(true);setTranslationError("");
     try{
-      const targetLanguage=translationPreference.customerLanguage,result=await authorizedFetch("/api/v1/translations/preview",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:source,targetLanguage})});
+      const targetLanguage=translationPreference.customerLanguage,result=await authorizedFetch("/api/v1/translations/preview",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:source,targetLanguage,conversationId:active.id})});
       if(result.token!==apiToken)setApiToken(result.token);
       const body=await result.response.json().catch(()=>({})) as {translatedText?:string;message?:string};
       if(!result.response.ok||!body.translatedText)throw new Error(body.message??"翻译失败");

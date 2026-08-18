@@ -9,6 +9,13 @@ export type TranslationProviderSetting={
   transcriptionModel:string;
 };
 
+export type TranslationContext={
+  /** Recent messages in chronological order. Kept intentionally small to control prompt size. */
+  conversation?:Array<{direction:"in"|"out";text:string}>;
+  customerCountry?:string;
+  customerPreferredLanguage?:string;
+};
+
 const defaults:Record<TranslationProvider,Omit<TranslationProviderSetting,"provider"|"apiKey">>={
   openai:{baseUrl:"https://api.openai.com/v1",model:"gpt-5.6-luna",transcriptionModel:"gpt-4o-mini-transcribe"},
   openai_compatible:{baseUrl:"",model:"",transcriptionModel:"gpt-4o-mini-transcribe"},
@@ -16,11 +23,11 @@ const defaults:Record<TranslationProvider,Omit<TranslationProviderSetting,"provi
 
 export function translationProviderDefaults(provider:TranslationProvider){return defaults[provider];}
 
-export async function translateText(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string}):Promise<string>{
+export async function translateText(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string;context?:TranslationContext}):Promise<string>{
   return requestTranslation(setting,input,"text") as Promise<string>;
 }
 
-export async function translateTextWithDetection(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string;sourceLanguage?:string}):Promise<{translatedText:string;sourceLanguage:string}>{
+export async function translateTextWithDetection(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string;sourceLanguage?:string;context?:TranslationContext}):Promise<{translatedText:string;sourceLanguage:string}>{
   return requestTranslation(setting,input,"detected") as Promise<{translatedText:string;sourceLanguage:string}>;
 }
 
@@ -48,10 +55,13 @@ export async function translateProductNames(setting:TranslationProviderSetting,i
   }catch{throw new Error("translation_provider_invalid_product_names_response");}
 }
 
-async function requestTranslation(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string;sourceLanguage?:string},mode:"text"):Promise<string>;
-async function requestTranslation(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string;sourceLanguage?:string},mode:"detected"):Promise<{translatedText:string;sourceLanguage:string}>;
-async function requestTranslation(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string;sourceLanguage?:string},mode:"text"|"detected"):Promise<string|{translatedText:string;sourceLanguage:string}>{
+async function requestTranslation(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string;sourceLanguage?:string;context?:TranslationContext},mode:"text"):Promise<string>;
+async function requestTranslation(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string;sourceLanguage?:string;context?:TranslationContext},mode:"detected"):Promise<{translatedText:string;sourceLanguage:string}>;
+async function requestTranslation(setting:TranslationProviderSetting,input:{text:string;targetLanguage:string;sourceLanguage?:string;context?:TranslationContext},mode:"text"|"detected"):Promise<string|{translatedText:string;sourceLanguage:string}>{
   const detected=mode==="detected",sourceLanguage=input.sourceLanguage?normalizeLanguageTag(input.sourceLanguage):undefined;
+  const context=input.context, recent=context?.conversation?.slice(-12)??[];
+  const contextPrompt=recent.length?`\n\nRecent conversation context (chronological, do not translate this block):\n${recent.map(item=>`${item.direction==="in"?"Customer":"Agent"}: ${item.text}`).join("\n")}`:"";
+  const localePrompt=`\nCustomer country/region: ${context?.customerCountry||"unknown"}\nCustomer preferred language: ${context?.customerPreferredLanguage||"not specified"}\nPreserve the customer's established dialect, register, spelling conventions, and writing system. For Morocco (MA), prefer Moroccan Darija rather than generic Modern Standard Arabic when the conversation indicates Darija. If the target is Moroccan Darija (for example ary or ar-MA), mirror whether the customer uses Latin transliteration (Arabizi/Darija Latin) or Arabic script; do not convert between scripts unless the customer does so in the conversation.`;
   const response=await fetch(`${trimSlash(setting.baseUrl)}/chat/completions`,{
     method:"POST",
     headers:{authorization:`Bearer ${setting.apiKey}`,"content-type":"application/json"},
@@ -62,8 +72,8 @@ async function requestTranslation(setting:TranslationProviderSetting,input:{text
           ?sourceLanguage
             ?"You are a precise business-message translator. The source language is explicitly supplied by the user; do not auto-detect or substitute another language. Translate only into the requested target language. Preserve names, phone numbers, URLs, emoji, line breaks, and formatting. Return only a JSON object with exactly these string fields: translatedText and sourceLanguage. Set sourceLanguage to the supplied BCP 47 source language exactly. Do not use a markdown fence."
             :"You are a precise business-message translator and language detector. Detect the source language and translate only into the requested target language. Preserve names, phone numbers, URLs, emoji, line breaks, and formatting. Return only a JSON object with exactly these string fields: translatedText and sourceLanguage. sourceLanguage must be the most appropriate BCP 47 language tag (for example es, pt-BR, or zh-CN). Do not use a markdown fence."
-          :"You are a precise business-message translator. Translate only into the requested target language. Preserve names, phone numbers, URLs, emoji, line breaks, and formatting. Return only the translated text with no explanation, label, markdown fence, or quotation marks."},
-        {role:"user",content:`${sourceLanguage?`Source language (BCP 47): ${sourceLanguage}\n`:""}Target language (BCP 47): ${input.targetLanguage}\n\nText to translate:\n${input.text}`},
+          :"You are a precise business-message translator. Translate only into the requested target language. Preserve names, phone numbers, URLs, emoji, line breaks, and formatting. Match the customer's regional language habits and script. Return only the translated text with no explanation, label, markdown fence, or quotation marks."},
+        {role:"user",content:`${sourceLanguage?`Source language (BCP 47): ${sourceLanguage}\n`:""}Target language (BCP 47): ${input.targetLanguage}${localePrompt}${contextPrompt}\n\nText to translate:\n${input.text}`},
       ],
     }),
     signal:AbortSignal.timeout(45_000),

@@ -44,6 +44,18 @@ test("translation honors an explicitly supplied source language",async()=>{
   }finally{globalThis.fetch=original;}
 });
 
+test("translation carries conversation context and mirrors Moroccan Darija script",async()=>{
+  const original=globalThis.fetch;let request:Request|undefined;
+  globalThis.fetch=async(input,init)=>{request=new Request(input,init);return Response.json({choices:[{message:{content:"labas"}}]});};
+  try{
+    await translateText({provider:"openai",apiKey:"secret",...translationProviderDefaults("openai")},{text:"How can I help?",targetLanguage:"ary",context:{customerCountry:"MA",customerPreferredLanguage:"ary",conversation:[{direction:"in",text:"salam, kif dayr?"}]}});
+    const body=JSON.parse(await request!.text());
+    assert.match(body.messages[0].content,/regional language habits and script/);
+    assert.match(body.messages[1].content,/Moroccan Darija/);
+    assert.match(body.messages[1].content,/Customer: salam, kif dayr\?/);
+  }finally{globalThis.fetch=original;}
+});
+
 test("product name translation preserves order and requires a structured response",async()=>{
   const original=globalThis.fetch;let request:Request|undefined;
   globalThis.fetch=async(input,init)=>{request=new Request(input,init);return Response.json({choices:[{message:{content:'["AirPods Pro（第二代）","至尊典藏版"]'}}]});};

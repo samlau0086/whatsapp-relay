@@ -86,6 +86,7 @@ export const translationProviderSettingsSchema=z.object({
 export const translationPreviewSchema=z.object({
   text:z.string().trim().min(1).max(65536),
   targetLanguage:languageCodeSchema,
+  conversationId:z.string().uuid().optional(),
 });
 export const productNameTranslationPreviewSchema=z.object({
   names:z.array(z.string().trim().min(1).max(120)).min(1).max(50),

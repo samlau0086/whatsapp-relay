@@ -1747,7 +1747,14 @@ app.post("/api/v1/translations/preview", {preHandler:authenticate}, async(reques
   const parsed=translationPreviewSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
   const setting=await activeTranslationSetting();if(!setting)return reply.code(503).send({error:"translation_not_configured",message:"管理员尚未启用 AI 翻译 Provider"});
   try{
-    const translatedText=await translateText(setting,{text:parsed.data.text,targetLanguage:parsed.data.targetLanguage});
+    let context:Parameters<typeof translateText>[1]["context"];
+    if(parsed.data.conversationId){
+      const access=await pool.query("SELECT c.account_id,co.country,co.preferred_language FROM conversations c JOIN contacts co ON co.id=c.contact_id WHERE c.id=$1",[parsed.data.conversationId]);
+      if(!access.rowCount||!canAccessAccount(request.principal,access.rows[0].account_id))return reply.code(404).send({error:"conversation_not_found"});
+      const recent=await pool.query("SELECT direction,text_content FROM messages WHERE conversation_id=$1 AND text_content IS NOT NULL AND btrim(text_content)<>'' ORDER BY occurred_at DESC,id DESC LIMIT 12",[parsed.data.conversationId]);
+      context={customerCountry:access.rows[0].country??undefined,customerPreferredLanguage:access.rows[0].preferred_language??undefined,conversation:recent.rows.reverse().map(row=>({direction:String(row.direction)==="in"?"in":"out",text:String(row.text_content)}))};
+    }
+    const translatedText=await translateText(setting,{text:parsed.data.text,targetLanguage:parsed.data.targetLanguage,context});
     return{translatedText,targetLanguage:parsed.data.targetLanguage,provider:setting.provider,model:setting.model};
   }catch(error){request.log.error({provider:setting.provider,error:String(error)},"Translation preview failed");return reply.code(502).send({error:"translation_failed",message:"AI 翻译失败，请检查 Provider 配置或稍后重试"});}
 });
@@ -1766,7 +1773,7 @@ app.post("/api/v1/translations/product-names/preview", {preHandler:authenticate}
 
 app.post("/api/v1/translations/messages", {preHandler:authenticate}, async(request,reply)=>{
   const parsed=messageTranslationsSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
-  const found=await pool.query("SELECT m.id,m.account_id,m.direction,m.kind,m.text_content,m.media_id,media.object_key,media.file_name,media.mime_type,media.byte_size,mt.translated_text,mt.source_language,transcription.transcript_text,transcription.source_language transcription_source_language FROM messages m LEFT JOIN media ON media.id=m.media_id LEFT JOIN message_translations mt ON mt.message_id=m.id AND mt.target_language=$2 LEFT JOIN message_transcriptions transcription ON transcription.message_id=m.id WHERE m.id=ANY($1::uuid[])",[parsed.data.messageIds,parsed.data.targetLanguage]);
+  const found=await pool.query("SELECT m.id,m.account_id,m.conversation_id,m.direction,m.kind,m.text_content,m.media_id,media.object_key,media.file_name,media.mime_type,media.byte_size,co.country customer_country,co.preferred_language customer_preferred_language,mt.translated_text,mt.source_language,transcription.transcript_text,transcription.source_language transcription_source_language FROM messages m JOIN conversations c ON c.id=m.conversation_id JOIN contacts co ON co.id=c.contact_id LEFT JOIN media ON media.id=m.media_id LEFT JOIN message_translations mt ON mt.message_id=m.id AND mt.target_language=$2 LEFT JOIN message_transcriptions transcription ON transcription.message_id=m.id WHERE m.id=ANY($1::uuid[])",[parsed.data.messageIds,parsed.data.targetLanguage]);
   if(found.rowCount!==new Set(parsed.data.messageIds).size||found.rows.some(row=>!canAccessAccount(request.principal,row.account_id)))return reply.code(404).send({error:"message_not_found"});
   const requestedSourceLanguage=parsed.data.sourceLanguage;
   const languageMatches=(cached:unknown)=>!requestedSourceLanguage||String(cached??"").toLowerCase()===requestedSourceLanguage.toLowerCase();
@@ -1774,6 +1781,12 @@ app.post("/api/v1/translations/messages", {preHandler:authenticate}, async(reque
   const hasCurrentTranscription=(row:Record<string,unknown>)=>Boolean(row.transcript_text)&&languageMatches(row.transcription_source_language);
   const hasWrittenText=(row:Record<string,unknown>)=>["text","image","video","document"].includes(String(row.kind))&&Boolean(String(row.text_content??"").trim());
   const eligible=found.rows.filter(row=>row.direction==="in"&&(hasWrittenText(row)||(row.kind==="audio"&&row.media_id&&row.object_key&&(hasCurrentTranslation(row)||parsed.data.generateAudio))));
+  const conversationIds=[...new Set(eligible.map(row=>String(row.conversation_id)))];
+  const recentByConversation=new Map<string,Array<{direction:"in"|"out";text:string}>>();
+  await Promise.all(conversationIds.map(async conversationId=>{
+    const recent=await pool.query("SELECT direction,text_content FROM messages WHERE conversation_id=$1 AND text_content IS NOT NULL AND btrim(text_content)<>'' ORDER BY occurred_at DESC,id DESC LIMIT 12",[conversationId]);
+    recentByConversation.set(conversationId,recent.rows.reverse().map(item=>({direction:String(item.direction)==="in"?"in":"out",text:String(item.text_content)})));
+  }));
   const setting=eligible.some(row=>!hasCurrentTranslation(row))?await activeTranslationSetting():null;
   if(eligible.some(row=>!hasCurrentTranslation(row))&&!setting)return reply.code(503).send({error:"translation_not_configured",message:"管理员尚未启用 AI 翻译 Provider"});
   const generated=await mapWithConcurrency(eligible.filter(row=>!hasCurrentTranslation(row)),3,row=>singleFlight(messageTranslationFlights,`${row.id}:${parsed.data.targetLanguage}:${requestedSourceLanguage??"auto"}`,async()=>{
@@ -1794,7 +1807,7 @@ app.post("/api/v1/translations/messages", {preHandler:authenticate}, async(reque
           });
         }
       }
-      const detected=await translateTextWithDetection(setting!,{text:sourceText,targetLanguage:parsed.data.targetLanguage,sourceLanguage:requestedSourceLanguage});
+      const detected=await translateTextWithDetection(setting!,{text:sourceText,targetLanguage:parsed.data.targetLanguage,sourceLanguage:requestedSourceLanguage,context:{customerCountry:row.customer_country??undefined,customerPreferredLanguage:row.customer_preferred_language??undefined,conversation:recentByConversation.get(String(row.conversation_id))}});
       await pool.query("INSERT INTO message_translations(message_id,target_language,translated_text,source_language,provider,model) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(message_id,target_language) DO UPDATE SET translated_text=EXCLUDED.translated_text,source_language=EXCLUDED.source_language,provider=EXCLUDED.provider,model=EXCLUDED.model,created_at=now()",[row.id,parsed.data.targetLanguage,detected.translatedText,detected.sourceLanguage,setting!.provider,setting!.model]);
       return{id:row.id,translatedText:detected.translatedText,sourceText,sourceLanguage:detected.sourceLanguage};
     }catch(error){const failure=translationFailure(error);request.log.error({messageId:row.id,provider:setting?.provider,error:String(error),failure:failure.error},"Incoming message translation failed");return{id:row.id,...failure};}
