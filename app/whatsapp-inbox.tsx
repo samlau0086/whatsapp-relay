@@ -175,7 +175,7 @@ type ContactProfile={id:string;accountId:string;accountName:string;platform:"wha
 type OrderProductItem={id:string;name:string;sku:string;quantity:number;unitAmount:number;costAmount:number|null;costCurrency:string|null;weightAmount:number|null;weightUnit:WeightUnit|null;shippingClassId:string|null;shippingClassName:string|null;imageMediaId:string|null;imageName:string;productId:string|null;variantId:string|null;internalNote:string};
 type OrderFeeItem={id:string;name:string;amount:number;source:"manual"|"paypal"};
 type CustomerAddress={id:string;label:string;recipientName:string;phone:string;address:string;countryCode:string;province:string;city:string;street1:string;street2:string;postalCode:string;isDefault:boolean};
-const QUICK_REPLY_VARIABLE_LABELS:Record<QuickReplyVariable,string>={first_name:"First name",middle_name:"Middle name",last_name:"Last name",shipping_address:"默认收货地址",email:"Primary Email",mobile:"Mobile",whatsapp:"WhatsApp"};
+const QUICK_REPLY_VARIABLE_LABELS:Record<QuickReplyVariable,string>={first_name:"First name",middle_name:"Middle name",last_name:"Last name",shipping_address:"默认收货地址",country:"国家",company_name:"公司名",job_title:"职位",province:"省份",city:"城市",email:"Primary Email",mobile:"Mobile",whatsapp:"WhatsApp"};
 function quickReplyVariableLabel(variable:QuickReplyVariable){return QUICK_REPLY_VARIABLE_LABELS[variable];}
 type PaymentRequest={id:string;invoiceId:string|null;url:string|null;status:string;amount:number;currency:string;environment:string;createdAt:string;lastSyncedAt:string|null};
 type PaymentMethodType="paypal"|"bank_transfer"|"western_union"|"wise"|"moneygram"|"stripe_payment_link"|"custom";
@@ -1296,6 +1296,11 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
         middle_name:profile.middleName,
         last_name:profile.lastName,
         shipping_address:defaultAddress?[defaultAddress.recipientName,defaultAddress.phone,defaultAddress.address].filter(Boolean).join("\n"):"",
+        country:profile.country,
+        company_name:profile.companyName,
+        job_title:profile.jobTitle,
+        province:profile.province,
+        city:profile.city,
         email:profile.primaryEmail??"",
         mobile:preferredMobile?.value??profile.phone,
         whatsapp:profile.phone,
