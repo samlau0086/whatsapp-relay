@@ -8,10 +8,10 @@ import {ConversationVirtualList} from "./conversation-virtual-list";
 
 export function ConversationPanel({
   filter,subtitle,query,onQuery,tags,tagId,onTagId,onTagOpen,customerStage,onCustomerStage,latestOrderStatus,onLatestOrderStatus,onOpenSidebar,collapsed,onToggleCollapsed,onRefresh,dateFilter,onDateFilter,onDateKeyDown,
-  listRef,sentinelRef,items,rows,totalSize,measure,effectiveActiveId,clock,markingUnreadId,onSelect,onMenu,onMarkUnread,
+  mobileOpen,onCloseMobile,listRef,sentinelRef,items,rows,totalSize,measure,effectiveActiveId,clock,markingUnreadId,onSelect,onMenu,onMarkUnread,
   loading,loadError,hasAccounts,loadingMore,loadMoreError,hasMore,onLoadMore,
 }:{
-  filter:string;subtitle:string;query:string;onQuery:(value:string)=>void;tags:Array<{id:string;name:string;color:string}>;tagId:string;onTagId:(value:string)=>void;onTagOpen:()=>void;onOpenSidebar:()=>void;collapsed:boolean;onToggleCollapsed:()=>void;onRefresh:()=>void;
+  filter:string;subtitle:string;query:string;onQuery:(value:string)=>void;tags:Array<{id:string;name:string;color:string}>;tagId:string;onTagId:(value:string)=>void;onTagOpen:()=>void;onOpenSidebar:()=>void;collapsed:boolean;onToggleCollapsed:()=>void;onRefresh:()=>void;mobileOpen:boolean;onCloseMobile:()=>void;
   customerStage:""|ConversationCustomerStage;onCustomerStage:(value:""|ConversationCustomerStage)=>void;latestOrderStatus:""|ConversationLatestOrderStatus;onLatestOrderStatus:(value:""|ConversationLatestOrderStatus)=>void;
   dateFilter:ConversationDateFilter;onDateFilter:(value:ConversationDateFilter)=>void;onDateKeyDown:(event:KeyboardEvent<HTMLButtonElement>)=>void;
   listRef:RefObject<HTMLDivElement|null>;sentinelRef:RefObject<HTMLDivElement|null>;items:Conversation[];rows:Array<{index:number;start:number}>;totalSize:number;
@@ -54,10 +54,11 @@ export function ConversationPanel({
     event.preventDefault();
     element.scrollLeft+=event.deltaY;
   };
-  return <section className="conversation-panel">
+  return <section className={`conversation-panel ${mobileOpen?"mobile-open":""}`}>
     <header className="conversation-head">
       <button className="mobile-menu" onClick={onOpenSidebar} aria-label="打开筛选"><Menu size={18}/></button>
       <div><h2>{filter}</h2><span>{subtitle}</span></div>
+      <button className="icon-button mobile-conversation-close" onClick={onCloseMobile} aria-label="关闭会话列表"><X size={17}/></button>
       <button className="icon-button conversation-toggle" onClick={onToggleCollapsed} aria-label={collapsed?"显示会话栏":"隐藏会话栏"} title={collapsed?"显示会话栏":"隐藏会话栏"}>{collapsed?<PanelLeftOpen size={17}/>:<PanelLeftClose size={17}/>}</button>
       <button className="icon-button" onClick={onRefresh} aria-label="刷新"><RefreshCw size={17}/></button>
     </header>
