@@ -23,6 +23,14 @@ export function normalizeQuickReplyVariable(value:string):string{
   return value.trim().toLowerCase().replace(/[\s-]+/g,"_");
 }
 
+const countryNames=new Intl.DisplayNames(["en"],{type:"region"});
+
+export function quickReplyCountryName(value:string):string{
+  const normalized=value.trim().toUpperCase();
+  if(!normalized)return "";
+  return /^[A-Z]{2}$/.test(normalized)?(countryNames.of(normalized)??value.trim()):value.trim();
+}
+
 export function quickReplyVariableNames(template:string):string[]{
   return Array.from(template.matchAll(VARIABLE_PATTERN),match=>normalizeQuickReplyVariable(match[1]));
 }

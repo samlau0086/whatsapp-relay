@@ -32,7 +32,7 @@ import {StatusCenter} from "./status-center";
 import {LANGUAGES,LanguageFlagIcon,LanguagePicker,languageName,languageShortCode} from "./language-picker";
 import {countryLabel,CountryPicker} from "./country-picker";
 import { conversationCountsPath, conversationListPath, conversationSummaryPath, type ConversationCustomerStage, type ConversationDateFilter, type ConversationLatestOrderStatus, type ConversationListFilter } from "./conversation-date-filter";
-import { QUICK_REPLY_VARIABLES, quickReplyVariableNames, renderQuickReplyVariables, type QuickReplyVariable, type QuickReplyVariableValues } from "./quick-reply-variables";
+import { QUICK_REPLY_VARIABLES, quickReplyCountryName, quickReplyVariableNames, renderQuickReplyVariables, type QuickReplyVariable, type QuickReplyVariableValues } from "./quick-reply-variables";
 import { confirmAction, ConfirmationHost, promptAction, PromptHost } from "./confirmation-ui";
 import {formatMessageTime,formatMessageTimeTitle} from "./message-time";
 import {useConversationFeed} from "./use-conversation-feed";
@@ -1296,7 +1296,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
         middle_name:profile.middleName,
         last_name:profile.lastName,
         shipping_address:defaultAddress?[defaultAddress.recipientName,defaultAddress.phone,defaultAddress.address].filter(Boolean).join("\n"):"",
-        country:profile.country,
+        country:quickReplyCountryName(profile.country),
         company_name:profile.companyName,
         job_title:profile.jobTitle,
         province:profile.province,

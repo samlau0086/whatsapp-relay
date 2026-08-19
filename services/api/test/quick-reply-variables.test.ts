@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { quickReplyVariableNames, renderQuickReplyVariables, type QuickReplyVariableValues } from "../../../app/quick-reply-variables.js";
+import { quickReplyCountryName, quickReplyVariableNames, renderQuickReplyVariables, type QuickReplyVariableValues } from "../../../app/quick-reply-variables.js";
 
 const values:QuickReplyVariableValues={
   first_name:"Alice",
@@ -26,6 +26,12 @@ test("quick reply variables render every supported customer field",()=>{
   assert.match(rendered.text,/China RelayDesk Trading Purchasing Manager Shanghai Shanghai/);
   assert.match(rendered.text,/alice@example\.com/);
   assert.deepEqual(quickReplyVariableNames(template),["first_name","middle_name","last_name","shipping_address","country","company_name","job_title","province","city","email","mobile","whatsapp"]);
+});
+
+test("country variable expands ISO country codes to a full name",()=>{
+  assert.equal(quickReplyCountryName("MA"),"Morocco");
+  assert.equal(quickReplyCountryName("Morocco"),"Morocco");
+  assert.equal(quickReplyCountryName(""),"");
 });
 
 test("quick reply rendering reports missing and unsupported variables without leaking a partial send",()=>{
