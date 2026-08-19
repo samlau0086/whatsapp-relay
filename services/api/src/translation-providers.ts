@@ -94,17 +94,25 @@ async function requestTranslation(setting:TranslationProviderSetting,input:{text
 }
 
 export async function transcribeAudio(setting:TranslationProviderSetting,input:{bytes:Buffer;fileName:string;mimeType:string;sourceLanguage?:string}):Promise<string>{
+  const endpoint=`${trimSlash(setting.baseUrl.trim())}/audio/transcriptions`;
+  if(!setting.baseUrl.trim()||!/^https?:\/\//i.test(setting.baseUrl.trim()))throw new Error("transcription_provider_invalid_endpoint");
+  if(!setting.apiKey.trim())throw new Error("transcription_provider_missing_api_key");
+  if(!setting.transcriptionModel.trim())throw new Error("transcription_provider_missing_model");
   const diarized=isDiarizationModel(setting.transcriptionModel);
-  const request=async(format:"json"|"diarized_json",includeChunking:boolean)=>{
-    const form=new FormData();form.append("model",setting.transcriptionModel);form.append("response_format",format);
+  const request=async(format?:"json"|"diarized_json",includeChunking=false,includeLanguage=true)=>{
+    const form=new FormData();form.append("model",setting.transcriptionModel);if(format)form.append("response_format",format);
     const speechLanguage=input.sourceLanguage?.split("-")[0].toLowerCase();
-    if(speechLanguage&&/^[a-z]{2}$/.test(speechLanguage))form.append("language",speechLanguage);
+    if(includeLanguage&&speechLanguage&&/^[a-z]{2}$/.test(speechLanguage))form.append("language",speechLanguage);
     if(includeChunking)form.append("chunking_strategy","auto");
     form.append("file",new Blob([input.bytes],{type:input.mimeType}),input.fileName);
-    return fetch(`${trimSlash(setting.baseUrl)}/audio/transcriptions`,{method:"POST",headers:{authorization:`Bearer ${setting.apiKey}`},body:form,signal:AbortSignal.timeout(90_000)});
+    return fetch(endpoint,{method:"POST",headers:{authorization:`Bearer ${setting.apiKey}`},body:form,signal:AbortSignal.timeout(90_000)});
   };
   let response=await request(diarized?"diarized_json":"json",diarized);
-  if(!response.ok&&diarized&&response.status===400)response=await request("json",false);
+  // OpenAI-compatible gateways often reject optional multipart fields. Retry once
+  // with the smallest interoperable request before surfacing a provider failure.
+  if(!response.ok&&response.status===400){
+    response=diarized?await request("json",false,false):await request(undefined,false,false);
+  }
   if(!response.ok)throw new Error(`transcription_provider_http_${response.status}:${(await response.text()).slice(0,300)}`);
   const raw=await response.text();
   const transcript=extractTranscript(raw,diarized);

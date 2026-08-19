@@ -2108,6 +2108,9 @@ async function singleFlight<T>(flights:Map<string,Promise<T>>,key:string,work:()
 function translationFailure(error:unknown):{error:string;message:string}{
   const detail=String(error);
   if(detail.includes("audio_conversion_"))return{error:"audio_conversion_failed",message:"语音格式转换失败，请稍后重试"};
+  if(detail.includes("transcription_provider_invalid_endpoint"))return{error:"transcription_endpoint_invalid",message:"语音转写 Provider 地址无效，请检查配置"};
+  if(detail.includes("transcription_provider_missing_api_key"))return{error:"transcription_auth_failed",message:"语音转写 Provider 未配置 API Key，请联系管理员"};
+  if(detail.includes("transcription_provider_missing_model"))return{error:"transcription_rejected",message:"语音转写模型未配置，请联系管理员"};
   if(/transcription_provider_http_(401|403)/.test(detail))return{error:"transcription_auth_failed",message:"语音转写 Provider 鉴权失败，请联系管理员"};
   if(detail.includes("transcription_provider_http_404"))return{error:"transcription_endpoint_missing",message:"当前 Provider 不支持语音转写接口"};
   if(detail.includes("transcription_provider_http_429"))return{error:"transcription_rate_limited",message:"语音转写请求过于频繁，请稍后重试"};

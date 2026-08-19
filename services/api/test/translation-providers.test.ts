@@ -108,3 +108,21 @@ test("provider failures and empty responses are rejected",async()=>{
     globalThis.fetch=async()=>Response.json({text:"  "});await assert.rejects(()=>transcribeAudio({provider:"openai",apiKey:"x",...translationProviderDefaults("openai")},{bytes:Buffer.from("voice"),fileName:"voice.ogg",mimeType:"audio/ogg"}),/empty_response/);
   }finally{globalThis.fetch=original;}
 });
+
+test("transcription retries without optional fields for strict compatible gateways",async()=>{
+  const original=globalThis.fetch;let calls=0;
+  globalThis.fetch=async(_input,init)=>{
+    calls++;
+    const form=await new Request("https://provider.test",init).formData();
+    if(calls===1){assert.equal(form.get("response_format"),"json");assert.equal(form.get("language"),"ar");return new Response("unsupported field",{status:400});}
+    assert.equal(form.get("response_format"),null);assert.equal(form.get("language"),null);return Response.json({text:"Recovered transcript"});
+  };
+  try{
+    const transcript=await transcribeAudio({provider:"openai_compatible",apiKey:"secret",baseUrl:"https://llm.example/v1",model:"translator-1",transcriptionModel:"speech-1"},{bytes:Buffer.from("voice"),fileName:"voice.ogg",mimeType:"audio/ogg",sourceLanguage:"ar"});
+    assert.equal(transcript,"Recovered transcript");assert.equal(calls,2);
+  }finally{globalThis.fetch=original;}
+});
+
+test("transcription rejects invalid provider endpoints before fetch",async()=>{
+  await assert.rejects(()=>transcribeAudio({provider:"openai_compatible",apiKey:"secret",baseUrl:"",model:"translator-1",transcriptionModel:"speech-1"},{bytes:Buffer.from("voice"),fileName:"voice.ogg",mimeType:"audio/ogg"}),/invalid_endpoint/);
+});
