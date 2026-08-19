@@ -57,6 +57,26 @@ test("bulk product import validates batches and is capped at 500 rows",async()=>
   assert.match(dialog,/const updateOnly=!currency&&!price&&!tierText/);
 });
 
+test("product CSV round-trips the latest catalog fields",async()=>{
+  const [schemas,server,dialog,inbox]=await Promise.all([
+    readFile(new URL("../src/schemas.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/product-import-dialog.tsx",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+  ]);
+  for(const field of ["galleryMediaIds","supplierLinks","internalNote","variants"])assert.match(schemas,new RegExp(`${field}:`));
+  assert.match(server,/replaceProductGallery\(client,productId,product\.galleryMediaIds/);
+  assert.match(server,/replaceProductVariants\(client,productId,product\.variants/);
+  assert.match(server,/supplier_links=CASE WHEN/);
+  assert.match(server,/internal_note=CASE WHEN/);
+  for(const header of ["gallery_images","variants","supplier_links","internal_note"])assert.match(dialog,new RegExp(header));
+  assert.match(dialog,/variantImage\?uploaded\.get/);
+  assert.match(inbox,/JSON\.stringify\(product\.priceTiers\)/);
+  assert.match(inbox,/product\.galleryImages\.map\(item=>item\.fileName\)/);
+  assert.match(inbox,/JSON\.stringify\(product\.variants/);
+  assert.match(inbox,/JSON\.stringify\(product\.supplierLinks\)/);
+});
+
 test("product automation can query and atomically update products by SKU",async()=>{
   const [schemas,server]=await Promise.all([
     readFile(new URL("../src/schemas.ts",import.meta.url),"utf8"),
