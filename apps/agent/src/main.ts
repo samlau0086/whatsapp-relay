@@ -387,6 +387,11 @@ async function startAccount(accountId: string, name: string, dataDir: string): P
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
+  // Keep the child-process pipes drained. Baileys writes reconnect warnings to
+  // stderr; if nobody reads the pipe, a burst of warnings can fill its buffer
+  // and block the worker's event loop, which then looks like a heartbeat timeout.
+  worker.stdout?.resume();
+  worker.stderr?.resume();
   workers.set(accountId, worker);
   let lastWorkerHeartbeat=Date.now();
   const workerWatchdog=setInterval(()=>{

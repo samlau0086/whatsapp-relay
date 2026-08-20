@@ -146,6 +146,9 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(css, /\.access-shell/);
   assert.match(component, /当前会话 · AI 双向翻译/);
   assert.match(component, /此会话偏好会跨浏览器同步/);
+  assert.match(component, /recommendedCustomerLanguage=\{inferContactRecommendation\(active\.phone\)\?\.language\?\?null\}/);
+  assert.match(component, /推荐语言：/);
+  assert.match(component, /customerLanguage:recommendedCustomerLanguage!/);
   assert.match(component, /TranslationPreviewDialog/);
   assert.match(component, /IncomingTranslation/);
   assert.match(component, /\["text","image","video","document"\]\.includes\(message\.kind\)/);
@@ -177,6 +180,7 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /Custom Provider/);
   assert.match(component, /gpt-5\.6-luna/);
   assert.match(css, /\.translation-menu/);
+  assert.match(css, /\.translation-recommendation/);
   assert.match(css, /\.incoming-translation/);
   assert.match(css, /\.voice-translate-action/);
   assert.match(css, /\.message-language-override/);
