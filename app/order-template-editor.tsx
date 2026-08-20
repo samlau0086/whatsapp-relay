@@ -3,7 +3,7 @@
 import { ArrowDown, ArrowUp, Check, GripVertical, Plus, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-export type TemplateFormat="text"|"image"|"pdf"|"sc"|"pi"|"ci";
+export type TemplateFormat="text"|"image"|"pdf"|"qt"|"sc"|"pi"|"ci";
 type BlockType="orderHeader"|"itemList"|"feeList"|"total"|"paymentSummary"|"shippingAddress"|"contactInfo"|"notes"|"divider"|"customText"|"customImage"|"imageText";
 type ContactInfoField="name"|"firstName"|"lastName"|"company"|"location"|"email"|"phone";
 type OrderBusinessStatus="quotation"|"pending_confirmation"|"pending_payment"|"paid"|"processing"|"shipped"|"completed"|"cancelled";

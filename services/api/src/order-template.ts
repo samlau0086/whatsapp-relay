@@ -6,7 +6,7 @@ export const ORDER_BLOCK_TYPES=["orderHeader","itemList","feeList","total","paym
 export type OrderBlockType=typeof ORDER_BLOCK_TYPES[number];
 export const CONTACT_INFO_FIELDS=["name","firstName","lastName","company","location","email","phone"] as const;
 export type ContactInfoField=typeof CONTACT_INFO_FIELDS[number];
-export type OrderTemplateFormat="text"|"image"|"pdf"|"sc"|"pi"|"ci";
+export type OrderTemplateFormat="text"|"image"|"pdf"|"qt"|"sc"|"pi"|"ci";
 export type OrderTemplateBlock={
   id:string;type:OrderBlockType;label?:string;text?:string;imageUrl?:string;imageLayout?:"left"|"right"|"top"|"bottom";
   statusLabels?:Partial<Record<OrderBusinessStatus,string>>;
@@ -90,10 +90,11 @@ function documentTemplate(label:string):OrderTemplate{const template=structuredC
 export const DEFAULT_SC_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Sales Contract");
 export const DEFAULT_PI_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Proforma Invoice");
 export const DEFAULT_CI_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Commercial Invoice");
+export const DEFAULT_QT_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Quotation");
 
 export function parseOrderTemplate(value:unknown,format:OrderTemplateFormat):OrderTemplate{
   const normalized=normalizeOrderTemplate(value,format),parsed=orderTemplateSchema.safeParse(normalized);
-  return parsed.success?parsed.data:(format==="text"?DEFAULT_TEXT_ORDER_TEMPLATE:format==="pdf"?DEFAULT_PDF_ORDER_TEMPLATE:format==="sc"?DEFAULT_SC_ORDER_TEMPLATE:format==="pi"?DEFAULT_PI_ORDER_TEMPLATE:format==="ci"?DEFAULT_CI_ORDER_TEMPLATE:DEFAULT_IMAGE_ORDER_TEMPLATE);
+  return parsed.success?parsed.data:(format==="text"?DEFAULT_TEXT_ORDER_TEMPLATE:format==="pdf"?DEFAULT_PDF_ORDER_TEMPLATE:format==="qt"?DEFAULT_QT_ORDER_TEMPLATE:format==="sc"?DEFAULT_SC_ORDER_TEMPLATE:format==="pi"?DEFAULT_PI_ORDER_TEMPLATE:format==="ci"?DEFAULT_CI_ORDER_TEMPLATE:DEFAULT_IMAGE_ORDER_TEMPLATE);
 }
 
 function normalizeOrderTemplate(value:unknown,format:OrderTemplateFormat):unknown{

@@ -2828,7 +2828,7 @@ function CrmDetailsPanel({
     [editOrderTarget, setEditOrderTarget] = useState<OrderItem | null>(null),
     [sendOrderTarget, setSendOrderTarget] = useState<OrderSendTarget | null>(null),
     [paymentOrderTarget, setPaymentOrderTarget] = useState<OrderItem | null>(null),
-    [orderDocumentMenu,setOrderDocumentMenu]=useState<{orderId:string;documentType:"sc"|"pi"|"ci"}|null>(null),
+    [orderDocumentMenu,setOrderDocumentMenu]=useState<{orderId:string;documentType:"qt"|"sc"|"pi"|"ci"}|null>(null),
     [statusOrderId,setStatusOrderId]=useState(""),
     [contactEditing, setContactEditing] = useState(false),
     [addressEditing, setAddressEditing] = useState(false),
@@ -3119,7 +3119,7 @@ function CrmDetailsPanel({
     }catch(reason){setError(reason instanceof Error?reason.message:"订单状态更新失败");}
     finally{setStatusOrderId("");}
   }
-  async function downloadOrderDocument(order:OrderItem,documentType:"sc"|"pi"|"ci"){
+  async function downloadOrderDocument(order:OrderItem,documentType:"qt"|"sc"|"pi"|"ci"){
     setBusy(true);setError("");
     try{
       const result=await authorizedFetch(`/api/v1/orders/${order.id}/documents/${documentType}`,token);
@@ -3131,7 +3131,7 @@ function CrmDetailsPanel({
     }catch(reason){setError(reason instanceof Error?reason.message:"单据下载失败");}
     finally{setBusy(false);}
   }
-  async function sendOrderDocument(order:OrderItem,documentType:"sc"|"pi"|"ci"){
+  async function sendOrderDocument(order:OrderItem,documentType:"qt"|"sc"|"pi"|"ci"){
     setBusy(true);setError("");
     try{
       const result=await authorizedFetch(`/api/v1/conversations/${active.id}/orders/${order.id}/documents/${documentType}/send`,token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({clientSendId:crypto.randomUUID()})});
@@ -3307,7 +3307,7 @@ function CrmDetailsPanel({
                           <CreditCard size={12} />
                           {order.paymentRequest?"付款详情":order.paymentProfile?"付款说明":"选择收款"}
                         </button>
-                        {(["sc","pi","ci"] as const).map(documentType=>{const open=orderDocumentMenu?.orderId===order.id&&orderDocumentMenu.documentType===documentType;return <div className="order-document-menu" key={documentType}><button className="order-payment" disabled={busy} onClick={()=>setOrderDocumentMenu(open?null:{orderId:order.id,documentType})} aria-expanded={open} aria-haspopup="menu" title={`${documentType.toUpperCase()} 文档操作`}><FileDown size={12}/>{documentType.toUpperCase()}</button>{open&&<div role="menu"><button role="menuitem" disabled={busy} onClick={()=>void sendOrderDocument(order,documentType)}><Send size={12}/>发送</button><button role="menuitem" disabled={busy} onClick={()=>{setOrderDocumentMenu(null);void downloadOrderDocument(order,documentType);}}><FileDown size={12}/>下载</button></div>}</div>;})}
+                        {(["qt","sc","pi","ci"] as const).map(documentType=>{const open=orderDocumentMenu?.orderId===order.id&&orderDocumentMenu.documentType===documentType;return <div className="order-document-menu" key={documentType}><button className="order-payment" disabled={busy} onClick={()=>setOrderDocumentMenu(open?null:{orderId:order.id,documentType})} aria-expanded={open} aria-haspopup="menu" title={`${documentType.toUpperCase()} 文档操作`}><FileDown size={12}/>{documentType.toUpperCase()}</button>{open&&<div role="menu"><button role="menuitem" disabled={busy} onClick={()=>void sendOrderDocument(order,documentType)}><Send size={12}/>发送</button><button role="menuitem" disabled={busy} onClick={()=>{setOrderDocumentMenu(null);void downloadOrderDocument(order,documentType);}}><FileDown size={12}/>下载</button></div>}</div>;})}
                         <button
                           className="order-edit"
                           disabled={busy}
@@ -5857,7 +5857,7 @@ function OrderSettingsPanel({token,onToken,onToast}:{token:string;onToken:(token
   const [section,setSection]=useState<"number"|"payments"|"product-card"|"shipping"|TemplateFormat>("number"),[dirty,setDirty]=useState(false);
   const request=useCallback((path:string,init?:RequestInit)=>authorizedFetch(path,token,init),[token]);
   async function select(next:"number"|"payments"|"product-card"|"shipping"|TemplateFormat){if(next===section)return;if(dirty&&!await confirmAction("当前模板的未保存修改将会丢失。",{title:"放弃未保存的修改？",confirmLabel:"放弃并离开",tone:"warning"}))return;setDirty(false);setSection(next);}
-  return <div className="order-settings-shell"><nav className="order-settings-tabs" aria-label="订单设置"><button className={section==="number"?"active":""} onClick={()=>select("number")}>编号规则</button><button className={section==="text"?"active":""} onClick={()=>select("text")}>文字模板</button><button className={section==="image"?"active":""} onClick={()=>select("image")}>图片模板</button><button className={section==="pdf"?"active":""} onClick={()=>select("pdf")}>PDF 模板</button><button className={section==="sc"?"active":""} onClick={()=>select("sc")}>SC 模板</button><button className={section==="pi"?"active":""} onClick={()=>select("pi")}>PI 模板</button><button className={section==="ci"?"active":""} onClick={()=>select("ci")}>CI 模板</button><button className={section==="product-card"?"active":""} onClick={()=>select("product-card")}>产品卡片模板</button><button className={section==="shipping"?"active":""} onClick={()=>select("shipping")}>运费模板</button><button className={section==="payments"?"active":""} onClick={()=>select("payments")}><CreditCard size={13}/>付款方式</button></nav>{section==="number"?<OrderNumberSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:section==="shipping"?<ShippingSettings request={request} onToken={onToken} onToast={onToast}/>:section==="payments"?<PaymentMethodsSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:section==="product-card"?<ProductCardTemplateEditor request={request} onToken={onToken} onToast={onToast} onDirtyChange={setDirty}/>:<OrderTemplateEditor format={section} request={request} onToken={onToken} onToast={onToast} onDirtyChange={setDirty}/>}</div>;
+  return <div className="order-settings-shell"><nav className="order-settings-tabs" aria-label="订单设置"><button className={section==="number"?"active":""} onClick={()=>select("number")}>编号规则</button><button className={section==="text"?"active":""} onClick={()=>select("text")}>文字模板</button><button className={section==="image"?"active":""} onClick={()=>select("image")}>图片模板</button><button className={section==="pdf"?"active":""} onClick={()=>select("pdf")}>PDF 模板</button><button className={section==="qt"?"active":""} onClick={()=>select("qt")}>QT 模板</button><button className={section==="sc"?"active":""} onClick={()=>select("sc")}>SC 模板</button><button className={section==="pi"?"active":""} onClick={()=>select("pi")}>PI 模板</button><button className={section==="ci"?"active":""} onClick={()=>select("ci")}>CI 模板</button><button className={section==="product-card"?"active":""} onClick={()=>select("product-card")}>产品卡片模板</button><button className={section==="shipping"?"active":""} onClick={()=>select("shipping")}>运费模板</button><button className={section==="payments"?"active":""} onClick={()=>select("payments")}><CreditCard size={13}/>付款方式</button></nav>{section==="number"?<OrderNumberSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:section==="shipping"?<ShippingSettings request={request} onToken={onToken} onToast={onToast}/>:section==="payments"?<PaymentMethodsSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:section==="product-card"?<ProductCardTemplateEditor request={request} onToken={onToken} onToast={onToast} onDirtyChange={setDirty}/>:<OrderTemplateEditor format={section} request={request} onToken={onToken} onToast={onToast} onDirtyChange={setDirty}/>}</div>;
 }
 
 function OrderNumberSettingsPanel({token,onToken,onToast}:{token:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){
