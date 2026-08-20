@@ -269,6 +269,11 @@ const orderContentSchema=z.object({
 export const orderSchema=z.object({clientOrderId:z.string().uuid()}).and(orderContentSchema);
 export const orderUpdateSchema=orderContentSchema;
 export const orderBusinessStatusUpdateSchema=z.object({businessStatus:orderBusinessStatusSchema});
+export const orderTrackingSchema=z.object({
+  carrier:z.string().trim().min(1).max(80),
+  trackingNumber:z.string().trim().min(1).max(160),
+  trackingUrl:z.string().trim().max(2000).optional().transform(value=>value||undefined).refine(value=>!value||/^https?:\/\//i.test(value),"tracking URL must be http(s)"),
+});
 export const orderAddressSchema=z.object({addressId:z.string().uuid().nullable().optional(),newAddress:customerAddressSchema.optional()}).superRefine((value,ctx)=>{if(value.addressId&&value.newAddress)ctx.addIssue({code:"custom",path:["addressId"],message:"addressId and newAddress are mutually exclusive"});});
 export const orderSendSchema=z.object({format:z.enum(["text","image","pdf"]).default("text"),clientSendId:z.string().uuid().optional(),translate:z.boolean().optional(),targetLanguage:languageCodeSchema.optional()}).default({format:"text"}).superRefine((value,ctx)=>{if(value.translate===true&&!value.targetLanguage)ctx.addIssue({code:"custom",path:["targetLanguage"],message:"target language is required when translation is requested"});});
 const emailSubjectSchema=z.string().trim().min(1).max(200).refine(value=>!/[\r\n]/.test(value),"subject must not contain line breaks");

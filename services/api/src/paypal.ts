@@ -2,6 +2,7 @@ export type PayPalEnvironment="sandbox"|"live";
 export type PayPalInvoiceItem={name:string;quantity:number;unitAmount:number};
 export type PayPalInvoiceInput={requestId:string;reference:string;currency:string;note?:string;items:PayPalInvoiceItem[]};
 export type PayPalInvoiceResult={invoiceId:string;status:string;paymentUrl:string|null};
+export type PayPalInvoiceDetail=PayPalInvoiceResult&{transactionId:string|null};
 
 export class PayPalApiError extends Error{
   constructor(public readonly status:number,public readonly code:string,message:string){super(message);this.name="PayPalApiError";}
@@ -50,7 +51,11 @@ export class PayPalClient{
     return{invoiceId,status,paymentUrl};
   }
 
-  async getInvoice(invoiceId:string):Promise<PayPalInvoiceResult>{const body=await this.api(`/v2/invoicing/invoices/${encodeURIComponent(invoiceId)}`);return{invoiceId:String(body.id??invoiceId),status:String(body.status??"UNKNOWN"),paymentUrl:findPaymentUrl(body)};}
+  async getInvoice(invoiceId:string):Promise<PayPalInvoiceDetail>{const body=await this.api(`/v2/invoicing/invoices/${encodeURIComponent(invoiceId)}`);return{invoiceId:String(body.id??invoiceId),status:String(body.status??"UNKNOWN"),paymentUrl:findPaymentUrl(body),transactionId:findTransactionId(body)};}
+
+  async addTracking(input:{transactionId:string;carrier:string;trackingNumber:string}):Promise<void>{
+    await this.api("/v1/shipping/trackers",{method:"POST",body:JSON.stringify({transaction_id:input.transactionId,carrier:input.carrier.trim().toUpperCase().replace(/[\s-]+/g,"_"),tracking_number:input.trackingNumber,shipment_status:"SHIPPED",notify_payer:false})});
+  }
 
   async cancelInvoice(invoiceId:string,status:string):Promise<void>{
     if(status.toUpperCase()==="DRAFT"){await this.api(`/v2/invoicing/invoices/${encodeURIComponent(invoiceId)}`,{method:"DELETE"});return;}
@@ -65,6 +70,12 @@ function findPaymentUrl(body:Record<string,unknown>):string|null{
   const linked=findLink(body,"payer-view");if(linked)return linked;
   const detail=body.detail&&typeof body.detail==="object"?body.detail as Record<string,unknown>:null,metadata=detail?.metadata&&typeof detail.metadata==="object"?detail.metadata as Record<string,unknown>:null;
   return typeof metadata?.recipient_view_url==="string"?metadata.recipient_view_url:null;
+}
+
+function findTransactionId(body:Record<string,unknown>):string|null{
+  const payments=Array.isArray(body.payments)?body.payments:[];
+  for(const payment of payments){if(payment&&typeof payment==="object"){const transactionId=(payment as Record<string,unknown>).transaction_id;if(typeof transactionId==="string"&&transactionId)return transactionId;}}
+  return null;
 }
 
 function paypalError(status:number,body:Record<string,unknown>,fallback:string):PayPalApiError{const details=Array.isArray(body.details)?body.details:[],first=details[0]&&typeof details[0]==="object"?details[0] as Record<string,unknown>:null;return new PayPalApiError(status,String(body.name??body.error??"paypal_error"),String(first?.description??body.message??body.error_description??fallback));}
