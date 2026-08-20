@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("relayAgent", {
   openBaileysRelease: (input) => ipcRenderer.invoke("baileys:open-release", input),
   checkAgentUpdate: () => ipcRenderer.invoke("agent:check-update"),
   installAgentUpdate: () => ipcRenderer.invoke("agent:install-update"),
+  openAgentRelease: (input) => ipcRenderer.invoke("agent:open-release", input),
   enroll: (input) => ipcRenderer.invoke("agent:enroll", input),
   updateCentralUrl: (input) => ipcRenderer.invoke("agent:update-central-url", input),
   addAccount: (input) => ipcRenderer.invoke("account:add", input),

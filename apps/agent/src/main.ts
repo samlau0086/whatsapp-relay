@@ -159,6 +159,7 @@ ipcMain.handle("baileys:check-update", async () => checkBaileysUpdate(BAILEYS_VE
 let pendingAgentUpdate: AgentUpdate | undefined;
 ipcMain.handle("agent:check-update", async () => { pendingAgentUpdate=await checkAgentUpdate(app.getVersion()); return pendingAgentUpdate; });
 ipcMain.handle("agent:install-update", async () => { const update=pendingAgentUpdate??await checkAgentUpdate(app.getVersion()); const result=await downloadAndInstallAgentUpdate(update); quitting=true; app.quit(); return result; });
+ipcMain.handle("agent:open-release", async (_event, input: {url?: string}) => { const url=input.url??"https://github.com/samlau0086/whatsapp-relay/releases"; if(!/^https:\/\/github\.com\/samlau0086\/whatsapp-relay\/releases(?:\/.*)?$/.test(url)) throw new Error("发布地址无效"); await shell.openExternal(url); return {ok:true}; });
 ipcMain.handle("baileys:open-release", async (_event, input: {url?: string}) => {
   const url = input.url ?? "https://github.com/WhiskeySockets/Baileys/releases";
   if (!/^https:\/\/github\.com\/WhiskeySockets\/Baileys\/releases(?:\/.*)?$/.test(url)) throw new Error("更新地址无效");
