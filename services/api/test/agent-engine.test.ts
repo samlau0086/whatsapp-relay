@@ -17,6 +17,11 @@ test("memory prompts keep recent messages within a bounded character budget",()=
   assert.equal(compacted.at(-1)?.id,"79");
 });
 
+test("memory prompts expose product-card context without changing customer text",()=>{
+  const compacted=compactMemoryMessages([{id:"card-1",direction:"out",kind:"image",text_content:"为您推荐一款产品",provider_payload:{aiContext:{type:"product_card",products:[{name:"香水",sku:"P-1"}]}}}]);
+  assert.equal(compacted[0].text_content,"为您推荐一款产品\n[Internal AI product-card context] {\"type\":\"product_card\",\"products\":[{\"name\":\"香水\",\"sku\":\"P-1\"}]}");
+});
+
 test("automatic replies require confidence and valid citations",()=>{
   const decision:AgentDecision={decision:"auto_reply",reply:"Our warranty is 12 months.",confidence:.9,citations:["chunk-1"],reason:"documented"};
   assert.equal(passesAutoReplyGate(decision,.8,new Set(["chunk-1"])),true);

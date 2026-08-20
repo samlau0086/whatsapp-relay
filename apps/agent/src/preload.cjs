@@ -4,6 +4,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("relayAgent", {
   state: () => ipcRenderer.invoke("agent:state"),
   diagnostics: () => ipcRenderer.invoke("agent:diagnostics"),
+  checkBaileysUpdate: () => ipcRenderer.invoke("baileys:check-update"),
+  openBaileysRelease: (input) => ipcRenderer.invoke("baileys:open-release", input),
   enroll: (input) => ipcRenderer.invoke("agent:enroll", input),
   updateCentralUrl: (input) => ipcRenderer.invoke("agent:update-central-url", input),
   addAccount: (input) => ipcRenderer.invoke("account:add", input),

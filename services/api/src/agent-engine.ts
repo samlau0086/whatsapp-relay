@@ -85,17 +85,25 @@ export function compactMemoryMessages(
   let characters = 0;
   for (const message of messages.slice(-maxMessages).reverse()) {
     const text = String(message.text_content ?? "").slice(0, 1200);
+    const payload = message.provider_payload as Record<string, unknown> | undefined;
+    const internalContext = payload?.aiContext ? JSON.stringify(payload.aiContext) : "";
     if (selected.length && characters + text.length > maxCharacters) break;
     characters += text.length;
     selected.unshift({
       id: message.id,
       direction: message.direction,
       kind: message.kind,
-      text_content: text,
+      text_content: [text, internalContext ? "[Internal AI product-card context] " + internalContext : ""].filter(Boolean).join("\n"),
       occurred_at: message.occurred_at,
     });
   }
   return selected;
+}
+
+function messageContextText(message: Record<string, unknown>): string {
+  const text = String(message.text_content ?? "");
+  const payload = message.provider_payload as Record<string, unknown> | undefined;
+  return [text, payload?.aiContext ? "[Internal AI product-card context] " + JSON.stringify(payload.aiContext) : ""].filter(Boolean).join("\n");
 }
 
 export function passesAutoReplyGate(
@@ -710,7 +718,7 @@ async function runConversationJob(job: Job): Promise<void> {
     }
   }
   const messages = await pool.query(
-    "SELECT m.id,m.direction,m.kind,COALESCE(m.text_content,t.transcript_text) text_content,m.occurred_at FROM messages m LEFT JOIN message_transcriptions t ON t.message_id=m.id WHERE m.conversation_id=$1 ORDER BY m.occurred_at DESC,m.id DESC LIMIT $2",
+    "SELECT m.id,m.direction,m.kind,COALESCE(m.text_content,t.transcript_text) text_content,m.provider_payload,m.occurred_at FROM messages m LEFT JOIN message_transcriptions t ON t.message_id=m.id WHERE m.conversation_id=$1 ORDER BY m.occurred_at DESC,m.id DESC LIMIT $2",
     [job.conversation_id, memoryOnly ? 60 : 20],
   );
   const ordered = messages.rows.reverse();
@@ -752,12 +760,12 @@ async function runConversationJob(job: Job): Promise<void> {
   const query = ordered
     .filter((item) => item.direction === "in")
     .slice(-3)
-    .map((item) => item.text_content ?? "")
+    .map((item) => messageContextText(item))
     .join("\n");
   const provider = await activeProvider();
   const productQuery = ordered
     .slice(-10)
-    .map((item) => String(item.text_content ?? ""))
+    .map((item) => messageContextText(item))
     .join("\n");
   const [chunks, products] = memoryOnly
     ? [[], []]
@@ -1071,7 +1079,7 @@ export async function generateSalesReplySuggestion(
   const cfg = context.rows[0];
   const [messages, facts, orders] = await Promise.all([
     pool.query(
-      "SELECT m.id,m.direction,m.kind,COALESCE(m.text_content,t.transcript_text) text_content,m.occurred_at FROM messages m LEFT JOIN message_transcriptions t ON t.message_id=m.id WHERE m.conversation_id=$1 ORDER BY m.occurred_at DESC,m.id DESC LIMIT 30",
+    "SELECT m.id,m.direction,m.kind,COALESCE(m.text_content,t.transcript_text) text_content,m.provider_payload,m.occurred_at FROM messages m LEFT JOIN message_transcriptions t ON t.message_id=m.id WHERE m.conversation_id=$1 ORDER BY m.occurred_at DESC,m.id DESC LIMIT 30",
       [conversationId],
     ),
     pool.query(
@@ -1093,11 +1101,11 @@ export async function generateSalesReplySuggestion(
   const knowledgeQuery = ordered
     .filter((item) => item.direction === "in")
     .slice(-5)
-    .map((item) => String(item.text_content ?? ""))
+    .map((item) => messageContextText(item))
     .join("\n");
   const productQuery = ordered
     .slice(-10)
-    .map((item) => String(item.text_content ?? ""))
+    .map((item) => messageContextText(item))
     .join("\n");
   const provider = await activeProvider();
   const [chunks, products] = await Promise.all([

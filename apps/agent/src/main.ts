@@ -3,10 +3,11 @@ import { fork, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, safeStorage, session, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, safeStorage, session, shell, Tray } from "electron";
 import QRCode from "qrcode";
 import { AgentStore } from "./store.js";
 import { CentralClient } from "./central-client.js";
+import { checkBaileysUpdate } from "./baileys-update.js";
 
 const PROTOCOL_VERSION = 2;
 const DEFAULT_CENTRAL_URL = "https://wsdesk.geekmt.com";
@@ -35,6 +36,7 @@ const removedWorkers = new Set<string>();
 const repairWorkers = new Set<string>();
 const unresponsiveWorkers = new Set<string>();
 const qrCodes = new Map<string,{dataUrl:string;generatedAt:number}>();
+const BAILEYS_VERSION = "7.0.0-rc13";
 
 if (!hasSingleInstanceLock) {
   app.quit();
@@ -151,6 +153,14 @@ ipcMain.handle("agent:state", async () => ({
   proxy: await proxyState(),
   latestQr: latestQr(),
 }));
+
+ipcMain.handle("baileys:check-update", async () => checkBaileysUpdate(BAILEYS_VERSION));
+ipcMain.handle("baileys:open-release", async (_event, input: {url?: string}) => {
+  const url = input.url ?? "https://github.com/WhiskeySockets/Baileys/releases";
+  if (!/^https:\/\/github\.com\/WhiskeySockets\/Baileys\/releases(?:\/.*)?$/.test(url)) throw new Error("更新地址无效");
+  await shell.openExternal(url);
+  return { ok: true };
+});
 
 ipcMain.handle("agent:diagnostics", async () => ({
   generatedAt: new Date().toISOString(),
