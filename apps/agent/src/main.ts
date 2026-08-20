@@ -8,6 +8,7 @@ import QRCode from "qrcode";
 import { AgentStore } from "./store.js";
 import { CentralClient } from "./central-client.js";
 import { checkBaileysUpdate } from "./baileys-update.js";
+import { checkAgentUpdate, downloadAndInstallAgentUpdate, type AgentUpdate } from "./agent-update.js";
 
 const PROTOCOL_VERSION = 2;
 const DEFAULT_CENTRAL_URL = "https://wsdesk.geekmt.com";
@@ -155,6 +156,9 @@ ipcMain.handle("agent:state", async () => ({
 }));
 
 ipcMain.handle("baileys:check-update", async () => checkBaileysUpdate(BAILEYS_VERSION));
+let pendingAgentUpdate: AgentUpdate | undefined;
+ipcMain.handle("agent:check-update", async () => { pendingAgentUpdate=await checkAgentUpdate(app.getVersion()); return pendingAgentUpdate; });
+ipcMain.handle("agent:install-update", async () => { const update=pendingAgentUpdate??await checkAgentUpdate(app.getVersion()); const result=await downloadAndInstallAgentUpdate(update); quitting=true; app.quit(); return result; });
 ipcMain.handle("baileys:open-release", async (_event, input: {url?: string}) => {
   const url = input.url ?? "https://github.com/WhiskeySockets/Baileys/releases";
   if (!/^https:\/\/github\.com\/WhiskeySockets\/Baileys\/releases(?:\/.*)?$/.test(url)) throw new Error("更新地址无效");
