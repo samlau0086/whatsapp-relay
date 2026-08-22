@@ -118,7 +118,7 @@ export async function transcribeAudio(setting:TranslationProviderSetting,input:{
   }
   if(!response.ok)throw new Error(`transcription_provider_http_${response.status}:${(await response.text()).slice(0,300)}`);
   const raw=await response.text();
-  const transcript=extractTranscript(raw,diarized);
+  const transcript=extractTranscript(raw);
   if(!transcript?.trim())throw new Error("transcription_provider_empty_response");
   return transcript.trim();
 }
@@ -130,7 +130,7 @@ function diarizedTranscript(segments:unknown):string|undefined{
   const text=segments.map(segment=>typeof segment==="object"&&segment!==null&&typeof (segment as {text?:unknown}).text==="string"?(segment as {text:string}).text.trim():"").filter(Boolean).join(" ");
   return text||undefined;
 }
-function extractTranscript(raw:string,diarized:boolean):string|undefined{
+function extractTranscript(raw:string):string|undefined{
   const value=raw.trim();
   if(!value)return undefined;
   try{
