@@ -80,7 +80,14 @@ export const translationProviderSettingsSchema=z.object({
   apiKey:z.string().trim().min(1).max(4096).optional(),
   baseUrl:z.string().trim().url().max(2048),
   model:z.string().trim().min(1).max(200),
-  transcriptionModel:z.string().trim().min(1).max(200),
+  transcriptionModel:z.string().trim().min(1).max(200).optional(),
+});
+
+export const transcriptionProviderSettingsSchema=z.object({
+  enabled:z.boolean().default(false),
+  apiKey:z.string().trim().min(1).max(4096).optional(),
+  baseUrl:z.string().trim().url().max(2048),
+  model:z.string().trim().min(1).max(200),
 });
 
 export const translationPreviewSchema=z.object({

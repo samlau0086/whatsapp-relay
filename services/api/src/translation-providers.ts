@@ -6,8 +6,10 @@ export type TranslationProviderSetting={
   apiKey:string;
   baseUrl:string;
   model:string;
-  transcriptionModel:string;
+  /** @deprecated Used only by legacy callers; transcription now has its own provider config. */
+  transcriptionModel?:string;
 };
+export type TranscriptionProviderSetting=TranslationProviderSetting & { transcriptionModel:string };
 
 export type TranslationContext={
   /** Recent messages in chronological order. Kept intentionally small to control prompt size. */
@@ -97,10 +99,11 @@ export async function transcribeAudio(setting:TranslationProviderSetting,input:{
   const endpoint=`${trimSlash(setting.baseUrl.trim())}/audio/transcriptions`;
   if(!setting.baseUrl.trim()||!/^https?:\/\//i.test(setting.baseUrl.trim()))throw new Error("transcription_provider_invalid_endpoint");
   if(!setting.apiKey.trim())throw new Error("transcription_provider_missing_api_key");
-  if(!setting.transcriptionModel.trim())throw new Error("transcription_provider_missing_model");
-  const diarized=isDiarizationModel(setting.transcriptionModel);
+  if(!setting.transcriptionModel?.trim())throw new Error("transcription_provider_missing_model");
+  const transcriptionModel=setting.transcriptionModel.trim();
+  const diarized=isDiarizationModel(transcriptionModel);
   const request=async(format?:"json"|"diarized_json",includeChunking=false,includeLanguage=true)=>{
-    const form=new FormData();form.append("model",setting.transcriptionModel);if(format)form.append("response_format",format);
+    const form=new FormData();form.append("model",transcriptionModel);if(format)form.append("response_format",format);
     const speechLanguage=input.sourceLanguage?.split("-")[0].toLowerCase();
     if(includeLanguage&&speechLanguage&&/^[a-z]{2}$/.test(speechLanguage))form.append("language",speechLanguage);
     if(includeChunking)form.append("chunking_strategy","auto");
