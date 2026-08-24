@@ -49,6 +49,12 @@ export async function ensureCrmTables(db:Queryable):Promise<void>{
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS sent_at timestamptz");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS send_format text");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS weight_unit text NOT NULL DEFAULT 'kg'");
+  await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_carrier text");
+  await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_number text");
+  await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_url text");
+  await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS paypal_tracking_synced_at timestamptz");
+  await db.query("ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_tracking_complete_check");
+  await db.query("ALTER TABLE orders ADD CONSTRAINT orders_tracking_complete_check CHECK ((tracking_carrier IS NULL AND tracking_number IS NULL AND tracking_url IS NULL) OR (tracking_carrier IS NOT NULL AND tracking_number IS NOT NULL))");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS rendered_media_id uuid REFERENCES media(id) ON DELETE SET NULL");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS deleted_at timestamptz");
   await db.query(`CREATE TABLE IF NOT EXISTS contact_addresses (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),contact_id uuid NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,label text NOT NULL,recipient_name text,phone text,address text NOT NULL,created_by uuid REFERENCES users(id) ON DELETE SET NULL,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now())`);

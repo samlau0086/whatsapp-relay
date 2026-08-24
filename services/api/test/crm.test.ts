@@ -53,6 +53,23 @@ test("order sending and deletion ship with an idempotent database upgrade",async
   assert.match(migration,/ADD COLUMN IF NOT EXISTS deleted_at/);
 });
 
+test("order tracking schema is initialized before tracking routes are available",async()=>{
+  const [crm,server,migration,migrator]=await Promise.all([
+    readFile(new URL("../src/crm.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../infra/postgres/migrations/074_order_tracking.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
+  ]);
+  for(const column of ["tracking_carrier","tracking_number","tracking_url","paypal_tracking_synced_at"]){
+    assert.match(crm,new RegExp(`ADD COLUMN IF NOT EXISTS ${column}`));
+    assert.match(migration,new RegExp(`ADD COLUMN IF NOT EXISTS ${column}`));
+  }
+  assert.match(migrator,/074_order_tracking\.sql/);
+  assert.match(server,/tracking_save_failed/);
+  assert.match(server,/tracking_schema_unavailable/);
+  assert.match(server,/trackingFailureMessage/);
+});
+
 test("order template defaults recover an empty settings singleton after migration",async()=>{
   const [crm,migration,migrator]=await Promise.all([
     readFile(new URL("../src/crm.ts",import.meta.url),"utf8"),
