@@ -46,9 +46,8 @@ jobs:
           set -Eeuo pipefail
           cd "$1/current"
           tracking_number=$2
-          order_id=$(docker compose -p relaydesk exec -T postgres sh -lc \
-            'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atq -v tracking_number="$1" -c "SELECT id FROM orders WHERE tracking_number = :'"'"'tracking_number'"'"' AND deleted_at IS NULL ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT 1"' \
-            sh "$tracking_number" </dev/null)
+          order_id=$(printf "SELECT id FROM orders WHERE tracking_number = '%s' AND deleted_at IS NULL ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT 1;\n" "$tracking_number" | docker compose -p relaydesk exec -T postgres sh -lc \
+            'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atq')
           test -n "$order_id"
           [[ "$order_id" =~ ^[0-9a-f-]{36}$ ]]
           diagnostic=$(cat <<'NODE'
