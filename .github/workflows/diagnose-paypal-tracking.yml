@@ -7,6 +7,11 @@ on:
         description: Saved order tracking number
         required: true
         type: string
+      deploy_current:
+        description: Emergency-deploy the current main revision before diagnosing
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -22,6 +27,7 @@ jobs:
       VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
       VPS_PORT: ${{ vars.VPS_PORT || '22' }}
       VPS_DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH || '/opt/relaydesk' }}
+      WEB_PORT: ${{ secrets.WEB_PORT || '3200' }}
       TRACKING_NUMBER: ${{ inputs.tracking_number }}
     steps:
       - name: Configure SSH
@@ -35,6 +41,66 @@ jobs:
           printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "$VPS_PORT" -H "$VPS_HOST" > ~/.ssh/known_hosts
+
+      - name: Check out current release
+        if: inputs.deploy_current
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Emergency deploy current release
+        if: inputs.deploy_current
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git archive --format=tar.gz --output=release.tar.gz "$GITHUB_SHA"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$VPS_USER@$VPS_HOST" "mkdir -p '$VPS_DEPLOY_PATH/incoming'"
+          scp -i ~/.ssh/id_ed25519 -P "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            release.tar.gz "$VPS_USER@$VPS_HOST:$VPS_DEPLOY_PATH/incoming/$GITHUB_SHA.tar.gz"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$VPS_USER@$VPS_HOST" "bash -s -- '$VPS_DEPLOY_PATH' '$GITHUB_SHA' '$WEB_PORT'" <<'REMOTE'
+          set -Eeuo pipefail
+          root=$1
+          sha=$2
+          web_port=$3
+          archive="$root/incoming/$sha.tar.gz"
+          release="$root/releases/$sha"
+          previous=$(readlink -f "$root/current" 2>/dev/null || true)
+
+          rollback() {
+            status=$?
+            trap - ERR
+            if [ -n "$previous" ] && [ -f "$previous/compose.yaml" ]; then
+              cd "$previous"
+              WEB_PORT="$web_port" docker compose -p relaydesk up --detach --build --remove-orphans --wait --wait-timeout 180 || true
+            fi
+            exit "$status"
+          }
+          trap rollback ERR
+
+          test -f "$archive"
+          mkdir -p "$release"
+          tar -xzf "$archive" -C "$release"
+          ln -sfn "$root/shared/.env" "$release/.env"
+          cd "$release"
+          WEB_PORT="$web_port" docker compose -p relaydesk config --quiet
+          WEB_PORT="$web_port" docker compose -p relaydesk up --detach --remove-orphans postgres redis minio
+          WEB_PORT="$web_port" docker compose -p relaydesk up minio-init
+          WEB_PORT="$web_port" docker compose -p relaydesk up --detach --build --remove-orphans api worker web gateway
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent http://127.0.0.1:8080/health >/dev/null && curl --fail --silent "http://127.0.0.1:$web_port/" >/dev/null; then
+              break
+            fi
+            [ "$attempt" -lt 90 ] || false
+            sleep 2
+          done
+          WEB_PORT="$web_port" docker compose -p relaydesk exec -T api npm run backfill:conversation-summaries
+          next_link="$root/.current-$sha"
+          rm -f "$next_link"
+          ln -s "$release" "$next_link"
+          mv -Tf "$next_link" "$root/current"
+          rm -f "$archive"
+          trap - ERR
+          REMOTE
 
       - name: Retry sync and capture PayPal response
         shell: bash
