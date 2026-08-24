@@ -1,0 +1,73 @@
+name: Diagnose PayPal tracking sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      tracking_number:
+        description: Saved order tracking number
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      VPS_PORT: ${{ vars.VPS_PORT || '22' }}
+      VPS_DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH || '/opt/relaydesk' }}
+      TRACKING_NUMBER: ${{ inputs.tracking_number }}
+    steps:
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$VPS_HOST"
+          test -n "$VPS_USER"
+          test -n "$VPS_SSH_KEY"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "$VPS_PORT" -H "$VPS_HOST" > ~/.ssh/known_hosts
+
+      - name: Retry sync and capture PayPal response
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$TRACKING_NUMBER" =~ ^[A-Za-z0-9._-]{1,160}$ ]]
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$VPS_USER@$VPS_HOST" "bash -s -- '$VPS_DEPLOY_PATH' '$TRACKING_NUMBER'" <<'REMOTE'
+          set -Eeuo pipefail
+          cd "$1/current"
+          tracking_number=$2
+          order_id=$(docker compose -p relaydesk exec -T postgres sh -lc \
+            'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atq -v tracking_number="$1" -c "SELECT id FROM orders WHERE tracking_number = :'"'"'tracking_number'"'"' AND deleted_at IS NULL ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT 1"' \
+            sh "$tracking_number" </dev/null)
+          test -n "$order_id"
+          [[ "$order_id" =~ ^[0-9a-f-]{36}$ ]]
+          diagnostic=$(cat <<'NODE'
+          const orderId = process.env.ORDER_ID;
+          const login = await fetch("http://gateway/api/v1/auth/login", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ email: process.env.ADMIN_EMAIL, password: process.env.ADMIN_PASSWORD }),
+          });
+          if (!login.ok) throw new Error(`login HTTP ${login.status}`);
+          const { accessToken } = await login.json();
+          const response = await fetch(`http://gateway/api/v1/orders/${orderId}/tracking/sync-paypal`, {
+            method: "POST",
+            headers: { authorization: `Bearer ${accessToken}` },
+          });
+          console.log(`order=${orderId}; HTTP ${response.status}`);
+          console.log((await response.text()).slice(0, 4000));
+          if (!response.ok) process.exitCode = 1;
+          NODE
+          )
+          docker compose -p relaydesk exec -T -e ORDER_ID="$order_id" api node --input-type=module -e "$diagnostic" </dev/null
+          REMOTE
