@@ -55,13 +55,13 @@ export class PayPalClient{
   async getInvoice(invoiceId:string):Promise<PayPalInvoiceDetail>{const encoded=encodeURIComponent(invoiceId),body=await this.api(`/v2/invoicing/invoices/${encoded}`);let transactionId=findTransactionId(body);if(!transactionId&&String(body.status??"").toUpperCase()==="PAID"){const payments=await this.api(`/v2/invoicing/invoices/${encoded}/payments`);transactionId=findTransactionId(payments);}return{invoiceId:String(body.id??invoiceId),status:String(body.status??"UNKNOWN"),paymentUrl:findPaymentUrl(body),transactionId};}
 
   async addTracking(input:{transactionId:string;carrier:string;trackingNumber:string}):Promise<void>{
-    const tracker={carrier:input.carrier.trim().toUpperCase().replace(/[\s-]+/g,"_"),tracking_number:input.trackingNumber,status:"SHIPPED",notify_buyer:false};
+    const tracker={transaction_id:input.transactionId,carrier:input.carrier.trim().toUpperCase().replace(/[\s-]+/g,"_"),tracking_number:input.trackingNumber,status:"SHIPPED",notify_buyer:false};
     try{await this.addTrackers([{...tracker,transaction_id:input.transactionId}]);}
     catch(error){
-      // Invoice payments can be paid successfully while their transaction ID is
-      // not accepted by the shipping API. Store the tracker without that link.
+      // Some PayPal Invoice transactions are not accepted by the batch endpoint,
+      // but are accepted by its single-tracker counterpart.
       if(!(error instanceof PayPalApiError)||error.status!==404)throw error;
-      await this.addTrackers([tracker]);
+      await this.api("/v1/shipping/trackers",{method:"POST",body:JSON.stringify(tracker)});
     }
   }
 

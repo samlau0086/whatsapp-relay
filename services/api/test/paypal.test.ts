@@ -84,9 +84,9 @@ test("adds tracking through PayPal's batch trackers endpoint",async()=>{
   assert.deepEqual(JSON.parse(String(trackingCall?.body)),{trackers:[{transaction_id:"9AB12345CD678901E",carrier:"FEDEX",tracking_number:"876025996582",status:"SHIPPED",notify_buyer:false}]});
 });
 
-test("retries invoice tracking without a transaction link when PayPal does not accept it",async()=>{
-  clearPayPalTokenCache();const trackingCalls:RequestInit[]=[];
-  const request=async(input:string|URL|Request,init?:RequestInit)=>{const url=String(input);if(url.endsWith("/v1/oauth2/token"))return Response.json({access_token:"token",expires_in:3600});if(url.endsWith("/v1/shipping/trackers-batch")){trackingCalls.push(init??{});return trackingCalls.length===1?Response.json({name:"RESOURCE_NOT_FOUND",message:"Transaction not found"},{status:404}):Response.json({tracker_identifiers:[{tracking_number:"876025996582"}]});}throw new Error(`unexpected ${url}`);};
+test("retries invoice tracking through the single-tracker endpoint when the batch endpoint returns 404",async()=>{
+  clearPayPalTokenCache();const calls:{url:string;init:RequestInit}[]=[];
+  const request=async(input:string|URL|Request,init?:RequestInit)=>{const url=String(input);if(url.endsWith("/v1/oauth2/token"))return Response.json({access_token:"token",expires_in:3600});if(url.endsWith("/v1/shipping/trackers-batch")){calls.push({url,init:init??{}});return Response.json({name:"RESOURCE_NOT_FOUND",message:"Transaction not found"},{status:404});}if(url.endsWith("/v1/shipping/trackers")){calls.push({url,init:init??{}});return Response.json({transaction_id:"9AB12345CD678901E",tracking_number:"876025996582"},{status:201});}throw new Error(`unexpected ${url}`);};
   await new PayPalClient({environment:"live",clientId:"client",clientSecret:"secret"},request as typeof fetch).addTracking({transactionId:"9AB12345CD678901E",carrier:"Fedex",trackingNumber:"876025996582"});
-  assert.equal(trackingCalls.length,2);assert.equal(JSON.parse(String(trackingCalls[0].body)).trackers[0].transaction_id,"9AB12345CD678901E");assert.equal("transaction_id" in JSON.parse(String(trackingCalls[1].body)).trackers[0],false);
+  assert.equal(calls.length,2);assert.equal(JSON.parse(String(calls[0].init.body)).trackers[0].transaction_id,"9AB12345CD678901E");assert.deepEqual(JSON.parse(String(calls[1].init.body)),{transaction_id:"9AB12345CD678901E",carrier:"FEDEX",tracking_number:"876025996582",status:"SHIPPED",notify_buyer:false});
 });
