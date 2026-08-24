@@ -51,7 +51,7 @@ export class PayPalClient{
     return{invoiceId,status,paymentUrl};
   }
 
-  async getInvoice(invoiceId:string):Promise<PayPalInvoiceDetail>{const body=await this.api(`/v2/invoicing/invoices/${encodeURIComponent(invoiceId)}`);return{invoiceId:String(body.id??invoiceId),status:String(body.status??"UNKNOWN"),paymentUrl:findPaymentUrl(body),transactionId:findTransactionId(body)};}
+  async getInvoice(invoiceId:string):Promise<PayPalInvoiceDetail>{const encoded=encodeURIComponent(invoiceId),body=await this.api(`/v2/invoicing/invoices/${encoded}`);let transactionId=findTransactionId(body);if(!transactionId&&String(body.status??"").toUpperCase()==="PAID"){const payments=await this.api(`/v2/invoicing/invoices/${encoded}/payments`);transactionId=findTransactionId(payments);}return{invoiceId:String(body.id??invoiceId),status:String(body.status??"UNKNOWN"),paymentUrl:findPaymentUrl(body),transactionId};}
 
   async addTracking(input:{transactionId:string;carrier:string;trackingNumber:string}):Promise<void>{
     await this.api("/v1/shipping/trackers",{method:"POST",body:JSON.stringify({transaction_id:input.transactionId,carrier:input.carrier.trim().toUpperCase().replace(/[\s-]+/g,"_"),tracking_number:input.trackingNumber,shipment_status:"SHIPPED",notify_payer:false})});
@@ -74,7 +74,7 @@ function findPaymentUrl(body:Record<string,unknown>):string|null{
 
 function findTransactionId(body:Record<string,unknown>):string|null{
   const payments=Array.isArray(body.payments)?body.payments:[];
-  for(const payment of payments){if(payment&&typeof payment==="object"){const transactionId=(payment as Record<string,unknown>).transaction_id;if(typeof transactionId==="string"&&transactionId)return transactionId;}}
+  for(const payment of payments){if(payment&&typeof payment==="object"){const item=payment as Record<string,unknown>,transactionId=item.transaction_id??item.transactionId;if(typeof transactionId==="string"&&transactionId)return transactionId;}}
   return null;
 }
 

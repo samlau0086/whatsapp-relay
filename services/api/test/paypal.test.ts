@@ -69,3 +69,10 @@ test("returns a sanitized PayPal API error",async()=>{
   clearPayPalTokenCache();const request=async()=>new Response(JSON.stringify({name:"AUTHENTICATION_FAILURE",message:"Authentication failed"}),{status:401,headers:{"content-type":"application/json"}}),client=new PayPalClient({environment:"live",clientId:"bad",clientSecret:"bad"},request as typeof fetch);
   await assert.rejects(()=>client.verify(),(error:unknown)=>error instanceof PayPalApiError&&error.status===401&&error.code==="AUTHENTICATION_FAILURE");
 });
+
+test("loads a paid invoice transaction from its payment records when invoice detail omits it",async()=>{
+  clearPayPalTokenCache();const calls:string[]=[];
+  const request=async(input:string|URL|Request)=>{const url=String(input);calls.push(url);if(url.endsWith("/v1/oauth2/token"))return Response.json({access_token:"token",expires_in:3600});if(url.endsWith("/v2/invoicing/invoices/INV2-PAID"))return Response.json({id:"INV2-PAID",status:"PAID"});if(url.endsWith("/v2/invoicing/invoices/INV2-PAID/payments"))return Response.json({payments:[{transaction_id:"9AB12345CD678901E"}]});throw new Error(`unexpected ${url}`);};
+  const invoice=await new PayPalClient({environment:"live",clientId:"client",clientSecret:"secret"},request as typeof fetch).getInvoice("INV2-PAID");
+  assert.equal(invoice.transactionId,"9AB12345CD678901E");assert.ok(calls.some(url=>url.endsWith("/v2/invoicing/invoices/INV2-PAID/payments")));
+});
