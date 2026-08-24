@@ -29,6 +29,12 @@ test("server-renders the RelayDesk inbox", async () => {
   );
 });
 
+test("PayPal tracking sync does not label an empty request as JSON", async () => {
+  const panel = await readFile(new URL("../app/order-tracking-panel.tsx", import.meta.url), "utf8");
+  assert.match(panel, /const hasBody=body!==undefined/);
+  assert.match(panel, /headers:hasBody\?\{authorization:`Bearer \$\{token\}`,"content-type":"application\/json"\}:\{authorization:`Bearer \$\{token\}`\}/);
+});
+
 test("workspace includes the reliable-sync UI and responsive breakpoints", async () => {
   const [component, conversationRow, css, taskCenter] = await Promise.all([
     readFile(new URL("../app/whatsapp-inbox.tsx", import.meta.url), "utf8"),
