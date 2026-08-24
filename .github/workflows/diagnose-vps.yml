@@ -138,4 +138,6 @@ jobs:
             exit 1
           fi
           docker compose -p relaydesk logs --tail=120 worker
+          echo "Recent tracking-related API logs:"
+          docker compose -p relaydesk logs --since=24h --no-color api | grep -E "PayPal tracking sync failed|Order tracking|paypalError|trackingError" | tail -n 100 || true
           REMOTE
