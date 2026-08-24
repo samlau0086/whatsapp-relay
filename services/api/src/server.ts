@@ -1322,6 +1322,7 @@ app.patch("/api/v1/orders/:orderId/tracking",{preHandler:authenticate},async(req
   const parsed=orderTrackingSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
   const {orderId}=request.params as {orderId:string};
   try{
+    await ensureOrderTrackingColumns();
     const access=await pool.query("SELECT c.account_id FROM orders o JOIN conversations c ON c.id=o.conversation_id WHERE o.id=$1 AND o.deleted_at IS NULL",[orderId]);
     if(!access.rowCount||!canAccessAccount(request.principal,access.rows[0].account_id))return reply.code(404).send({error:"not_found"});
     const saved=await pool.query("UPDATE orders SET tracking_carrier=$2,tracking_number=$3,tracking_url=$4,paypal_tracking_synced_at=NULL,updated_at=now() WHERE id=$1 RETURNING tracking_carrier carrier,tracking_number trackingNumber,tracking_url trackingUrl,paypal_tracking_synced_at paypalTrackingSyncedAt",[orderId,parsed.data.carrier,parsed.data.trackingNumber,parsed.data.trackingUrl??null]);
@@ -1334,7 +1335,7 @@ app.post("/api/v1/orders/:orderId/tracking/sync-paypal",{preHandler:authenticate
   if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
   const {orderId}=request.params as {orderId:string};
   let found;
-  try{found=await pool.query("SELECT o.id,o.tracking_carrier,o.tracking_number,o.payment_profile_snapshot,o.payment_profile_id,o.paypal_tracking_synced_at,c.account_id,pr.id payment_request_id,pr.provider_request_id,pr.environment,pr.payment_profile_id request_profile_id,pr.status FROM orders o JOIN conversations c ON c.id=o.conversation_id LEFT JOIN order_payment_requests pr ON pr.order_id=o.id AND pr.is_current WHERE o.id=$1 AND o.deleted_at IS NULL",[orderId]);}catch(error){request.log.error({orderId,trackingError:error instanceof Error?error.message:String(error)},"Order tracking lookup failed");return reply.code(503).send({error:"tracking_schema_unavailable",message:trackingFailureMessage(error)});}
+  try{await ensureOrderTrackingColumns();found=await pool.query("SELECT o.id,o.tracking_carrier,o.tracking_number,o.payment_profile_snapshot,o.payment_profile_id,o.paypal_tracking_synced_at,c.account_id,pr.id payment_request_id,pr.provider_request_id,pr.environment,pr.payment_profile_id request_profile_id,pr.status FROM orders o JOIN conversations c ON c.id=o.conversation_id LEFT JOIN order_payment_requests pr ON pr.order_id=o.id AND pr.is_current WHERE o.id=$1 AND o.deleted_at IS NULL",[orderId]);}catch(error){request.log.error({orderId,trackingError:error instanceof Error?error.message:String(error)},"Order tracking lookup failed");return reply.code(503).send({error:"tracking_schema_unavailable",message:trackingFailureMessage(error)});}
   if(!found.rowCount||!canAccessAccount(request.principal,found.rows[0].account_id))return reply.code(404).send({error:"not_found"});
   const row=found.rows[0],snapshot=row.payment_profile_snapshot as PaymentProfileSnapshot|null;
   if(!snapshot||snapshot.methodType!=="paypal")return reply.code(409).send({error:"paypal_profile_required",message:"只有 PayPal 付款方式的订单可以同步物流"});
@@ -2166,6 +2167,9 @@ async function cancelCurrentPaymentRequest(orderId:string,actorId:string):Promis
 
 function paypalFailureMessage(error:unknown):string{if(error instanceof PayPalApiError){if(error.status===401||error.status===403)return"PayPal 鉴权失败，请管理员检查凭据和环境";if(error.status===422||error.status===400)return`PayPal 拒绝了该订单：${error.message}`;if(error.status===429)return"PayPal 请求过于频繁，请稍后重试";}return"PayPal 服务暂时不可用，请稍后重试";}
 function trackingFailureMessage(error:unknown):string{const code=(error as {code?:unknown})?.code;if(code==="42703"||code==="42P01")return"物流功能正在初始化，请稍后重试；若持续出现，请重启 API 服务以完成数据库升级";if(code==="23514")return"物流信息不完整，请同时填写承运商和物流单号";return"物流信息暂时无法保存，请稍后重试";}
+let orderTrackingColumnsReady:Promise<void>|null=null;
+function ensureOrderTrackingColumns():Promise<void>{if(!orderTrackingColumnsReady)orderTrackingColumnsReady=ensureOrderTrackingColumnsOnce().catch(error=>{orderTrackingColumnsReady=null;throw error;});return orderTrackingColumnsReady;}
+async function ensureOrderTrackingColumnsOnce():Promise<void>{await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_carrier text");await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_number text");await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_url text");await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS paypal_tracking_synced_at timestamptz");await pool.query("ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_tracking_complete_check");await pool.query("ALTER TABLE orders ADD CONSTRAINT orders_tracking_complete_check CHECK ((tracking_carrier IS NULL AND tracking_number IS NULL AND tracking_url IS NULL) OR (tracking_carrier IS NOT NULL AND tracking_number IS NOT NULL))");}
 
 const transcriptionFlights=new Map<string,Promise<string>>();
 const messageTranslationFlights=new Map<string,Promise<{id:string;translatedText?:string;sourceText?:string;sourceLanguage?:string;error?:string;message?:string}>>();
