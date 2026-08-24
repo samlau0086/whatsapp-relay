@@ -49,6 +49,7 @@ export async function ensureCrmTables(db:Queryable):Promise<void>{
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS sent_at timestamptz");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS send_format text");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS weight_unit text NOT NULL DEFAULT 'kg'");
+  await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_carrier text");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_number text");
   await db.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_url text");

@@ -70,6 +70,8 @@ test("order tracking schema is initialized before tracking routes are available"
   assert.match(server,/trackingFailureMessage/);
   assert.match(server,/await ensureOrderTrackingColumns\(\)/);
   assert.match(server,/ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_carrier text/);
+  assert.match(server,/ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at timestamptz/);
+  assert.match(crm,/ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at timestamptz/);
 });
 
 test("order template defaults recover an empty settings singleton after migration",async()=>{
