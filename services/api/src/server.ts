@@ -1350,7 +1350,7 @@ app.post("/api/v1/orders/:orderId/tracking/sync-paypal",{preHandler:authenticate
     const saved=await pool.query("UPDATE orders SET paypal_tracking_synced_at=now(),updated_at=now() WHERE id=$1 RETURNING paypal_tracking_synced_at",[orderId]);
     await auditCrm(request.principal.id,"order.tracking.sync_paypal","order",orderId,{transactionId:detail.transactionId,carrier:row.tracking_carrier,trackingNumber:row.tracking_number});
     return {syncedAt:saved.rows[0].paypal_tracking_synced_at,transactionId:detail.transactionId};
-  }catch(error){request.log.warn({orderId,paypalError:error instanceof PayPalApiError?error.code:String(error)},"PayPal tracking sync failed");return reply.code(502).send({error:"paypal_tracking_sync_failed",message:paypalFailureMessage(error)});}
+  }catch(error){request.log.warn({orderId,paypalError:error instanceof PayPalApiError?error.code:String(error),paypalStatus:error instanceof PayPalApiError?error.status:undefined,paypalMessage:error instanceof PayPalApiError?error.message:undefined},"PayPal tracking sync failed");return reply.code(502).send({error:"paypal_tracking_sync_failed",message:paypalFailureMessage(error)});}
 });
 
 app.post("/api/v1/orders/:orderId/payment-request/send",{preHandler:authenticate},async(request,reply)=>{

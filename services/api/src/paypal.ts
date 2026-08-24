@@ -35,7 +35,8 @@ export class PayPalClient{
 
   private async api(path:string,init:RequestInit={}):Promise<Record<string,unknown>>{
     const token=await this.accessToken();const response=await this.request(`${paypalBaseUrl(this.setting.environment)}${path}`,{...init,headers:{authorization:`Bearer ${token}`,accept:"application/json","content-type":"application/json",...(init.headers??{})}});
-    const body=response.status===204?{}:await response.json().catch(()=>({})) as Record<string,unknown>;
+    const text=response.status===204?"":await response.text();let body:Record<string,unknown>={};
+    if(text){try{const parsed=JSON.parse(text);if(parsed&&typeof parsed==="object"&&!Array.isArray(parsed))body=parsed as Record<string,unknown>;}catch{body={message:text.replace(/\s+/g," ").slice(0,500)};}}
     if(!response.ok)throw paypalError(response.status,body,"PayPal request failed");return body;
   }
 
