@@ -90,3 +90,8 @@ test("retries invoice tracking through the single-tracker endpoint when the batc
   await new PayPalClient({environment:"live",clientId:"client",clientSecret:"secret"},request as typeof fetch).addTracking({transactionId:"9AB12345CD678901E",carrier:"Fedex",trackingNumber:"876025996582"});
   assert.equal(calls.length,2);assert.equal(JSON.parse(String(calls[0].init.body)).trackers[0].transaction_id,"9AB12345CD678901E");assert.deepEqual(JSON.parse(String(calls[1].init.body)),{transaction_id:"9AB12345CD678901E",carrier:"FEDEX",tracking_number:"876025996582",status:"SHIPPED",notify_buyer:false});
 });
+
+test("reports Invoice tracking as unsupported only after both PayPal tracking endpoints return 404",async()=>{
+  clearPayPalTokenCache();const request=async(input:string|URL|Request)=>{const url=String(input);if(url.endsWith("/v1/oauth2/token"))return Response.json({access_token:"token",expires_in:3600});if(url.endsWith("/v1/shipping/trackers-batch")||url.endsWith("/v1/shipping/trackers"))return Response.json({name:"RESOURCE_NOT_FOUND"},{status:404});throw new Error(`unexpected ${url}`);};
+  await assert.rejects(()=>new PayPalClient({environment:"live",clientId:"client",clientSecret:"secret"},request as typeof fetch).addTracking({transactionId:"9AB12345CD678901E",carrier:"Fedex",trackingNumber:"876025996582"}),(error:unknown)=>error instanceof PayPalApiError&&error.status===409&&error.code==="paypal_invoice_tracking_unsupported");
+});

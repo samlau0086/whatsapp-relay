@@ -61,7 +61,11 @@ export class PayPalClient{
       // Some PayPal Invoice transactions are not accepted by the batch endpoint,
       // but are accepted by its single-tracker counterpart.
       if(!(error instanceof PayPalApiError)||error.status!==404)throw error;
-      await this.api("/v1/shipping/trackers",{method:"POST",body:JSON.stringify(tracker)});
+      try{await this.api("/v1/shipping/trackers",{method:"POST",body:JSON.stringify(tracker)});}
+      catch(fallbackError){
+        if(fallbackError instanceof PayPalApiError&&fallbackError.status===404)throw new PayPalApiError(409,"paypal_invoice_tracking_unsupported","PayPal rejected this paid Invoice transaction from both tracking endpoints");
+        throw fallbackError;
+      }
     }
   }
 
