@@ -76,3 +76,10 @@ test("loads a paid invoice transaction from its payment records when invoice det
   const invoice=await new PayPalClient({environment:"live",clientId:"client",clientSecret:"secret"},request as typeof fetch).getInvoice("INV2-PAID");
   assert.equal(invoice.transactionId,"9AB12345CD678901E");assert.ok(calls.some(url=>url.endsWith("/v2/invoicing/invoices/INV2-PAID/payments")));
 });
+
+test("adds tracking through PayPal's batch trackers endpoint",async()=>{
+  clearPayPalTokenCache();let trackingCall:RequestInit|undefined;
+  const request=async(input:string|URL|Request,init?:RequestInit)=>{const url=String(input);if(url.endsWith("/v1/oauth2/token"))return Response.json({access_token:"token",expires_in:3600});if(url.endsWith("/v1/shipping/trackers-batch")){trackingCall=init;return Response.json({tracker_identifiers:[{transaction_id:"9AB12345CD678901E",tracking_number:"876025996582"}]});}throw new Error(`unexpected ${url}`);};
+  await new PayPalClient({environment:"live",clientId:"client",clientSecret:"secret"},request as typeof fetch).addTracking({transactionId:"9AB12345CD678901E",carrier:"Fedex",trackingNumber:"876025996582"});
+  assert.deepEqual(JSON.parse(String(trackingCall?.body)),{trackers:[{transaction_id:"9AB12345CD678901E",carrier:"FEDEX",tracking_number:"876025996582",status:"SHIPPED",notify_buyer:false}]});
+});

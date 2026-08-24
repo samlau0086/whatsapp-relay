@@ -55,7 +55,8 @@ export class PayPalClient{
   async getInvoice(invoiceId:string):Promise<PayPalInvoiceDetail>{const encoded=encodeURIComponent(invoiceId),body=await this.api(`/v2/invoicing/invoices/${encoded}`);let transactionId=findTransactionId(body);if(!transactionId&&String(body.status??"").toUpperCase()==="PAID"){const payments=await this.api(`/v2/invoicing/invoices/${encoded}/payments`);transactionId=findTransactionId(payments);}return{invoiceId:String(body.id??invoiceId),status:String(body.status??"UNKNOWN"),paymentUrl:findPaymentUrl(body),transactionId};}
 
   async addTracking(input:{transactionId:string;carrier:string;trackingNumber:string}):Promise<void>{
-    await this.api("/v1/shipping/trackers",{method:"POST",body:JSON.stringify({transaction_id:input.transactionId,carrier:input.carrier.trim().toUpperCase().replace(/[\s-]+/g,"_"),tracking_number:input.trackingNumber,shipment_status:"SHIPPED",notify_payer:false})});
+    const result=await this.api("/v1/shipping/trackers-batch",{method:"POST",body:JSON.stringify({trackers:[{transaction_id:input.transactionId,carrier:input.carrier.trim().toUpperCase().replace(/[\s-]+/g,"_"),tracking_number:input.trackingNumber,status:"SHIPPED",notify_buyer:false}]})}),errors=Array.isArray(result.errors)?result.errors:[],first=errors[0]&&typeof errors[0]==="object"?errors[0] as Record<string,unknown>:null;
+    if(first)throw new PayPalApiError(422,String(first.name??first.error??"paypal_tracking_rejected"),String(first.message??first.description??"PayPal rejected the tracking information"));
   }
 
   async cancelInvoice(invoiceId:string,status:string):Promise<void>{
