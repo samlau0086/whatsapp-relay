@@ -34,6 +34,7 @@ import { collageTemplateCreateSchema, collageTemplateUpdateSchema, materialGener
 import { renderCollagePage, type CollageProduct } from "./collage-image.js";
 import { stitchMaterialImages } from "./material-stitch-image.js";
 import { registerTaskRoutes } from "./task-routes.js";
+import {registerProactiveRoutes} from "./proactive-routes.js";
 import {registerStatusRoutes} from "./status-routes.js";
 import {registerWhatsAppCloudRoutes} from "./whatsapp-cloud.js";
 import {registerMessengerRoutes} from "./messenger.js";
@@ -71,6 +72,7 @@ await ensureCurrencySettingsTable();
 await ensureEmailTables();
 await ensureCollageTables();
 await registerTaskRoutes(app);
+await registerProactiveRoutes(app);
 await registerStatusRoutes(app);
 await registerWhatsAppCloudRoutes(app);
 await registerMessengerRoutes(app);

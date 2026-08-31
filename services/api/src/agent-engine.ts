@@ -5,6 +5,7 @@ import { pool, transaction } from "./db.js";
 import { decryptAtRest } from "./security.js";
 import { ensureOrderDetailsImage } from "./order-details-image.js";
 import { isTemplateRequiredError, queueChannelCommand } from "./whatsapp-outbound.js";
+import {cancelProactiveForConversation,suppressProactiveForContact,isProactiveOptOut} from "./proactive-outreach.js";
 
 const s3 = new S3Client({
   region: config.S3_REGION,
@@ -696,7 +697,7 @@ async function runConversationJob(job: Job): Promise<void> {
     return;
   }
   if (job.kind === "followup") {
-    if (Date.now() - new Date(job.created_at).getTime() > 24 * 60 * 60_000) {
+    if (Date.now() - new Date(job.created_at).getTime() > 7 * 24 * 60 * 60_000) {
       await cancelRunJob(job, "followup_expired");
       return;
     }
@@ -1657,9 +1658,10 @@ async function queueAiMessage(
       },
     });
     await client.query(
-      "INSERT INTO conversation_agent_state(conversation_id,mode,followup_count,last_agent_message_id) VALUES($1,'cautious',$2,$3) ON CONFLICT(conversation_id) DO UPDATE SET last_agent_message_id=EXCLUDED.last_agent_message_id,followup_count=EXCLUDED.followup_count,updated_at=now()",
+      "INSERT INTO conversation_agent_state(conversation_id,mode,followup_count,last_agent_message_id) VALUES($1,$2,$3,$4) ON CONFLICT(conversation_id) DO UPDATE SET mode=EXCLUDED.mode,last_agent_message_id=EXCLUDED.last_agent_message_id,followup_count=EXCLUDED.followup_count,updated_at=now()",
       [
         job.conversation_id,
+        cfg.mode,
         job.kind === "followup" ? Number(cfg.followup_count) + 1 : 0,
         message.rows[0].id,
       ],
@@ -1708,6 +1710,12 @@ export async function enqueueInboundAgentWork(
     "UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error=CASE WHEN kind='followup' THEN 'customer_replied' ELSE 'superseded_by_newer_message' END WHERE conversation_id=$1 AND state='pending' AND (kind='followup' OR (kind='reply' AND source_message_id IS DISTINCT FROM $2))",
     [conversationId, messageId],
   );
+  await cancelProactiveForConversation(client,conversationId,"customer_replied");
+  const incoming=await client.query("SELECT text_content FROM messages WHERE id=$1",[messageId]);
+  if(isProactiveOptOut(String(incoming.rows[0]?.text_content??""))){
+    const contact=await client.query("SELECT contact_id FROM conversations WHERE id=$1",[conversationId]);
+    if(contact.rowCount)await suppressProactiveForContact(client,String(contact.rows[0].contact_id),"customer_opt_out");
+  }
   await client.query(
     "INSERT INTO agent_jobs(conversation_id,source_message_id,kind,available_at) SELECT $1,$2,'reply',now()+interval '3 seconds' WHERE EXISTS(SELECT 1 FROM conversations c JOIN account_agent_settings s ON s.account_id=c.account_id JOIN conversation_agent_state st ON st.conversation_id=c.id WHERE c.id=$1 AND s.enabled AND st.mode IN ('cautious','full')) ON CONFLICT DO NOTHING",
     [conversationId, messageId],

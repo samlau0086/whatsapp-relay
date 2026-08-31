@@ -8,6 +8,7 @@ import { processOneTaskCycle } from "./task-engine.js";
 import {processOneCloudOutbound,processOneCloudWebhook,syncDueCloudTemplates} from "./whatsapp-cloud.js";
 import {processOneMessengerOutbound,processOneMessengerWebhook} from "./messenger.js";
 import {processOneStatusCycle,recoverStaleStatusCommands} from "./status-engine.js";
+import {processOneProactiveOutreach} from "./proactive-outreach.js";
 
 let stopping=false;
 let lastRetention=0;
@@ -18,6 +19,7 @@ while(!stopping){
   const agentWork=await processOneAgentJob();
   const emailWork=await processOneEmail();
   const taskWork=await processOneTaskCycle();
+  const proactiveWork=await processOneProactiveOutreach();
   const statusWork=await processOneStatusCycle();
   const cloudOutbound=await processOneCloudOutbound();
   const cloudInbound=await processOneCloudWebhook();
@@ -25,7 +27,7 @@ while(!stopping){
   const messengerInbound=await processOneMessengerWebhook();
   const templateSync=await syncDueCloudTemplates();
   const delivery=await claimWebhook();
-  if(delivery)await deliverWebhook(delivery);else if(!agentWork&&!emailWork&&!taskWork&&!statusWork&&!cloudOutbound&&!cloudInbound&&!messengerOutbound&&!messengerInbound&&!templateSync)await sleep(750);
+  if(delivery)await deliverWebhook(delivery);else if(!agentWork&&!emailWork&&!taskWork&&!proactiveWork&&!statusWork&&!cloudOutbound&&!cloudInbound&&!messengerOutbound&&!messengerInbound&&!templateSync)await sleep(750);
   await requeueCommands();
   await recoverStaleStatusCommands();
   await enforceRetention();
