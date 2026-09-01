@@ -392,6 +392,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const notificationBaselineReady=useRef(false);
   const notificationAudio=useRef<AudioContext|null>(null);
   const lastRealtimeCountsRefresh=useRef(0);
+  const quickReplySyncRef=useRef(Promise.resolve());
 
   const userId=user?.id??tokenSubject(apiToken);
   const counts=conversationCounts;
@@ -834,15 +835,20 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   },[translationPreference.agentLanguage]);
   useEffect(()=>{
     const accountId=active?.accountId;
-    const timer=window.setTimeout(()=>{
-      if(!accountId||!userId){setSavedQuickReplies([]);return;}
-      try{
-        const key=quickReplyStorageKey(userId,accountId),stored=localStorage.getItem(key),items=loadQuickReplyStore(stored);
-        setSavedQuickReplies(items);if(!stored||stored.trim().startsWith("["))localStorage.setItem(key,JSON.stringify({version:2,items}));
-      }catch{setSavedQuickReplies([]);}
-    },0);
-    return()=>window.clearTimeout(timer);
-  },[active?.accountId,userId]);
+    if(!accountId||!userId||!apiToken){setSavedQuickReplies([]);return;}
+    let cancelled=false;
+    void (async()=>{
+      const key=quickReplyStorageKey(userId,accountId),stored=localStorage.getItem(key),localItems=loadQuickReplyStore(stored);
+      const result=await authorizedFetch(`/api/v1/accounts/${accountId}/quick-replies`,apiToken);
+      if(result.token!==apiToken)setApiToken(result.token);
+      if(!result.response.ok){if(!cancelled)setSavedQuickReplies(localItems);return;}
+      const body=await result.response.json() as {items:SavedQuickReply[]};
+      const items=body.items??[];
+      if(!items.length&&localItems.length){await syncQuickReplies(accountId,result.token,localItems);if(!cancelled)setSavedQuickReplies(localItems);return;}
+      if(!cancelled){setSavedQuickReplies(items);localStorage.setItem(key,JSON.stringify({version:2,items}));}
+    })().catch(()=>{if(!cancelled)setSavedQuickReplies(loadQuickReplyStore(localStorage.getItem(quickReplyStorageKey(userId,accountId))));});
+    return()=>{cancelled=true;};
+  },[active?.accountId,userId,apiToken]);
   useEffect(()=>{if(!apiToken||!translationPreference.enabled||!translationConfigured)return;const ids=currentMessages.filter(message=>message.direction==="in"&&((["text","image","video","document"].includes(message.kind)&&message.text.trim())||(message.kind==="audio"&&message.attachment))&&!messageTranslations[message.id]).map(message=>message.id);if(!ids.length)return;const timer=window.setTimeout(()=>void loadIncomingTranslations(apiToken,ids,translationPreference.agentLanguage,translationPreference.customerLanguage),0);return()=>window.clearTimeout(timer);},[apiToken,currentMessages,translationPreference.enabled,translationPreference.agentLanguage,translationPreference.customerLanguage,translationConfigured,messageTranslations,loadIncomingTranslations]);
   useEffect(()=>{if(!toast)return;const timer=window.setTimeout(()=>setToast(""),3200);return()=>window.clearTimeout(timer);},[toast]);
   useEffect(()=>{const timer=window.setInterval(()=>setClock(Date.now()),30_000);return()=>window.clearInterval(timer);},[]);
@@ -1331,13 +1337,20 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   function addMessageToQuickReplies(message:ChatMessage){
     if(!active||!userId)return;
     const text=message.text.trim(),attachment=message.attachment?{id:message.attachment.id,fileName:message.attachment.name,mimeType:message.attachment.mime,size:parseFormattedBytes(message.attachment.size),sha256:"",createdAt:message.occurredAt??new Date().toISOString(),usageCount:1}:undefined;
-    const reply:SavedQuickReply={id:crypto.randomUUID(),sourceMessageId:message.id,title:(text||attachment?.fileName||kindText(message.kind)).slice(0,40),text,tags:`${kindText(message.kind)} ${active.name}`,kind:message.kind,createdAt:new Date().toISOString(),attachment};
+    const kind=["text","image","audio","video","document"].includes(message.kind)?message.kind:"text";
+    const reply:SavedQuickReply={id:crypto.randomUUID(),sourceMessageId:message.id,title:(text||attachment?.fileName||kindText(message.kind)).slice(0,40),text,tags:`${kindText(message.kind)} ${active.name}`,kind,createdAt:new Date().toISOString(),attachment:kind==="text"?undefined:attachment};
     const next=[reply,...savedQuickReplies.filter(item=>item.sourceMessageId!==message.id)];persistQuickReplies(next);
     setToast("已加入快捷回复，可在输入区搜索使用");
   }
 
   function persistQuickReplies(next:SavedQuickReply[]){
-    if(!active||!userId)return;localStorage.setItem(quickReplyStorageKey(userId,active.accountId),JSON.stringify({version:2,items:next}));setSavedQuickReplies(next);
+    if(!active||!userId)return;localStorage.setItem(quickReplyStorageKey(userId,active.accountId),JSON.stringify({version:2,items:next}));setSavedQuickReplies(next);if(apiToken)void syncQuickReplies(active.accountId,apiToken,next);
+  }
+
+  async function syncQuickReplies(accountId:string,token:string,items:SavedQuickReply[]):Promise<void>{
+    const payload={items:items.map(item=>({id:item.id,sourceMessageId:item.sourceMessageId||null,title:item.title,text:item.text,tags:item.tags.split(/\s+/).filter(Boolean),kind:item.kind,attachmentId:item.attachment?.id??null,createdAt:item.createdAt}))};
+    quickReplySyncRef.current=quickReplySyncRef.current.catch(()=>undefined).then(async()=>{const result=await authorizedFetch(`/api/v1/accounts/${accountId}/quick-replies`,token,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify(payload)});if(result.token!==token)setApiToken(result.token);if(!result.response.ok)throw new Error("quick_reply_sync_failed");});
+    await quickReplySyncRef.current;
   }
 
   function saveQuickReply(item:SavedQuickReply){
@@ -6292,7 +6305,7 @@ function ProductDialog({product,products,token,onToken,onClose,onSaved}:{product
 }
 
 function AgentManagement({token,role,onToken,onToast}:{token:string;role:string;onToken:(token:string)=>void;onToast:(text:string)=>void}){
-  const [agents,setAgents]=useState<ManagedAgent[]>([]);const [loading,setLoading]=useState(true);const [error,setError]=useState("");const [enrollment,setEnrollment]=useState<{code:string;expiresAt:string}|null>(null);
+  const [agents,setAgents]=useState<ManagedAgent[]>([]);const [loading,setLoading]=useState(true);const [error,setError]=useState("");const [enrollment,setEnrollment]=useState<{code:string;expiresAt:string}|null>(null);const [migration,setMigration]=useState<{sourceAgent:ManagedAgent;account:ManagedAgent["accounts"][number]}|null>(null);
   const load=useCallback(async(quiet=false)=>{if(!token)return;if(!quiet)setLoading(true);try{const result=await authorizedFetch("/api/v1/agents",token);if(result.token!==token)onToken(result.token);if(!result.response.ok)throw new Error(result.response.status===403?"当前账号无权查看 Agent":"Agent 列表加载失败");const body=await result.response.json() as {data:ManagedAgent[]};setAgents(body.data);setError("");}catch(reason){setError(reason instanceof Error?reason.message:"Agent 列表加载失败");}finally{if(!quiet)setLoading(false);}},[token,onToken]);
   useEffect(()=>{const initial=window.setTimeout(()=>void load(),0);const timer=window.setInterval(()=>void load(true),5000);return()=>{window.clearTimeout(initial);window.clearInterval(timer);};},[load]);
   async function createAgent(){const name=await promptAction({title:"注册新 Agent",label:"设备名称",defaultValue:"Windows Agent",description:"使用容易辨认的名称，方便团队管理设备连接。",placeholder:"例如：办公室 Windows Agent",confirmLabel:"生成注册码",maxLength:80});if(!name?.trim())return;const result=await authorizedFetch("/api/v1/agents/enrollment",token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name:name.trim()})});if(result.token!==token)onToken(result.token);if(!result.response.ok){onToast(`创建失败（HTTP ${result.response.status}）`);return;}const body=await result.response.json() as {enrollmentCode:string;expiresAt:string};setEnrollment({code:body.enrollmentCode,expiresAt:body.expiresAt});void load(true);}
@@ -6300,15 +6313,22 @@ function AgentManagement({token,role,onToken,onToast}:{token:string;role:string;
   async function revokeAgent(agent:ManagedAgent){if(!await confirmAction(`撤销「${agent.name}」后，该设备必须重新注册才能连接。`,{title:"撤销 Agent？",confirmLabel:"确认撤销"}))return;await mutate(agent.id,{revoke:true},"Agent 已撤销");}
   async function deleteAgent(agent:ManagedAgent){if(!await confirmAction(`「${agent.name}」的中心登记将被永久删除，账号历史消息仍会保留。`,{title:"删除 Agent 登记？",confirmLabel:"永久删除"}))return;const result=await authorizedFetch(`/api/v1/agents/${agent.id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);if(!result.response.ok){onToast(`删除失败（HTTP ${result.response.status}）`);return;}onToast("Agent 登记已删除");void load(true);}
   async function mutate(id:string,body:Record<string,unknown>,success:string){const result=await authorizedFetch(`/api/v1/agents/${id}`,token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify(body)});if(result.token!==token)onToken(result.token);if(!result.response.ok){onToast(`操作失败（HTTP ${result.response.status}）`);return;}onToast(success);void load(true);}
+  async function transferAccount(targetAgentId:string){if(!migration)return;const result=await authorizedFetch(`/api/v1/agents/accounts/${migration.account.id}/transfer`,token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({targetAgentId})});if(result.token!==token)onToken(result.token);if(!result.response.ok){const body=await result.response.json().catch(()=>({})) as {error?:string};onToast(body.error==="commands_in_flight"?"账号仍有正在发送的消息，请稍后重试":`迁移失败（HTTP ${result.response.status}）`);return;}setMigration(null);onToast("账号已迁移，新 Agent 请扫描二维码重新配对");void load(true);}
   async function copyCode(){if(!enrollment)return;try{await navigator.clipboard.writeText(enrollment.code);onToast("注册码已复制");}catch{onToast("复制失败，请手动复制");}}
   return <section className="management-panel"><header className="management-head"><div><span className="eyebrow">设备与连接</span><h1>Agent 管理</h1><p>查看所有已注册 Windows Agent、连接状态和所管理的 WhatsApp 账号。</p></div><div><button className="secondary-action" onClick={()=>void load()}><RefreshCw size={15}/>刷新</button>{role==="admin"&&<button className="primary-action" onClick={()=>void createAgent()}><Plus size={15}/>注册新 Agent</button>}</div></header>
     {enrollment&&<div className="management-enrollment"><span><b>一次性注册码</b><small>有效期至 {new Date(enrollment.expiresAt).toLocaleString("zh-CN")}</small></span><code>{enrollment.code}</code><button onClick={()=>void copyCode()}>复制</button><button onClick={()=>setEnrollment(null)} aria-label="关闭"><X size={15}/></button></div>}
     <div className="management-summary"><SummaryCard label="全部 Agent" value={agents.length}/><SummaryCard label="当前在线" value={agents.filter(agentIsOnline).length}/><SummaryCard label="已绑定账号" value={agents.reduce((sum,agent)=>sum+agent.accounts.length,0)}/><SummaryCard label="在线账号" value={agents.filter(agentIsOnline).flatMap(agent=>agent.accounts).filter(account=>account.status==="online").length}/></div>
-    {loading?<EmptyState title="正在读取 Agent" text="请稍候…"/>:error?<EmptyState title="Agent 数据加载失败" text={error}/>:agents.length?<div className="agent-grid">{agents.map(agent=>{const online=agentIsOnline(agent),effectiveStatus=online?"online":agent.status==="revoked"?"revoked":agent.status==="pending"?"pending":"offline";return <article className="agent-card" key={agent.id}><div className="agent-card-head"><span className={`agent-device ${online?"online":""}`}><MonitorSmartphone size={20}/></span><span><b>{agent.name}</b><small>{agent.platform||"平台待上报"} · v{agent.version||"未知"}</small></span><em className={`agent-badge ${effectiveStatus}`}>{agentStatusText(effectiveStatus)}</em></div><dl><div><dt>最后心跳</dt><dd>{agent.last_seen_at?formatLastSeen(agent.last_seen_at):"从未连接"}</dd></div><div><dt>确认游标</dt><dd>{agent.last_acked_cursor??0}</dd></div><div><dt>协议版本</dt><dd>{agent.protocol_version??"待协商"}</dd></div><div><dt>注册时间</dt><dd>{new Date(agent.created_at).toLocaleDateString("zh-CN")}</dd></div></dl>{!online&&agent.status!=="pending"&&agent.status!=="revoked"&&<div className="agent-timeout-note"><WifiOff size={13}/>超过 45 秒未收到心跳，已判定离线</div>}<div className="agent-accounts"><h3>WhatsApp 账号 <span>{agent.accounts.length}</span></h3>{agent.accounts.length?agent.accounts.map(account=>{const accountOnline=online&&account.status==="online";return <div key={account.id}><i className={`status-dot ${accountOnline?"online":""}`}/><span><b>{account.display_name}</b><small>{account.phone_e164||(online?account.status_reason:"Agent 已离线")||statusText(account.status)}</small></span><em>{accountOnline?"在线":"离线"}</em></div>}):<p>此 Agent 尚未绑定账号</p>}</div>{role==="admin"?<footer><button onClick={()=>void renameAgent(agent)}>编辑名称</button>{agent.status!=="revoked"&&<button onClick={()=>void revokeAgent(agent)}>撤销凭据</button>}<button className="danger-text" onClick={()=>void deleteAgent(agent)}><Trash2 size={13}/>移除 Agent</button></footer>:<p className="agent-permission-note">当前账号仅可查看；管理员登录后可移除 Agent。</p>}</article>})}</div>:<EmptyState title="尚未注册 Agent" text="点击右上角“注册新 Agent”生成一次性注册码"/>}
+    {loading?<EmptyState title="正在读取 Agent" text="请稍候…"/>:error?<EmptyState title="Agent 数据加载失败" text={error}/>:agents.length?<div className="agent-grid">{agents.map(agent=>{const online=agentIsOnline(agent),effectiveStatus=online?"online":agent.status==="revoked"?"revoked":agent.status==="pending"?"pending":"offline";return <article className="agent-card" key={agent.id}><div className="agent-card-head"><span className={`agent-device ${online?"online":""}`}><MonitorSmartphone size={20}/></span><span><b>{agent.name}</b><small>{agent.platform||"平台待上报"} · v{agent.version||"未知"}</small></span><em className={`agent-badge ${effectiveStatus}`}>{agentStatusText(effectiveStatus)}</em></div><dl><div><dt>最后心跳</dt><dd>{agent.last_seen_at?formatLastSeen(agent.last_seen_at):"从未连接"}</dd></div><div><dt>确认游标</dt><dd>{agent.last_acked_cursor??0}</dd></div><div><dt>协议版本</dt><dd>{agent.protocol_version??"待协商"}</dd></div><div><dt>注册时间</dt><dd>{new Date(agent.created_at).toLocaleDateString("zh-CN")}</dd></div></dl>{!online&&agent.status!=="pending"&&agent.status!=="revoked"&&<div className="agent-timeout-note"><WifiOff size={13}/>超过 45 秒未收到心跳，已判定离线</div>}<div className="agent-accounts"><h3>WhatsApp 账号 <span>{agent.accounts.length}</span></h3>{agent.accounts.length?agent.accounts.map(account=>{const accountOnline=online&&account.status==="online";return <div key={account.id}><i className={`status-dot ${accountOnline?"online":""}`}/><span><b>{account.display_name}</b><small>{account.phone_e164||(online?account.status_reason:"Agent 已离线")||statusText(account.status)}</small></span><em>{accountOnline?"在线":"离线"}</em>{role==="admin"&&agents.some(target=>target.id!==agent.id&&target.status!=="revoked")&&<button title="迁移到其他 Agent" onClick={()=>setMigration({sourceAgent:agent,account})}><ArrowRightLeft size={14}/>迁移</button>}</div>}):<p>此 Agent 尚未绑定账号</p>}</div>{role==="admin"?<footer><button onClick={()=>void renameAgent(agent)}>编辑名称</button>{agent.status!=="revoked"&&<button onClick={()=>void revokeAgent(agent)}>撤销凭据</button>}<button className="danger-text" onClick={()=>void deleteAgent(agent)}><Trash2 size={13}/>移除 Agent</button></footer>:<p className="agent-permission-note">当前账号仅可查看；管理员登录后可移除 Agent。</p>}</article>})}</div>:<EmptyState title="尚未注册 Agent" text="点击右上角“注册新 Agent”生成一次性注册码"/>}
+    {migration&&<AgentAccountTransferDialog sourceAgent={migration.sourceAgent} account={migration.account} agents={agents} onClose={()=>setMigration(null)} onTransfer={transferAccount}/>}
   </section>;
 }
 
 function SummaryCard({label,value}:{label:string;value:number}){return <div><span>{label}</span><b>{value}</b></div>;}
+function AgentAccountTransferDialog({sourceAgent,account,agents,onClose,onTransfer}:{sourceAgent:ManagedAgent;account:ManagedAgent["accounts"][number];agents:ManagedAgent[];onClose:()=>void;onTransfer:(targetAgentId:string)=>Promise<void>}){
+  const eligible=agents.filter(agent=>agent.id!==sourceAgent.id&&agent.status!=="revoked"),[targetAgentId,setTargetAgentId]=useState(eligible[0]?.id??""),[busy,setBusy]=useState(false);
+  async function submit(){if(!targetAgentId)return;setBusy(true);try{await onTransfer(targetAgentId);}finally{setBusy(false);}}
+  return <div className="modal-backdrop" role="presentation"><section className="login-dialog context-action-dialog conversation-transfer-dialog" role="dialog" aria-modal="true" aria-labelledby="agent-account-transfer-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><ArrowRightLeft size={19}/></span><h2 id="agent-account-transfer-title">迁移 WhatsApp 账号</h2><p>将“{account.display_name}”从“{sourceAgent.name}”切换到新 Agent。聊天记录、联系人、设置和快捷回复都会保留；新设备需要扫描二维码重新配对。</p>{eligible.length?<label>目标 Agent<select value={targetAgentId} onChange={event=>setTargetAgentId(event.target.value)} disabled={busy}>{eligible.map(agent=><option value={agent.id} key={agent.id}>{agent.name} · {agentIsOnline(agent)?"在线":"离线"}</option>)}</select></label>:<div className="conversation-transfer-empty">没有可用的目标 Agent</div>}<footer><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void submit()} disabled={busy||!targetAgentId}>{busy?"正在迁移…":"确认迁移"}</button></footer></section></div>;
+}
 function agentStatusText(status:string){return({pending:"待注册",online:"在线",offline:"离线",revoked:"已撤销"} as Record<string,string>)[status]??status;}
 function agentIsOnline(agent:ManagedAgent){if(agent.status!=="online"||!agent.last_seen_at)return false;return Date.now()-new Date(agent.last_seen_at).getTime()<45_000;}
 function formatLastSeen(value:string){const date=new Date(value),seconds=Math.max(0,Math.floor((Date.now()-date.getTime())/1000));if(seconds<60)return`${seconds} 秒前`;if(seconds<3600)return`${Math.floor(seconds/60)} 分钟前`;return date.toLocaleString("zh-CN");}

@@ -361,3 +361,15 @@ export const paymentProfileUpdateSchema=paymentProfileCreateSchema.partial().ref
 export const paymentSendSchema=z.object({clientSendId:z.string().uuid()});
 
 export const enrollmentSchema = z.object({ code: z.string().min(16), name: z.string().min(2).max(80), version: z.string(), platform: z.string() });
+const quickReplyItemSchema=z.object({
+  id:z.string().trim().min(1).max(160),
+  sourceMessageId:z.string().trim().max(160).nullable().optional(),
+  title:z.string().trim().min(1).max(240),
+  text:z.string().max(65536).default(""),
+  tags:z.array(z.string().trim().min(1).max(80)).max(30).default([]),
+  kind:z.enum(["text","image","audio","video","document"]),
+  attachmentId:z.string().uuid().nullable().optional(),
+  createdAt:z.string().datetime().optional(),
+}).superRefine((value,ctx)=>{if(value.kind==="text"&&value.attachmentId)ctx.addIssue({code:"custom",path:["attachmentId"],message:"text quick replies cannot include an attachment"});if(value.kind!=="text"&&!value.attachmentId)ctx.addIssue({code:"custom",path:["attachmentId"],message:"media quick replies require an attachment"});});
+export const quickReplySyncSchema=z.object({items:z.array(quickReplyItemSchema).max(300)}).superRefine((value,ctx)=>{const ids=value.items.map(item=>item.id);if(new Set(ids).size!==ids.length)ctx.addIssue({code:"custom",path:["items"],message:"quick reply ids must be unique"});});
+export const agentAccountTransferSchema=z.object({targetAgentId:z.string().uuid()});

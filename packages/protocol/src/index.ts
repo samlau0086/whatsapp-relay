@@ -106,7 +106,7 @@ export interface AgentCommandResult {
 }
 
 export type AgentFrame = AgentHello | AgentHeartbeat | AgentEventBatch | AgentCommandResult;
-export type ServerFrame = AgentCommand | { type: "ack"; cursor: number } | { type: "incompatible"; supportedVersion: number } | { type: "pong"; at: string } | { type:"attention_cleared"; accountId:string; chatJid:string };
+export type ServerFrame = AgentCommand | { type: "ack"; cursor: number } | { type: "incompatible"; supportedVersion: number } | { type: "pong"; at: string } | { type:"attention_cleared"; accountId:string; chatJid:string } | {type:"account_reassigned";accountId:string;accountName:string;action:"add"|"remove"};
 
 export function retryDelayMs(attempt: number, capMs = 30 * 60_000): number {
   const base = Math.min(capMs, 1_000 * 2 ** Math.max(0, attempt - 1));

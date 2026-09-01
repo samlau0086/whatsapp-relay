@@ -4,6 +4,7 @@ import { AgentStore } from "./store.js";
 
 type CommandHandler = (command:{sequence:number;commandId:string;accountId:string;command:string;payload:Record<string,unknown>})=>Promise<Record<string,unknown>>;
 type AttentionClearedHandler = (input:{accountId:string;chatJid:string})=>void;
+type AccountReassignedHandler = (input:{accountId:string;accountName:string;action:"add"|"remove"})=>void;
 export type CentralClientOptions = {
   baseUrl:string;
   agentId:string;
@@ -16,6 +17,7 @@ export type CentralClientOptions = {
   onCommand:CommandHandler;
   onStatus:(value:string)=>void;
   onAttentionCleared:AttentionClearedHandler;
+  onAccountReassigned:AccountReassignedHandler;
 };
 
 export class CentralClient {
@@ -50,6 +52,7 @@ export class CentralClient {
     if(frame.type==="error"){this.store.set("lastSyncError",JSON.stringify({code:frame.code,cursor:frame.cursor,detail:frame.detail,at:new Date().toISOString()}));return;}
     if(frame.type==="incompatible"){this.options.onStatus("incompatible");this.stop();return;}
     if(frame.type==="attention_cleared"){this.options.onAttentionCleared({accountId:String(frame.accountId??""),chatJid:String(frame.chatJid??"")});return;}
+    if(frame.type==="account_reassigned"){const action=frame.action==="add"?"add":"remove";this.options.onAccountReassigned({accountId:String(frame.accountId??""),accountName:String(frame.accountName??"WhatsApp"),action});return;}
     if(frame.type!=="command")return;
     const command=frame as {type:string;sequence:number;commandId:string;accountId:string;command:string;payload:Record<string,unknown>};
     const prior=this.store.priorResult(command.commandId);if(prior){this.socket?.send(JSON.stringify(prior));return;}

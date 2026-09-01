@@ -283,6 +283,23 @@ ipcMain.handle("account:remove", async (_event, input: {id:string}) => {
   return {ok:true};
 });
 
+async function applyAccountReassignment(input:{accountId:string;accountName:string;action:"add"|"remove"}):Promise<void>{
+  const dataDir=app.getPath("userData");
+  if(input.action==="add"){
+    if(store.accounts().some(account=>account.id===input.accountId))return;
+    store.upsertAccount(input.accountId,input.accountName,"pairing");
+    await startAccount(input.accountId,input.accountName,dataDir);
+    return;
+  }
+  const worker=workers.get(input.accountId);
+  if(worker){removedWorkers.add(input.accountId);worker.send({type:"shutdown",logout:true});setTimeout(()=>{if(workers.get(input.accountId)===worker)worker.kill();},3000);}
+  store.deleteAccount(input.accountId);
+  store.discardRemovedAccountStatusEvents();
+  qrCodes.delete(input.accountId);
+  window?.webContents.send("agent:event",{type:"qr_cleared",accountId:input.accountId});
+  await rm(join(dataDir,"accounts",input.accountId),{recursive:true,force:true});
+}
+
 function restartCentral():void{
   const agentId=store.get("agentId"),credential=store.get("credential"),baseUrl=store.get("baseUrl");
   if(!agentId||!credential||!baseUrl)return;
@@ -311,6 +328,7 @@ async function connectCentral(input:{baseUrl:string;agentId:string;credential:st
       window?.webContents.send("agent:event", { type: "central_status", status });
     },
     onAttentionCleared:({accountId,chatJid})=>clearAttention(accountId,chatJid),
+    onAccountReassigned:input=>void applyAccountReassignment(input),
   });
   client = nextClient;
   nextClient.start();

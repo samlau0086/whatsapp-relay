@@ -9,9 +9,9 @@ import { ifNoneMatchMatches, IMMUTABLE_PRIVATE_CACHE_CONTROL, strongEtag } from 
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount, hasScope, type Principal } from "./auth.js";
-import { apiKeyCreateSchema, contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, conversationTransferSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, materialSendBatchStatusSchema, materialSendSchema, messageCommentSchema, messageCommentVoteSchema, messageRetrySchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderBusinessStatusUpdateSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderTrackingSchema, orderUpdateSchema, paymentSendSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productLabelCatalogDeleteSchema, productLabelCatalogUpdateSchema, productNameTranslationPreviewSchema, productSkuQuerySchema, productUpdateSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, transcriptionProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
+import { agentAccountTransferSchema, apiKeyCreateSchema, contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, conversationTransferSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, materialSendBatchStatusSchema, materialSendSchema, messageCommentSchema, messageCommentVoteSchema, messageRetrySchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderBusinessStatusUpdateSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderTrackingSchema, orderUpdateSchema, paymentSendSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productLabelCatalogDeleteSchema, productLabelCatalogUpdateSchema, productNameTranslationPreviewSchema, productSkuQuerySchema, productUpdateSchema, quickReplySyncSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, transcriptionProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
 import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
-import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline, clearAgentAttention } from "./agent-hub.js";
+import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline, clearAgentAttention, notifyAgentAccountReassignment } from "./agent-hub.js";
 import { generateSpeech, ttsProviderFailureMessage, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
 import { TRANSLATION_PROVIDERS, transcribeAudio, translateProductNames, translateText, translateTextWithDetection, translationProviderDefaults, type TranslationProvider, type TranslationProviderSetting, type TranscriptionProviderSetting } from "./translation-providers.js";
 import { normalizeTranscriptionAudio } from "./audio-normalizer.js";
@@ -51,6 +51,7 @@ const videoNormalizationJobs=new Map<string,Promise<{object_key:string;file_name
 const mediaPreviewCache=new Map<string,Buffer>();
 const mediaPreviewJobs=new Map<string,Promise<Buffer>>();
 const refreshCookie=(token:string,persistent:boolean)=>`relay_refresh=${token}; HttpOnly; SameSite=Lax; Path=/api/v1/auth${persistent?"; Max-Age=34560000":""}${config.NODE_ENV==="production"?"; Secure":""}`;
+function parseQuickReplyTags(value:unknown):string[]{try{const tags=JSON.parse(String(value??"[]"));return Array.isArray(tags)?tags.map(String).filter(tag=>tag.length<=80):[];}catch{return[];}}
 
 function orderFeesWithPayPalFee(fees:OrderSummaryFee[],items:OrderSummaryItem[],shippingAmount:number,paymentProfile:PaymentProfileSnapshot|null):Array<OrderSummaryFee&{source:"manual"|"paypal"}>{
   const manual=fees.map(fee=>({...fee,source:"manual" as const}));
@@ -239,6 +240,31 @@ app.delete("/api/v1/agents/:id", {preHandler:authenticate}, async(request,reply)
     return true;
   });
   if(!removed)return reply.code(404).send({error:"not_found"});disconnectAgent(id,"deleted");return reply.code(204).send();
+});
+
+app.post("/api/v1/agents/accounts/:accountId/transfer",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
+  const {accountId}=request.params as {accountId:string};const parsed=agentAccountTransferSchema.safeParse(request.body);
+  if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  const result=await transaction(async client=>{
+    const account=await client.query("SELECT id,agent_id,display_name,platform,transport FROM channel_accounts WHERE id=$1 FOR UPDATE",[accountId]);
+    if(!account.rowCount)return{error:"not_found" as const};
+    const current=account.rows[0];
+    if(current.platform!=="whatsapp"||current.transport!=="web")return{error:"unsupported_account" as const};
+    if(String(current.agent_id??"")===parsed.data.targetAgentId)return{error:"same_agent" as const};
+    const target=await client.query("SELECT id FROM agents WHERE id=$1 AND status<>'revoked'",[parsed.data.targetAgentId]);
+    if(!target.rowCount)return{error:"target_not_found" as const};
+    const dispatched=await client.query("SELECT 1 FROM outbound_commands WHERE account_id=$1 AND state='dispatched' LIMIT 1",[accountId]);
+    if(dispatched.rowCount)return{error:"commands_in_flight" as const};
+    await client.query("UPDATE outbound_commands SET agent_id=$2 WHERE account_id=$1 AND state='pending'",[accountId,parsed.data.targetAgentId]);
+    await client.query("UPDATE channel_accounts SET agent_id=$2,status='pairing',status_reason='agent_migrated',last_event_at=now() WHERE id=$1",[accountId,parsed.data.targetAgentId]);
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'account.transfer_agent','whatsapp_account',$2,$3)",[request.principal!.id,accountId,JSON.stringify({fromAgentId:current.agent_id,toAgentId:parsed.data.targetAgentId})]);
+    return{accountName:String(current.display_name),sourceAgentId:current.agent_id?String(current.agent_id):null};
+  });
+  if("error" in result){const status=result.error==="not_found"?404:result.error==="commands_in_flight"?409:400;return reply.code(status).send({error:result.error});}
+  if(result.sourceAgentId)notifyAgentAccountReassignment(result.sourceAgentId,accountId,result.accountName,"remove");
+  notifyAgentAccountReassignment(parsed.data.targetAgentId,accountId,result.accountName,"add");
+  return{accountId,targetAgentId:parsed.data.targetAgentId,status:"pairing"};
 });
 
 app.post("/agent/accounts", async(request,reply)=>{
@@ -1990,6 +2016,31 @@ app.put("/api/v1/admin/agent-provider/:provider",{preHandler:authenticate},async
   const body=(request.body??{}) as {enabled?:boolean;apiKey?:string;baseUrl?:string;model?:string;embeddingModel?:string};if(typeof body.enabled!=="boolean"||!body.baseUrl?.trim()||!body.model?.trim()||!body.embeddingModel?.trim())return reply.code(400).send({error:"invalid_request"});
   const baseUrl=body.baseUrl.trim(),model=body.model.trim(),embeddingModel=body.embeddingModel.trim();const current=await pool.query("SELECT api_key_encrypted FROM agent_provider_settings WHERE provider=$1",[provider]);const encrypted=body.apiKey?.trim()?encryptAtRest(body.apiKey.trim(),config.DATA_ENCRYPTION_KEY):current.rows[0]?.api_key_encrypted??null;if(body.enabled&&!encrypted)return reply.code(400).send({error:"api_key_required"});
   await transaction(async client=>{if(body.enabled)await client.query("UPDATE agent_provider_settings SET enabled=false,updated_at=now() WHERE provider<>$1",[provider]);await client.query("INSERT INTO agent_provider_settings(provider,enabled,api_key_encrypted,base_url,model,embedding_model) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(provider) DO UPDATE SET enabled=EXCLUDED.enabled,api_key_encrypted=EXCLUDED.api_key_encrypted,base_url=EXCLUDED.base_url,model=EXCLUDED.model,embedding_model=EXCLUDED.embedding_model,updated_at=now()",[provider,body.enabled,encrypted,baseUrl,model,embeddingModel]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'agent.provider.update','agent_provider',$2,$3)",[request.principal!.id,provider,JSON.stringify({enabled:body.enabled,baseUrl,model,embeddingModel})]);});return{provider,enabled:body.enabled,keyConfigured:Boolean(encrypted)};
+});
+
+app.get("/api/v1/accounts/:id/quick-replies",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const {id}=request.params as {id:string};if(!canAccessAccount(request.principal,id))return reply.code(404).send({error:"not_found"});
+  const account=await pool.query("SELECT id FROM channel_accounts WHERE id=$1",[id]);if(!account.rowCount)return reply.code(404).send({error:"not_found"});
+  const result=await pool.query("SELECT q.id,q.source_message_id,q.title,q.text_content,q.tags,q.kind,q.created_at,m.id media_id,m.file_name,m.mime_type,m.byte_size,m.sha256,m.created_at media_created_at FROM account_quick_replies q LEFT JOIN media m ON m.id=q.media_id WHERE q.account_id=$1 AND q.user_id=$2 ORDER BY q.updated_at DESC,q.created_at DESC",[id,request.principal.id]);
+  return{items:result.rows.map(row=>({id:String(row.id),sourceMessageId:row.source_message_id??"",title:String(row.title),text:String(row.text_content??""),tags:parseQuickReplyTags(row.tags).join(" "),kind:String(row.kind),createdAt:new Date(row.created_at).toISOString(),attachment:row.media_id?{id:String(row.media_id),fileName:row.file_name??"",mimeType:row.mime_type,size:Number(row.byte_size),sha256:row.sha256,createdAt:new Date(row.media_created_at).toISOString(),usageCount:0}:undefined}))};
+});
+
+app.put("/api/v1/accounts/:id/quick-replies",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const {id}=request.params as {id:string};if(!canAccessAccount(request.principal,id))return reply.code(404).send({error:"not_found"});
+  const parsed=quickReplySyncSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  const items=parsed.data.items;
+  const stored=await transaction(async client=>{
+    const account=await client.query("SELECT id FROM channel_accounts WHERE id=$1 FOR UPDATE",[id]);if(!account.rowCount)return null;
+    const mediaIds=[...new Set(items.flatMap(item=>item.attachmentId?[item.attachmentId]:[]))];
+    if(mediaIds.length){const media=await client.query("SELECT id FROM media WHERE id=ANY($1::uuid[]) AND account_id=$2 AND status='ready'",[mediaIds,id]);if(media.rowCount!==mediaIds.length)throw new Error("quick_reply_media_invalid");}
+    await client.query("DELETE FROM account_quick_replies WHERE account_id=$1 AND user_id=$2",[id,request.principal!.id]);
+    for(const item of items)await client.query("INSERT INTO account_quick_replies(account_id,user_id,id,source_message_id,title,text_content,tags,kind,media_id,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now())",[id,request.principal!.id,item.id,item.sourceMessageId??null,item.title,item.text,JSON.stringify(item.tags),item.kind,item.attachmentId??null,item.createdAt?new Date(item.createdAt):new Date()]);
+    return items.length;
+  }).catch(error=>{if(error instanceof Error&&error.message==="quick_reply_media_invalid")return -1;throw error;});
+  if(stored===null)return reply.code(404).send({error:"not_found"});if(stored===-1)return reply.code(400).send({error:"quick_reply_media_invalid"});
+  return{items:stored};
 });
 
 app.get("/api/v1/accounts/:id/agent-settings",{preHandler:authenticate},async(request,reply)=>{const {id}=request.params as {id:string};if(!canAccessAccount(request.principal,id))return reply.code(404).send({error:"not_found"});const result=await pool.query("SELECT account_id,enabled,persona,reply_language,reply_suggestion_instructions,timezone,business_days,business_start::text,business_end::text,confidence_threshold,followup_enabled,followup_delays_hours,default_conversation_mode,updated_at FROM account_agent_settings WHERE account_id=$1",[id]);const assigned=await pool.query("SELECT knowledge_base_id FROM account_knowledge_bases WHERE account_id=$1",[id]);return{...(result.rows[0]??{account_id:id,enabled:false,persona:'You are a helpful, concise customer service agent.',reply_language:'auto',reply_suggestion_instructions:'',timezone:'UTC',business_days:[1,2,3,4,5],business_start:'09:00',business_end:'18:00',confidence_threshold:.8,followup_enabled:true,followup_delays_hours:[24,72],default_conversation_mode:'human_paused'}),knowledgeBaseIds:assigned.rows.map(row=>row.knowledge_base_id)};});
