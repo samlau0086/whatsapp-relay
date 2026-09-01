@@ -95,12 +95,12 @@ RelayDesk 现在提供统一的普通任务与定时消息中心，包含列表�
 
 ## Docker Relay Agent
 
-RelayDesk 也提供带浏览器管理界面的 Linux Docker Agent。每个容器绑定一个 WhatsApp 账号，二维码、连接状态和重新配对操作可在本地网页完成；会话凭据和待同步事件持久化在 Docker volume 中。
+RelayDesk 也提供带浏览器管理界面的 Linux Docker Agent。每个容器只绑定一个 WhatsApp 账号，二维码、连接状态和重新配对操作可在本地网页完成；会话凭据和待同步事件会持久化在 Docker volume 中。
 
-1. 在 RelayDesk 的 **设置 → Agent 管理** 创建 15 分钟有效的一次性注册码。
-2. 下载 `apps/agent/compose.yaml` 与 `apps/agent/.env.docker.example`，将示例文件保存为 `.env`，并填写 `RELAY_CENTRAL_URL`、`RELAY_ENROLLMENT_CODE`、`RELAY_ACCOUNT_ID` 和 `RELAY_MASTER_KEY`。
+1. 在 RelayDesk 的 **设置 → Agent 管理** 生成一个 15 分钟有效的一次性注册码。
+2. 在服务器上复制 `apps/agent/compose.yaml` 和 `apps/agent/.env.docker.example`，然后把示例文件另存为本地私有的 `.env`。不要直接修改仓库里的示例文件；`.env` 里至少填写 `RELAY_CENTRAL_URL`、`RELAY_ENROLLMENT_CODE`、`RELAY_ACCOUNT_ID` 和 `RELAY_MASTER_KEY`。
 3. 执行 `docker compose pull && docker compose up -d`。
-4. 管理界面默认只绑定服务器本机 `127.0.0.1:8788`；通过 `ssh -L 8788:127.0.0.1:8788 <user>@<server>` 建立隧道后，在浏览器打开 `http://127.0.0.1:8788` 扫码。
+4. 管理界面默认只绑定服务器本机 `127.0.0.1:8788`。如果需要远程查看，请先通过 `ssh -L 8788:127.0.0.1:8788 <user>@<server>` 建立隧道，再在浏览器打开 `http://127.0.0.1:8788`。
 
 完整部署、升级、代理和安全访问说明见 [`docs/docker-agent.md`](docs/docker-agent.md)。镜像由 GitHub Actions 发布到 `ghcr.io/samlau0086/relaydesk-agent:latest`。
 

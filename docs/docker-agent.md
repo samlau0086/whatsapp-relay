@@ -22,7 +22,7 @@ cat /proc/sys/kernel/random/uuid
 
 ## 2. 配置并启动
 
-从仓库复制 `apps/agent/compose.yaml` 和 `apps/agent/.env.docker.example` 到服务器上的私有目录：
+在服务器上复制 `apps/agent/compose.yaml` 和 `apps/agent/.env.docker.example`，然后把示例文件另存为本地私有的 `.env`。不要直接修改仓库里的示例文件；`.env` 里至少填写：
 
 ```bash
 mkdir -p /opt/relaydesk-agent && cd /opt/relaydesk-agent
@@ -30,8 +30,6 @@ curl -fsSLO https://raw.githubusercontent.com/samlau0086/whatsapp-relay/main/app
 curl -fsSLo .env https://raw.githubusercontent.com/samlau0086/whatsapp-relay/main/apps/agent/.env.docker.example
 chmod 600 .env
 ```
-
-编辑 `.env`，至少填写：
 
 - `RELAY_CENTRAL_URL`：RelayDesk 对外 HTTPS 根地址，例如 `https://relay.example.com`。
 - `RELAY_ENROLLMENT_CODE`：刚生成的一次性注册码。
