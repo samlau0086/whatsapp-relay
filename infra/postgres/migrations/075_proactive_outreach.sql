@@ -1,4 +1,16 @@
 -- Account-level, low-frequency proactive outreach for qualified cold contacts.
+-- The performance fixture intentionally boots a reduced schema in some branches;
+-- do not make PostgreSQL initialization fail when the CRM schema is absent.
+DO $$
+BEGIN
+  IF to_regclass('public.whatsapp_accounts') IS NULL
+     OR to_regclass('public.contacts') IS NULL
+     OR to_regclass('public.conversations') IS NULL
+     OR to_regclass('public.messages') IS NULL THEN
+    RAISE NOTICE 'Skipping proactive outreach migration: CRM schema is incomplete';
+    RETURN;
+  END IF;
+
 CREATE TABLE IF NOT EXISTS proactive_outreach_settings (
   account_id uuid PRIMARY KEY REFERENCES whatsapp_accounts(id) ON DELETE CASCADE,
   enabled boolean NOT NULL DEFAULT false,
@@ -34,3 +46,4 @@ CREATE TABLE IF NOT EXISTS proactive_outreach_events (
   reason text, metadata jsonb NOT NULL DEFAULT '{}'::jsonb, created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS proactive_outreach_events_contact_idx ON proactive_outreach_events(contact_id,created_at DESC);
+END $$;

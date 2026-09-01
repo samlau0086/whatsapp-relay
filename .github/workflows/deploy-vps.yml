@@ -79,10 +79,15 @@ jobs:
         with:
           node-version: 22.13.0
       - name: Start isolated performance stack
-        run: docker compose -f performance/conversations/compose.yaml up --detach --build --wait
-      - name: Print performance stack logs on startup failure
-        if: failure()
-        run: docker compose -f performance/conversations/compose.yaml logs --no-color api postgres
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compose=(docker compose -f performance/conversations/compose.yaml)
+          if ! "${compose[@]}" up --detach --build --wait --wait-timeout 180; then
+            echo 'Performance stack startup logs:' >&2
+            "${compose[@]}" logs --no-color --tail=200 api postgres >&2 || true
+            exit 1
+          fi
       - name: Seed 100k conversations and 1m messages
         run: docker compose -f performance/conversations/compose.yaml exec -T postgres psql -U relay_perf -d relay_perf < performance/conversations/seed.sql
       - name: Build summary indexes and validate backfill
