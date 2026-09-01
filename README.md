@@ -100,7 +100,13 @@ RelayDesk 也提供带浏览器管理界面的 Linux Docker Agent。每个容器
 1. 在 RelayDesk 的 **设置 → Agent 管理** 生成一个 15 分钟有效的一次性注册码。
 2. 在服务器上复制 `apps/agent/compose.yaml` 和 `apps/agent/.env.docker.example`，然后把示例文件另存为本地私有的 `.env`。不要直接修改仓库里的示例文件；`.env` 里至少填写 `RELAY_CENTRAL_URL`、`RELAY_ENROLLMENT_CODE`、`RELAY_ACCOUNT_ID` 和 `RELAY_MASTER_KEY`。
 3. 执行 `docker compose pull && docker compose up -d`。
-4. 管理界面默认只绑定服务器本机 `127.0.0.1:8788`。如果需要远程查看，请先通过 `ssh -L 8788:127.0.0.1:8788 <user>@<server>` 建立隧道，再在浏览器打开 `http://127.0.0.1:8788`。
+4. 管理界面默认只绑定服务器本机 `127.0.0.1:8788`。如果你不打算把 8788 端口直接暴露到公网，建议先建立 SSH 隧道，再在本机浏览器访问本机地址：
+
+   ```bash
+   ssh -L 8788:127.0.0.1:8788 <user>@<server>
+   ```
+
+   隧道建立后，在本机浏览器打开 `http://127.0.0.1:8788` 扫码。
 
 完整部署、升级、代理和安全访问说明见 [`docs/docker-agent.md`](docs/docker-agent.md)。镜像由 GitHub Actions 发布到 `ghcr.io/samlau0086/relaydesk-agent:latest`。
 
