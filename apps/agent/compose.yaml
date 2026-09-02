@@ -8,7 +8,9 @@ services:
       RELAY_CENTRAL_URL: ${RELAY_CENTRAL_URL:?Set the public RelayDesk URL}
       RELAY_ENROLLMENT_CODE: ${RELAY_ENROLLMENT_CODE:-}
       RELAY_AGENT_NAME: ${RELAY_AGENT_NAME:-Docker Relay Agent}
-      RELAY_ACCOUNT_ID: ${RELAY_ACCOUNT_ID:?Set a UUID for this WhatsApp account}
+      # Optional: creates the first account on a brand-new volume for backwards compatibility.
+      # Leave empty and add one or more accounts from the local management page instead.
+      RELAY_ACCOUNT_ID: ${RELAY_ACCOUNT_ID:-}
       RELAY_ACCOUNT_NAME: ${RELAY_ACCOUNT_NAME:-WhatsApp}
       RELAY_MASTER_KEY: ${RELAY_MASTER_KEY:-}
       RELAY_PROXY_URL: ${RELAY_PROXY_URL:-}

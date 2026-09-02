@@ -1,24 +1,12 @@
 # Docker Relay Agent 部署
 
-Docker Agent 是 Windows 桌面 Agent 的 Linux 版本，带有浏览器管理界面。每个容器只连接一个 WhatsApp 账号；运行状态、登录会话和待同步事件保存在 Docker volume 中，因此升级或重启不会要求重新扫码。
+Docker Agent 是 Windows 桌面 Agent 的 Linux 版本，带有浏览器管理界面。一个容器可管理多个 WhatsApp 账号；每个账号都有独立的登录会话、二维码和执行器。运行状态、登录会话和待同步事件保存在 Docker volume 中，因此升级或重启不会要求重新扫码。
 
 > 容器需要能访问公网 RelayDesk HTTPS/WSS 地址和 WhatsApp。它不需要开放入站端口。
 
 ## 1. 创建 Agent 注册码
 
 登录 RelayDesk，在 **设置 → Agent 管理** 中为 Docker Agent 生成一次性注册码。注册码有效期为 15 分钟。
-
-为此 WhatsApp 账号生成一个 UUID：
-
-```bash
-uuidgen
-```
-
-如果服务器没有 `uuidgen`，可使用：
-
-```bash
-cat /proc/sys/kernel/random/uuid
-```
 
 ## 2. 配置并启动
 
@@ -33,8 +21,9 @@ chmod 600 .env
 
 - `RELAY_CENTRAL_URL`：RelayDesk 对外 HTTPS 根地址，例如 `https://relay.example.com`。
 - `RELAY_ENROLLMENT_CODE`：刚生成的一次性注册码。
-- `RELAY_ACCOUNT_ID`：上一步生成的 UUID。
 - `RELAY_MASTER_KEY`：执行 `openssl rand -hex 32` 生成的 64 位十六进制密钥。
+
+`RELAY_ACCOUNT_ID` 和 `RELAY_ACCOUNT_NAME` 是可选的兼容配置：仅在全新 Docker volume 首次启动时预创建第一个账号。通常保持 `RELAY_ACCOUNT_ID` 为空，启动后在本地管理页点击 **添加账号** 即可创建任意数量的账号，无需手动生成 UUID。
 
 启动容器：
 
@@ -43,7 +32,7 @@ docker compose pull
 docker compose up -d
 ```
 
-在服务器本机浏览器打开 `http://127.0.0.1:8788`，即可查看 Agent 状态并扫描 WhatsApp 关联二维码。
+在服务器本机浏览器打开 `http://127.0.0.1:8788`，即可查看 Agent 状态、添加 WhatsApp 账号并扫描关联二维码。
 
 如果你不打算把 8788 端口直接暴露到公网，推荐先建立 SSH 隧道，再在本机浏览器访问本机地址：
 
@@ -51,8 +40,8 @@ docker compose up -d
 ssh -L 8788:127.0.0.1:8788 <user>@<server>
 ```
 
-隧道建立后，在本机浏览器打开 `http://127.0.0.1:8788`。用手机 WhatsApp 的 **关联设备** 扫描界面显示的二维码；页面变为“已连接”即完成。
-管理界面支持查看中心和账号状态、重新连接，以及清除当前会话后重新配对。默认 Compose 将管理端口仅绑定到服务器 `127.0.0.1`，不会暴露给公网。若修改 `RELAY_UI_BIND` 对外开放，请务必置于具备身份认证的 HTTPS 反向代理之后。
+隧道建立后，在本机浏览器打开 `http://127.0.0.1:8788`。点击 **添加账号**，输入一个便于识别的名称，再用手机 WhatsApp 的 **关联设备** 扫描该账号二维码；页面变为“已连接”即完成。可重复添加多个账号。
+管理界面支持查看中心和账号状态、添加、编辑、重新连接、清除当前会话后重新配对，以及移除账号。默认 Compose 将管理端口仅绑定到服务器 `127.0.0.1`，不会暴露给公网。若修改 `RELAY_UI_BIND` 对外开放，请务必置于具备身份认证的 HTTPS 反向代理之后。
 
 首次注册成功后，从 `.env` 删除 `RELAY_ENROLLMENT_CODE` 的值，再执行：
 
