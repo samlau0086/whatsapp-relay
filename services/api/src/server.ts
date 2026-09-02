@@ -214,7 +214,7 @@ app.get("/api/v1/agents", {preHandler:authenticate}, async(request,reply)=>{
   const [agents,accounts,detachedAccounts]=await Promise.all([
     pool.query("SELECT id,name,status,version,protocol_version,capabilities,platform,last_seen_at,last_acked_cursor,enrollment_expires_at,created_at FROM agents ORDER BY created_at DESC"),
     pool.query("SELECT id,agent_id,display_name,phone_e164,status,status_reason,last_event_at,transport FROM channel_accounts WHERE transport='web' AND agent_id IS NOT NULL ORDER BY display_name"),
-    pool.query("SELECT a.id,a.display_name,a.phone_e164,a.status,a.status_reason,a.last_event_at,a.transport FROM channel_accounts a WHERE a.transport='web' AND COALESCE(a.platform,'whatsapp')='whatsapp' AND a.agent_id IS NULL ORDER BY a.display_name"),
+    pool.query("SELECT a.id,a.display_name,a.phone_e164,a.status,a.status_reason,a.last_event_at,a.transport FROM channel_accounts a WHERE a.transport='web' AND COALESCE(a.platform,'whatsapp')='whatsapp' AND a.agent_id IS NULL AND COALESCE(a.status_reason,'') NOT IN ('data_migrated_to_account','detached_dismissed') ORDER BY a.display_name"),
   ]);
   return {data:agents.rows.map(agent=>({...agent,accounts:accounts.rows.filter(account=>account.agent_id===agent.id)})),detachedAccounts:detachedAccounts.rows};
 });
@@ -332,6 +332,15 @@ app.delete("/api/v1/accounts/:id/agent-binding",{preHandler:authenticate},async(
   if("error" in result)return reply.code(result.error==="commands_pending"?409:404).send({error:result.error});
   if(result.agentId)notifyAgentAccountRemoved(result.agentId,id);
   return{accountId:id,removed:true};
+});
+
+app.delete("/api/v1/accounts/:id/detached-migration",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
+  const {id}=request.params as {id:string};
+  const updated=await pool.query("UPDATE channel_accounts SET status_reason='detached_dismissed',last_event_at=now() WHERE id=$1 AND agent_id IS NULL AND transport='web' RETURNING id",[id]);
+  if(!updated.rowCount)return reply.code(404).send({error:"not_found"});
+  await pool.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id) VALUES('user',$1,'account.detached_dismiss','whatsapp_account',$2)",[request.principal!.id,id]);
+  return {accountId:id,removed:true};
 });
 
 app.get("/api/v1/api-keys", {preHandler:authenticate}, async(request,reply)=>{
