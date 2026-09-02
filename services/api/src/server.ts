@@ -11,7 +11,7 @@ import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount, hasScope, type Principal } from "./auth.js";
 import { whatsappAccountTransferSchema, apiKeyCreateSchema, contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, conversationTransferSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, materialSendBatchStatusSchema, materialSendSchema, messageCommentSchema, messageCommentVoteSchema, messageRetrySchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderBusinessStatusUpdateSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderTrackingSchema, orderUpdateSchema, paymentSendSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productLabelCatalogDeleteSchema, productLabelCatalogUpdateSchema, productNameTranslationPreviewSchema, productSkuQuerySchema, productUpdateSchema, quickReplySyncSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, transcriptionProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
 import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
-import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline, clearAgentAttention } from "./agent-hub.js";
+import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline, clearAgentAttention, notifyAgentAccountRemoved } from "./agent-hub.js";
 import { generateSpeech, ttsProviderFailureMessage, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
 import { TRANSLATION_PROVIDERS, transcribeAudio, translateProductNames, translateText, translateTextWithDetection, translationProviderDefaults, type TranslationProvider, type TranslationProviderSetting, type TranscriptionProviderSetting } from "./translation-providers.js";
 import { normalizeTranscriptionAudio } from "./audio-normalizer.js";
@@ -307,10 +307,30 @@ app.delete("/agent/accounts/:id", async(request,reply)=>{
   const agent=await pool.query("SELECT id FROM agents WHERE credential_hash=$1 AND status<>'revoked'",[hashSecret(credential)]);
   if(!agent.rowCount)return reply.code(401).send({error:"unauthorized"});
   const {id}=request.params as {id:string};
+  const commands=await pool.query("SELECT 1 FROM outbound_commands WHERE account_id=$1 AND agent_id=$2 AND state IN ('pending','dispatched') LIMIT 1",[id,agent.rows[0].id]);
+  if(commands.rowCount)return reply.code(409).send({error:"commands_pending"});
   const removed=await pool.query("UPDATE channel_accounts SET agent_id=NULL,status='logged_out',status_reason='removed_from_agent' WHERE id=$1 AND agent_id=$2 RETURNING id",[id,agent.rows[0].id]);
   if(!removed.rowCount)return reply.code(404).send({error:"not_found"});
   await pool.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id) VALUES('agent',$1,'account.remove','whatsapp_account',$2)",[agent.rows[0].id,id]);
   return reply.code(204).send();
+});
+
+app.delete("/api/v1/accounts/:id/agent-binding",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
+  const {id}=request.params as {id:string};
+  const result=await transaction(async client=>{
+    const account=await client.query("SELECT id,agent_id FROM channel_accounts WHERE id=$1 FOR UPDATE",[id]);
+    if(!account.rowCount)return{error:"not_found" as const};
+    const agentId=account.rows[0].agent_id?String(account.rows[0].agent_id):null;
+    const commands=await client.query("SELECT 1 FROM outbound_commands WHERE account_id=$1 AND state IN ('pending','dispatched') LIMIT 1",[id]);
+    if(commands.rowCount)return{error:"commands_pending" as const};
+    await client.query("UPDATE channel_accounts SET agent_id=NULL,status='logged_out',status_reason='removed_from_agent',last_event_at=now() WHERE id=$1",[id]);
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'account.remove_from_agent','whatsapp_account',$2,$3)",[request.principal!.id,id,JSON.stringify({agentId})]);
+    return{agentId};
+  });
+  if("error" in result)return reply.code(result.error==="commands_pending"?409:404).send({error:result.error});
+  if(result.agentId)notifyAgentAccountRemoved(result.agentId,id);
+  return{accountId:id,removed:true};
 });
 
 app.get("/api/v1/api-keys", {preHandler:authenticate}, async(request,reply)=>{

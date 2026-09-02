@@ -270,16 +270,20 @@ ipcMain.handle("account:repair", async (_event, input: {id:string}) => {
   return {ok:true};
 });
 
+async function removeLocalAccount(accountId:string):Promise<void>{
+  const worker=workers.get(accountId);
+  if(worker){removedWorkers.add(accountId);worker.send({type:"shutdown",logout:true});setTimeout(()=>{if(workers.get(accountId)===worker)worker.kill();},3000);}
+  store.deleteAccount(accountId);
+  store.discardRemovedAccountStatusEvents();
+  qrCodes.delete(accountId);
+  window?.webContents.send("agent:event",{type:"qr_cleared",accountId});
+  await rm(join(app.getPath("userData"),"accounts",accountId),{recursive:true,force:true});
+}
+
 ipcMain.handle("account:remove", async (_event, input: {id:string}) => {
   const account=store.accounts().find(item=>item.id===input.id);if(!account)throw new Error("账号不存在");
   await accountRequest(input.id,"DELETE");
-  const worker=workers.get(input.id);
-  if(worker){removedWorkers.add(input.id);worker.send({type:"shutdown",logout:true});setTimeout(()=>{if(workers.get(input.id)===worker)worker.kill();},3000);}
-  store.deleteAccount(input.id);
-  store.discardRemovedAccountStatusEvents();
-  qrCodes.delete(input.id);
-  window?.webContents.send("agent:event",{type:"qr_cleared",accountId:input.id});
-  await rm(join(app.getPath("userData"),"accounts",input.id),{recursive:true,force:true});
+  await removeLocalAccount(input.id);
   return {ok:true};
 });
 
@@ -311,6 +315,7 @@ async function connectCentral(input:{baseUrl:string;agentId:string;credential:st
       window?.webContents.send("agent:event", { type: "central_status", status });
     },
     onAttentionCleared:({accountId,chatJid})=>clearAttention(accountId,chatJid),
+    onAccountRemoved:accountId=>void removeLocalAccount(accountId),
   });
   client = nextClient;
   nextClient.start();

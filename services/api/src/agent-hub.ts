@@ -51,6 +51,13 @@ export function clearAgentAttention(agentId:string,accountId:string,chatJid:stri
   return true;
 }
 
+export function notifyAgentAccountRemoved(agentId:string,accountId:string):boolean{
+  const socket=liveAgents.get(agentId);
+  if(!socket||socket.readyState!==socket.OPEN)return false;
+  socket.send(JSON.stringify({type:"account_removed",accountId}));
+  return true;
+}
+
 
 export async function markStaleAgentsOffline():Promise<number>{
   return transaction(async client=>{
