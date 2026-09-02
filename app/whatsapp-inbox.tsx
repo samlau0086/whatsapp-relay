@@ -2487,6 +2487,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             setActiveId(transferConversation.id);
             setToast(`会话已转移到“${account.name}”，聊天记录和关联信息保持不变`);
           }}
+          onMerged={(targetConversationId,account)=>{
+            setTransferConversation(null);
+            setSelectedAccount(account.id);
+            setActiveId(targetConversationId);
+            setToast(`会话已合并到“${account.name}”，原会话已归档保留`);
+          }}
         />
       )}
       {replySuggestion&&active?.id===replySuggestion.conversationId&&(
@@ -2703,9 +2709,9 @@ function ConversationNoteDialog({conversation,token,onToken,onClose,onSaved}:{co
   return <div className="modal-backdrop context-action-backdrop" role="presentation"><section className="login-dialog context-action-dialog" role="dialog" aria-modal="true" aria-labelledby="context-note-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><FileText size={19}/></span><h2 id="context-note-title">给 {conversation.name} 添加备注</h2><p>备注将对团队成员共享，并显示在联系人详情中。</p><label>备注内容<textarea autoFocus value={body} onChange={event=>setBody(event.target.value)} maxLength={5000} placeholder="记录客户需求、跟进情况或注意事项"/><small>{body.length}/5000</small></label>{error&&<span className="login-error">{error}</span>}<footer><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void save()} disabled={busy||!body.trim()}>{busy?"正在保存…":"添加备注"}</button></footer></section></div>;
 }
 
-function ConversationTransferDialog({conversation,accounts,token,onToken,onClose,onTransferred}:{conversation:Conversation;accounts:Account[];token:string;onToken:(token:string)=>void;onClose:()=>void;onTransferred:(account:Account,token:string)=>Promise<void>}){
+function ConversationTransferDialog({conversation,accounts,token,onToken,onClose,onTransferred,onMerged}:{conversation:Conversation;accounts:Account[];token:string;onToken:(token:string)=>void;onClose:()=>void;onTransferred:(account:Account,token:string)=>Promise<void>;onMerged:(targetConversationId:string,account:Account)=>void}){
   const eligible=accounts.filter(account=>account.id!==conversation.accountId&&account.platform===conversation.platform);
-  const [accountId,setAccountId]=useState(eligible[0]?.id??""),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  const [accountId,setAccountId]=useState(eligible[0]?.id??""),[busy,setBusy]=useState(false),[error,setError]=useState(""),[mergeTarget,setMergeTarget]=useState<Account|null>(null),[ruleStrategy,setRuleStrategy]=useState<"target"|"source">("target");
   const target=eligible.find(account=>account.id===accountId);
   async function transfer(){
     if(!target||busy)return;
@@ -2714,11 +2720,25 @@ function ConversationTransferDialog({conversation,accounts,token,onToken,onClose
     setBusy(true);setError("");
     const result=await authorizedFetch(`/api/v1/conversations/${conversation.id}/transfer`,token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId:target.id})});
     if(result.token!==token)onToken(result.token);
-    const body=await result.response.json().catch(()=>({})) as {message?:string};
-    if(!result.response.ok){setError(body.message??`账号转移失败（HTTP ${result.response.status}）`);setBusy(false);return;}
+    const body=await result.response.json().catch(()=>({})) as {error?:string;message?:string};
+    if(!result.response.ok){if(body.error==="contact_conflict"){setMergeTarget(target);setBusy(false);return;}setError(body.message??`账号转移失败（HTTP ${result.response.status}）`);setBusy(false);return;}
     await onTransferred(target,result.token);
   }
-  return <div className="modal-backdrop context-action-backdrop" role="presentation"><section className="login-dialog context-action-dialog conversation-transfer-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-transfer-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><ArrowRightLeft size={19}/></span><h2 id="conversation-transfer-title">转移会话账号</h2><p>为“{conversation.name}”选择新的发送账号。转移不会清除聊天记录或会话关联信息。</p>{eligible.length?<label>目标账号<select autoFocus value={accountId} onChange={event=>setAccountId(event.target.value)} disabled={busy}>{eligible.map(account=><option key={account.id} value={account.id}>{account.platform==="messenger"?"Facebook":"WhatsApp"} · {account.name} · {account.status==="online"?"在线":"离线"}</option>)}</select></label>:<div className="conversation-transfer-empty">没有其他可转移的同渠道账号</div>}{error&&<span className="login-error">{error}</span>}<footer><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void transfer()} disabled={busy||!target}>{busy?"正在转移…":"转移账号"}</button></footer></section></div>;
+  async function merge(){
+    if(!mergeTarget||busy)return;
+    const strategyText=ruleStrategy==="target"?"保留目标账号的任务规则":"以当前会话的任务规则覆盖目标规则";
+    const confirmed=await confirmAction(`目标账号已存在“${conversation.name}”的会话。合并后，当前会话会归档保留，标签和备注会复制到目标会话，当前会话的自动消息任务会停止；${strategyText}。`,{title:"确认合并到目标会话？",confirmLabel:"确认合并",tone:"warning"});
+    if(!confirmed)return;
+    setBusy(true);setError("");
+    const result=await authorizedFetch(`/api/v1/conversations/${conversation.id}/merge`,token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId:mergeTarget.id,ruleStrategy})});
+    if(result.token!==token)onToken(result.token);
+    const body=await result.response.json().catch(()=>({})) as {message?:string;targetConversationId?:string};
+    if(!result.response.ok){setError(body.message??`会话合并失败（HTTP ${result.response.status}）`);setBusy(false);return;}
+    if(!body.targetConversationId){setError("会话合并失败：未返回目标会话");setBusy(false);return;}
+    onMerged(body.targetConversationId,mergeTarget);
+  }
+  const isMerging=Boolean(mergeTarget);
+  return <div className="modal-backdrop context-action-backdrop" role="presentation"><section className="login-dialog context-action-dialog conversation-transfer-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-transfer-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><ArrowRightLeft size={19}/></span><h2 id="conversation-transfer-title">{isMerging?"合并到目标会话":"转移会话账号"}</h2>{isMerging?<><p>“{mergeTarget?.name}”已存在同一联系人的会话。合并会保留当前会话历史并将其归档，标签和备注会复制到目标会话；为防重复发送，当前会话的自动消息任务会停止。</p><fieldset className="conversation-merge-strategy" disabled={busy}><legend>重复任务规则</legend><label><input type="radio" name="rule-strategy" checked={ruleStrategy==="target"} onChange={()=>setRuleStrategy("target")}/>保留目标账号规则（推荐）</label><small>使用目标会话已有规则，当前会话规则保留但停用。</small><label><input type="radio" name="rule-strategy" checked={ruleStrategy==="source"} onChange={()=>setRuleStrategy("source")}/>以当前会话规则覆盖目标规则</label><small>保留目标规则位置，但用当前会话的规则配置替换。</small></fieldset></>:<><p>为“{conversation.name}”选择新的发送账号。转移不会清除聊天记录或会话关联信息。</p>{eligible.length?<label>目标账号<select autoFocus value={accountId} onChange={event=>setAccountId(event.target.value)} disabled={busy}>{eligible.map(account=><option key={account.id} value={account.id}>{account.platform==="messenger"?"Facebook":"WhatsApp"} · {account.name} · {account.status==="online"?"在线":"离线"}</option>)}</select></label>:<div className="conversation-transfer-empty">没有其他可转移的同渠道账号</div>}</>}{error&&<span className="login-error">{error}</span>}<footer>{isMerging&&<button className="secondary-action" onClick={()=>{setMergeTarget(null);setError("");}} disabled={busy}>返回</button>}<button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void(isMerging?merge():transfer())} disabled={busy||(!isMerging&&!target)}>{busy?(isMerging?"正在合并…":"正在转移…"):(isMerging?"确认合并":"转移账号")}</button></footer></section></div>;
 }
 
 function ConversationQuickTaskDialog({conversation,token,assignedUserId,onToken,onClose,onSaved}:{conversation:Conversation;token:string;assignedUserId:string|null;onToken:(token:string)=>void;onClose:()=>void;onSaved:()=>void}){

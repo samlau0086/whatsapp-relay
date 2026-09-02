@@ -56,6 +56,9 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /\/api\/v1\/agents\/enrollment/);
   assert.match(component, /\/api\/v1\/agents/);
   assert.match(component, /\/api\/v1\/conversations/);
+  assert.match(component, /合并到目标会话/);
+  assert.match(component, /rule-strategy/);
+  assert.match(component, /\/api\/v1\/conversations\/\$\{conversation\.id\}\/merge/);
   assert.match(component, /\/api\/v1\/media/);
   assert.match(component, /EmojiPicker/);
   assert.match(component, /MediaDialog/);
@@ -73,6 +76,7 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(css, /group-member-list/);
   assert.match(css, /\.contact-preview-body/);
   assert.match(css, /\.contact-preview-actions/);
+  assert.match(css, /\.conversation-merge-strategy/);
   assert.match(css, /\.login-dialog\.contact-preview-dialog\{width:clamp\(760px,56vw,1600px\)!important/);
   assert.match(component, /MaterialLibrarySendDialog/);
   assert.match(component, /打开素材库/);
