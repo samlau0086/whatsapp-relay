@@ -51,12 +51,6 @@ export function clearAgentAttention(agentId:string,accountId:string,chatJid:stri
   return true;
 }
 
-export function notifyAgentAccountReassignment(agentId:string,accountId:string,accountName:string,action:"add"|"remove"):boolean{
-  const socket=liveAgents.get(agentId);
-  if(!socket||socket.readyState!==socket.OPEN)return false;
-  socket.send(JSON.stringify({type:"account_reassigned",accountId,accountName,action}));
-  return true;
-}
 
 export async function markStaleAgentsOffline():Promise<number>{
   return transaction(async client=>{

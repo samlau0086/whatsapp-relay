@@ -9,9 +9,9 @@ import { ifNoneMatchMatches, IMMUTABLE_PRIVATE_CACHE_CONTROL, strongEtag } from 
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount, hasScope, type Principal } from "./auth.js";
-import { agentAccountTransferSchema, apiKeyCreateSchema, contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, conversationTransferSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, materialSendBatchStatusSchema, materialSendSchema, messageCommentSchema, messageCommentVoteSchema, messageRetrySchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderBusinessStatusUpdateSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderTrackingSchema, orderUpdateSchema, paymentSendSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productLabelCatalogDeleteSchema, productLabelCatalogUpdateSchema, productNameTranslationPreviewSchema, productSkuQuerySchema, productUpdateSchema, quickReplySyncSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, transcriptionProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
+import { whatsappAccountTransferSchema, apiKeyCreateSchema, contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationTagsSchema, conversationTransferSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, materialSendBatchStatusSchema, materialSendSchema, messageCommentSchema, messageCommentVoteSchema, messageRetrySchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderBusinessStatusUpdateSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderTrackingSchema, orderUpdateSchema, paymentSendSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productLabelCatalogDeleteSchema, productLabelCatalogUpdateSchema, productNameTranslationPreviewSchema, productSkuQuerySchema, productUpdateSchema, quickReplySyncSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, transcriptionProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
 import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
-import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline, clearAgentAttention, notifyAgentAccountReassignment } from "./agent-hub.js";
+import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline, clearAgentAttention } from "./agent-hub.js";
 import { generateSpeech, ttsProviderFailureMessage, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
 import { TRANSLATION_PROVIDERS, transcribeAudio, translateProductNames, translateText, translateTextWithDetection, translationProviderDefaults, type TranslationProvider, type TranslationProviderSetting, type TranscriptionProviderSetting } from "./translation-providers.js";
 import { normalizeTranscriptionAudio } from "./audio-normalizer.js";
@@ -242,29 +242,35 @@ app.delete("/api/v1/agents/:id", {preHandler:authenticate}, async(request,reply)
   if(!removed)return reply.code(404).send({error:"not_found"});disconnectAgent(id,"deleted");return reply.code(204).send();
 });
 
-app.post("/api/v1/agents/accounts/:accountId/transfer",{preHandler:authenticate},async(request,reply)=>{
+app.post("/api/v1/accounts/:sourceAccountId/transfer",{preHandler:authenticate},async(request,reply)=>{
   if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
-  const {accountId}=request.params as {accountId:string};const parsed=agentAccountTransferSchema.safeParse(request.body);
+  const {sourceAccountId}=request.params as {sourceAccountId:string};const parsed=whatsappAccountTransferSchema.safeParse(request.body);
   if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
   const result=await transaction(async client=>{
-    const account=await client.query("SELECT id,agent_id,display_name,platform,transport FROM channel_accounts WHERE id=$1 FOR UPDATE",[accountId]);
-    if(!account.rowCount)return{error:"not_found" as const};
-    const current=account.rows[0];
-    if(current.platform!=="whatsapp"||current.transport!=="web")return{error:"unsupported_account" as const};
-    if(String(current.agent_id??"")===parsed.data.targetAgentId)return{error:"same_agent" as const};
-    const target=await client.query("SELECT id FROM agents WHERE id=$1 AND status<>'revoked'",[parsed.data.targetAgentId]);
-    if(!target.rowCount)return{error:"target_not_found" as const};
-    const dispatched=await client.query("SELECT 1 FROM outbound_commands WHERE account_id=$1 AND state='dispatched' LIMIT 1",[accountId]);
-    if(dispatched.rowCount)return{error:"commands_in_flight" as const};
-    await client.query("UPDATE outbound_commands SET agent_id=$2 WHERE account_id=$1 AND state='pending'",[accountId,parsed.data.targetAgentId]);
-    await client.query("UPDATE channel_accounts SET agent_id=$2,status='pairing',status_reason='agent_migrated',last_event_at=now() WHERE id=$1",[accountId,parsed.data.targetAgentId]);
-    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'account.transfer_agent','whatsapp_account',$2,$3)",[request.principal!.id,accountId,JSON.stringify({fromAgentId:current.agent_id,toAgentId:parsed.data.targetAgentId})]);
-    return{accountName:String(current.display_name),sourceAgentId:current.agent_id?String(current.agent_id):null};
+    const accounts=await client.query("SELECT id,display_name,platform,agent_id FROM channel_accounts WHERE id=ANY($1::uuid[]) FOR UPDATE",[[sourceAccountId,parsed.data.targetAccountId]]);
+    if(accounts.rowCount!==2)return{error:"not_found" as const};
+    const source=accounts.rows.find(row=>String(row.id)===sourceAccountId),target=accounts.rows.find(row=>String(row.id)===parsed.data.targetAccountId);
+    if(!source||!target)return{error:"not_found" as const};
+    if(source.id===target.id)return{error:"same_account" as const};
+    if(source.platform!=="whatsapp"||target.platform!=="whatsapp")return{error:"unsupported_account" as const};
+    const pending=await client.query("SELECT 1 FROM outbound_commands WHERE account_id=$1 AND state IN ('pending','dispatched') LIMIT 1",[sourceAccountId]);
+    if(pending.rowCount)return{error:"source_commands_pending" as const};
+    const occupied=await client.query("SELECT (SELECT count(*) FROM contacts WHERE account_id=$1) contacts,(SELECT count(*) FROM conversations WHERE account_id=$1) conversations,(SELECT count(*) FROM messages WHERE account_id=$1) messages,(SELECT count(*) FROM account_quick_replies WHERE account_id=$1) quick_replies",[parsed.data.targetAccountId]);
+    if(Number(occupied.rows[0].contacts)||Number(occupied.rows[0].conversations)||Number(occupied.rows[0].messages)||Number(occupied.rows[0].quick_replies))return{error:"target_account_not_empty" as const};
+    const counts={contacts:0,conversations:0,messages:0,media:0,quickReplies:0};
+    counts.contacts=(await client.query("UPDATE contacts SET account_id=$2 WHERE account_id=$1",[sourceAccountId,parsed.data.targetAccountId])).rowCount??0;
+    counts.conversations=(await client.query("UPDATE conversations SET account_id=$2 WHERE account_id=$1",[sourceAccountId,parsed.data.targetAccountId])).rowCount??0;
+    counts.messages=(await client.query("UPDATE messages SET account_id=$2 WHERE account_id=$1",[sourceAccountId,parsed.data.targetAccountId])).rowCount??0;
+    counts.media=(await client.query("UPDATE media SET account_id=$2 WHERE account_id=$1",[sourceAccountId,parsed.data.targetAccountId])).rowCount??0;
+    counts.quickReplies=(await client.query("UPDATE account_quick_replies SET account_id=$2 WHERE account_id=$1",[sourceAccountId,parsed.data.targetAccountId])).rowCount??0;
+    await client.query("INSERT INTO account_agent_settings(account_id,enabled,persona,reply_language,timezone,business_days,business_start,business_end,confidence_threshold,followup_enabled,followup_delays_hours,default_conversation_mode,reply_suggestion_instructions) SELECT $2,enabled,persona,reply_language,timezone,business_days,business_start,business_end,confidence_threshold,followup_enabled,followup_delays_hours,default_conversation_mode,reply_suggestion_instructions FROM account_agent_settings WHERE account_id=$1 ON CONFLICT(account_id) DO UPDATE SET enabled=EXCLUDED.enabled,persona=EXCLUDED.persona,reply_language=EXCLUDED.reply_language,timezone=EXCLUDED.timezone,business_days=EXCLUDED.business_days,business_start=EXCLUDED.business_start,business_end=EXCLUDED.business_end,confidence_threshold=EXCLUDED.confidence_threshold,followup_enabled=EXCLUDED.followup_enabled,followup_delays_hours=EXCLUDED.followup_delays_hours,default_conversation_mode=EXCLUDED.default_conversation_mode,reply_suggestion_instructions=EXCLUDED.reply_suggestion_instructions,updated_at=now()",[sourceAccountId,parsed.data.targetAccountId]);
+    await client.query("INSERT INTO account_knowledge_bases(account_id,knowledge_base_id) SELECT $2,knowledge_base_id FROM account_knowledge_bases WHERE account_id=$1 ON CONFLICT DO NOTHING",[sourceAccountId,parsed.data.targetAccountId]);
+    await client.query("UPDATE channel_accounts SET status='logged_out',status_reason='data_migrated_to_account',last_event_at=now() WHERE id=$1",[sourceAccountId]);
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'account.transfer_data','whatsapp_account',$2,$3)",[request.principal!.id,parsed.data.targetAccountId,JSON.stringify({sourceAccountId,targetAccountId:parsed.data.targetAccountId,counts})]);
+    return{counts};
   });
-  if("error" in result){const status=result.error==="not_found"?404:result.error==="commands_in_flight"?409:400;return reply.code(status).send({error:result.error});}
-  if(result.sourceAgentId)notifyAgentAccountReassignment(result.sourceAgentId,accountId,result.accountName,"remove");
-  notifyAgentAccountReassignment(parsed.data.targetAgentId,accountId,result.accountName,"add");
-  return{accountId,targetAgentId:parsed.data.targetAgentId,status:"pairing"};
+  if("error" in result){const status=result.error==="not_found"?404:result.error==="source_commands_pending"||result.error==="target_account_not_empty"?409:400;return reply.code(status).send({error:result.error});}
+  return{sourceAccountId,targetAccountId:parsed.data.targetAccountId,counts:result.counts};
 });
 
 app.post("/agent/accounts", async(request,reply)=>{

@@ -372,4 +372,4 @@ const quickReplyItemSchema=z.object({
   createdAt:z.string().datetime().optional(),
 }).superRefine((value,ctx)=>{if(value.kind==="text"&&value.attachmentId)ctx.addIssue({code:"custom",path:["attachmentId"],message:"text quick replies cannot include an attachment"});if(value.kind!=="text"&&!value.attachmentId)ctx.addIssue({code:"custom",path:["attachmentId"],message:"media quick replies require an attachment"});});
 export const quickReplySyncSchema=z.object({items:z.array(quickReplyItemSchema).max(300)}).superRefine((value,ctx)=>{const ids=value.items.map(item=>item.id);if(new Set(ids).size!==ids.length)ctx.addIssue({code:"custom",path:["items"],message:"quick reply ids must be unique"});});
-export const agentAccountTransferSchema=z.object({targetAgentId:z.string().uuid()});
+export const whatsappAccountTransferSchema=z.object({targetAccountId:z.string().uuid()});
