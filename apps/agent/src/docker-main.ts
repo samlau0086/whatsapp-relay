@@ -27,6 +27,13 @@ const reconnectRequested=new Set<string>();
 let stopping=false;
 let masterKey="";
 
+class CentralAccountRequestError extends Error {
+  constructor(readonly status:number,readonly code?:string){
+    super(status===404?"中心平台未找到此账号与当前 Agent 的绑定":`中心账号操作失败（HTTP ${status}${code?` · ${code}`:""}`);
+    this.name="CentralAccountRequestError";
+  }
+}
+
 void start().catch(error=>{
   console.error("RelayDesk Docker Agent failed to start:",error);
   process.exitCode=1;
@@ -75,7 +82,7 @@ async function accountRequest(accountId:string,method:"PATCH"|"DELETE",body?:Rec
   const response=await fetch(new URL(`/agent/accounts/${encodeURIComponent(accountId)}`,baseUrl),{method,headers:body?authHeaders():{authorization:authHeaders().authorization},body:body?JSON.stringify(body):undefined});
   if(!response.ok){
     const payload=await response.json().catch(()=>({})) as {error?:string};
-    throw new Error(response.status===404?"账号不存在，或中心平台尚未部署账号管理接口":`中心账号操作失败（HTTP ${response.status}${payload.error?` · ${payload.error}`:""}）`);
+    throw new CentralAccountRequestError(response.status,payload.error);
   }
 }
 
@@ -152,8 +159,16 @@ async function removeLocalAccount(accountId:string):Promise<void>{
   await rm(join(dataDir,"accounts",accountId),{recursive:true,force:true});
 }
 
-async function removeAccount(accountId:string):Promise<void>{
-  requireAccount(accountId);await accountRequest(accountId,"DELETE");await removeLocalAccount(accountId);
+async function removeAccount(accountId:string):Promise<{warning?:string}>{
+  requireAccount(accountId);
+  try{await accountRequest(accountId,"DELETE");}
+  catch(error){
+    if(!(error instanceof CentralAccountRequestError)||error.status!==404)throw error;
+    await removeLocalAccount(accountId);
+    return {warning:"已移除 Docker 中的本地 WhatsApp 会话；中心平台未找到此账号与当前 Agent 的绑定，因此未修改中心端账号数据。"};
+  }
+  await removeLocalAccount(accountId);
+  return {};
 }
 
 function requireAccount(accountId:string):{id:string;name:string}{
@@ -182,7 +197,7 @@ async function handleDashboardRequest(request:IncomingMessage,html:string,respon
     if(method==="PATCH"&&!action){const input=await readJson(request) as {name?:unknown};const name=String(input.name??"").trim();if(name.length<2||name.length>80)throw new Error("账号名称需要 2–80 个字符");requireAccount(accountId);await accountRequest(accountId,"PATCH",{name});store.renameAccount(accountId,name);respondJson(response,200,{ok:true});return;}
     if(method==="POST"&&action==="reconnect"){await reconnectAccount(accountId);respondJson(response,202,{ok:true});return;}
     if(method==="POST"&&action==="repair"){await repairAccount(accountId);respondJson(response,202,{ok:true});return;}
-    if(method==="DELETE"&&!action){await removeAccount(accountId);respondJson(response,202,{ok:true});return;}
+    if(method==="DELETE"&&!action){const result=await removeAccount(accountId);respondJson(response,202,{ok:true,...result});return;}
   }
   respondJson(response,404,{error:"not_found"});
 }
