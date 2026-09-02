@@ -728,14 +728,23 @@ app.post("/api/v1/conversations/:id/transfer", {preHandler:authenticate}, async(
     if(duplicate.rowCount)return{status:"contact_conflict" as const};
     const pending=await client.query("SELECT 1 FROM outbound_commands oc JOIN messages m ON m.id=oc.message_id WHERE m.conversation_id=$1 AND oc.state IN ('pending','dispatched') LIMIT 1",[id]);
     if(pending.rowCount)return{status:"outbound_pending" as const};
-    const ruleConflict=await client.query(`SELECT 1 FROM task_rules moving JOIN task_rules existing
+    const ruleConflicts=await client.query(`SELECT moving.id source_rule_id,existing.id target_rule_id
+      FROM task_rules moving JOIN task_rules existing
       ON existing.account_id=$2 AND existing.contact_id=moving.contact_id AND existing.source=moving.source AND existing.source_key=moving.source_key AND existing.id<>moving.id
-      WHERE moving.contact_id=$1 LIMIT 1`,[source.contact_id,targetAccountId]);
-    if(ruleConflict.rowCount)return{status:"task_rule_conflict" as const};
+      WHERE moving.contact_id=$1`,[source.contact_id,targetAccountId]);
+    if(ruleConflicts.rowCount&&!parsed.data.ruleStrategy)return{status:"task_rule_conflict" as const};
+    if(ruleConflicts.rowCount){
+      for(const conflict of ruleConflicts.rows as Array<{source_rule_id:string;target_rule_id:string}>){
+        if(parsed.data.ruleStrategy==="source")await client.query(`UPDATE task_rules target SET title_template=source.title_template,description=source.description,month=source.month,day=source.day,start_time=source.start_time,duration_minutes=source.duration_minutes,lead_days=source.lead_days,send_mode=source.send_mode,enabled=source.enabled,recurrence=source.recurrence,tool_overrides=source.tool_overrides,updated_at=now()
+          FROM task_rules source WHERE target.id=$1 AND source.id=$2`,[conflict.target_rule_id,conflict.source_rule_id]);
+        await client.query("UPDATE tasks SET rule_id=$1,updated_at=now() WHERE rule_id=$2",[conflict.target_rule_id,conflict.source_rule_id]);
+        await client.query("UPDATE task_rules SET enabled=false,updated_at=now() WHERE id=$1",[conflict.source_rule_id]);
+      }
+    }
     await client.query("UPDATE contacts SET account_id=$2,updated_at=now() WHERE id=$1",[source.contact_id,targetAccountId]);
     await client.query("UPDATE conversations SET account_id=$2 WHERE id=$1",[id,targetAccountId]);
     await client.query("UPDATE tasks SET account_id=$2,updated_at=now() WHERE conversation_id=$1 OR contact_id=$3",[id,targetAccountId,source.contact_id]);
-    await client.query("UPDATE task_rules SET account_id=$2,updated_at=now() WHERE contact_id=$1",[source.contact_id,targetAccountId]);
+    await client.query("UPDATE task_rules SET account_id=$2,updated_at=now() WHERE contact_id=$1 AND NOT(id=ANY($3::uuid[]))",[source.contact_id,targetAccountId,ruleConflicts.rows.map(row=>String((row as {source_rule_id:string}).source_rule_id))]);
     await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'conversation.transfer','conversation',$2,$3)",[principal.id,id,JSON.stringify({fromAccountId:source.account_id,fromAccountName:source.account_name,toAccountId:targetAccountId,toAccountName:target.rows[0].display_name,contactId:source.contact_id})]);
     return{status:"transferred" as const,accountId:targetAccountId,accountName:String(target.rows[0].display_name)};
   });
@@ -746,7 +755,7 @@ app.post("/api/v1/conversations/:id/transfer", {preHandler:authenticate}, async(
   if(result.status==="platform_mismatch")return reply.code(409).send({error:"platform_mismatch",message:"会话只能转移到相同渠道类型的账号"});
   if(result.status==="contact_conflict")return reply.code(409).send({error:"contact_conflict",message:"目标账号已存在该联系人，无法转移为重复会话"});
   if(result.status==="outbound_pending")return reply.code(409).send({error:"outbound_pending",message:"该会话仍有待发送消息，请发送完成后再转移"});
-  if(result.status==="task_rule_conflict")return reply.code(409).send({error:"task_rule_conflict",message:"目标账号已存在该联系人的相同任务规则，请先处理冲突规则"});
+  if(result.status==="task_rule_conflict")return reply.code(409).send({error:"task_rule_conflict",message:"目标账号已存在该联系人的相同任务规则，请先选择保留目标规则或以源规则覆盖"});
   return reply.send({id,...result});
 });
 

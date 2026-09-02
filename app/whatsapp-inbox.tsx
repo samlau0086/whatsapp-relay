@@ -2711,19 +2711,39 @@ function ConversationNoteDialog({conversation,token,onToken,onClose,onSaved}:{co
 
 function ConversationTransferDialog({conversation,accounts,token,onToken,onClose,onTransferred,onMerged}:{conversation:Conversation;accounts:Account[];token:string;onToken:(token:string)=>void;onClose:()=>void;onTransferred:(account:Account,token:string)=>Promise<void>;onMerged:(targetConversationId:string,account:Account)=>void}){
   const eligible=accounts.filter(account=>account.id!==conversation.accountId&&account.platform===conversation.platform);
-  const [accountId,setAccountId]=useState(eligible[0]?.id??""),[busy,setBusy]=useState(false),[error,setError]=useState(""),[mergeTarget,setMergeTarget]=useState<Account|null>(null),[ruleStrategy,setRuleStrategy]=useState<"target"|"source">("target");
+  const [accountId,setAccountId]=useState(eligible[0]?.id??"");
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState("");
+  const [mergeTarget,setMergeTarget]=useState<Account|null>(null);
+  const [ruleConflictTarget,setRuleConflictTarget]=useState<Account|null>(null);
+  const [ruleStrategy,setRuleStrategy]=useState<"target"|"source">("target");
   const target=eligible.find(account=>account.id===accountId);
-  async function transfer(){
+  const isMerging=Boolean(mergeTarget);
+  const isRuleConflict=Boolean(ruleConflictTarget);
+
+  async function transfer(includeRuleStrategy=false){
     if(!target||busy)return;
-    const confirmed=await confirmAction(`将“${conversation.name}”从“${conversation.account}”转移到“${target.name}”？聊天记录、标签、备注、订单及其他会话关联信息都会保留。`,{title:"确认转移账号？",confirmLabel:"确认转移",tone:"warning"});
+    const strategyText=includeRuleStrategy?(ruleStrategy==="target"?"将保留目标账号已有的重复规则，源规则会停用后继续转移。":"将以当前会话的规则覆盖目标账号的重复规则，源规则会停用后继续转移。"):("");
+    const confirmed=await confirmAction(`将“${conversation.name}”从“${conversation.account}”转移到“${target.name}”？聊天记录、标签、备注、订单及其他会话关联信息都会保留。${strategyText}`,{title:"确认转移账号？",confirmLabel:includeRuleStrategy?"继续转移":"确认转移",tone:"warning"});
     if(!confirmed)return;
     setBusy(true);setError("");
-    const result=await authorizedFetch(`/api/v1/conversations/${conversation.id}/transfer`,token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId:target.id})});
+    const body:Record<string,unknown>={accountId:target.id};
+    if(includeRuleStrategy)body.ruleStrategy=ruleStrategy;
+    const result=await authorizedFetch(`/api/v1/conversations/${conversation.id}/transfer`,token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
     if(result.token!==token)onToken(result.token);
-    const body=await result.response.json().catch(()=>({})) as {error?:string;message?:string};
-    if(!result.response.ok){if(body.error==="contact_conflict"){setMergeTarget(target);setBusy(false);return;}setError(body.message??`账号转移失败（HTTP ${result.response.status}）`);setBusy(false);return;}
+    const response=await result.response.json().catch(()=>({})) as {error?:string;message?:string};
+    if(!result.response.ok){
+      if(response.error==="contact_conflict"){setMergeTarget(target);setRuleConflictTarget(null);setBusy(false);return;}
+      if(response.error==="task_rule_conflict"){setRuleConflictTarget(target);setMergeTarget(null);setBusy(false);return;}
+      setError(response.message??`账号转移失败（HTTP ${result.response.status}）`);
+      setBusy(false);
+      return;
+    }
+    setMergeTarget(null);
+    setRuleConflictTarget(null);
     await onTransferred(target,result.token);
   }
+
   async function merge(){
     if(!mergeTarget||busy)return;
     const strategyText=ruleStrategy==="target"?"保留目标账号的任务规则":"以当前会话的任务规则覆盖目标规则";
@@ -2735,10 +2755,12 @@ function ConversationTransferDialog({conversation,accounts,token,onToken,onClose
     const body=await result.response.json().catch(()=>({})) as {message?:string;targetConversationId?:string};
     if(!result.response.ok){setError(body.message??`会话合并失败（HTTP ${result.response.status}）`);setBusy(false);return;}
     if(!body.targetConversationId){setError("会话合并失败：未返回目标会话");setBusy(false);return;}
+    setMergeTarget(null);
+    setRuleConflictTarget(null);
     onMerged(body.targetConversationId,mergeTarget);
   }
-  const isMerging=Boolean(mergeTarget);
-  return <div className="modal-backdrop context-action-backdrop" role="presentation"><section className="login-dialog context-action-dialog conversation-transfer-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-transfer-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><ArrowRightLeft size={19}/></span><h2 id="conversation-transfer-title">{isMerging?"合并到目标会话":"转移会话账号"}</h2>{isMerging?<><p>“{mergeTarget?.name}”已存在同一联系人的会话。合并会保留当前会话历史并将其归档，标签和备注会复制到目标会话；为防重复发送，当前会话的自动消息任务会停止。</p><fieldset className="conversation-merge-strategy" disabled={busy}><legend>重复任务规则</legend><label><input type="radio" name="rule-strategy" checked={ruleStrategy==="target"} onChange={()=>setRuleStrategy("target")}/>保留目标账号规则（推荐）</label><small>使用目标会话已有规则，当前会话规则保留但停用。</small><label><input type="radio" name="rule-strategy" checked={ruleStrategy==="source"} onChange={()=>setRuleStrategy("source")}/>以当前会话规则覆盖目标规则</label><small>保留目标规则位置，但用当前会话的规则配置替换。</small></fieldset></>:<><p>为“{conversation.name}”选择新的发送账号。转移不会清除聊天记录或会话关联信息。</p>{eligible.length?<label>目标账号<select autoFocus value={accountId} onChange={event=>setAccountId(event.target.value)} disabled={busy}>{eligible.map(account=><option key={account.id} value={account.id}>{account.platform==="messenger"?"Facebook":"WhatsApp"} · {account.name} · {account.status==="online"?"在线":"离线"}</option>)}</select></label>:<div className="conversation-transfer-empty">没有其他可转移的同渠道账号</div>}</>}{error&&<span className="login-error">{error}</span>}<footer>{isMerging&&<button className="secondary-action" onClick={()=>{setMergeTarget(null);setError("");}} disabled={busy}>返回</button>}<button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void(isMerging?merge():transfer())} disabled={busy||(!isMerging&&!target)}>{busy?(isMerging?"正在合并…":"正在转移…"):(isMerging?"确认合并":"转移账号")}</button></footer></section></div>;
+
+  return <div className="modal-backdrop context-action-backdrop" role="presentation"><section className="login-dialog context-action-dialog conversation-transfer-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-transfer-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><ArrowRightLeft size={19}/></span><h2 id="conversation-transfer-title">{isMerging?"合并到目标会话":isRuleConflict?"处理任务规则冲突":"转移会话账号"}</h2>{isMerging?<><p>“{mergeTarget?.name}”已存在同一联系人的会话。合并会保留当前会话历史并将其归档，标签和备注会复制到目标会话；为防重复发送，当前会话的自动消息任务会停止。</p><fieldset className="conversation-merge-strategy" disabled={busy}><legend>重复任务规则</legend><label><input type="radio" name="rule-strategy" checked={ruleStrategy==="target"} onChange={()=>setRuleStrategy("target")}/>保留目标账号规则（推荐）</label><small>使用目标会话已有规则，当前会话规则保留但停用。</small><label><input type="radio" name="rule-strategy" checked={ruleStrategy==="source"} onChange={()=>setRuleStrategy("source")}/>以当前会话规则覆盖目标规则</label><small>保留目标规则位置，但用当前会话的规则配置替换。</small></fieldset></>:isRuleConflict?<><p>目标账号已存在“{conversation.name}”的同一联系人任务规则。你可以保留目标规则，或以当前会话规则覆盖目标规则后继续转移。</p><fieldset className="conversation-merge-strategy" disabled={busy}><legend>重复任务规则</legend><label><input type="radio" name="rule-strategy" checked={ruleStrategy==="target"} onChange={()=>setRuleStrategy("target")}/>保留目标账号规则（推荐）</label><small>使用目标账号已有规则，源规则会停用后继续转移。</small><label><input type="radio" name="rule-strategy" checked={ruleStrategy==="source"} onChange={()=>setRuleStrategy("source")}/>以当前会话规则覆盖目标规则</label><small>保留目标规则位置，但用当前会话的规则配置替换。</small></fieldset></>:<><p>为“{conversation.name}”选择新的发送账号。转移不会清除聊天记录或会话关联信息。</p>{eligible.length?<label>目标账号<select autoFocus value={accountId} onChange={event=>{setAccountId(event.target.value);setMergeTarget(null);setRuleConflictTarget(null);setError("");}} disabled={busy}>{eligible.map(account=><option key={account.id} value={account.id}>{account.platform==="messenger"?"Facebook":"WhatsApp"} · {account.name} · {account.status==="online"?"在线":"离线"}</option>)}</select></label>:<div className="conversation-transfer-empty">没有其他可转移的同渠道账号</div>}</>}{error&&<span className="login-error">{error}</span>}<footer>{isMerging&&<button className="secondary-action" onClick={()=>{setMergeTarget(null);setError("");}} disabled={busy}>返回</button>}{isRuleConflict&&<button className="secondary-action" onClick={()=>{setRuleConflictTarget(null);setError("");}} disabled={busy}>返回</button>}<button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void(isMerging?merge():isRuleConflict?transfer(true):transfer())} disabled={busy||(!isMerging&&!isRuleConflict&&!target)}>{busy?(isMerging?"正在合并…":isRuleConflict?"正在处理…":"正在转移…"):(isMerging?"确认合并":isRuleConflict?"继续转移":"转移账号")}</button></footer></section></div>;
 }
 
 function ConversationQuickTaskDialog({conversation,token,assignedUserId,onToken,onClose,onSaved}:{conversation:Conversation;token:string;assignedUserId:string|null;onToken:(token:string)=>void;onClose:()=>void;onSaved:()=>void}){

@@ -120,7 +120,7 @@ export const newConversationSchema = z.object({
 });
 
 export const customerStageSchema=z.enum(["new","considering","qualified","won","lost"]);
-export const conversationTransferSchema=z.object({accountId:z.string().uuid()});
+export const conversationTransferSchema=z.object({accountId:z.string().uuid(),ruleStrategy:z.enum(["target","source"]).optional()});
 export const conversationMergeSchema=z.object({accountId:z.string().uuid(),ruleStrategy:z.enum(["target","source"])});
 export const conversationAgentModeSchema=z.enum(["cautious","full","human_paused"]);
 export const contactAliasSchema=z.object({alias:z.string().trim().max(80)});
