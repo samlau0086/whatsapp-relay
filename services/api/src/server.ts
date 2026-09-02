@@ -211,11 +211,12 @@ app.post("/api/v1/agents/enrollment", {preHandler:authenticate}, async(request,r
 app.get("/api/v1/agents", {preHandler:authenticate}, async(request,reply)=>{
   if(!["admin","supervisor"].includes(request.principal?.role??""))return reply.code(403).send({error:"supervisor_required"});
   await markStaleAgentsOffline();
-  const [agents,accounts]=await Promise.all([
+  const [agents,accounts,detachedAccounts]=await Promise.all([
     pool.query("SELECT id,name,status,version,protocol_version,capabilities,platform,last_seen_at,last_acked_cursor,enrollment_expires_at,created_at FROM agents ORDER BY created_at DESC"),
     pool.query("SELECT id,agent_id,display_name,phone_e164,status,status_reason,last_event_at,transport FROM channel_accounts WHERE transport='web' AND agent_id IS NOT NULL ORDER BY display_name"),
+    pool.query("SELECT a.id,a.display_name,a.phone_e164,a.status,a.status_reason,a.last_event_at,a.transport FROM channel_accounts a WHERE a.transport='web' AND COALESCE(a.platform,'whatsapp')='whatsapp' AND a.agent_id IS NULL ORDER BY a.display_name"),
   ]);
-  return {data:agents.rows.map(agent=>({...agent,accounts:accounts.rows.filter(account=>account.agent_id===agent.id)}))};
+  return {data:agents.rows.map(agent=>({...agent,accounts:accounts.rows.filter(account=>account.agent_id===agent.id)})),detachedAccounts:detachedAccounts.rows};
 });
 
 app.patch("/api/v1/agents/:id", {preHandler:authenticate}, async(request,reply)=>{
