@@ -341,6 +341,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [imageViewerMessageId,setImageViewerMessageId]=useState("");
   const [composerImageBusy,setComposerImageBusy]=useState(false);
   const [composerImageDragging,setComposerImageDragging]=useState(false);
+  const [pendingComposerImages,setPendingComposerImages]=useState<MediaAsset[]>([]);
   const [materialLibraryOpen,setMaterialLibraryOpen]=useState(false);
   const [productCardsOpen,setProductCardsOpen]=useState(false);
   const [ttsOpen,setTtsOpen]=useState(false);
@@ -1006,6 +1007,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   }
 
   async function sendMessage(){
+    if(pendingComposerImages.length){await sendPendingComposerImages();return;}
     if(!active||!apiToken||!draft.trim()||translatingDraft||composerImageBusy||quickReplyResolving)return;
     if(active.conversationType==="group"&&!active.groupActive){setToast("此群已退出或不可访问，无法发送消息");return;}
     const resolvedSource=await resolveQuickReplyText(draft.trim());
@@ -1017,6 +1019,19 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       try{const targetLanguage=translationPreference.customerLanguage,conversationId=active.id,accountId=active.accountId,result=await authorizedFetch("/api/v1/translations/preview",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:source,targetLanguage,conversationId})});if(result.token!==apiToken)setApiToken(result.token);const body=await result.response.json().catch(()=>({})) as {translatedText?:string;message?:string};if(!result.response.ok||!body.translatedText)throw new Error(body.message??"翻译失败");setTranslationPreview({source,translated:body.translatedText,targetLanguage,conversationId,accountId});}catch(reason){setTranslationError(reason instanceof Error?reason.message:"翻译失败");setToast("AI 翻译失败，原文未发送");}finally{setTranslatingDraft(false);}return;
     }
     await queueTextMessage(source);
+  }
+
+  async function sendPendingComposerImages(){
+    if(!active||!apiToken||!pendingComposerImages.length||translatingDraft||composerImageBusy)return;
+    if(active.conversationType==="group"&&!active.groupActive){setToast("此群已退出或不可访问，无法发送消息");return;}
+    const images=pendingComposerImages,caption=draft.trim();
+    setComposerImageBusy(true);
+    try{
+      await previewAndSendMediaAsset(images[0],caption,true,true,images.slice(1));
+      if(!translationPreference.enabled||!caption)setPendingComposerImages([]);
+      setToast(images.length>1?'图片已进入发送队列':'图片已进入发送队列');
+    }catch(reason){setToast(reason instanceof Error?reason.message:'Image send failed');}
+    finally{setComposerImageBusy(false);}
   }
 
   async function queueTextMessage(
@@ -1258,7 +1273,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     setComposerImageBusy(true);setComposerImageDragging(false);
     try{
       const uploaded:MediaAsset[]=[];
-      for(const [index,file] of images.entries()){
+      for(const file of images){
         const form=new FormData();form.append("file",file);
         const result=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(active.accountId)}`,apiToken,{method:"POST",body:form});
         if(result.token!==apiToken)setApiToken(result.token);
@@ -1266,8 +1281,9 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
         if(!result.response.ok||!body.mediaId)throw new Error(body.message??`${file.name} 上传失败（HTTP ${result.response.status}）`);
         uploaded.push({id:body.mediaId,fileName:body.fileName??file.name,mimeType:body.mimeType??file.type,size:body.size??file.size,sha256:body.sha256??"",createdAt:new Date().toISOString(),usageCount:0});
       }
-      await previewAndSendMediaAsset(uploaded[0],caption,true,true,uploaded.slice(1));
-      if(!caption||!translationPreference.enabled)setToast(images.length>1?`${images.length} 张图片已进入发送队列`:"图片已进入发送队列");
+      setPendingComposerImages(uploaded);
+      setDraft(caption);
+      setToast(images.length>1?`${images.length} 张图片已准备发送`:"图片已准备发送，请添加说明后点击发送");
     }catch(reason){setToast(reason instanceof Error?reason.message:"图片上传失败");}
     finally{setComposerImageBusy(false);}
   }
@@ -2184,13 +2200,24 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                       onDragLeave={handleComposerDragLeave}
                       onDrop={handleComposerDrop}
                     >
-                      {(composerImageDragging || composerImageBusy) && (
+      {pendingComposerImages.length>0 && !composerImageDragging && (
+        <div className="composer-image-pending">
+          <div className="composer-image-thumbnails">
+            {pendingComposerImages.map(asset=><div className="composer-image-thumbnail" key={asset.id}>
+              <ProductImage mediaId={asset.id} token={apiToken} onToken={setApiToken} alt={asset.fileName} preview />
+              <button type="button" onClick={()=>setPendingComposerImages(images=>images.filter(item=>item.id!==asset.id))} aria-label={`移除图片 ${asset.fileName}`}><X size={12}/></button>
+            </div>)}
+          </div>
+          <span>{pendingComposerImages.length>1?`${pendingComposerImages.length} 张图片待发送`:'图片待发送，可添加 caption'}</span>
+        </div>
+      )}
+      {(composerImageDragging || composerImageBusy) && (
                         <div className="composer-image-drop-hint">
                           <UploadCloud size={18} />
                           <span>
                             {composerImageBusy
-                              ? "正在上传并发送图片…"
-                              : "松开即可发送图片"}
+                              ? "正在准备图片…"
+                              : "松开即可添加图片"}
                           </span>
                         </div>
                       )}
@@ -2607,6 +2634,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             if(!preview.media){await queueTextMessage(text,preview.source,preview.targetLanguage,preview.conversationId,preview.accountId);return;}
             await sendMediaAsset(preview.media.asset,text,preview.media.throwOnFailure,preview.media.includeReply,preview.source,preview.targetLanguage,preview.conversationId,preview.accountId);
             for(const asset of preview.media.followingAssets)await sendMediaAsset(asset,"",true,false,undefined,undefined,preview.conversationId,preview.accountId);
+            setPendingComposerImages([]);
           })()}
         />
       )}
