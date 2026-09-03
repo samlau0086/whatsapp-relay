@@ -312,7 +312,7 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /SKU 在有效产品中必须保持唯一/);
   assert.match(css, /\.product-bulk-toolbar/);
   assert.match(css, /\.product-bulk-dialog/);
-  assert.match(component, /PRODUCT_PAGE_SIZES = \[24,32,36,48,64\]/);
+  assert.match(component, /PRODUCT_PAGE_SIZES = \[24,25,26,27,28,30\]/);
   assert.match(component, /每页产品数/);
   assert.match(css, /\.product-page-size/);
   assert.match(css, /\.order-product-mode/);
