@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight, Check, Copy, Pencil, Plus, ShoppingBag, Trash2, UploadCloud, X } from "lucide-react";
+import { ArrowUpRight, Check, Copy, Link, Pencil, Plus, ShoppingBag, Trash2, UploadCloud, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { confirmAction } from "./confirmation-ui";
 import {
@@ -27,7 +27,7 @@ type VariantDraft = { id: string; attributes: Record<string, string>; sku: strin
 type SupplierLink = { label: string; url: string; supplyPrice?: number };
 type SupplierLinkDraft = { id: string; label: string; url: string; supplyPrice: string };
 type Tag = { id: string; name: string; color: string };
-type GalleryImage = Pick<ProductImageAsset, "id" | "fileName">;
+type GalleryImage = Pick<ProductImageAsset, "id" | "fileName"> & { externalUrl?: string };
 type Product = {
   id: string;
   sku: string;
@@ -42,6 +42,7 @@ type Product = {
   shippingClass: string | null;
   imageMediaId: string | null;
   imageName: string;
+  imageUrl?: string | null;
   galleryImages?: GalleryImage[];
   priceTiers: Tier[];
   supplierLinks: SupplierLink[];
@@ -236,7 +237,7 @@ export function ProductEditorDialog({
       product?.imageMediaId ?? null,
     ),
     [imageName, setImageName] = useState(product?.imageName ?? ""),
-    [galleryImages, setGalleryImages] = useState<GalleryImage[]>(() => product?.galleryImages?.length ? product.galleryImages : product?.imageMediaId ? [{ id: product.imageMediaId, fileName: product.imageName }] : []),
+    [galleryImages, setGalleryImages] = useState<GalleryImage[]>(() => product?.galleryImages?.length ? product.galleryImages : product?.imageMediaId ? [{ id: product.imageMediaId, fileName: product.imageName }] : product?.imageUrl ? [{ id: product.imageUrl, fileName: product.imageUrl, externalUrl: product.imageUrl }] : []),
     [variantDimensions, setVariantDimensions] = useState<VariantDimension[]>(() => {
       const names = [...new Set((product?.variants ?? []).flatMap((variant) => Object.keys(variant.attributes)))];
       return names.map((name) => ({ id: crypto.randomUUID(), name, values: [...new Set((product?.variants ?? []).map((variant) => variant.attributes[name]).filter(Boolean))].join(", ") }));
@@ -442,8 +443,9 @@ export function ProductEditorDialog({
         weightAmount:weightAmount===""?null:Number(weightAmount),
         weightUnit:weightAmount===""?null:weightUnit,
         shippingClassId:product?.shippingClassId&&!shippingClasses.some(item=>item.id===product.shippingClassId)?undefined:shippingClassId||null,
-        imageMediaId: galleryImages[0]?.id ?? null,
-        galleryMediaIds: galleryImages.map((image) => image.id),
+        imageMediaId: galleryImages.find((image) => !image.externalUrl)?.id ?? null,
+        galleryMediaIds: galleryImages.filter((image) => !image.externalUrl).map((image) => image.id),
+        galleryExternalUrls: galleryImages.filter((image) => image.externalUrl).map((image) => image.externalUrl!),
         priceTiers: tiers.map((tier) => ({
           minQuantity: Number(tier.minQuantity),
           unitAmount: Number(tier.unitAmount),
@@ -487,6 +489,11 @@ export function ProductEditorDialog({
     setImageMediaId((current) => current ?? asset.id);
     setImageName((current) => current || asset.fileName);
     setImagePickerOpen(false);
+  }
+  function addExternalImage() {
+    const value=window.prompt("粘贴外部图片 URL（仅保存链接，不会下载或占用图库空间）")?.trim();
+    if(!value)return;
+    try{const url=new URL(value);if(!/^https?:$/.test(url.protocol))throw new Error();setGalleryImages(images=>images.some(image=>image.externalUrl===url.href)||images.length>=12?images:[...images,{id:url.href,fileName:url.href,externalUrl:url.href}]);setImageName(current=>current||url.href);}catch{setError("请输入以 http:// 或 https:// 开头的有效图片链接");}
   }
   function generateVariantCombinations() {
     const dimensions = variantDimensions.map((dimension) => ({ name: dimension.name.trim(), values: [...new Set(dimension.values.split(",").map((value) => value.trim()).filter(Boolean))] })).filter((dimension) => dimension.name && dimension.values.length);
@@ -743,8 +750,8 @@ export function ProductEditorDialog({
             </label>
           </div>
           <label className="product-image-input">产品相册 · 可选（最多 12 张）</label>
-          {galleryImages.length > 0 && <div className="product-gallery-editor">{galleryImages.map((image, index) => <div className="product-gallery-item product-dialog-image-preview" key={image.id}><MediaImagePreview mediaId={image.id} alt={image.fileName || (name ? `${name} 图片预览 ${index + 1}` : `产品图片预览 ${index + 1}`)} request={request} onToken={onToken} className="product-image"/><span title={image.fileName}>{index === 0 ? `封面 · ${image.fileName || "未命名图片"}` : image.fileName || "未命名图片"}</span><button type="button" aria-label={`移除相册图片 ${index + 1}`} title="移除图片" onClick={() => setGalleryImages((images) => { const next = images.filter((item) => item.id !== image.id); setImageMediaId(next[0]?.id ?? null); setImageName(next[0]?.fileName ?? ""); return next; })}><Trash2 size={13}/></button></div>)}</div>}
-          <button type="button" className="product-gallery-add" onClick={() => setImagePickerOpen(true)} disabled={galleryImages.length >= 12}><UploadCloud size={14}/>{galleryImages.length ? "添加相册图片" : "从媒体与附件中添加图片"}</button>
+          {galleryImages.length > 0 && <div className="product-gallery-editor">{galleryImages.map((image, index) => <div className="product-gallery-item product-dialog-image-preview" key={image.id}>{image.externalUrl?<img src={image.externalUrl} alt={image.fileName} className="product-image"/>:<MediaImagePreview mediaId={image.id} alt={image.fileName || (name ? `${name} 图片预览 ${index + 1}` : `产品图片预览 ${index + 1}`)} request={request} onToken={onToken} className="product-image"/>}<span title={image.fileName}>{index === 0 ? `封面 · ${image.externalUrl?"外部链接 · ":""}${image.fileName || "未命名图片"}` : image.fileName || "未命名图片"}</span><button type="button" aria-label={`移除相册图片 ${index + 1}`} title="移除图片" onClick={() => setGalleryImages((images) => { const next = images.filter((item) => item.id !== image.id); const cover=next[0]; setImageMediaId(cover?.externalUrl?null:cover?.id ?? null); setImageName(cover?.fileName ?? ""); return next; })}><Trash2 size={13}/></button></div>)}</div>}
+          <div className="product-gallery-actions"><button type="button" className="product-gallery-add" onClick={() => setImagePickerOpen(true)} disabled={galleryImages.length >= 12}><UploadCloud size={14}/>{galleryImages.length ? "添加图库图片" : "从媒体与附件中添加图片"}</button><button type="button" className="product-gallery-add" onClick={addExternalImage} disabled={galleryImages.length >= 12}><Link size={14}/>添加外部 URL</button></div>
           <section className="product-variant-editor">
             <button type="button" className="secondary-action variant-inherit-generate" onClick={generateVariantCombinations}><Plus size={13} />按父 SKU 和阶梯价生成组合</button>
             <header><span><b>产品变体</b><small>添加规格和值后自动生成组合，每个组合可设置独立 SKU、价格和图片。</small></span><button type="button" onClick={() => setVariantDimensions((items) => [...items, { id: crypto.randomUUID(), name: "", values: "" }])}><Plus size={13} />添加规格</button></header>
