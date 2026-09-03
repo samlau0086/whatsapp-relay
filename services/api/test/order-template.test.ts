@@ -60,6 +60,7 @@ test("INQ templates default to a procurement list without pricing summaries",()=
   assert.equal(types.includes("paymentSummary"),false);
   const legacy=parseOrderTemplate({version:1,blocks:[{id:"items",type:"itemList"}]},"inq");
   assert.equal(legacy.blocks.some(block=>block.type==="paymentSummary"),false);
+  assert.equal(legacy.blocks.some(block=>block.type==="total"),false);
 });
 
 test("translation markers round-trip and reject damaged output",()=>{

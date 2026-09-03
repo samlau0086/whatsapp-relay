@@ -19,7 +19,7 @@ import { isBrowserCompatibleVideo, normalizeBrowserVideo } from "./video-normali
 import { calculateOrderTotal, canManageSharedRecord, ensureCrmTables, primaryContactEmail, type OrderSummaryFee, type OrderSummaryItem } from "./crm.js";
 import { renderTemplateOrderImage } from "./order-image.js";
 import { renderTemplateOrderPdf } from "./order-pdf.js";
-import { DEFAULT_CI_ORDER_TEMPLATE, DEFAULT_IMAGE_ORDER_TEMPLATE, DEFAULT_INQ_ORDER_TEMPLATE, DEFAULT_PDF_ORDER_TEMPLATE, DEFAULT_PI_ORDER_TEMPLATE, DEFAULT_QT_ORDER_TEMPLATE, DEFAULT_SC_ORDER_TEMPLATE, DEFAULT_TEXT_ORDER_TEMPLATE, orderTemplateSchema, orderTemplateUpdateSchema, parseOrderTemplate, parseTranslatedSemanticOrder, renderSemanticOrder, renderTextOrder, serializeSemanticOrder, type OrderTemplateFormat } from "./order-template.js";
+import { DEFAULT_CI_ORDER_TEMPLATE, DEFAULT_IMAGE_ORDER_TEMPLATE, DEFAULT_INQ_ORDER_TEMPLATE, DEFAULT_PDF_ORDER_TEMPLATE, DEFAULT_PI_ORDER_TEMPLATE, DEFAULT_QT_ORDER_TEMPLATE, DEFAULT_SC_ORDER_TEMPLATE, DEFAULT_TEXT_ORDER_TEMPLATE, orderTemplateSchema, parseOrderTemplate, parseTranslatedSemanticOrder, renderSemanticOrder, renderTextOrder, serializeSemanticOrder, type OrderTemplateFormat, validateOrderTemplate } from "./order-template.js";
 import { allocateOrderNumber, isValidTimeZone, orderNumberPreview, validateOrderNumberTemplate } from "./order-number.js";
 import { resolveContactTimeZone } from "./contact-timezone.js";
 import { generateSalesReplySuggestion, pauseAgentForHuman } from "./agent-engine.js";
@@ -1501,7 +1501,7 @@ app.get("/api/v1/admin/order-templates",{preHandler:authenticate},async(request,
 app.put("/api/v1/admin/order-templates/:format",{preHandler:authenticate},async(request,reply)=>{
   if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
   const {format}=request.params as {format:string};if(!["text","image","pdf","qt","sc","pi","ci","inq"].includes(format))return reply.code(404).send({error:"not_found"});
-  const parsed=orderTemplateUpdateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+   const parsed=validateOrderTemplate(request.body,format as OrderTemplateFormat);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
   const column=({text:"text_template",image:"image_template",pdf:"pdf_template",qt:"qt_template",sc:"sc_template",pi:"pi_template",ci:"ci_template",inq:"inq_template"} as Record<string,string>)[format],saved=await pool.query(`UPDATE order_settings SET ${column}=$1::jsonb,updated_by=$2,updated_at=now() WHERE singleton=true RETURNING updated_at`,[JSON.stringify(parsed.data),request.principal.id]);
   await auditCrm(request.principal.id,"order.template.update","order_settings","workspace",{format,blockCount:parsed.data.blocks.length});
   return{format,template:parsed.data,updatedAt:saved.rows[0]?.updated_at??null};

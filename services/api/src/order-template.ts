@@ -68,6 +68,14 @@ export const orderTemplateSchema=z.object({version:z.literal(1),blocks:z.array(b
 
 export const orderTemplateUpdateSchema=orderTemplateSchema;
 
+export function validateOrderTemplate(value:unknown,format:OrderTemplateFormat){
+  if(format!=="inq")return orderTemplateUpdateSchema.safeParse(value);
+  if(!value||typeof value!=="object"||!Array.isArray((value as {blocks?:unknown}).blocks))return orderTemplateUpdateSchema.safeParse(value);
+  const template=value as {blocks:Array<unknown>};
+  const parsed=orderTemplateUpdateSchema.safeParse({...value,blocks:[...template.blocks,{id:"__inq-validation-total",type:"total"},{id:"__inq-validation-payment",type:"paymentSummary"}]});
+  return parsed.success?{success:true as const,data:value as OrderTemplate}:{success:false as const,error:parsed.error};
+}
+
 export const DEFAULT_TEXT_ORDER_TEMPLATE:OrderTemplate={version:1,blocks:[
   {id:"order-header",type:"orderHeader",label:"Order",statusLabels:DEFAULT_ORDER_STATUS_LABELS,bold:true,blankAfter:true},
   {id:"items",type:"itemList",label:"Items:",itemTemplate:DEFAULT_ORDER_ITEM_TEMPLATE,blankAfter:true},
@@ -95,7 +103,7 @@ function inquiryTemplate():OrderTemplate{const template=documentTemplate("Inquir
 export const DEFAULT_INQ_ORDER_TEMPLATE:OrderTemplate=inquiryTemplate();
 
 export function parseOrderTemplate(value:unknown,format:OrderTemplateFormat):OrderTemplate{
-  const normalized=normalizeOrderTemplate(value,format),parsed=orderTemplateSchema.safeParse(normalized);
+  const normalized=normalizeOrderTemplate(value,format),parsed=validateOrderTemplate(normalized,format);
   return parsed.success?parsed.data:(format==="text"?DEFAULT_TEXT_ORDER_TEMPLATE:format==="pdf"?DEFAULT_PDF_ORDER_TEMPLATE:format==="qt"?DEFAULT_QT_ORDER_TEMPLATE:format==="sc"?DEFAULT_SC_ORDER_TEMPLATE:format==="pi"?DEFAULT_PI_ORDER_TEMPLATE:format==="ci"?DEFAULT_CI_ORDER_TEMPLATE:format==="inq"?DEFAULT_INQ_ORDER_TEMPLATE:DEFAULT_IMAGE_ORDER_TEMPLATE);
 }
 
