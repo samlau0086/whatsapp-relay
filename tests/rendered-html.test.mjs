@@ -317,6 +317,7 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(css, /\.product-page-size/);
   assert.match(css, /\.order-product-mode/);
   assert.match(component, /ProductSearchDropdown/);
+  assert.match(component, /mediaId=\{product\.imageMediaId\}\s+externalUrl=\{product\.imageUrl\}\s+token=\{token\}/);
   assert.match(component, /role="combobox"/);
   assert.match(component, /搜索产品名称、SKU、价格或标签/);
   assert.match(component, /ProductCardSendDialog/);

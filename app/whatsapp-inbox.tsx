@@ -4384,6 +4384,7 @@ function OrderDialog({
                 <div className="order-product-image-preview">
                   <ProductImage
                     mediaId={product.imageMediaId}
+                    externalUrl={product.imageUrl}
                     token={token}
                     onToken={onToken}
                     alt={product.imageName || product.name || "产品图片"}
