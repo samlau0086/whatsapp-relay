@@ -24,7 +24,9 @@ test("agent hub ingests authoritative group snapshots without enqueueing AI work
   assert.doesNotMatch(groupBranch,/enqueueInboundAgentWork/);
   assert.doesNotMatch(groupBranch,/INSERT INTO contacts\(account_id,provider_user_id,phone_e164/);
   assert.match(hub,/SELECT id,contact_id FROM whatsapp_groups WHERE account_id=\$1 AND group_jid=\$2 FOR UPDATE/);
+  assert.match(hub,/SELECT id FROM whatsapp_groups WHERE contact_id=\$1 FOR UPDATE/);
   assert.match(hub,/UPDATE whatsapp_groups SET subject=\$2,active=true,updated_at=now\(\) WHERE id=\$1/);
+  assert.match(hub,/UPDATE whatsapp_groups SET group_jid=\$2,subject=\$3,active=true,updated_at=now\(\) WHERE id=\$1/);
   assert.doesNotMatch(hub,/DO UPDATE SET contact_id=EXCLUDED\.contact_id/);
 });
 
