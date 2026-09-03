@@ -62,7 +62,9 @@ export async function renderTemplateOrderImage(template:OrderTemplate,blocks:Sem
     const imageSize=definition.imageSize==="large"?160:definition.imageSize==="small"?88:124;
     const showImages=block.type==="itemList"&&definition.showProductImages!==false;
     const lineLayouts=block.lines.map((line,index)=>{
-      const productIndex=block.type==="itemList"?index-(definition.label?1:0):-1,hasImage=showImages&&productIndex>=0&&Boolean(prepared[productIndex]);
+      const isItemHeading=block.type==="itemList"&&index===0;
+      const isGroupHeading=block.type==="itemList"&&/^\[(Brand|Category)\]/.test(line);
+      const productIndex=block.type==="itemList"&&!isItemHeading&&!isGroupHeading?(block.itemIndexes?.[index]??-1):-1,hasImage=showImages&&productIndex>=0&&Boolean(prepared[productIndex]);
       const wrapped=wrapLine(line,hasImage?38:64);return{wrapped,productIndex,hasImage,height:Math.max(wrapped.length*lineHeight+14,hasImage?imageSize+20:lineHeight+14)};
     });
     const blockHeight=Math.max(34,lineLayouts.reduce((sum,line)=>sum+line.height,0)+28),blockY=y;

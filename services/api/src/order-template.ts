@@ -6,13 +6,13 @@ export const ORDER_BLOCK_TYPES=["orderHeader","itemList","feeList","total","paym
 export type OrderBlockType=typeof ORDER_BLOCK_TYPES[number];
 export const CONTACT_INFO_FIELDS=["name","firstName","lastName","company","location","email","phone"] as const;
 export type ContactInfoField=typeof CONTACT_INFO_FIELDS[number];
-export type OrderTemplateFormat="text"|"image"|"pdf"|"qt"|"sc"|"pi"|"ci";
+export type OrderTemplateFormat="text"|"image"|"pdf"|"qt"|"sc"|"pi"|"ci"|"inq";
 export type OrderTemplateBlock={
   id:string;type:OrderBlockType;label?:string;text?:string;imageUrl?:string;imageLayout?:"left"|"right"|"top"|"bottom";
   statusLabels?:Partial<Record<OrderBusinessStatus,string>>;
   bold?:boolean;italic?:boolean;strikethrough?:boolean;monospace?:boolean;blankAfter?:boolean;
   fontSize?:"small"|"medium"|"large";textColor?:string;backgroundColor?:string;align?:"left"|"center"|"right";
-  itemTemplate?:string;showProductImages?:boolean;imageSize?:"small"|"medium"|"large";
+  itemTemplate?:string;showProductImages?:boolean;imageSize?:"small"|"medium"|"large";groupBy?:"none"|"brand"|"category";
   contactFields?:ContactInfoField[];
 };
 export type OrderTemplate={version:1;blocks:OrderTemplateBlock[]};
@@ -24,7 +24,7 @@ export type OrderTemplateContext={
   paymentProfile?:{summary?:string}|null;
   contact?:{firstName?:string|null;lastName?:string|null;companyName?:string|null;country?:string|null;province?:string|null;city?:string|null;email?:string|null}|null;
 };
-export type SemanticOrderBlock={id:string;type:OrderBlockType;lines:string[]};
+export type SemanticOrderBlock={id:string;type:OrderBlockType;lines:string[];itemIndexes?:number[]};
 
 const color=z.string().regex(/^#[0-9A-Fa-f]{6}$/);
 export const DEFAULT_ORDER_ITEM_TEMPLATE="{{index}}. {{title}} x {{quantity}} - {{price}} each - {{subtotal}}";
@@ -35,7 +35,7 @@ const blockSchema=z.object({
   statusLabels:z.object(Object.fromEntries(ORDER_BUSINESS_STATUSES.map(status=>[status,z.string().trim().min(1).max(80)])) as Record<OrderBusinessStatus,z.ZodString>).partial().optional(),
   bold:z.boolean().optional(),italic:z.boolean().optional(),strikethrough:z.boolean().optional(),monospace:z.boolean().optional(),blankAfter:z.boolean().optional(),
   fontSize:z.enum(["small","medium","large"]).optional(),textColor:color.optional(),backgroundColor:color.optional(),align:z.enum(["left","center","right"]).optional(),
-  itemTemplate:z.string().min(1).max(500).optional(),showProductImages:z.boolean().optional(),imageSize:z.enum(["small","medium","large"]).optional(),
+  itemTemplate:z.string().min(1).max(500).optional(),showProductImages:z.boolean().optional(),imageSize:z.enum(["small","medium","large"]).optional(),groupBy:z.enum(["none","brand","category"]).optional(),
   contactFields:z.array(z.enum(CONTACT_INFO_FIELDS)).min(1).max(CONTACT_INFO_FIELDS.length).optional(),
 }).strict().superRefine((block,ctx)=>{
   if(block.type==="customText"){
@@ -91,10 +91,11 @@ export const DEFAULT_SC_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Sales Con
 export const DEFAULT_PI_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Proforma Invoice");
 export const DEFAULT_CI_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Commercial Invoice");
 export const DEFAULT_QT_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Quotation");
+export const DEFAULT_INQ_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Inquiry");
 
 export function parseOrderTemplate(value:unknown,format:OrderTemplateFormat):OrderTemplate{
   const normalized=normalizeOrderTemplate(value,format),parsed=orderTemplateSchema.safeParse(normalized);
-  return parsed.success?parsed.data:(format==="text"?DEFAULT_TEXT_ORDER_TEMPLATE:format==="pdf"?DEFAULT_PDF_ORDER_TEMPLATE:format==="qt"?DEFAULT_QT_ORDER_TEMPLATE:format==="sc"?DEFAULT_SC_ORDER_TEMPLATE:format==="pi"?DEFAULT_PI_ORDER_TEMPLATE:format==="ci"?DEFAULT_CI_ORDER_TEMPLATE:DEFAULT_IMAGE_ORDER_TEMPLATE);
+  return parsed.success?parsed.data:(format==="text"?DEFAULT_TEXT_ORDER_TEMPLATE:format==="pdf"?DEFAULT_PDF_ORDER_TEMPLATE:format==="qt"?DEFAULT_QT_ORDER_TEMPLATE:format==="sc"?DEFAULT_SC_ORDER_TEMPLATE:format==="pi"?DEFAULT_PI_ORDER_TEMPLATE:format==="ci"?DEFAULT_CI_ORDER_TEMPLATE:format==="inq"?DEFAULT_INQ_ORDER_TEMPLATE:DEFAULT_IMAGE_ORDER_TEMPLATE);
 }
 
 function normalizeOrderTemplate(value:unknown,format:OrderTemplateFormat):unknown{
@@ -115,10 +116,17 @@ export function renderSemanticOrder(template:OrderTemplate,context:OrderTemplate
   const address=[context.address?.recipientName,context.address?.phone,context.address?.address].filter(Boolean).join(" · ");
   const variables:Record<string,string>={orderNumber:context.orderNumber,customerName:context.customerName,customerPhone:context.customerPhone,currency:context.currency,total,address,recipientName:context.address?.recipientName??"",recipientPhone:context.address?.phone??"",notes:context.description};
   const replace=(text:string)=>text.replace(/{{\s*([A-Za-z]+)\s*}}/g,(_,name:string)=>variables[name]??"");
-  return template.blocks.flatMap(block=>{
+  return template.blocks.flatMap<SemanticOrderBlock>(block=>{
     let lines:string[]=[];const label=block.label??defaultLabel(block.type);
     if(block.type==="orderHeader"){const statusLabel=block.statusLabels?.[context.businessStatus]?.trim()||label;lines=[`${statusLabel}${statusLabel?" ":""}#${context.orderNumber}`];}
-    else if(block.type==="itemList")lines=[...(label?[label]:[]),...context.items.map((item,index)=>renderOrderItem(block.itemTemplate,item,index,context.currency))];
+    else if(block.type==="itemList"){
+      const itemIndexes:number[]=[];if(label){lines.push(label);itemIndexes.push(-1);}
+      const groups=block.groupBy&&block.groupBy!=="none"?new Map<string,Array<{item:OrderSummaryItem;index:number}>>():null;
+      if(groups)for(const [index,item] of context.items.entries()){const key=(block.groupBy==="brand"?item.brand:item.category)?.trim()||"未分类";const group=groups.get(key)??[];group.push({item,index});groups.set(key,group);}
+      if(groups)for(const [key,group] of groups){lines.push(`[${block.groupBy==="brand"?"Brand":"Category"}] ${key}`);itemIndexes.push(-1);for(const {item,index} of group){lines.push(renderOrderItem(block.itemTemplate,item,index,context.currency));itemIndexes.push(index);}}
+      else for(const [index,item] of context.items.entries()){lines.push(renderOrderItem(block.itemTemplate,item,index,context.currency));itemIndexes.push(index);}
+      return[{id:block.id,type:block.type,lines,itemIndexes}];
+    }
     else if(block.type==="feeList"){if(!context.fees.length)return[];lines=[...(label?[label]:[]),...context.fees.map(fee=>`${fee.name} - ${context.currency} ${fee.amount.toFixed(2)}`)];}
     else if(block.type==="total")lines=[`${label}${label?" ":""}${total}`];
     else if(block.type==="paymentSummary"){if(!context.paymentProfile?.summary)return[];lines=[`${label}${label?" ":""}${context.paymentProfile.summary}`];}
