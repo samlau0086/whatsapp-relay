@@ -195,21 +195,20 @@ jobs:
               attempt=$((attempt + 1))
             done
           }
-          # Authenticate once and keep the multiplexed connection alive for the
-          # upload and activation steps, avoiding repeated public TCP handshakes.
+          # Do not create a multiplexed master connection here. A stale or
+          # server-rejected control socket can make later sessions fail with
+          # "Master refused session request" even though direct SSH works.
           retry_network ssh \
             -i ~/.ssh/id_ed25519 \
             -p "$VPS_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=yes \
-            -o ConnectTimeout=20 \
-            -o ConnectionAttempts=1 \
-            -o ServerAliveInterval=15 \
-            -o ServerAliveCountMax=2 \
-            -o ControlMaster=yes \
-            -o ControlPersist=10m \
-            -o "ControlPath=$HOME/.ssh/relaydesk-%C" \
-            -MNf "$VPS_USER@$VPS_HOST"
+            -o ConnectTimeout=30 \
+            -o ConnectionAttempts=2 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
+            -o TCPKeepAlive=yes \
+            "$VPS_USER@$VPS_HOST" true
 
       - name: Package tracked source
         run: git archive --format=tar.gz --output=release.tar.gz "$GITHUB_SHA"
@@ -295,13 +294,12 @@ jobs:
             -i ~/.ssh/id_ed25519
             -o BatchMode=yes
             -o StrictHostKeyChecking=yes
-            -o ConnectTimeout=20
-            -o ConnectionAttempts=1
-            -o ServerAliveInterval=15
-            -o ServerAliveCountMax=2
-            -o ControlMaster=auto
-            -o ControlPersist=10m
-            -o "ControlPath=$HOME/.ssh/relaydesk-%C"
+             -o ConnectTimeout=30
+             -o ConnectionAttempts=2
+             -o ServerAliveInterval=30
+             -o ServerAliveCountMax=20
+             -o TCPKeepAlive=yes
+             -o ControlMaster=no
           )
           retry_network ssh "${ssh_options[@]}" -p "$VPS_PORT" \
             "$VPS_USER@$VPS_HOST" "mkdir -p '$VPS_DEPLOY_PATH/incoming'"
@@ -315,8 +313,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            -o ConnectTimeout=20 -o ConnectionAttempts=1 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
-            -o ControlMaster=auto -o ControlPersist=10m -o "ControlPath=$HOME/.ssh/relaydesk-%C" \
+            -o ConnectTimeout=30 -o ConnectionAttempts=2 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
+            -o TCPKeepAlive=yes -o ControlMaster=no \
             "$VPS_USER@$VPS_HOST" "bash -s -- '$VPS_DEPLOY_PATH' '$GITHUB_SHA' '$WEB_PORT'" <<'REMOTE'
           set -Eeuo pipefail
 
