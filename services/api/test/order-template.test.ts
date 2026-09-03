@@ -18,10 +18,10 @@ test("template validation protects core blocks and variables",()=>{
 
 test("item templates render every supported product variable",()=>{
   const template=structuredClone(DEFAULT_TEXT_ORDER_TEMPLATE),items=template.blocks.find(block=>block.type==="itemList")!;
-  items.itemTemplate="{{index}} | {{title}} | {{sku}} | {{quantity}} | {{price}} | {{subtotal}}";
-  const block=renderSemanticOrder(template,context).find(item=>item.type==="itemList")!;
-  assert.equal(block.lines[1],"1 | Perfume _limited_ | PERFUME-001 | 2 | USD 49.75 | USD 99.50");
-  assert.equal(block.lines[2],"2 | Gift box | GIFT-001 | 1 | USD 8.00 | USD 8.00");
+  items.itemTemplate="{{index}} | {{title}} | {{sku}} | {{brand}} | {{category}} | {{description}} | {{quantity}} | {{price}} | {{subtotal}}";
+  const block=renderSemanticOrder(template,{...context,items:[{...context.items[0],brand:"Lumière",category:"Fragrance",description:"Eau de parfum"},{...context.items[1],brand:"Lumière",category:"Packaging",description:"Gift-ready box"}]}).find(item=>item.type==="itemList")!;
+  assert.equal(block.lines[1],"1 | Perfume _limited_ | PERFUME-001 | Lumière | Fragrance | Eau de parfum | 2 | USD 49.75 | USD 99.50");
+  assert.equal(block.lines[2],"2 | Gift box | GIFT-001 | Lumière | Packaging | Gift-ready box | 1 | USD 8.00 | USD 8.00");
 });
 
 test("order headers use the configured label for each business status",()=>{

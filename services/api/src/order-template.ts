@@ -29,7 +29,7 @@ export type SemanticOrderBlock={id:string;type:OrderBlockType;lines:string[];ite
 const color=z.string().regex(/^#[0-9A-Fa-f]{6}$/);
 export const DEFAULT_ORDER_ITEM_TEMPLATE="{{index}}. {{title}} x {{quantity}} - {{price}} each - {{subtotal}}";
 export const DEFAULT_ORDER_STATUS_LABELS:Record<OrderBusinessStatus,string>={quotation:"Quotation",pending_confirmation:"Order",pending_payment:"Payment Due",paid:"Paid Order",processing:"Order",shipped:"Shipped Order",completed:"Completed Order",cancelled:"Cancelled Order"};
-const ORDER_ITEM_VARIABLES=new Set(["index","title","sku","quantity","price","subtotal"]);
+const ORDER_ITEM_VARIABLES=new Set(["index","title","sku","quantity","price","subtotal","brand","category","description"]);
 const blockSchema=z.object({
   id:z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/),type:z.enum(ORDER_BLOCK_TYPES),label:z.string().max(80).optional(),text:z.string().max(1000).optional(),imageUrl:z.string().url().max(2000).optional(),imageLayout:z.enum(["left","right","top","bottom"]).optional(),
   statusLabels:z.object(Object.fromEntries(ORDER_BUSINESS_STATUSES.map(status=>[status,z.string().trim().min(1).max(80)])) as Record<OrderBusinessStatus,z.ZodString>).partial().optional(),
@@ -179,6 +179,9 @@ function renderOrderItem(template:string|undefined,item:OrderSummaryItem,index:n
     index:String(index+1),
     title:item.name,
     sku:item.sku??"",
+    brand:item.brand??"",
+    category:item.category??"",
+    description:item.description??"",
     quantity:String(item.quantity),
     price:`${currency} ${item.unitAmount.toFixed(2)}`,
     subtotal:`${currency} ${(item.quantity*item.unitAmount).toFixed(2)}`,

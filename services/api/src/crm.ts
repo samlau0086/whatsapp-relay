@@ -12,7 +12,7 @@ export function primaryContactEmail(emails:Array<{email:string;isPrimary?:boolea
   return emails.find(item=>item.isPrimary||item.is_primary)?.email??null;
 }
 
-export type OrderSummaryItem={name:string;sku?:string;quantity:number;unitAmount:number;brand?:string;category?:string};
+export type OrderSummaryItem={name:string;sku?:string;quantity:number;unitAmount:number;brand?:string;category?:string;description?:string};
 export type OrderSummaryFee={name:string;amount:number};
 
 export function calculateOrderTotal(items:OrderSummaryItem[],fees:OrderSummaryFee[],shippingAmount=0):number{return items.reduce((sum,item)=>sum+item.quantity*item.unitAmount,0)+fees.reduce((sum,fee)=>sum+fee.amount,0)+shippingAmount;}
