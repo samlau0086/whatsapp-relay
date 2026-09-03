@@ -3,7 +3,7 @@ import test from "node:test";
 import sharp from "sharp";
 import { renderTemplateOrderImage } from "../src/order-image.js";
 import { renderTemplateOrderPdf } from "../src/order-pdf.js";
-import { DEFAULT_IMAGE_ORDER_TEMPLATE, DEFAULT_SC_ORDER_TEMPLATE, DEFAULT_TEXT_ORDER_TEMPLATE, orderTemplateSchema, parseTranslatedSemanticOrder, renderSemanticOrder, renderTextOrder, serializeSemanticOrder } from "../src/order-template.js";
+import { DEFAULT_IMAGE_ORDER_TEMPLATE, DEFAULT_INQ_ORDER_TEMPLATE, DEFAULT_SC_ORDER_TEMPLATE, DEFAULT_TEXT_ORDER_TEMPLATE, orderTemplateSchema, parseOrderTemplate, parseTranslatedSemanticOrder, renderSemanticOrder, renderTextOrder, serializeSemanticOrder } from "../src/order-template.js";
 
 const context={orderNumber:"20260720-001",businessStatus:"pending_confirmation" as const,currency:"USD",customerName:"Alex",customerPhone:"+8613800000000",description:"Handle *carefully*",items:[{name:"Perfume _limited_",sku:"PERFUME-001",quantity:2,unitAmount:49.75},{name:"Gift box",sku:"GIFT-001",quantity:1,unitAmount:8}],fees:[{name:"Shipping",amount:6.5}],address:{recipientName:"Alex",phone:"+8613800000000",address:"88 Market Street"}};
 
@@ -51,6 +51,15 @@ test("SC templates include a contact information block by default",()=>{
   const contact=DEFAULT_SC_ORDER_TEMPLATE.blocks.find(block=>block.type==="contactInfo");
   assert.ok(contact);
   assert.deepEqual(contact.contactFields,["name","firstName","lastName","company","location","email","phone"]);
+});
+
+test("INQ templates default to a procurement list without pricing summaries",()=>{
+  const types=DEFAULT_INQ_ORDER_TEMPLATE.blocks.map(block=>block.type);
+  assert.equal(types.includes("feeList"),false);
+  assert.equal(types.includes("total"),false);
+  assert.equal(types.includes("paymentSummary"),false);
+  const legacy=parseOrderTemplate({version:1,blocks:[{id:"items",type:"itemList"}]},"inq");
+  assert.equal(legacy.blocks.some(block=>block.type==="paymentSummary"),false);
 });
 
 test("translation markers round-trip and reject damaged output",()=>{

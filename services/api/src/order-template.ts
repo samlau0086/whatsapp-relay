@@ -91,7 +91,8 @@ export const DEFAULT_SC_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Sales Con
 export const DEFAULT_PI_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Proforma Invoice");
 export const DEFAULT_CI_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Commercial Invoice");
 export const DEFAULT_QT_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Quotation");
-export const DEFAULT_INQ_ORDER_TEMPLATE:OrderTemplate=documentTemplate("Inquiry");
+function inquiryTemplate():OrderTemplate{const template=documentTemplate("Inquiry");template.blocks=template.blocks.filter(block=>block.type!=="feeList"&&block.type!=="total"&&block.type!=="paymentSummary");return template;}
+export const DEFAULT_INQ_ORDER_TEMPLATE:OrderTemplate=inquiryTemplate();
 
 export function parseOrderTemplate(value:unknown,format:OrderTemplateFormat):OrderTemplate{
   const normalized=normalizeOrderTemplate(value,format),parsed=orderTemplateSchema.safeParse(normalized);
@@ -102,7 +103,7 @@ function normalizeOrderTemplate(value:unknown,format:OrderTemplateFormat):unknow
   if(!value||typeof value!=="object"||!Array.isArray((value as {blocks?:unknown}).blocks))return value;
   const template=value as {version?:unknown;blocks:Array<Record<string,unknown>>};
   const blocks=template.blocks.map(block=>block.type==="itemList"&&block.itemTemplate===undefined?{...block,itemTemplate:DEFAULT_ORDER_ITEM_TEMPLATE}:block.type==="orderHeader"?{...block,statusLabels:{...DEFAULT_ORDER_STATUS_LABELS,...(block.statusLabels&&typeof block.statusLabels==="object"?block.statusLabels:{})}}:block);
-  if(!blocks.some(block=>block.type==="paymentSummary")){
+  if(format!=="inq"&&!blocks.some(block=>block.type==="paymentSummary")){
     const block=format==="text"
       ?{id:"payment-summary",type:"paymentSummary",label:"Payment:",blankAfter:true}
       :{id:"payment-summary",type:"paymentSummary",label:"Payment:",fontSize:"medium",textColor:"#20372D",backgroundColor:"#EEF6F2",align:"left"};
