@@ -267,10 +267,19 @@ async function completeGroupSync(client:import("pg").PoolClient,agentId:string,p
 }
 
 async function upsertGroupPeer(client:import("pg").PoolClient,accountId:string,groupJid:string,subject:string):Promise<{groupId:string;contactId:string;conversationId:string}>{
+  const existing=await client.query("SELECT id,contact_id FROM whatsapp_groups WHERE account_id=$1 AND group_jid=$2 FOR UPDATE",[accountId,groupJid]);
+  if(existing.rowCount){
+    const groupId=String(existing.rows[0].id),contactId=String(existing.rows[0].contact_id);
+    await client.query("UPDATE contacts SET display_name=$2,entity_type='group',last_seen_at=now(),updated_at=now() WHERE id=$1",[contactId,subject]);
+    const conversation=await client.query("INSERT INTO conversations(account_id,contact_id,unread_count) VALUES($1,$2,0) ON CONFLICT(account_id,contact_id) DO UPDATE SET status=CASE WHEN conversations.status='archived' THEN 'open'::conversation_status ELSE conversations.status END RETURNING id",[accountId,contactId]);
+    await client.query("UPDATE whatsapp_groups SET subject=$2,active=true,updated_at=now() WHERE id=$1",[groupId,subject]);
+    return{groupId,contactId,conversationId:String(conversation.rows[0].id)};
+  }
   const contact=await client.query("INSERT INTO contacts(account_id,provider_user_id,display_name,entity_type,last_seen_at) VALUES($1,$2,$3,'group',now()) ON CONFLICT(account_id,provider_user_id) DO UPDATE SET display_name=EXCLUDED.display_name,entity_type='group',last_seen_at=now(),updated_at=now() RETURNING id",[accountId,groupJid,subject]);
-  const conversation=await client.query("INSERT INTO conversations(account_id,contact_id,unread_count) VALUES($1,$2,0) ON CONFLICT(account_id,contact_id) DO UPDATE SET status=CASE WHEN conversations.status='archived' THEN 'open'::conversation_status ELSE conversations.status END RETURNING id",[accountId,contact.rows[0].id]);
-  const group=await client.query("INSERT INTO whatsapp_groups(account_id,contact_id,group_jid,subject) VALUES($1,$2,$3,$4) ON CONFLICT(account_id,group_jid) DO UPDATE SET contact_id=EXCLUDED.contact_id,subject=EXCLUDED.subject,active=true,updated_at=now() RETURNING id",[accountId,contact.rows[0].id,groupJid,subject]);
-  return{groupId:String(group.rows[0].id),contactId:String(contact.rows[0].id),conversationId:String(conversation.rows[0].id)};
+  const contactId=String(contact.rows[0].id);
+  const conversation=await client.query("INSERT INTO conversations(account_id,contact_id,unread_count) VALUES($1,$2,0) ON CONFLICT(account_id,contact_id) DO UPDATE SET status=CASE WHEN conversations.status='archived' THEN 'open'::conversation_status ELSE conversations.status END RETURNING id",[accountId,contactId]);
+  const group=await client.query("INSERT INTO whatsapp_groups(account_id,contact_id,group_jid,subject) VALUES($1,$2,$3,$4) RETURNING id",[accountId,contactId,groupJid,subject]);
+  return{groupId:String(group.rows[0].id),contactId,conversationId:String(conversation.rows[0].id)};
 }
 
 const UUID_PATTERN=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
