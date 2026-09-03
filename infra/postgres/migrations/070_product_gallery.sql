@@ -10,7 +10,12 @@ CREATE INDEX IF NOT EXISTS product_gallery_images_media_idx
   ON product_gallery_images(media_id);
 
 INSERT INTO product_gallery_images(product_id, media_id, position)
-SELECT id, image_media_id, 0
-FROM products
-WHERE image_media_id IS NOT NULL
-ON CONFLICT(product_id, media_id) DO NOTHING;
+SELECT p.id, p.image_media_id, 0
+FROM products p
+WHERE p.image_media_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM product_gallery_images gallery
+    WHERE gallery.product_id = p.id
+      AND gallery.media_id = p.image_media_id
+  );
