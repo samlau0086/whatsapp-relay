@@ -4246,6 +4246,7 @@ function OrderDialog({
                   item.name.trim().toLowerCase() ===
                   product.name.trim().toLowerCase(),
               );
+            const hasProductImage = Boolean(product.imageMediaId || product.imageUrl);
             return <article key={product.id} className="order-product">
               <header>
                 <b>商品 {index + 1}</b>
@@ -4284,19 +4285,34 @@ function OrderDialog({
                 )}
               </div>
               {product.mode === "library" ? (
-                <div className="order-product-selector">
-                  <span className="order-product-selector-label">选择产品</span>
-                  <ProductSearchDropdown
-                    id={`order-${product.id}`}
-                    products={available}
-                    value={product.productId}
-                    fallbackName={product.name}
-                    onChange={(productId) => chooseCatalogProduct(product.id, productId)}
-                  />
-                  {catalog.find(item=>item.id===product.productId)?.variants.length ? <label className="order-product-variant-picker">变体<select value={product.variantId??""} onChange={event=>chooseCatalogVariant(product.id,event.target.value)}><option value="">请选择规格</option>{catalog.find(item=>item.id===product.productId)!.variants.map(variant=><option key={variant.id} value={variant.id}>{Object.entries(variant.attributes).map(([key,value])=>`${key}: ${value}`).join(" / ")} · {variant.sku}</option>)}</select></label> : null}
-                  <small className="selected-product-note">
-                    名称与图片取自产品快照，订单内可调整成交单价。
-                  </small>
+                <div className={`order-product-library-layout${hasProductImage ? " has-image" : ""}`}>
+                  {hasProductImage && (
+                    <div className="order-product-image-preview" title={product.imageName || "已选择产品图片"}>
+                      <ProductImage
+                        mediaId={product.imageMediaId}
+                        externalUrl={product.imageUrl}
+                        token={token}
+                        onToken={onToken}
+                        alt={product.imageName || product.name || "产品图片"}
+                        className="order-product-image"
+                      />
+                      <span>{product.imageName || "已选择产品图片"}</span>
+                    </div>
+                  )}
+                  <div className="order-product-selector">
+                    <span className="order-product-selector-label">选择产品</span>
+                    <ProductSearchDropdown
+                      id={`order-${product.id}`}
+                      products={available}
+                      value={product.productId}
+                      fallbackName={product.name}
+                      onChange={(productId) => chooseCatalogProduct(product.id, productId)}
+                    />
+                    {catalog.find(item=>item.id===product.productId)?.variants.length ? <label className="order-product-variant-picker">变体<select value={product.variantId??""} onChange={event=>chooseCatalogVariant(product.id,event.target.value)}><option value="">请选择规格</option>{catalog.find(item=>item.id===product.productId)!.variants.map(variant=><option key={variant.id} value={variant.id}>{Object.entries(variant.attributes).map(([key,value])=>`${key}: ${value}`).join(" / ")} · {variant.sku}</option>)}</select></label> : null}
+                    <small className="selected-product-note">
+                      名称与图片取自产品快照，订单内可调整成交单价。
+                    </small>
+                  </div>
                 </div>
               ) : (
                 <>
@@ -4381,7 +4397,7 @@ function OrderDialog({
                 </button>
               )}
               </>}
-              {(product.imageMediaId || product.imageUrl) && (
+              {product.mode !== "library" && hasProductImage && (
                 <div className="order-product-image-preview">
                   <ProductImage
                     mediaId={product.imageMediaId}
