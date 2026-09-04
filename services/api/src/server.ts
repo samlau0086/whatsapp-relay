@@ -1717,7 +1717,7 @@ app.get("/api/v1/orders/:orderId/documents/:document",{preHandler:authenticate},
   try{
     const products=await Promise.all(itemsResult.rows.map(async item=>{try{if(item.object_key){const object=await s3.send(new GetObjectCommand({Bucket:config.S3_BUCKET,Key:String(item.object_key)}));return{name:String(item.name),image:object.Body?Buffer.from(await object.Body.transformToByteArray()):undefined};}if(typeof item.image_url==="string"&&/^https?:\/\//i.test(item.image_url)){const response=await fetch(item.image_url,{signal:AbortSignal.timeout(8000)});if(response.ok)return{name:String(item.name),image:Buffer.from(await response.arrayBuffer())};}}catch{}return{name:String(item.name)};}));
     if(document==="inq"&&requestedFormat!=="pdf"){
-      const bytes=await renderTemplateOrderImage(template,renderSemanticOrder(template,context),products),fileName=`INQ-${safeFileName(String(row.display_order_number))}.png`;
+      const bytes=await renderTemplateOrderImage(template,renderSemanticOrder(template,context),products,{groupItemsWithRoundedFrames:true}),fileName=`INQ-${safeFileName(String(row.display_order_number))}.png`;
       return reply.header("Content-Type","image/png").header("Content-Disposition",`attachment; filename="${fileName}"`).send(bytes);
     }
     const bytes=await renderTemplateOrderPdf(template,renderSemanticOrder(template,context),products),fileName=`${document.toUpperCase()}-${safeFileName(String(row.display_order_number))}.pdf`;

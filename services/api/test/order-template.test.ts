@@ -75,6 +75,11 @@ test("structured image templates render dynamic-height PNG output",async()=>{
   assert.equal(metadata.format,"png");assert.equal(metadata.width,1080);assert.ok((metadata.height??0)>=720);
 });
 
+test("INQ image renderer separates grouped items with rounded frames",async()=>{
+  const template={...DEFAULT_INQ_ORDER_TEMPLATE,blocks:DEFAULT_INQ_ORDER_TEMPLATE.blocks.map(block=>block.type==="itemList"?{...block,groupBy:"brand" as const}:block)},blocks=renderSemanticOrder(template,{...context,items:[{...context.items[0],brand:"Lumière"},{...context.items[1],brand:"Maison"}]}),plain=await renderTemplateOrderImage(template,blocks,[]),grouped=await renderTemplateOrderImage(template,blocks,[],{groupItemsWithRoundedFrames:true});
+  assert.notDeepEqual(grouped,plain);
+  assert.ok((await sharp(grouped).metadata()).height);
+});
 test("PDF order templates produce a valid PDF containing the rendered order",async()=>{
   const red=await sharp({create:{width:20,height:20,channels:3,background:"#d22"}}).png().toBuffer(),blocks=renderSemanticOrder(DEFAULT_IMAGE_ORDER_TEMPLATE,context);
   const pdf=await renderTemplateOrderPdf(DEFAULT_IMAGE_ORDER_TEMPLATE,blocks,[{name:"Perfume",image:red},{name:"Gift box",image:red}]);

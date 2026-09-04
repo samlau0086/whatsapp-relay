@@ -3,6 +3,7 @@ import type { OrderTemplate, SemanticOrderBlock } from "./order-template.js";
 
 export type OrderImageProduct={name:string;image?:Buffer};
 export type OrderImageSections={title:string;itemsHeading:string;items:string[];feesHeading:string;fees:string[];notes:string;total:string};
+export type TemplateOrderImageOptions={groupItemsWithRoundedFrames?:boolean};
 
 const WIDTH=1080;
 const PADDING=72;
@@ -39,7 +40,7 @@ export async function renderOrderImage(summary:string,products:OrderImageProduct
   return sharp(Buffer.from(svg)).png({compressionLevel:9}).toBuffer();
 }
 
-export async function renderTemplateOrderImage(template:OrderTemplate,blocks:SemanticOrderBlock[],products:OrderImageProduct[]):Promise<Buffer>{
+export async function renderTemplateOrderImage(template:OrderTemplate,blocks:SemanticOrderBlock[],products:OrderImageProduct[],options:TemplateOrderImageOptions={}):Promise<Buffer>{
   const definitions=new Map(template.blocks.map(block=>[block.id,block]));
   const prepared=await Promise.all(products.map(async product=>product.image?(await sharp(product.image).rotate().resize(240,240,{fit:"cover"}).png().toBuffer()).toString("base64"):null));
   const customImages=new Map<string,string>();
@@ -67,6 +68,24 @@ export async function renderTemplateOrderImage(template:OrderTemplate,blocks:Sem
       const productIndex=block.type==="itemList"&&!isItemHeading&&!isGroupHeading?(block.itemIndexes?.[index]??-1):-1,hasImage=showImages&&productIndex>=0&&Boolean(prepared[productIndex]);
       const wrapped=wrapLine(line,hasImage?38:64);return{wrapped,productIndex,hasImage,height:Math.max(wrapped.length*lineHeight+14,hasImage?imageSize+20:lineHeight+14)};
     });
+    const hasGroups=block.type==="itemList"&&lineLayouts.some((_,index)=>/^\[(Brand|Category)\]/.test(block.lines[index]??""));
+    if(options.groupItemsWithRoundedFrames&&hasGroups){
+      const drawLine=(layout:typeof lineLayouts[number],lineY:number,bold=false)=>{
+        const x=align==="center"?WIDTH/2:align==="right"?WIDTH-PADDING-24:PADDING+24,textAnchor=align==="center"?"middle":align==="right"?"end":"start";
+        layout.wrapped.forEach((line,index)=>fragments.push(`<text x="${x}" y="${lineY+fontSize+index*lineHeight}" text-anchor="${textAnchor}" font-family="Noto Sans,Noto Sans CJK SC,sans-serif" font-size="${fontSize}" font-weight="${bold?700:500}" fill="${escapeXml(color)}">${escapeXml(line)}</text>`));
+        if(layout.hasImage){const data=prepared[layout.productIndex];fragments.push(`<image x="${WIDTH-PADDING-imageSize-18}" y="${lineY+8}" width="${imageSize}" height="${imageSize}" preserveAspectRatio="xMidYMid slice" href="data:image/png;base64,${data}"/>`);}
+      };
+      let groupStart=1;
+      if(lineLayouts[0]){drawLine(lineLayouts[0],y);y+=lineLayouts[0].height+10;}
+      for(let index=1;index<=lineLayouts.length;index++){
+        if(index<lineLayouts.length&&!/^\[(Brand|Category)\]/.test(block.lines[index]??""))continue;
+        const group=lineLayouts.slice(groupStart,index);
+        if(group.length){const groupHeight=group.reduce((sum,line)=>sum+line.height,0)+28,groupY=y;fragments.push(`<rect x="${PADDING}" y="${groupY}" width="${CONTENT_WIDTH}" height="${groupHeight}" rx="16" fill="${escapeXml(background)}" stroke="#C8D9D1"/>`);let lineY=groupY+14;group.forEach((layout,groupIndex)=>{drawLine(layout,lineY,groupIndex===0);lineY+=layout.height;});y+=groupHeight+14;}
+        groupStart=index;
+      }
+      y+=4;
+      continue;
+    }
     const blockHeight=Math.max(34,lineLayouts.reduce((sum,line)=>sum+line.height,0)+28),blockY=y;
     fragments.push(`<rect x="${PADDING}" y="${blockY}" width="${CONTENT_WIDTH}" height="${blockHeight}" rx="16" fill="${escapeXml(background)}" stroke="#E0EAE5"/>`);
     let lineY=blockY+24;
