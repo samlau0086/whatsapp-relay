@@ -2277,7 +2277,7 @@ async function acceptedShipping(client:PoolClient,data:{currency:string;items:Or
   }
   let destination:{countryCode?:string|null;province?:string|null}|undefined;
   if(data.newAddress)destination={countryCode:data.newAddress.countryCode??null,province:data.newAddress.province??null};
-  else if(data.addressId){const address=await client.query("SELECT country_code,province FROM contact_addresses WHERE id=$1 AND contact_id=$2",[data.addressId,contactId]);if(!address.rowCount)throw Object.assign(new Error("invalid_customer_address"),{statusCode:400});destination={countryCode:address.rows[0].country_code?String(address.rows[0].country_code):null,province:address.rows[0].province?String(address.rows[0].province):null};}
+  else if(data.addressId){const address=await client.query("SELECT country_code,province FROM contact_addresses WHERE id=$1::uuid AND contact_id=$2::uuid",[data.addressId,contactId]);if(!address.rowCount)throw Object.assign(new Error("invalid_customer_address"),{statusCode:400});destination={countryCode:address.rows[0].country_code?String(address.rows[0].country_code):null,province:address.rows[0].province?String(address.rows[0].province):null};}
   const quote=await calculateShippingQuote(client,{templateId:data.shippingTemplateId!,currency:data.currency,destination,items},{enabledOnly:true});
   return{amount:quote.amount,snapshot:quote};
 }

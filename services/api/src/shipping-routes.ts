@@ -31,9 +31,9 @@ async function listTemplates(db:Queryable,enabledOnly:boolean){
 }
 
 export async function calculateShippingQuote(db:Queryable,input:QuoteInput,{enabledOnly=true}:{enabledOnly?:boolean}={}){
-  const templateResult=await db.query(`SELECT id,name,currency,enabled,is_default,version FROM shipping_templates WHERE id=$1 ${enabledOnly?"AND enabled":""}`,[input.templateId]);
+  const templateResult=await db.query(`SELECT id,name,currency,enabled,is_default,version FROM shipping_templates WHERE id=$1::uuid ${enabledOnly?"AND enabled":""}`,[input.templateId]);
   if(!templateResult.rowCount)throw Object.assign(new Error("shipping_template_unavailable"),{statusCode:409});
-  const template=templateResult.rows[0],rulesResult=await db.query("SELECT r.*,c.name shipping_class_name FROM shipping_template_rules r LEFT JOIN shipping_classes c ON c.id=r.shipping_class_id WHERE r.template_id=$1 ORDER BY r.destination_country_code NULLS FIRST,r.destination_province NULLS FIRST,r.shipping_class_id NULLS FIRST",[input.templateId]);
+  const template=templateResult.rows[0],rulesResult=await db.query("SELECT r.*,c.name shipping_class_name FROM shipping_template_rules r LEFT JOIN shipping_classes c ON c.id=r.shipping_class_id WHERE r.template_id=$1::uuid ORDER BY r.destination_country_code NULLS FIRST,r.destination_province NULLS FIRST,r.shipping_class_id NULLS FIRST",[input.templateId]);
   const defaultRow=rulesResult.rows.find(row=>row.shipping_class_id===null&&row.destination_country_code===null&&row.destination_province===null);
   if(!defaultRow)throw Object.assign(new Error("shipping_default_rule_missing"),{statusCode:409});
   const classIds=[...new Set(input.items.flatMap(item=>item.shippingClassId?[item.shippingClassId]:[]))];
