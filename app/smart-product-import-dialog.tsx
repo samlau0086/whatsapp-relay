@@ -1,5 +1,5 @@
 "use client";
-import { Check, Plus, Sparkles, Trash2, X } from "lucide-react";
+import { Check, Sparkles, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 type Source={id?:string;name:string;baseUrl:string};

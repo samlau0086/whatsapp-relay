@@ -10,7 +10,7 @@ test("contacts, orders, and products expose CSV import and export controls",asyn
     readFile(new URL("../../../app/product-import-dialog.tsx",import.meta.url),"utf8"),
     readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
   ]);
-  assert.equal((inbox.match(/一键导入/g)??[]).length,3);
+  assert.equal((inbox.match(/(?:一键导入|智能导入)/g)??[]).length,6);
   assert.equal((inbox.match(/一键导出/g)??[]).length,3);
   assert.match(dialog,/contacts:\{/);
   assert.match(dialog,/orders:\{/);
