@@ -3727,7 +3727,7 @@ function OrderSendDialog({order,emails,defaultTargetLanguage,busy,onClose,onSend
 
 type DraftProduct={id:string;mode:"library"|"new"|"legacy";productId:string|null;variantId:string|null;clientProductId:string|null;sku:string;name:string;quantity:string;unitAmount:string;weightAmount:string;weightUnit:WeightUnit;shippingClassId:string;shippingClassName:string;priceLocked:boolean;imageMediaId:string|null;imageUrl:string|null;imageName:string};
 type DraftFee={id:string;name:string;amount:string;source?:"manual"|"paypal"};
-const newDraftProduct=():DraftProduct=>({id:crypto.randomUUID(),mode:"new",productId:null,variantId:null,clientProductId:crypto.randomUUID(),sku:"",name:"",quantity:"1",unitAmount:"",weightAmount:"",weightUnit:"kg",shippingClassId:"",shippingClassName:"",priceLocked:false,imageMediaId:null,imageUrl:null,imageName:""});
+const newDraftProduct=():DraftProduct=>({id:crypto.randomUUID(),mode:"library",productId:null,variantId:null,clientProductId:null,sku:"",name:"",quantity:"1",unitAmount:"",weightAmount:"",weightUnit:"kg",shippingClassId:"",shippingClassName:"",priceLocked:false,imageMediaId:null,imageUrl:null,imageName:""});
 function calculatePayPalFeeClient(netAmount:number,ratePercent:number,fixedFee:number){const net=Math.round(netAmount*100),fixed=Math.round(fixedFee*100),rate=Math.round(ratePercent*10000);if(!rate&&!fixed)return 0;const gross=Math.ceil((net+fixed)*1000000/(1000000-rate));return (gross-net)/100;}
 function tierPrice(product:ProductItem,quantity:number){return [...product.priceTiers].reverse().find(tier=>quantity>=tier.minQuantity)?.unitAmount??product.defaultUnitAmount;}
 
@@ -3941,6 +3941,7 @@ function OrderDialog({
     [addressDraft, setAddressDraft] = useState({label:order?.address?.label??"收货地址",recipientName:order?.address?.recipientName??active.name,phone:order?.address?.phone??active.phone,address:order?.address?.address??"",countryCode:order?.address?.countryCode??"",province:order?.address?.province??"",city:order?.address?.city??"",street1:order?.address?.street1??order?.address?.address??"",street2:order?.address?.street2??"",postalCode:order?.address?.postalCode??""}),
     [imagePickerProductId, setImagePickerProductId] = useState<string|null>(null),
     [busy, setBusy] = useState(false),
+    [refreshingPrices, setRefreshingPrices] = useState(false),
     [error, setError] = useState("");
   const selectedPaymentProfile=paymentProfiles.find(item=>item.id===paymentProfileId)??null;
   const manualFees=useMemo(()=>fees.filter(fee=>{const name=fee.name.trim().toLocaleLowerCase();const paypalLabel=selectedPaymentProfile?.paypalFeeLabel?.trim().toLocaleLowerCase();return fee.source!=="paypal"&&name!=="paypal 手续费"&&name!=="paypal fee"&&(!paypalLabel||name!==paypalLabel);}),[fees,selectedPaymentProfile?.paypalFeeLabel]);
@@ -4039,6 +4040,29 @@ function OrderDialog({
     if(!selected||!variant)return;
     const orderCurrency=currency||currencyConfig.baseCurrency, quantity=Number(draft?.quantity)||1;
     updateProduct(rowId,{variantId,sku:variant.sku,name:selected.name,unitAmount:convertCurrency([...variant.priceTiers].reverse().find(t=>quantity>=t.minQuantity)?.unitAmount??variant.priceTiers[0]?.unitAmount??0,selected.currency,orderCurrency,currencyConfig).toFixed(2),priceLocked:false,imageMediaId:variant.imageMediaId??selected.imageMediaId,imageUrl:variant.imageMediaId?null:selected.imageUrl,imageName:"",weightAmount:selected.weightAmount?.toString()??"",weightUnit:selected.weightUnit??weightUnit,shippingClassId:selected.shippingClassId??"",shippingClassName:selected.shippingClass??""});
+  }
+  async function refreshProductPrices(){
+    if(refreshingPrices)return;
+    const libraryItems=products.filter(item=>item.mode==="library"&&item.productId);
+    if(!libraryItems.length){setError("请先选择产品库中的商品");return;}
+    setRefreshingPrices(true);setError("");
+    try{
+      const result=await authorizedFetch("/api/v1/products?limit=100",token);
+      if(result.token!==token)onToken(result.token);
+      if(!result.response.ok)throw new Error(`产品库加载失败（HTTP ${result.response.status}）`);
+      const body=await result.response.json() as {data:Array<Record<string,unknown>>};
+      const latest=body.data.map(mapProduct),orderCurrency=currency||currencyConfig.baseCurrency;
+      setCatalog(latest);
+      setProducts(all=>all.map(item=>{
+        if(item.mode!=="library"||!item.productId)return item;
+        const selected=latest.find(product=>product.id===item.productId);
+        if(!selected)return item;
+        const quantity=Number(item.quantity)||1,variant=item.variantId?selected.variants.find(candidate=>candidate.id===item.variantId):null;
+        const sourceAmount=variant?[...variant.priceTiers].reverse().find(tier=>quantity>=tier.minQuantity)?.unitAmount??variant.priceTiers[0]?.unitAmount??0:tierPrice(selected,quantity);
+        return{...item,sku:variant?.sku??selected.sku,unitAmount:convertCurrency(sourceAmount,selected.currency,orderCurrency,currencyConfig).toFixed(2),priceLocked:false};
+      }));
+    }catch(reason){setError(reason instanceof Error?reason.message:"产品价格更新失败");}
+    finally{setRefreshingPrices(false);}
   }
   function changeCurrency(next:string){if(!currency){setCurrency(next);return;}setProducts(all=>all.map(item=>{const selected=catalog.find(product=>product.id===item.productId),amount=selected&&!item.priceLocked?tierPrice(selected,Number(item.quantity)||1):Number(item.unitAmount);const from=selected&&!item.priceLocked?selected.currency:currency;return{...item,unitAmount:Number.isFinite(amount)?convertCurrency(amount,from,next,currencyConfig).toFixed(2):item.unitAmount};}));setFees(all=>all.map(fee=>({...fee,amount:fee.amount?convertCurrency(Number(fee.amount),currency,next,currencyConfig).toFixed(2):fee.amount})));setCurrency(next);}
   function makeNewProduct(rowId: string) {
@@ -4207,6 +4231,7 @@ function OrderDialog({
         </p>
         <div className="order-builder-head">
           <b>Products</b>
+          {order&&<button type="button" className="secondary-action" onClick={()=>void refreshProductPrices()} disabled={busy||refreshingPrices}>{refreshingPrices?<RefreshCw size={13} className="spin"/>:<RefreshCw size={13}/>} {refreshingPrices?"正在更新价格…":"从产品库更新价格"}</button>}
           <label>
             订单状态
             <select value={businessStatus} onChange={event=>setBusinessStatus(event.target.value as OrderBusinessStatus)}>
