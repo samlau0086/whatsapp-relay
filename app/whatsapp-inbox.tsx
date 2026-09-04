@@ -2918,7 +2918,7 @@ function CrmDetailsPanel({
     [editOrderTarget, setEditOrderTarget] = useState<OrderItem | null>(null),
     [sendOrderTarget, setSendOrderTarget] = useState<OrderSendTarget | null>(null),
     [paymentOrderTarget, setPaymentOrderTarget] = useState<OrderItem | null>(null),
-    [orderDocumentMenu,setOrderDocumentMenu]=useState<{orderId:string;documentType:"qt"|"sc"|"pi"|"ci"}|null>(null),
+    [orderDocumentMenu,setOrderDocumentMenu]=useState<{orderId:string;documentType:"inq"|"qt"|"sc"|"pi"|"ci"}|null>(null),
     [statusOrderId,setStatusOrderId]=useState(""),
     [contactEditing, setContactEditing] = useState(false),
     [addressEditing, setAddressEditing] = useState(false),
@@ -3209,15 +3209,17 @@ function CrmDetailsPanel({
     }catch(reason){setError(reason instanceof Error?reason.message:"订单状态更新失败");}
     finally{setStatusOrderId("");}
   }
-  async function downloadOrderDocument(order:OrderItem,documentType:"inq"|"qt"|"sc"|"pi"|"ci"){
+  async function downloadOrderDocument(order:OrderItem,documentType:"inq"|"qt"|"sc"|"pi"|"ci",format:"image"|"pdf"=documentType==="inq"?"image":"pdf"){
     setBusy(true);setError("");
     try{
-      const result=await authorizedFetch(`/api/v1/orders/${order.id}/documents/${documentType}`,token);
+      const query=documentType==="inq"?`?format=${format}`:"";
+      const result=await authorizedFetch(`/api/v1/orders/${order.id}/documents/${documentType}${query}`,token);
       if(result.token!==token)onToken(result.token);
       if(!result.response.ok)throw new Error(`单据下载失败（HTTP ${result.response.status}）`);
       const url=URL.createObjectURL(await result.response.blob()),link=document.createElement("a");
-      link.href=url;link.download=`${documentType.toUpperCase()}-${order.orderNumber}.${documentType==="inq"?"png":"pdf"}`;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),0);
-      onToast(`${documentType.toUpperCase()} 已下载`);
+      const extension=format==="image"?"png":"pdf";
+      link.href=url;link.download=`${documentType.toUpperCase()}-${order.orderNumber}.${extension}`;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),0);
+      onToast(`${documentType.toUpperCase()} ${extension.toUpperCase()} 已下载`);
     }catch(reason){setError(reason instanceof Error?reason.message:"单据下载失败");}
     finally{setBusy(false);}
   }
@@ -3397,7 +3399,7 @@ function CrmDetailsPanel({
                           <CreditCard size={12} />
                           {order.paymentRequest?"付款详情":order.paymentProfile?"付款说明":"选择收款"}
                         </button>
-                        <button className="order-payment" disabled={busy} onClick={()=>void downloadOrderDocument(order,"inq")} title="下载 INQ 询盘图片"><FileDown size={12}/>INQ</button>
+                        {(()=>{const open=orderDocumentMenu?.orderId===order.id&&orderDocumentMenu.documentType==="inq";return <div className="order-document-menu"><button className="order-payment" disabled={busy} onClick={()=>setOrderDocumentMenu(open?null:{orderId:order.id,documentType:"inq"})} aria-expanded={open} aria-haspopup="menu" title="下载 INQ 询盘"><FileDown size={12}/>INQ</button>{open&&<div role="menu"><button role="menuitem" disabled={busy} onClick={()=>{setOrderDocumentMenu(null);void downloadOrderDocument(order,"inq","image");}}><FileDown size={12}/>下载图片</button><button role="menuitem" disabled={busy} onClick={()=>{setOrderDocumentMenu(null);void downloadOrderDocument(order,"inq","pdf");}}><FileDown size={12}/>下载 PDF</button></div>}</div>})()}
                         {(["qt","sc","pi","ci"] as const).map(documentType=>{const open=orderDocumentMenu?.orderId===order.id&&orderDocumentMenu.documentType===documentType;return <div className="order-document-menu" key={documentType}><button className="order-payment" disabled={busy} onClick={()=>setOrderDocumentMenu(open?null:{orderId:order.id,documentType})} aria-expanded={open} aria-haspopup="menu" title={`${documentType.toUpperCase()} 文档操作`}><FileDown size={12}/>{documentType.toUpperCase()}</button>{open&&<div role="menu"><button role="menuitem" disabled={busy} onClick={()=>void sendOrderDocument(order,documentType)}><Send size={12}/>发送</button><button role="menuitem" disabled={busy} onClick={()=>{setOrderDocumentMenu(null);void downloadOrderDocument(order,documentType);}}><FileDown size={12}/>下载</button></div>}</div>;})}
                         <button
                           className="order-edit"
