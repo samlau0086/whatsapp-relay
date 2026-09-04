@@ -3943,7 +3943,7 @@ function OrderDialog({
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const selectedPaymentProfile=paymentProfiles.find(item=>item.id===paymentProfileId)??null;
-  const manualFees=useMemo(()=>fees.filter(fee=>fee.source!=="paypal"),[fees]);
+  const manualFees=useMemo(()=>fees.filter(fee=>{const name=fee.name.trim().toLocaleLowerCase();const paypalLabel=selectedPaymentProfile?.paypalFeeLabel?.trim().toLocaleLowerCase();return fee.source!=="paypal"&&name!=="paypal 手续费"&&name!=="paypal fee"&&(!paypalLabel||name!==paypalLabel);}),[fees,selectedPaymentProfile?.paypalFeeLabel]);
   const paypalFeeAmount=useMemo(()=>selectedPaymentProfile?.methodType==="paypal"?calculatePayPalFeeClient(products.reduce((sum,item)=>sum+(Number(item.quantity)||0)*(Number(item.unitAmount)||0),0)+manualFees.reduce((sum,fee)=>sum+(Number(fee.amount)||0),0)+(Number(shippingAmount)||0),selectedPaymentProfile.paypalFeeRatePercent,selectedPaymentProfile.paypalFixedFee):0,[products,manualFees,shippingAmount,selectedPaymentProfile]);
   const displayFees=useMemo(()=>paypalFeeAmount>0?[...manualFees,{id:"paypal-fee",name:selectedPaymentProfile?.paypalFeeLabel||"PayPal 手续费",amount:paypalFeeAmount,source:"paypal" as const}]:manualFees,[manualFees,paypalFeeAmount]);
   const total = useMemo(()=>products.reduce((sum,item)=>sum+(Number(item.quantity)||0)*(Number(item.unitAmount)||0),0)+manualFees.reduce((sum,fee)=>sum+(Number(fee.amount)||0),0)+(Number(shippingAmount)||0)+paypalFeeAmount,[products,manualFees,shippingAmount,paypalFeeAmount]);

@@ -54,9 +54,13 @@ const refreshCookie=(token:string,persistent:boolean)=>`relay_refresh=${token}; 
 function parseQuickReplyTags(value:unknown):string[]{try{const tags=JSON.parse(String(value??"[]"));return Array.isArray(tags)?tags.map(String).filter(tag=>tag.length<=80):[];}catch{return[];}}
 
 function orderFeesWithPayPalFee(fees:OrderSummaryFee[],items:OrderSummaryItem[],shippingAmount:number,paymentProfile:PaymentProfileSnapshot|null):Array<OrderSummaryFee&{source:"manual"|"paypal"}>{
-  const manual=fees.map(fee=>({...fee,source:"manual" as const}));
+  const paypalLabel=paymentProfile?.paypalFeeLabel?.trim().toLocaleLowerCase();
+  const manual=fees.filter(fee=>{
+    const name=fee.name.trim().toLocaleLowerCase();
+    return name!==PAYPAL_FEE_NAME.toLocaleLowerCase()&&name!=="paypal fee"&&(!paypalLabel||name!==paypalLabel);
+  }).map(fee=>({...fee,source:"manual" as const}));
   if(paymentProfile?.methodType!=="paypal")return manual;
-  const netAmount=calculateOrderTotal(items,fees,shippingAmount);
+  const netAmount=calculateOrderTotal(items,manual,shippingAmount);
   const amount=calculatePayPalFee(netAmount,paymentProfile.paypalFeeRatePercent,paymentProfile.paypalFixedFee);
   return amount>0?[...manual,{name:paymentProfile.paypalFeeLabel||PAYPAL_FEE_NAME,amount,source:"paypal"}]:manual;
 }
