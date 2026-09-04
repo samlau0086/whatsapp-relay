@@ -36,6 +36,7 @@ type Product = {
   category: string;
   brand: string;
   currency: string;
+  isInStock: boolean;
   weightAmount: number | null;
   weightUnit: WeightUnit | null;
   shippingClassId: string | null;
@@ -221,6 +222,7 @@ export function ProductEditorDialog({
     [currency, setCurrency] = useState(
       product?.currency ?? (currencies.some((item) => item.code === "CNY") ? "CNY" : baseCurrency),
     ),
+    [isInStock,setIsInStock]=useState(product?.isInStock??true),
     [weightAmount,setWeightAmount]=useState(product?.weightAmount?.toString()??""),
     [weightUnit,setWeightUnit]=useState<WeightUnit>(product?.weightUnit??"kg"),
     [shippingClassId,setShippingClassId]=useState(product?.shippingClassId??""),
@@ -440,6 +442,7 @@ export function ProductEditorDialog({
         supplierLinks:normalizedSupplierLinks,
         internalNote:internalNote.trim(),
         currency,
+        isInStock,
         weightAmount:weightAmount===""?null:Number(weightAmount),
         weightUnit:weightAmount===""?null:weightUnit,
         shippingClassId:product?.shippingClassId&&!shippingClasses.some(item=>item.id===product.shippingClassId)?undefined:shippingClassId||null,
@@ -549,7 +552,7 @@ export function ProductEditorDialog({
             SKU
             在有效产品中忽略大小写保持唯一；修改不会影响历史订单和已发送卡片。
           </p>
-          <div className="product-form-grid">
+          <div className="product-form-grid"><label>库存状态<select value={isInStock?"in_stock":"out_of_stock"} onChange={event=>setIsInStock(event.target.value==="in_stock")}><option value="in_stock">In stock</option><option value="out_of_stock">Out of stock</option></select></label>
             <label>
               产品名称
               <input
@@ -971,3 +974,7 @@ function productSaveError(body: ProductErrorBody, status: number) {
   if (body.details?.formErrors?.[0]) return body.details.formErrors[0];
   return `保存失败（HTTP ${status}）`;
 }
+
+
+
+
