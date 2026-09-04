@@ -2920,6 +2920,7 @@ function CrmDetailsPanel({
     [sendOrderTarget, setSendOrderTarget] = useState<OrderSendTarget | null>(null),
     [paymentOrderTarget, setPaymentOrderTarget] = useState<OrderItem | null>(null),
     [orderDocumentMenu,setOrderDocumentMenu]=useState<{orderId:string;documentType:"inq"|"qt"|"sc"|"pi"|"ci"}|null>(null),
+    [documentPreview,setDocumentPreview]=useState<{url:string;name:string;mime:"image"|"pdf"}|null>(null),
     [statusOrderId,setStatusOrderId]=useState(""),
     [contactEditing, setContactEditing] = useState(false),
     [addressEditing, setAddressEditing] = useState(false),
@@ -3000,6 +3001,10 @@ function CrmDetailsPanel({
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [onClose, orderOpen, editOrderTarget, sendOrderTarget, paymentOrderTarget, taskEditing, tagEditing]);
+  useEffect(() => {
+    if (!documentPreview) return;
+    return () => URL.revokeObjectURL(documentPreview.url);
+  }, [documentPreview?.url]);
   async function request(path: string, init: RequestInit) {
     setBusy(true);
     setError("");
@@ -3210,20 +3215,12 @@ function CrmDetailsPanel({
     }catch(reason){setError(reason instanceof Error?reason.message:"订单状态更新失败");}
     finally{setStatusOrderId("");}
   }
-  async function downloadOrderDocument(order:OrderItem,documentType:"inq"|"qt"|"sc"|"pi"|"ci",format:"image"|"pdf"=documentType==="inq"?"image":"pdf"){
-    setBusy(true);setError("");
-    try{
-      const query=documentType==="inq"?`?format=${format}`:"";
-      const result=await authorizedFetch(`/api/v1/orders/${order.id}/documents/${documentType}${query}`,token);
-      if(result.token!==token)onToken(result.token);
-      if(!result.response.ok)throw new Error(`单据下载失败（HTTP ${result.response.status}）`);
-      const url=URL.createObjectURL(await result.response.blob()),link=document.createElement("a");
-      const extension=format==="image"?"png":"pdf";
-      link.href=url;link.download=`${documentType.toUpperCase()}-${order.orderNumber}.${extension}`;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),0);
-      onToast(`${documentType.toUpperCase()} ${extension.toUpperCase()} 已下载`);
-    }catch(reason){setError(reason instanceof Error?reason.message:"单据下载失败");}
-    finally{setBusy(false);}
-  }
+  async function fetchOrderDocument(order:OrderItem,documentType:"inq"|"qt"|"sc"|"pi"|"ci",format:"image"|"pdf"=documentType==="inq"?"image":"pdf",mode:"download"|"preview"="download"){
+     setBusy(true);setError("");const controller=new AbortController(),timeout=window.setTimeout(()=>controller.abort(),30000);
+     try{const query="?format="+format,result=await authorizedFetch("/api/v1/orders/"+order.id+"/documents/"+documentType+query,token,{signal:controller.signal});if(result.token!==token)onToken(result.token);if(!result.response.ok)throw new Error("单据"+(mode==="preview"?"预览":"下载")+"失败（HTTP "+result.response.status+"）");const extension=format==="image"?"png":"pdf",name=documentType.toUpperCase()+"-"+order.orderNumber+"."+extension,url=URL.createObjectURL(await result.response.blob());if(mode==="preview")setDocumentPreview(previous=>{if(previous)URL.revokeObjectURL(previous.url);return {url,name,mime:format};});else{const link=document.createElement("a");link.href=url;link.download=name;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),1000);onToast(documentType.toUpperCase()+" "+extension.toUpperCase()+" 已下载");}setOrderDocumentMenu(null);}catch(reason){setError(reason instanceof DOMException&&reason.name==="AbortError"?"单据生成超时，请稍后重试":reason instanceof Error?reason.message:"单据操作失败");}finally{window.clearTimeout(timeout);setBusy(false);}
+   }
+   async function downloadOrderDocument(order:OrderItem,documentType:"inq"|"qt"|"sc"|"pi"|"ci",format:"image"|"pdf"=documentType==="inq"?"image":"pdf"){return fetchOrderDocument(order,documentType,format,"download");}
+   async function previewOrderDocument(order:OrderItem,documentType:"inq"|"qt"|"sc"|"pi"|"ci",format:"image"|"pdf"=documentType==="inq"?"image":"pdf"){return fetchOrderDocument(order,documentType,format,"preview");}
   async function sendOrderDocument(order:OrderItem,documentType:"qt"|"sc"|"pi"|"ci"){
     setBusy(true);setError("");
     try{
@@ -3400,8 +3397,8 @@ function CrmDetailsPanel({
                           <CreditCard size={12} />
                           {order.paymentRequest?"付款详情":order.paymentProfile?"付款说明":"选择收款"}
                         </button>
-                        {(()=>{const open=orderDocumentMenu?.orderId===order.id&&orderDocumentMenu.documentType==="inq";return <div className={`order-document-menu${open?" open":""}`}><button className="order-payment" disabled={busy} onClick={()=>setOrderDocumentMenu(open?null:{orderId:order.id,documentType:"inq"})} aria-expanded={open} aria-haspopup="menu" title="下载 INQ 询盘"><FileDown size={12}/>INQ</button>{open&&<div role="menu"><button role="menuitem" disabled={busy} onClick={()=>{setOrderDocumentMenu(null);void downloadOrderDocument(order,"inq","image");}}><FileDown size={12}/>下载图片</button><button role="menuitem" disabled={busy} onClick={()=>{setOrderDocumentMenu(null);void downloadOrderDocument(order,"inq","pdf");}}><FileDown size={12}/>下载 PDF</button></div>}</div>})()}
-                        {(["qt","sc","pi","ci"] as const).map(documentType=>{const open=orderDocumentMenu?.orderId===order.id&&orderDocumentMenu.documentType===documentType;return <div className={`order-document-menu${open?" open":""}`} key={documentType}><button className="order-payment" disabled={busy} onClick={()=>setOrderDocumentMenu(open?null:{orderId:order.id,documentType})} aria-expanded={open} aria-haspopup="menu" title={`${documentType.toUpperCase()} 文档操作`}><FileDown size={12}/>{documentType.toUpperCase()}</button>{open&&<div role="menu"><button role="menuitem" disabled={busy} onClick={()=>void sendOrderDocument(order,documentType)}><Send size={12}/><span>发送</span></button><button role="menuitem" disabled={busy} onClick={()=>{setOrderDocumentMenu(null);void downloadOrderDocument(order,documentType);}}><FileDown size={12}/><span>下载</span></button></div>}</div>;})}
+                        {(()=>{const open=orderDocumentMenu?.orderId===order.id&&orderDocumentMenu.documentType==="inq";return <div className={`order-document-menu${open?" open":""}`}><button className="order-payment" disabled={busy} onClick={()=>setOrderDocumentMenu(open?null:{orderId:order.id,documentType:"inq"})} aria-expanded={open} aria-haspopup="menu" title="下载 INQ 询盘"><FileDown size={12}/>INQ</button>{open&&<div role="menu"><button role="menuitem" disabled={busy} onClick={()=>void previewOrderDocument(order,"inq","image")}><Eye size={12}/>预览图片</button><button role="menuitem" disabled={busy} onClick={()=>void previewOrderDocument(order,"inq","pdf")}><Eye size={12}/>预览 PDF</button><button role="menuitem" disabled={busy} onClick={()=>void downloadOrderDocument(order,"inq","image")}><FileDown size={12}/>下载图片</button><button role="menuitem" disabled={busy} onClick={()=>void downloadOrderDocument(order,"inq","pdf")}><FileDown size={12}/>下载 PDF</button></div>}</div>})()}
+                        {(["qt","sc","pi","ci"] as const).map(documentType=>{const open=orderDocumentMenu?.orderId===order.id&&orderDocumentMenu.documentType===documentType;return <div className={`order-document-menu${open?" open":""}`} key={documentType}><button className="order-payment" disabled={busy} onClick={()=>setOrderDocumentMenu(open?null:{orderId:order.id,documentType})} aria-expanded={open} aria-haspopup="menu" title={`${documentType.toUpperCase()} 文档操作`}><FileDown size={12}/>{documentType.toUpperCase()}</button>{open&&<div role="menu"><button role="menuitem" disabled={busy} onClick={()=>void sendOrderDocument(order,documentType)}><Send size={12}/><span>发送</span></button><button role="menuitem" disabled={busy} onClick={()=>void previewOrderDocument(order,documentType,"pdf")}><Eye size={12}/><span>预览</span></button><button role="menuitem" disabled={busy} onClick={()=>void downloadOrderDocument(order,documentType)}><FileDown size={12}/><span>下载</span></button></div>}</div>;})}
                         <button
                           className="order-edit"
                           disabled={busy}
@@ -3433,7 +3430,8 @@ function CrmDetailsPanel({
               ) : (
                 <p className="crm-empty">尚未创建订单</p>
               )}
-            </div>
+            </div>             {documentPreview&&<div className="modal-backdrop order-document-preview-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget){URL.revokeObjectURL(documentPreview.url);setDocumentPreview(null)}}}><section className="order-document-preview-dialog" role="dialog" aria-modal="true" aria-label={documentPreview.name+"预览"}><header><div><h3>{documentPreview.name}</h3><p>文档预览</p></div><button className="login-close" aria-label="关闭预览" onClick={()=>{URL.revokeObjectURL(documentPreview.url);setDocumentPreview(null)}}><X size={18}/></button></header><div className="order-document-preview-body">{documentPreview.mime==="image"?<img src={documentPreview.url} alt={documentPreview.name}/>:<iframe src={documentPreview.url} title={documentPreview.name}/>}</div></section></div>}
+
             <div className="detail-section crm-section">
               <h4>客户阶段</h4>
               <select
