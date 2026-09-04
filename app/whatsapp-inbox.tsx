@@ -180,6 +180,8 @@ type CustomerAddress={id:string;label:string;recipientName:string;phone:string;a
 const QUICK_REPLY_VARIABLE_LABELS:Record<QuickReplyVariable,string>={first_name:"First name",middle_name:"Middle name",last_name:"Last name",shipping_address:"默认收货地址",country:"国家",company_name:"公司名",job_title:"职位",province:"省份",city:"城市",email:"Primary Email",mobile:"Mobile",whatsapp:"WhatsApp"};
 function quickReplyVariableLabel(variable:QuickReplyVariable){return QUICK_REPLY_VARIABLE_LABELS[variable];}
 type PaymentRequest={id:string;invoiceId:string|null;url:string|null;status:string;amount:number;currency:string;environment:string;createdAt:string;lastSyncedAt:string|null};
+type OrderDocumentTemplateBlock={id:string;type:string;imageUrl?:string;imageLayout?:"left"|"right"|"top"|"bottom";bold?:boolean;italic?:boolean;strikethrough?:boolean;monospace?:boolean;fontSize?:"small"|"medium"|"large";textColor?:string;backgroundColor?:string;align?:"left"|"center"|"right";showProductImages?:boolean;imageSize?:"small"|"medium"|"large"};
+type OrderDocumentHtmlPreview={documentType:"inq"|"qt"|"sc"|"pi"|"ci";template:{blocks:OrderDocumentTemplateBlock[]};blocks:Array<{id:string;type:string;lines:string[];itemIndexes?:number[]}>};
 type PaymentMethodType="paypal"|"bank_transfer"|"western_union"|"wise"|"moneygram"|"stripe_payment_link"|"custom";
 type PaymentPublicField={label:string;value:string};
 type PaymentProfile={id:string;profileId:string;name:string;profileName:string;methodId:string;methodType:PaymentMethodType;methodName:string;enabled:boolean;environment:"sandbox"|"live"|null;summary:string;publicFields:PaymentPublicField[];instructions:string;paypalFeeRatePercent:number;paypalFixedFee:number;paypalFeeLabel:string;sandboxClientIdConfigured?:boolean;sandboxClientSecretConfigured?:boolean;liveClientIdConfigured?:boolean;liveClientSecretConfigured?:boolean;sandboxClientId?:string;sandboxClientSecret?:string;liveClientId?:string;liveClientSecret?:string;referenceTemplate?:string;noteTemplate?:string;itemNameTemplate?:string};
@@ -2920,6 +2922,7 @@ function CrmDetailsPanel({
     [sendOrderTarget, setSendOrderTarget] = useState<OrderSendTarget | null>(null),
     [paymentOrderTarget, setPaymentOrderTarget] = useState<OrderItem | null>(null),
     [orderDocumentMenu,setOrderDocumentMenu]=useState<{orderId:string;documentType:"inq"|"qt"|"sc"|"pi"|"ci"}|null>(null),
+    [documentHtmlPreview,setDocumentHtmlPreview]=useState<{order:OrderItem;preview:OrderDocumentHtmlPreview}|null>(null),
     [statusOrderId,setStatusOrderId]=useState(""),
     [contactEditing, setContactEditing] = useState(false),
     [addressEditing, setAddressEditing] = useState(false),
@@ -2991,7 +2994,8 @@ function CrmDetailsPanel({
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (paymentOrderTarget) setPaymentOrderTarget(null);
+      if (documentHtmlPreview) setDocumentHtmlPreview(null);
+      else if (paymentOrderTarget) setPaymentOrderTarget(null);
       else if (sendOrderTarget) setSendOrderTarget(null);
       else if (taskEditing) setTaskEditing(null);
       else if (tagEditing) setTagEditing(null);
@@ -2999,7 +3003,7 @@ function CrmDetailsPanel({
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [onClose, orderOpen, editOrderTarget, sendOrderTarget, paymentOrderTarget, taskEditing, tagEditing]);
+  }, [onClose, orderOpen, editOrderTarget, sendOrderTarget, paymentOrderTarget, taskEditing, tagEditing, documentHtmlPreview]);
   async function request(path: string, init: RequestInit) {
     setBusy(true);
     setError("");
@@ -3214,7 +3218,10 @@ function CrmDetailsPanel({
      setBusy(true);setError("");const controller=new AbortController(),timeout=window.setTimeout(()=>controller.abort(),30000);
      try{const query="?format="+format,result=await authorizedFetch("/api/v1/orders/"+order.id+"/documents/"+documentType+query,token,{signal:controller.signal});if(result.token!==token)onToken(result.token);if(!result.response.ok)throw new Error("单据下载失败（HTTP "+result.response.status+"）");const extension=format==="image"?"png":"pdf",name=documentType.toUpperCase()+"-"+order.orderNumber+"."+extension,url=URL.createObjectURL(await result.response.blob()),link=document.createElement("a");link.href=url;link.download=name;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),1000);onToast(documentType.toUpperCase()+" "+extension.toUpperCase()+" 已下载");setOrderDocumentMenu(null);}catch(reason){setError(reason instanceof DOMException&&reason.name==="AbortError"?"单据生成超时，请稍后重试":reason instanceof Error?reason.message:"单据下载失败");}finally{window.clearTimeout(timeout);setBusy(false);}
    }
-   function previewOrderDocument(order:OrderItem){setOrderDocumentMenu(null);setPaymentOrderTarget(order);}
+   async function previewOrderDocument(order:OrderItem,documentType:"inq"|"qt"|"sc"|"pi"|"ci"){
+    setBusy(true);setError("");
+    try{const result=await authorizedFetch(`/api/v1/orders/${order.id}/documents/${documentType}/preview`,token);if(result.token!==token)onToken(result.token);const body=await result.response.json().catch(()=>({})) as Partial<OrderDocumentHtmlPreview>&{message?:string};if(!result.response.ok)throw new Error(body.message??`单据预览失败（HTTP ${result.response.status}）`);if(!body.template||!Array.isArray(body.blocks))throw new Error("单据预览数据无效");setDocumentHtmlPreview({order,preview:body as OrderDocumentHtmlPreview});setOrderDocumentMenu(null);}catch(reason){setError(reason instanceof Error?reason.message:"单据预览失败");}finally{setBusy(false);}
+   }
   async function sendOrderDocument(order:OrderItem,documentType:"qt"|"sc"|"pi"|"ci"){
     setBusy(true);setError("");
     try{
@@ -3391,8 +3398,8 @@ function CrmDetailsPanel({
                           <CreditCard size={12} />
                           {order.paymentRequest?"付款详情":order.paymentProfile?"付款说明":"选择收款"}
                         </button>
-                        {(()=>{const open=orderDocumentMenu?.orderId===order.id&&orderDocumentMenu.documentType==="inq";return <div className={`order-document-menu${open?" open":""}`}><button className="order-payment" disabled={busy} onClick={()=>setOrderDocumentMenu(open?null:{orderId:order.id,documentType:"inq"})} aria-expanded={open} aria-haspopup="menu" title="INQ 询盘操作"><FileDown size={12}/>INQ</button>{open&&<div role="menu"><button role="menuitem" onClick={()=>previewOrderDocument(order)}><Eye size={12}/>HTML 预览</button><button role="menuitem" disabled={busy} onClick={()=>void downloadOrderDocument(order,"inq","image")}><FileDown size={12}/>下载图片</button><button role="menuitem" disabled={busy} onClick={()=>void downloadOrderDocument(order,"inq","pdf")}><FileDown size={12}/>下载 PDF</button></div>}</div>})()}
-                        {(["qt","sc","pi","ci"] as const).map(documentType=>{const open=orderDocumentMenu?.orderId===order.id&&orderDocumentMenu.documentType===documentType;return <div className={`order-document-menu${open?" open":""}`} key={documentType}><button className="order-payment" disabled={busy} onClick={()=>setOrderDocumentMenu(open?null:{orderId:order.id,documentType})} aria-expanded={open} aria-haspopup="menu" title={`${documentType.toUpperCase()} 文档操作`}><FileDown size={12}/>{documentType.toUpperCase()}</button>{open&&<div role="menu"><button role="menuitem" disabled={busy} onClick={()=>void sendOrderDocument(order,documentType)}><Send size={12}/><span>发送</span></button><button role="menuitem" onClick={()=>previewOrderDocument(order)}><Eye size={12}/><span>HTML 预览</span></button><button role="menuitem" disabled={busy} onClick={()=>void downloadOrderDocument(order,documentType)}><FileDown size={12}/><span>下载</span></button></div>}</div>;})}
+                        {(()=>{const open=orderDocumentMenu?.orderId===order.id&&orderDocumentMenu.documentType==="inq";return <div className={`order-document-menu${open?" open":""}`}><button className="order-payment" disabled={busy} onClick={()=>setOrderDocumentMenu(open?null:{orderId:order.id,documentType:"inq"})} aria-expanded={open} aria-haspopup="menu" title="INQ 询盘操作"><FileDown size={12}/>INQ</button>{open&&<div role="menu"><button role="menuitem" disabled={busy} onClick={()=>void previewOrderDocument(order,"inq")}><Eye size={12}/>HTML 预览</button><button role="menuitem" disabled={busy} onClick={()=>void downloadOrderDocument(order,"inq","image")}><FileDown size={12}/>下载图片</button><button role="menuitem" disabled={busy} onClick={()=>void downloadOrderDocument(order,"inq","pdf")}><FileDown size={12}/>下载 PDF</button></div>}</div>})()}
+                        {(["qt","sc","pi","ci"] as const).map(documentType=>{const open=orderDocumentMenu?.orderId===order.id&&orderDocumentMenu.documentType===documentType;return <div className={`order-document-menu${open?" open":""}`} key={documentType}><button className="order-payment" disabled={busy} onClick={()=>setOrderDocumentMenu(open?null:{orderId:order.id,documentType})} aria-expanded={open} aria-haspopup="menu" title={`${documentType.toUpperCase()} 文档操作`}><FileDown size={12}/>{documentType.toUpperCase()}</button>{open&&<div role="menu"><button role="menuitem" disabled={busy} onClick={()=>void sendOrderDocument(order,documentType)}><Send size={12}/><span>发送</span></button><button role="menuitem" disabled={busy} onClick={()=>void previewOrderDocument(order,documentType)}><Eye size={12}/><span>HTML 预览</span></button><button role="menuitem" disabled={busy} onClick={()=>void downloadOrderDocument(order,documentType)}><FileDown size={12}/><span>下载</span></button></div>}</div>;})}
                         <button
                           className="order-edit"
                           disabled={busy}
@@ -3425,6 +3432,8 @@ function CrmDetailsPanel({
                 <p className="crm-empty">尚未创建订单</p>
               )}
             </div>
+
+{documentHtmlPreview&&<OrderDocumentHtmlPreviewDialog order={documentHtmlPreview.order} preview={documentHtmlPreview.preview} token={token} onToken={onToken} onClose={()=>setDocumentHtmlPreview(null)}/>}
 
             <div className="detail-section crm-section">
               <h4>客户阶段</h4>
@@ -6256,6 +6265,11 @@ function OrderManagement({token,accounts,onToken,onToast,onConversation}:{token:
     {editing&&<OrderDialog order={editing} active={{id:editing.conversationId,name:editing.customerName,initials:"",color:"#477a62",account:editing.accountName,accountId:editing.accountId,phone:editing.customerPhone,providerUserId:"",contactId:"",alias:"",contactName:editing.customerName,primaryEmail:"",contactMethods:[],preview:"",lastDirection:null,lastMessageStatus:null,lastMessageAt:null,time:"",unread:0,accountStatus:"online",assignedUserId:null,favorite:false,blocked:false,conversationStatus:"open",customerStage:"new",tags:[],remindAt:null,platform:"whatsapp",pageId:null,transport:"web",serviceWindowExpiresAt:null,replyWindowExpiresAt:null,conversationType:"direct",groupJid:null,groupParticipantCount:0,groupActive:true}} token={token} onToken={onToken} onClose={()=>setEditing(null)} onCreated={async orderNumber=>{setEditing(null);onToast(`订单 #${orderNumber} 已更新`);cursorRef.current=null;await load(true);}}/>}
     {importing&&<DataImportDialog kind="orders" accounts={accounts.map(account=>({id:account.id,name:account.name}))} request={(path,init)=>authorizedFetch(path,token,init)} onToken={onToken} onClose={()=>setImporting(false)} onImported={async count=>{setImporting(false);cursorRef.current=null;onToast(`已导入 ${count} 张草稿订单`);await load(true);}}/>}
   </section>;
+}
+
+const ORDER_DOCUMENT_LABELS:Record<OrderDocumentHtmlPreview["documentType"],string>={inq:"Inquiry",qt:"Quotation",sc:"Sales Contract",pi:"Proforma Invoice",ci:"Commercial Invoice"};
+function OrderDocumentHtmlPreviewDialog({order,preview,token,onToken,onClose}:{order:OrderItem;preview:OrderDocumentHtmlPreview;token:string;onToken:(token:string)=>void;onClose:()=>void}){
+  return <div className="modal-backdrop order-template-preview-backdrop" role="presentation"><section className="login-dialog order-template-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="order-template-preview-title"><button className="login-close" onClick={onClose} aria-label="关闭"><X size={17}/></button><header><span className="login-logo"><FileText size={19}/></span><div><h2 id="order-template-preview-title">{preview.documentType.toUpperCase()} HTML 预览</h2><p>{ORDER_DOCUMENT_LABELS[preview.documentType]} · 订单 #{order.orderNumber}</p></div></header><div className="order-template-preview-sheet">{preview.template.blocks.map(definition=>{const block=preview.blocks.find(value=>value.id===definition.id);if(!block)return null;const fontSize=definition.fontSize==="large"?"16px":definition.fontSize==="small"?"11px":"13px",style={color:definition.textColor,backgroundColor:definition.backgroundColor,textAlign:definition.align,fontSize},imageSize=definition.imageSize==="large"?152:definition.imageSize==="small"?52:88,vertical=definition.imageLayout==="top"||definition.imageLayout==="bottom",imageFirst=definition.imageLayout!=="right"&&definition.imageLayout!=="bottom",content=<div className="order-template-preview-lines">{block.lines.map((line,index)=>{const itemIndex=block.itemIndexes?.[index],item=typeof itemIndex==="number"&&itemIndex>=0?order.items[itemIndex]:null;return item&&definition.showProductImages!==false?<div className="order-template-preview-item" key={`${definition.id}-${index}`}><ProductImage mediaId={item.imageMediaId} externalUrl={item.imageUrl} token={token} onToken={onToken} alt={item.name} className="order-template-preview-product-image"/><p>{line||"\u00a0"}</p></div>:<p key={`${definition.id}-${index}`}>{line||"\u00a0"}</p>;})}</div>;if(definition.type==="customImage"&&definition.imageUrl)return <section key={definition.id} className="order-template-preview-block" style={style}><img src={definition.imageUrl} alt="" style={{width:imageSize,height:imageSize,objectFit:"contain"}}/></section>;if(definition.type==="imageText"&&definition.imageUrl)return <section key={definition.id} className="order-template-preview-block order-template-preview-image-text" style={{...style,flexDirection:vertical?"column":"row"}}><img src={definition.imageUrl} alt="" style={{width:vertical?"100%":imageSize,height:imageSize,objectFit:"contain",order:imageFirst?0:2}}/><div style={{order:imageFirst?1:0}}>{content}</div></section>;return <section key={definition.id} className={`order-template-preview-block ${definition.type==="divider"?"divider":""}`} style={style}>{content}</section>;})}</div></section></div>;
 }
 
 function OrderDetailsDialog({order,token,onToken,onToast,onPaymentChange,onClose,onEdit,onConversation}:{order:OrderItem;token:string;onToken:(token:string)=>void;onToast:(text:string)=>void;onPaymentChange:(paymentRequest:PaymentRequest)=>void;onClose:()=>void;onEdit:()=>void;onConversation:()=>void}){

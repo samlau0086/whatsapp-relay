@@ -1699,6 +1699,22 @@ app.post("/api/v1/conversations/:conversationId/orders/:orderId/send",{preHandle
   if(!queued)return reply.code(404).send({error:"not_found"});if(order.agent_id)void dispatchPending(order.agent_id);return reply.code(202).send({orderId,orderNumber:String(order.display_order_number),messageId:queued.messageId,status:"queued",format:queued.format,deduplicated:queued.deduplicated});
 });
 
+app.get("/api/v1/orders/:orderId/documents/:document/preview",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const {orderId,document}=request.params as {orderId:string;document:string};
+  if(!["qt","sc","pi","ci","inq"].includes(document))return reply.code(404).send({error:"not_found"});
+  const found=await pool.query("SELECT o.id,o.display_order_number,o.business_status,o.currency,o.description,o.shipping_address_snapshot,o.payment_profile_snapshot,c.account_id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164,co.provider_user_id) customer_name,co.phone_e164 customer_phone,co.first_name contact_first_name,co.last_name contact_last_name,co.company_name contact_company_name,co.country contact_country,co.province contact_province,co.city contact_city,(SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) contact_email FROM orders o JOIN conversations c ON c.id=o.conversation_id JOIN contacts co ON co.id=c.contact_id WHERE o.id=$1 AND o.deleted_at IS NULL",[orderId]);
+  if(!found.rowCount||!canAccessAccount(request.principal,found.rows[0].account_id))return reply.code(404).send({error:"not_found"});
+  const [itemsResult,feesResult,settingsResult]=await Promise.all([
+    pool.query("SELECT i.product_name name,i.product_sku sku,i.quantity,i.unit_amount,p.brand,p.category,p.description FROM order_items i LEFT JOIN products p ON p.id=i.product_id WHERE i.order_id=$1 ORDER BY i.position",[orderId]),
+    pool.query("SELECT name,amount FROM (SELECT name,amount,position FROM order_fees WHERE order_id=$1 UNION ALL SELECT 'Shipping',shipping_amount,32767 FROM orders WHERE id=$1 AND shipping_amount IS NOT NULL) listed ORDER BY position",[orderId]),
+    pool.query("SELECT qt_template,sc_template,pi_template,ci_template,inq_template FROM order_settings WHERE singleton=true"),
+  ]);
+  const row=found.rows[0],items:OrderSummaryItem[]=itemsResult.rows.map(item=>({name:String(item.name),sku:String(item.sku??""),quantity:Number(item.quantity),unitAmount:Number(item.unit_amount),brand:String(item.brand??""),category:String(item.category??""),description:String(item.description??"")})),fees:OrderSummaryFee[]=feesResult.rows.map(fee=>({name:String(fee.name),amount:Number(fee.amount)}));
+  const defaults={qt:DEFAULT_QT_ORDER_TEMPLATE,sc:DEFAULT_SC_ORDER_TEMPLATE,pi:DEFAULT_PI_ORDER_TEMPLATE,ci:DEFAULT_CI_ORDER_TEMPLATE,inq:DEFAULT_INQ_ORDER_TEMPLATE},raw=settingsResult.rows[0]?.[`${document}_template`],template=parseOrderTemplate(raw??defaults[document as keyof typeof defaults],document as OrderTemplateFormat),context={orderNumber:String(row.display_order_number),businessStatus:String(row.business_status??"quotation") as Parameters<typeof renderSemanticOrder>[1]["businessStatus"],currency:String(row.currency),customerName:String(row.customer_name??""),customerPhone:String(row.customer_phone??""),description:String(row.description??""),items,fees,address:row.shipping_address_snapshot??null,paymentProfile:row.payment_profile_snapshot??null,contact:{firstName:row.contact_first_name,lastName:row.contact_last_name,companyName:row.contact_company_name,country:row.contact_country,province:row.contact_province,city:row.contact_city,email:row.contact_email}};
+  return reply.send({documentType:document,template,blocks:renderSemanticOrder(template,context)});
+});
+
 app.get("/api/v1/orders/:orderId/documents/:document",{preHandler:authenticate},async(request,reply)=>{
   if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
   const {orderId,document}=request.params as {orderId:string;document:string};
