@@ -3430,7 +3430,7 @@ function CrmDetailsPanel({
               ) : (
                 <p className="crm-empty">尚未创建订单</p>
               )}
-            </div>             {documentPreview&&<div className="modal-backdrop order-document-preview-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget){URL.revokeObjectURL(documentPreview.url);setDocumentPreview(null)}}}><section className="order-document-preview-dialog" role="dialog" aria-modal="true" aria-label={documentPreview.name+"预览"}><header><div><h3>{documentPreview.name}</h3><p>文档预览</p></div><button className="login-close" aria-label="关闭预览" onClick={()=>{URL.revokeObjectURL(documentPreview.url);setDocumentPreview(null)}}><X size={18}/></button></header><div className="order-document-preview-body">{documentPreview.mime==="image"?<img src={documentPreview.url} alt={documentPreview.name}/>:<iframe src={documentPreview.url} title={documentPreview.name}/>}</div></section></div>}
+            </div>             {documentPreview&&<div className="modal-backdrop order-document-preview-backdrop"><section className="order-document-preview-dialog" role="dialog" aria-modal="true" aria-label={documentPreview.name+"预览"}><header><div><h3>{documentPreview.name}</h3><p>文档预览</p></div><button className="login-close" aria-label="关闭预览" onClick={()=>setDocumentPreview(null)}><X size={18}/></button></header><div className="order-document-preview-body">{documentPreview.mime==="image"?<img src={documentPreview.url} alt={documentPreview.name}/>:<iframe src={documentPreview.url} title={documentPreview.name}/>}</div></section></div>}
 
             <div className="detail-section crm-section">
               <h4>客户阶段</h4>
