@@ -84,7 +84,7 @@ export async function resolvePaymentProfile(client:Queryable,profileId:string|nu
     if(any.rowCount)throw Object.assign(new Error("payment_profile_required"),{statusCode:400});
     return null;
   }
-  const result=await client.query(`${PROFILE_SELECT} WHERE p.id=$1 AND p.enabled AND m.enabled AND p.deleted_at IS NULL AND m.deleted_at IS NULL`,[profileId]);
+  const result=await client.query(`${PROFILE_SELECT} WHERE p.id=$1::uuid AND p.enabled AND m.enabled AND p.deleted_at IS NULL AND m.deleted_at IS NULL`,[profileId]);
   if(!result.rowCount)throw Object.assign(new Error("payment_profile_unavailable"),{statusCode:400});
   return paymentProfileSnapshot(result.rows[0]);
 }
