@@ -24,7 +24,7 @@ export type OrderTemplateContext={
   paymentProfile?:{summary?:string}|null;
   contact?:{firstName?:string|null;lastName?:string|null;companyName?:string|null;country?:string|null;province?:string|null;city?:string|null;email?:string|null}|null;
 };
-export type SemanticOrderBlock={id:string;type:OrderBlockType;lines:string[];itemIndexes?:number[]};
+export type SemanticOrderBlock={id:string;type:OrderBlockType;lines:string[];itemIndexes?:number[];outOfStockLineIndexes?:number[]};
 
 const color=z.string().regex(/^#[0-9A-Fa-f]{6}$/);
 export const DEFAULT_ORDER_ITEM_TEMPLATE="{{index}}. {{title}} x {{quantity}} - {{price}} each - {{subtotal}}";
@@ -129,12 +129,12 @@ export function renderSemanticOrder(template:OrderTemplate,context:OrderTemplate
     let lines:string[]=[];const label=block.label??defaultLabel(block.type);
     if(block.type==="orderHeader"){const statusLabel=block.statusLabels?.[context.businessStatus]?.trim()||label;lines=[`${statusLabel}${statusLabel?" ":""}#${context.orderNumber}`];}
     else if(block.type==="itemList"){
-      const itemIndexes:number[]=[];if(label){lines.push(label);itemIndexes.push(-1);}
+      const itemIndexes:number[]=[],outOfStockLineIndexes:number[]=[];if(label){lines.push(label);itemIndexes.push(-1);}
       const groups=block.groupBy&&block.groupBy!=="none"?new Map<string,Array<{item:OrderSummaryItem;index:number}>>():null;
       if(groups)for(const [index,item] of context.items.entries()){const key=(block.groupBy==="brand"?item.brand:item.category)?.trim()||"未分类";const group=groups.get(key)??[];group.push({item,index});groups.set(key,group);}
-      if(groups)for(const [key,group] of groups){lines.push(`[${block.groupBy==="brand"?"Brand":"Category"}] ${key}`);itemIndexes.push(-1);for(const {item,index} of group){lines.push(renderOrderItem(block.itemTemplate,item,index,context.currency));itemIndexes.push(index);}}
-      else for(const [index,item] of context.items.entries()){lines.push(renderOrderItem(block.itemTemplate,item,index,context.currency));itemIndexes.push(index);}
-      return[{id:block.id,type:block.type,lines,itemIndexes}];
+      if(groups)for(const [key,group] of groups){lines.push(`[${block.groupBy==="brand"?"Brand":"Category"}] ${key}`);itemIndexes.push(-1);for(const {item,index} of group){lines.push(renderOrderItem(block.itemTemplate,item,index,context.currency));itemIndexes.push(index);if(item.isOutOfStock)outOfStockLineIndexes.push(lines.length-1);}}
+      else for(const [index,item] of context.items.entries()){lines.push(renderOrderItem(block.itemTemplate,item,index,context.currency));itemIndexes.push(index);if(item.isOutOfStock)outOfStockLineIndexes.push(lines.length-1);}
+      return[{id:block.id,type:block.type,lines,itemIndexes,outOfStockLineIndexes}];
     }
     else if(block.type==="feeList"){if(!context.fees.length)return[];lines=[...(label?[label]:[]),...context.fees.map(fee=>`${fee.name} - ${context.currency} ${fee.amount.toFixed(2)}`)];}
     else if(block.type==="total")lines=[`${label}${label?" ":""}${total}`];

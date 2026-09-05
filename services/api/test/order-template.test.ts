@@ -27,6 +27,7 @@ test("item templates render every supported product variable",()=>{
 test("out-of-stock items render a status instead of zero prices",()=>{
   const blocks=renderSemanticOrder(DEFAULT_TEXT_ORDER_TEMPLATE,{...context,items:[{...context.items[0],quantity:1,unitAmount:0,isOutOfStock:true}]}),items=blocks.find(block=>block.type==="itemList")!;
   assert.equal(items.lines[1],"1. Perfume _limited_ x 1 - Out of stock");
+  assert.deepEqual(items.outOfStockLineIndexes,[1]);
 });
 
 test("order headers use the configured label for each business status",()=>{
