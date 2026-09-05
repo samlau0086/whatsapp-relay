@@ -71,9 +71,10 @@ export async function renderTemplateOrderImage(template:OrderTemplate,blocks:Sem
     const hasGroups=block.type==="itemList"&&lineLayouts.some((_,index)=>/^\[(Brand|Category)\]/.test(block.lines[index]??""));
     if(options.groupItemsWithRoundedFrames&&hasGroups){
       const drawLine=(layout:typeof lineLayouts[number],lineY:number,bold=false)=>{
-        const x=align==="center"?WIDTH/2:align==="right"?WIDTH-PADDING-24:PADDING+24,textAnchor=align==="center"?"middle":align==="right"?"end":"start";
+        const textStart=PADDING+imageSize+36,textEnd=WIDTH-PADDING-24,textX=align==="center"?(textStart+textEnd)/2:align==="right"?textEnd:textStart;
+        const x=layout.hasImage?textX:(align==="center"?WIDTH/2:align==="right"?WIDTH-PADDING-24:PADDING+24),textAnchor=align==="center"?"middle":align==="right"?"end":"start";
         layout.wrapped.forEach((line,index)=>fragments.push(`<text x="${x}" y="${lineY+fontSize+index*lineHeight}" text-anchor="${textAnchor}" font-family="Noto Sans,Noto Sans CJK SC,sans-serif" font-size="${fontSize}" font-weight="${bold?700:500}" fill="${escapeXml(color)}">${escapeXml(line)}</text>`));
-        if(layout.hasImage){const data=prepared[layout.productIndex];fragments.push(`<image x="${WIDTH-PADDING-imageSize-18}" y="${lineY+8}" width="${imageSize}" height="${imageSize}" preserveAspectRatio="xMidYMid slice" href="data:image/png;base64,${data}"/>`);}
+        if(layout.hasImage){const data=prepared[layout.productIndex];fragments.push(`<image x="${PADDING+18}" y="${lineY+8}" width="${imageSize}" height="${imageSize}" preserveAspectRatio="xMidYMid slice" href="data:image/png;base64,${data}"/>`);}
       };
       let groupStart=1;
       if(lineLayouts[0]){drawLine(lineLayouts[0],y);y+=lineLayouts[0].height+10;}
@@ -90,9 +91,10 @@ export async function renderTemplateOrderImage(template:OrderTemplate,blocks:Sem
     fragments.push(`<rect x="${PADDING}" y="${blockY}" width="${CONTENT_WIDTH}" height="${blockHeight}" rx="16" fill="${escapeXml(background)}" stroke="#E0EAE5"/>`);
     let lineY=blockY+24;
     for(const layout of lineLayouts){
-      const x=align==="center"?WIDTH/2:align==="right"?WIDTH-PADDING-24:PADDING+24,textAnchor=align==="center"?"middle":align==="right"?"end":"start";
+      const textStart=PADDING+imageSize+36,textEnd=WIDTH-PADDING-24,textX=align==="center"?(textStart+textEnd)/2:align==="right"?textEnd:textStart;
+      const x=layout.hasImage?textX:(align==="center"?WIDTH/2:align==="right"?WIDTH-PADDING-24:PADDING+24),textAnchor=align==="center"?"middle":align==="right"?"end":"start";
       layout.wrapped.forEach((line,index)=>fragments.push(`<text x="${x}" y="${lineY+fontSize+index*lineHeight}" text-anchor="${textAnchor}" font-family="Noto Sans,Noto Sans CJK SC,sans-serif" font-size="${fontSize}" font-weight="${block.type==="orderHeader"||block.type==="total"?700:500}" fill="${escapeXml(color)}">${escapeXml(line)}</text>`));
-      if(layout.hasImage){const data=prepared[layout.productIndex];fragments.push(`<image x="${WIDTH-PADDING-imageSize-18}" y="${lineY+8}" width="${imageSize}" height="${imageSize}" preserveAspectRatio="xMidYMid slice" href="data:image/png;base64,${data}"/>`);}
+      if(layout.hasImage){const data=prepared[layout.productIndex];fragments.push(`<image x="${PADDING+18}" y="${lineY+8}" width="${imageSize}" height="${imageSize}" preserveAspectRatio="xMidYMid slice" href="data:image/png;base64,${data}"/>`);}
       lineY+=layout.height;
     }
     y+=blockHeight+18;
