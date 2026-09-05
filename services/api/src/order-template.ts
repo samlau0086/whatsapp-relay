@@ -175,6 +175,7 @@ export function renderTextOrder(template:OrderTemplate,blocks:SemanticOrderBlock
 
 function escapeWhatsApp(value:string):string{return value.replace(/([*_~`])/g,"$1\u200b");}
 function renderOrderItem(template:string|undefined,item:OrderSummaryItem,index:number,currency:string):string{
+  if(item.isOutOfStock&&(!template?.trim()||template.trim()===DEFAULT_ORDER_ITEM_TEMPLATE))return `${index+1}. ${item.name} x ${item.quantity} - Out of stock`;
   const variables:Record<string,string>={
     index:String(index+1),
     title:item.name,
@@ -183,8 +184,8 @@ function renderOrderItem(template:string|undefined,item:OrderSummaryItem,index:n
     category:item.category??"",
     description:item.description??"",
     quantity:String(item.quantity),
-    price:`${currency} ${item.unitAmount.toFixed(2)}`,
-    subtotal:`${currency} ${(item.quantity*item.unitAmount).toFixed(2)}`,
+    price:item.isOutOfStock?"Out of stock":`${currency} ${item.unitAmount.toFixed(2)}`,
+    subtotal:item.isOutOfStock?"Out of stock":`${currency} ${(item.quantity*item.unitAmount).toFixed(2)}`,
   };
   return(template?.trim()||DEFAULT_ORDER_ITEM_TEMPLATE).replace(/{{\s*([A-Za-z]+)\s*}}/g,(_,name:string)=>variables[name]??"");
 }

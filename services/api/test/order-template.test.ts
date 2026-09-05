@@ -24,6 +24,11 @@ test("item templates render every supported product variable",()=>{
   assert.equal(block.lines[2],"2 | Gift box | GIFT-001 | Lumière | Packaging | Gift-ready box | 1 | USD 8.00 | USD 8.00");
 });
 
+test("out-of-stock items render a status instead of zero prices",()=>{
+  const blocks=renderSemanticOrder(DEFAULT_TEXT_ORDER_TEMPLATE,{...context,items:[{...context.items[0],quantity:1,unitAmount:0,isOutOfStock:true}]}),items=blocks.find(block=>block.type==="itemList")!;
+  assert.equal(items.lines[1],"1. Perfume _limited_ x 1 - Out of stock");
+});
+
 test("order headers use the configured label for each business status",()=>{
   const template=structuredClone(DEFAULT_TEXT_ORDER_TEMPLATE),header=template.blocks.find(block=>block.type==="orderHeader")!;
   header.statusLabels={...header.statusLabels,quotation:"Quote",paid:"Receipt"};
