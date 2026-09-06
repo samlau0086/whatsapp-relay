@@ -45,3 +45,33 @@ export function CountryPicker({value,onChange,label="搜索并选择国家/地�
     </div>}
   </div>;
 }
+
+const REGION_OPTIONS:CountryOption[]=[
+  {code:"global",chinese:"全球",english:"Global",searchText:"global 全球"},
+  ...COUNTRY_OPTIONS,
+];
+
+export function RegionPicker({value,onChange,label="搜索并选择地区"}:{value:string;onChange:(value:string)=>void;label?:string}){
+  const listboxId=useId(),[open,setOpen]=useState(false),[query,setQuery]=useState(""),[highlighted,setHighlighted]=useState(-1);
+  const normalizedValue=value.trim().toLowerCase();
+  const selected=REGION_OPTIONS.find(item=>item.code.toLowerCase()===normalizedValue);
+  const visible=useMemo(()=>{const term=query.trim().toLocaleLowerCase();return REGION_OPTIONS.filter(item=>!term||item.searchText.includes(term));},[query]);
+  function choose(code:string){onChange(code);setOpen(false);setQuery("");setHighlighted(-1);}
+  function openPicker(){setOpen(true);setQuery("");setHighlighted(Math.max(0,REGION_OPTIONS.findIndex(item=>item.code.toLowerCase()===normalizedValue)));}
+  function onKeyDown(event:KeyboardEvent<HTMLInputElement>){
+    if(event.key==="Escape"){setOpen(false);setQuery("");setHighlighted(-1);return;}
+    if(event.key==="ArrowDown"||event.key==="ArrowUp"){
+      event.preventDefault();
+      if(!open){openPicker();return;}
+      if(!visible.length)return;
+      const direction=event.key==="ArrowDown"?1:-1;
+      setHighlighted(index=>index<0?(direction>0?0:visible.length-1):(index+direction+visible.length)%visible.length);
+      return;
+    }
+    if(event.key==="Enter"&&open&&highlighted>=0&&visible[highlighted]){event.preventDefault();choose(visible[highlighted].code);}
+  }
+  return <div className="country-picker">
+    <div className="country-search-field"><Search size={14}/><input type="search" value={open?query:(selected?`${selected.chinese} · ${selected.english}`:value)} placeholder="搜索中文、English 或代码" onFocus={openPicker} onChange={event=>{setOpen(true);setQuery(event.target.value);setHighlighted(0);}} onKeyDown={onKeyDown} onBlur={()=>window.setTimeout(()=>setOpen(false),120)} aria-label={label} role="combobox" aria-expanded={open} aria-controls={listboxId} aria-autocomplete="list" aria-activedescendant={open&&highlighted>=0?`${listboxId}-${highlighted}`:undefined} autoComplete="off"/><ChevronDown size={14}/></div>
+    {open&&<div id={listboxId} className="country-options" role="listbox">{visible.length?visible.map((region,index)=><button id={`${listboxId}-${index}`} type="button" role="option" aria-selected={region.code.toLowerCase()===normalizedValue} className={region.code.toLowerCase()===normalizedValue||index===highlighted?"selected":""} key={region.code} onMouseEnter={()=>setHighlighted(index)} onMouseDown={event=>event.preventDefault()} onClick={()=>choose(region.code)}><span><b>{region.chinese}</b><small>{region.english}</small></span><em>{region.code.toUpperCase()}</em></button>):<span className="country-empty">没有匹配的地区</span>}</div>}
+  </div>;
+}
