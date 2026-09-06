@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {readFile} from "node:fs/promises";
 import test from "node:test";
 import {isHolidayBlocked,nextDailyProactiveRunAt,nextEligibleProactiveRunAt,normalizeProactiveMessageTemplates,proactiveTemplateScenario,renderProactiveMessageTemplate,resolveProactiveLanguage,selectProactiveMessageTemplate} from "../src/proactive-outreach.js";
 
@@ -45,4 +46,11 @@ test("system templates match touch scenario and customer stage before language f
   assert.equal(selectProactiveMessageTemplate(templates,"en","first_touch","qualified")?.id,"qualified-first");
   assert.equal(selectProactiveMessageTemplate(templates,"zh_CN","follow_up","new")?.id,"follow-zh");
   assert.equal(selectProactiveMessageTemplate(templates,"en","follow_up","new")?.id,"follow-default");
+});
+
+test("proactive outreach queries use the existing contact country field",async()=>{
+  const source=await readFile(new URL("../src/proactive-outreach.ts",import.meta.url),"utf8");
+  assert.doesNotMatch(source,/\bc(?:o)?\.country_code\b/);
+  assert.match(source,/\bc\.country country_code\b/);
+  assert.match(source,/\bco\.country country_code\b/);
 });
