@@ -10,7 +10,8 @@ let lastScan=0;
 let proactiveSchemaReady:Promise<void>|null=null;
 
 export type HolidayDefinition={id:string;name:string;month:number;day:number;regions?:string[]};
-export type ProactiveMessageTemplate={id?:string;language?:string;body:string};
+export type ProactiveTemplateScenario="first_touch"|"follow_up";
+export type ProactiveMessageTemplate={id?:string;language?:string;scenario?:ProactiveTemplateScenario;customerStages?:string[];body:string};
 export type ProactiveReplyDraft={reply:string;replyZh:string;citations:string[];reason:string;contextSnapshot:Record<string,unknown>;language:string;generationMode:"ai"|"fallback";fallbackReason:string|null};
 
 export async function ensureProactiveOutreachTables():Promise<void>{
@@ -58,12 +59,15 @@ export function nextEligibleProactiveRunAt(now:Date,timeZone:string,sendStart:st
 export function nextDailyProactiveRunAt(now:Date,timeZone:string,sendStart:string,sendEnd:string,holidays:unknown,contactCountry?:string|null){const local=localParts(now,timeZone),start=parseTime(sendStart),tomorrow=zonedDate(local.year,local.month,local.day+1,start.hour,start.minute,timeZone);return nextEligibleProactiveRunAt(tomorrow,timeZone,sendStart,sendEnd,holidays,contactCountry);}
 
 function languageMatches(candidate:string,desired:string):boolean{const left=candidate.trim().toLowerCase();const right=desired.trim().toLowerCase();if(!left||!right||right==="auto")return true;return left===right||left.startsWith(`${right}_`)||left.startsWith(`${right}-`)||right.startsWith(`${left}_`)||right.startsWith(`${left}-`);}
+function normalizeTemplateScenario(value:unknown):ProactiveTemplateScenario|undefined{return value==="first_touch"||value==="follow_up"?value:undefined;}
+function normalizeTemplateCustomerStages(value:unknown):string[]{const values=Array.isArray(value)?value:[value];return [...new Set(values.map(item=>String(item??"").trim()).filter(item=>item==="new"||item==="considering"||item==="qualified"))];}
+export function proactiveTemplateScenario(touches:number):ProactiveTemplateScenario{return touches>0?"follow_up":"first_touch";}
 export function normalizeProactiveMessageTemplates(value:unknown):ProactiveMessageTemplate[]{
   if(typeof value==="string")return value.trim()?[{body:value.trim()}]:[];
   if(Array.isArray(value))return value.flatMap(item=>normalizeProactiveMessageTemplates(item));
   if(!value||typeof value!=="object")return[];
-  const record=value as Record<string,unknown>,body=String(record.body??record.text??record.content??"").trim();
-  if(body)return[{id:typeof record.id==="string"?record.id:undefined,language:typeof record.language==="string"?record.language:undefined,body}];
+  const record=value as Record<string,unknown>,body=String(record.body??record.text??record.content??"").trim(),scenario=normalizeTemplateScenario(record.scenario),customerStages=normalizeTemplateCustomerStages(record.customerStages??record.customer_stages??record.customerStage??record.customer_stage);
+  if(body)return[{id:typeof record.id==="string"?record.id:undefined,language:typeof record.language==="string"?record.language:undefined,scenario,customerStages:customerStages.length?customerStages:undefined,body}];
   if(Array.isArray(record.templates))return normalizeProactiveMessageTemplates(record.templates);
   return Object.entries(record).flatMap(([language,item])=>{
     if(language==="templates")return[];
@@ -72,7 +76,7 @@ export function normalizeProactiveMessageTemplates(value:unknown):ProactiveMessa
     return normalizeProactiveMessageTemplates({...item as Record<string,unknown>,language:(item as Record<string,unknown>).language??(language==="default"?undefined:language)});
   });
 }
-export function selectProactiveMessageTemplate(templates:unknown,desiredLanguage:string):ProactiveMessageTemplate|null{const values=normalizeProactiveMessageTemplates(templates),languageMatch=values.find(template=>template.language&&languageMatches(template.language,desiredLanguage));return languageMatch??values.find(template=>!template.language)??values[0]??null;}
+export function selectProactiveMessageTemplate(templates:unknown,desiredLanguage:string,scenario:ProactiveTemplateScenario="first_touch",customerStage:string="new"):ProactiveMessageTemplate|null{const values=normalizeProactiveMessageTemplates(templates),matches=(template:ProactiveMessageTemplate,requiredScenario:boolean,requiredStage:boolean)=>(!requiredScenario||template.scenario===scenario)&&(!requiredStage||Boolean(template.customerStages?.includes(customerStage))),pick=(candidates:ProactiveMessageTemplate[])=>candidates.find(template=>template.language&&languageMatches(template.language,desiredLanguage))??candidates.find(template=>!template.language)??candidates[0]??null;return pick(values.filter(template=>matches(template,true,true)))??pick(values.filter(template=>matches(template,true,false)&&!template.customerStages?.length))??pick(values.filter(template=>matches(template,false,true)&&!template.scenario))??pick(values.filter(template=>!template.scenario&&!template.customerStages?.length));}
 export function renderProactiveMessageTemplate(template:ProactiveMessageTemplate,context:{contactName:string;companyName?:string|null;customerStage:string;lastMessage?:string}):string{return template.body.replace(/{{\s*(contactName|companyName|customerStage|lastMessage)\s*}}/g,(_match,key:string)=>({contactName:context.contactName||"there",companyName:context.companyName||"",customerStage:context.customerStage,lastMessage:context.lastMessage||""})[key]??"").replace(/\s+([,.!?])/g,"$1").replace(/ {2,}/g," ").trim();}
 
 export async function buildProactiveReplyDraft(input:{accountId:string;persona:string;replyLanguage:string;contact:Record<string,unknown>;summary:string;facts:unknown[];orders:unknown[];messages:unknown[];customerStage:string;knowledgeQuery:string;}):Promise<ProactiveReplyDraft>{
@@ -154,12 +158,12 @@ export async function processOneProactiveOutreach():Promise<boolean>{
       const messages=await client.query("SELECT m.id,m.direction,m.kind,COALESCE(m.text_content,t.transcript_text) text_content,m.provider_payload,m.occurred_at FROM messages m LEFT JOIN message_transcriptions t ON t.message_id=m.id WHERE m.conversation_id=$1 ORDER BY m.occurred_at DESC,m.id DESC LIMIT 8",[job.conversation_id]);
       const lastMessage=String(messages.rows[0]?.text_content??""),knowledgeQuery=[String(job.summary??""),contact.name,contact.companyName,String(job.customer_stage??""),lastMessage].join("\n");
       const draft=await buildProactiveReplyDraft({accountId:job.account_id,persona:String(job.persona??"You are a helpful, concise relationship assistant."),replyLanguage:String(job.reply_language??"auto"),contact,summary:String(job.summary??""),facts:facts.rows,orders:orders.rows,messages:messages.rows,customerStage:String(job.customer_stage??"new"),knowledgeQuery});
-      const selectedTemplate=selectProactiveMessageTemplate(job.message_templates,draft.language),templateReply=selectedTemplate?renderProactiveMessageTemplate(selectedTemplate,{contactName:contact.name,companyName:contact.companyName,customerStage:String(job.customer_stage??"new"),lastMessage}):"",reply=draft.reply.trim()||templateReply,generationMode=draft.reply.trim()?"ai":"system_template",fallbackReason=draft.reply.trim()?null:draft.fallbackReason??"ai_generation_failed";
+      const touchCount=Number((job.payload as Record<string,unknown> | null)?.touches??0),templateScenario=proactiveTemplateScenario(touchCount),customerStage=String(job.customer_stage??"new"),selectedTemplate=selectProactiveMessageTemplate(job.message_templates,draft.language,templateScenario,customerStage),templateReply=selectedTemplate?renderProactiveMessageTemplate(selectedTemplate,{contactName:contact.name,companyName:contact.companyName,customerStage,lastMessage}):"",reply=draft.reply.trim()||templateReply,generationMode=draft.reply.trim()?"ai":"system_template",fallbackReason=draft.reply.trim()?null:draft.fallbackReason??"ai_generation_failed";
       if(!isSafeProactiveReply(reply)){const reason=selectedTemplate?"unsafe_system_template":"system_template_unavailable",nextRun=nextEligibleProactiveRunAt(now,timezone,windowStart,windowEnd,job.country_holidays,contactCountry);await deferProactiveJob(client,job,nextRun,reason,{generationMode:"deferred",fallbackReason:reason,usedTemplateId:selectedTemplate?.id??null,holidaySkipped:false});return;}
       const payload:Record<string,unknown>={type:"text",text:reply};
       const message=await client.query("INSERT INTO messages(conversation_id,account_id,client_message_id,direction,kind,text_content,status,occurred_at) VALUES($1,$2,$3,'out',$4,$5,'queued',now()) RETURNING id",[job.conversation_id,job.account_id,`proactive-${job.id}`,"text",reply]);
       const queued=await queueChannelCommand(client,{accountId:job.account_id,conversationId:job.conversation_id,messageId:message.rows[0].id,payload:{accountId:job.account_id,conversationId:job.conversation_id,messageId:message.rows[0].id,clientMessageId:`proactive-${job.id}`,toJid:String(job.provider_user_id),...(payload as Record<string,unknown>),type:String(payload.type??"text")}});
-      await client.query("UPDATE proactive_outreach_jobs SET state='sent',message_id=$2,completed_at=now(),last_error=NULL,payload=payload || $3::jsonb,updated_at=now() WHERE id=$1",[job.id,message.rows[0].id,JSON.stringify({generationMode,fallbackReason,usedTemplateId:selectedTemplate?.id??null,holidaySkipped:false})]);
+      await client.query("UPDATE proactive_outreach_jobs SET state='sent',message_id=$2,completed_at=now(),last_error=NULL,payload=payload || $3::jsonb,updated_at=now() WHERE id=$1",[job.id,message.rows[0].id,JSON.stringify({generationMode,fallbackReason,usedTemplateId:selectedTemplate?.id??null,templateScenario,templateCustomerStage:customerStage,holidaySkipped:false})]);
       await audit(client,job.account_id,job.contact_id,job.id,"sent",generationMode==="ai"?"ai_personalized":"system_template_fallback");
       if(queued.agentId)void dispatchPending(queued.agentId);
     });
