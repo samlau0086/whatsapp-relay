@@ -2,7 +2,6 @@ import {createHash} from "node:crypto";
 import type {PoolClient} from "pg";
 import {pool,transaction} from "./db.js";
 import {dispatchPending} from "./agent-hub.js";
-import {generatePersonalizedTaskMessage} from "./agent-engine.js";
 import {queueChannelCommand} from "./whatsapp-outbound.js";
 import {resolveContactTimeZone} from "./contact-timezone.js";
 
