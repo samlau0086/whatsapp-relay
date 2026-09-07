@@ -166,7 +166,7 @@ export async function processOneTaskCycle(): Promise<boolean> {
   }
   const draftId = await transaction(async (client) => {
     const draft = await client.query(
-      `SELECT t.id FROM tasks t JOIN account_task_settings s ON s.account_id=t.account_id WHERE t.kind='message' AND t.status='planned' AND t.send_at IS NOT NULL AND t.send_at-(s.draft_lead_hours||' hours')::interval<=now() AND NOT EXISTS(SELECT 1 FROM task_drafts d WHERE d.task_id=t.id AND d.status IN ('pending','approved','sent')) ORDER BY t.send_at LIMIT 1 FOR UPDATE OF t SKIP LOCKED`,
+      `SELECT t.id FROM tasks t JOIN account_task_settings s ON s.account_id=t.account_id WHERE t.kind='message' AND t.status IN ('planned','in_progress') AND (t.status='planned' OR t.updated_at<now()-interval '5 minutes') AND t.send_at IS NOT NULL AND t.send_at-(s.draft_lead_hours||' hours')::interval<=now() AND NOT EXISTS(SELECT 1 FROM task_drafts d WHERE d.task_id=t.id AND d.status IN ('pending','approved','sent')) ORDER BY t.send_at LIMIT 1 FOR UPDATE OF t SKIP LOCKED`,
     );
     if (!draft.rowCount) return null;
     await client.query(
@@ -415,7 +415,7 @@ async function ensureTaskOccurrence(
 
 export async function markOverdueTasks(): Promise<void> {
   await pool.query(
-    `UPDATE tasks SET status='overdue',last_error=CASE WHEN kind='message' AND status='waiting_approval' THEN 'approval_deadline_missed' WHEN kind='message' AND status='scheduled' THEN 'task_dependency_incomplete' ELSE last_error END,updated_at=now() WHERE (status IN ('planned','in_progress','waiting_approval') OR (status='scheduled' AND EXISTS(SELECT 1 FROM task_dependencies d JOIN tasks p ON p.id=d.depends_on_task_id WHERE d.task_id=tasks.id AND p.status<>'completed'))) AND (CASE WHEN kind='message' THEN send_at ELSE due_at END)<now()`,
+    `UPDATE tasks SET status='overdue',last_error=CASE WHEN kind='message' AND status='waiting_approval' THEN 'approval_deadline_missed' WHEN kind='message' AND status='scheduled' THEN 'task_dependency_incomplete' ELSE last_error END,updated_at=now() WHERE (kind='general' AND status IN ('planned','in_progress') AND due_at<now()) OR (kind='message' AND status='waiting_approval' AND send_at<now()) OR (kind='message' AND status='scheduled' AND send_at<now() AND EXISTS(SELECT 1 FROM task_dependencies d JOIN tasks p ON p.id=d.depends_on_task_id WHERE d.task_id=tasks.id AND p.status<>'completed'))`,
   );
 }
 

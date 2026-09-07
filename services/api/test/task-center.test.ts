@@ -66,6 +66,15 @@ test("task tool overrides replace account defaults with a deny-by-default list",
   assert.equal(accountTaskSettingsSchema.safeParse({...settings,holidays:[settings.holidays[0],settings.holidays[0]]}).success,false);
 });
 
+test("late message tasks recover draft generation before an approval deadline is marked overdue",async()=>{
+  const engine=await readFile(new URL("../src/task-engine.ts",import.meta.url),"utf8");
+  assert.match(engine,/t\.status IN \('planned','in_progress'\)/);
+  assert.match(engine,/t\.updated_at<now\(\)-interval '5 minutes'/);
+  assert.match(engine,/kind='general' AND status IN \('planned','in_progress'\) AND due_at<now\(\)/);
+  assert.match(engine,/kind='message' AND status='waiting_approval' AND send_at<now\(\)/);
+  assert.doesNotMatch(engine,/status IN \('planned','in_progress','waiting_approval'\)/);
+});
+
 test("holiday plans can be arranged for every contact from task settings",async()=>{
   const [routes,engine]=await Promise.all([
     readFile(new URL("../src/task-routes.ts",import.meta.url),"utf8"),
