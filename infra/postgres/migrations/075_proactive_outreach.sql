@@ -3,7 +3,7 @@
 -- do not make PostgreSQL initialization fail when the CRM schema is absent.
 DO $$
 BEGIN
-  IF to_regclass('public.whatsapp_accounts') IS NULL
+  IF to_regclass('public.channel_accounts') IS NULL
      OR to_regclass('public.contacts') IS NULL
      OR to_regclass('public.conversations') IS NULL
      OR to_regclass('public.messages') IS NULL THEN
@@ -12,7 +12,7 @@ BEGIN
   END IF;
 
 CREATE TABLE IF NOT EXISTS proactive_outreach_settings (
-  account_id uuid PRIMARY KEY REFERENCES whatsapp_accounts(id) ON DELETE CASCADE,
+  account_id uuid PRIMARY KEY REFERENCES channel_accounts(id) ON DELETE CASCADE,
   enabled boolean NOT NULL DEFAULT false,
   max_touches_per_year smallint NOT NULL DEFAULT 5 CHECK(max_touches_per_year BETWEEN 1 AND 12),
   local_send_start time NOT NULL DEFAULT '10:00',
@@ -30,7 +30,7 @@ ALTER TABLE contacts DROP CONSTRAINT IF EXISTS contacts_country_code_check;
 ALTER TABLE contacts ADD CONSTRAINT contacts_country_code_check CHECK(country_code IS NULL OR country_code ~ '^[A-Z]{2}$');
 
 CREATE TABLE IF NOT EXISTS proactive_outreach_jobs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), account_id uuid NOT NULL REFERENCES whatsapp_accounts(id) ON DELETE CASCADE,
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), account_id uuid NOT NULL REFERENCES channel_accounts(id) ON DELETE CASCADE,
   contact_id uuid NOT NULL REFERENCES contacts(id) ON DELETE CASCADE, conversation_id uuid REFERENCES conversations(id) ON DELETE SET NULL,
   trigger_kind text NOT NULL CHECK(trigger_kind IN ('cold','holiday')), trigger_key text, planned_at timestamptz NOT NULL,
   state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','processing','sent','skipped','cancelled','failed')),
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS proactive_outreach_jobs (
 CREATE UNIQUE INDEX IF NOT EXISTS proactive_outreach_pending_unique ON proactive_outreach_jobs(contact_id) WHERE state IN ('pending','processing');
 CREATE INDEX IF NOT EXISTS proactive_outreach_jobs_ready_idx ON proactive_outreach_jobs(state,planned_at) WHERE state IN ('pending','processing');
 CREATE TABLE IF NOT EXISTS proactive_outreach_events (
-  id bigserial PRIMARY KEY, account_id uuid NOT NULL REFERENCES whatsapp_accounts(id) ON DELETE CASCADE,
+  id bigserial PRIMARY KEY, account_id uuid NOT NULL REFERENCES channel_accounts(id) ON DELETE CASCADE,
   contact_id uuid NOT NULL REFERENCES contacts(id) ON DELETE CASCADE, job_id uuid REFERENCES proactive_outreach_jobs(id) ON DELETE SET NULL,
   event_type text NOT NULL CHECK(event_type IN ('planned','sent','skipped','cancelled','suppressed','restored','failed')),
   reason text, metadata jsonb NOT NULL DEFAULT '{}'::jsonb, created_at timestamptz NOT NULL DEFAULT now()

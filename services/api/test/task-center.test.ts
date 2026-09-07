@@ -93,3 +93,23 @@ test("deleted tasks are cancelled and hidden from the default task list",async()
   assert.match(indexes,/tasks_assignee_conversation_due_idx/);
   assert.match(indexes,/tasks_assignee_contact_due_idx/);
 });
+
+test("proactive outreach task center list is read-only, scoped, and queue-only",async()=>{
+  const [routes,frontend]=await Promise.all([
+    readFile(new URL("../src/proactive-routes.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/task-center.tsx",import.meta.url),"utf8"),
+  ]);
+  assert.match(routes,/app\.get\("\/api\/v1\/proactive-outreach\/jobs"/);
+  assert.match(routes,/account_permissions/);
+  assert.match(routes,/can_read/);
+  assert.match(routes,/account_forbidden/);
+  assert.match(routes,/j\.state IN \('pending','processing'\)/);
+  assert.match(routes,/ORDER BY j\.planned_at,j\.id/);
+  assert.match(routes,/total:/);
+  assert.match(routes,/hasMore:/);
+  assert.match(frontend,/普通任务/);
+  assert.match(frontend,/主动触达/);
+  assert.match(frontend,/当前没有排队中的主动触达任务/);
+  assert.match(frontend,/冷客户跟进/);
+  assert.match(frontend,/processing:"处理中"/);
+});
