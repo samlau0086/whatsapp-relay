@@ -50,6 +50,7 @@ const COLORS = ["#6b4f3a", "#305f72", "#9b5f72", "#477a62", "#705b86"];
 const PRODUCT_PAGE_SIZES = [24,32,36,48,64] as const;
 const CONTACT_PAGE_SIZES = [24,32,48,64] as const;
 let refreshPromise:Promise<string>|null=null;
+let currentAccessToken="";
 const MESSAGE_PAGE_SIZE=50;
 const MEDIA_DOWNLOAD_CONCURRENCY=4;
 const MEDIA_CACHE_LIMIT=80;
@@ -516,6 +517,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
 
   const logout=useCallback(()=>{
     void fetch(`${API_URL}/api/v1/auth/logout`,{method:"POST",credentials:"include"}).catch(()=>undefined);
+    currentAccessToken="";
     clearStoredSession();
     conversationDetailsCache.clear();
     conversationAbortRef.current?.abort();conversationCursorRef.current=null;
@@ -550,7 +552,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const loadConversationCounts=useCallback(async(token:string)=>{
     const result=await authorizedFetch(conversationCountsPath(dateFilter,new Date(),selectedAccount),token);
     if(result.token!==token)setApiToken(result.token);
-    if(result.response.status===401){logout();return;}
+    if(result.response.status===401)return;
     if(result.response.ok){
       const body=await result.response.json() as ConversationCounts&{dueReminders?:Array<{id:string;display_name:string;remind_at:string}>};
       setConversationCounts(body);
@@ -781,7 +783,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       const token=storage.getItem("relayAccessToken")??"";
       const storedUser=storage.getItem("relayUser");
       if(!token){setLoading(false);setSessionReady(true);return;}
-      setApiToken(token);if(storedUser)try{setUser(JSON.parse(storedUser) as User);}catch{}
+      currentAccessToken=token;setApiToken(token);if(storedUser)try{setUser(JSON.parse(storedUser) as User);}catch{}
       setAuthOpen(false);setSessionReady(true);
     },0);
     return()=>window.clearTimeout(timer);
@@ -1237,7 +1239,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     }
   }
 
-  async function sendMediaAsset(asset:MediaAsset,caption:string,throwOnFailure=false,includeReply=true,translationSourceText?:string,translationTargetLanguage?:string,targetConversationId?:string,targetAccountId?:string){
+  async function sendMediaAsset(asset:MediaAsset,caption:string,throwOnFailure=false,includeReply=true,translationSourceText?:string,translationTargetLanguage?:string,targetConversationId?:string,targetAccountId?:string,refreshMessages=true){
     const target=targetConversationId?conversations.find(item=>item.id===targetConversationId)??(active?.id===targetConversationId?active:null):active;
     const conversationId=targetConversationId??target?.id,accountId=targetAccountId??target?.accountId;
     if(!conversationId||!accountId||!apiToken)return;
@@ -1246,12 +1248,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     setMessages(all=>({...all,[conversationId]:[...(all[conversationId]??[]),{id:clientMessageId,direction:"out",kind,text:caption,translationSourceText,translationTargetLanguage,quoted,platform:target?.platform??"whatsapp",pageId:target?.pageId??undefined,time:formatTime(new Date()),status:"queued",attachment:{id:asset.id,name:asset.fileName,mime:asset.mimeType,size:formatBytes(asset.size)},comments:[]}]}));
     const queued=await authorizedFetch("/api/v1/messages",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId,conversationId,clientMessageId,type:kind,text:caption||undefined,mediaId:asset.id,...(translationSourceText?{translationSourceText}:{}),...(translationTargetLanguage?{translationTargetLanguage}:{}),...(quoted?{quotedMessageId:quoted.id}:{})})});if(queued.token!==apiToken)setApiToken(queued.token);
     if(!queued.response.ok){const body=await queued.response.json().catch(()=>({})) as {error?:string};const message=body.error==="agent_upgrade_required"?"请先升级 Windows Agent 后再使用指定回复":`附件消息入队失败（HTTP ${queued.response.status}）`;setToast(message);setMessages(all=>({...all,[conversationId]:(all[conversationId]??[]).map(item=>item.id===clientMessageId?{...item,status:"failed"}:item)}));if(throwOnFailure)throw new Error(message);return;}
-    setMediaOpen(false);setMaterialLibraryOpen(false);setToast(target?.accountStatus==="online"?"附件已进入发送队列":"账号离线，附件已持久化排队");void loadMessages(queued.token,conversationId);
+     setMediaOpen(false);setMaterialLibraryOpen(false);setToast(target?.accountStatus==="online"?"附件已进入发送队列":"账号离线，附件已持久化排队");if(refreshMessages)void loadMessages(queued.token,conversationId);
   }
 
   async function previewAndSendMediaAsset(asset:MediaAsset,caption:string,throwOnFailure=false,includeReply=true,followingAssets:MediaAsset[]=[]){
     const source=caption.trim();
-    if(!source||!translationPreference.enabled){await sendMediaAsset(asset,source,throwOnFailure,includeReply);for(const item of followingAssets)await sendMediaAsset(item,"",true,false);return;}
+    if(!source||!translationPreference.enabled){const refreshAfterBatch=followingAssets.length>0;await sendMediaAsset(asset,source,throwOnFailure,includeReply,undefined,undefined,undefined,undefined,!refreshAfterBatch);for(const item of followingAssets)await sendMediaAsset(item,"",true,false,undefined,undefined,undefined,undefined,false);if(refreshAfterBatch&&active?.id)void loadMessages(apiToken,active.id);return;}
     if(!translationConfigured){const message="AI 翻译暂不可用，请联系管理员配置 Provider";setToast(message);if(throwOnFailure)throw new Error(message);return;}
     setTranslatingDraft(true);setTranslationError("");
     try{
@@ -1276,14 +1278,10 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     setComposerImageBusy(true);setComposerImageDragging(false);
     try{
       const uploaded:MediaAsset[]=[];
-      for(const file of images){
-        const form=new FormData();form.append("file",file);
-        const result=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(active.accountId)}`,apiToken,{method:"POST",body:form});
-        if(result.token!==apiToken)setApiToken(result.token);
-        const body=await result.response.json().catch(()=>({})) as {mediaId?:string;fileName?:string;mimeType?:string;size?:number;sha256?:string;message?:string};
-        if(!result.response.ok||!body.mediaId)throw new Error(body.message??`${file.name} 上传失败（HTTP ${result.response.status}）`);
-        uploaded.push({id:body.mediaId,fileName:body.fileName??file.name,mimeType:body.mimeType??file.type,size:body.size??file.size,sha256:body.sha256??"",createdAt:new Date().toISOString(),usageCount:0});
-      }
+      const uploadedByIndex:Array<MediaAsset|undefined>=new Array(images.length);let nextIndex=0;
+      const uploadNext=async()=>{for(;;){const index=nextIndex++;if(index>=images.length)return;const file=images[index];const form=new FormData();form.append("file",file);const result=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(active.accountId)}`,apiToken,{method:"POST",body:form});if(result.token!==apiToken)setApiToken(result.token);const body=await result.response.json().catch(()=>({})) as {mediaId?:string;fileName?:string;mimeType?:string;size?:number;sha256?:string;message?:string};if(!result.response.ok||!body.mediaId)throw new Error(body.message??`${file.name} 上传失败（HTTP ${result.response.status}）`);uploadedByIndex[index]={id:body.mediaId,fileName:body.fileName??file.name,mimeType:body.mimeType??file.type,size:body.size??file.size,sha256:body.sha256??"",createdAt:new Date().toISOString(),usageCount:0};}};
+      await Promise.all(Array.from({length:Math.min(3,images.length)},()=>uploadNext()));
+      uploaded.push(...uploadedByIndex.filter((item):item is MediaAsset=>Boolean(item)));
       setPendingComposerImages(uploaded);
       setDraft(caption);
       setToast(images.length>1?`${images.length} 张图片已准备发送`:"图片已准备发送，请添加说明后点击发送");
@@ -2635,8 +2633,10 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           onConfirm={(text) => void (async()=>{
             const preview=translationPreview;setTranslationPreview(null);
             if(!preview.media){await queueTextMessage(text,preview.source,preview.targetLanguage,preview.conversationId,preview.accountId);return;}
-            await sendMediaAsset(preview.media.asset,text,preview.media.throwOnFailure,preview.media.includeReply,preview.source,preview.targetLanguage,preview.conversationId,preview.accountId);
-            for(const asset of preview.media.followingAssets)await sendMediaAsset(asset,"",true,false,undefined,undefined,preview.conversationId,preview.accountId);
+            const refreshAfterBatch=preview.media.followingAssets.length>0;
+            await sendMediaAsset(preview.media.asset,text,preview.media.throwOnFailure,preview.media.includeReply,preview.source,preview.targetLanguage,preview.conversationId,preview.accountId,!refreshAfterBatch);
+            for(const asset of preview.media.followingAssets)await sendMediaAsset(asset,"",true,false,undefined,undefined,preview.conversationId,preview.accountId,false);
+            if(refreshAfterBatch)void loadMessages(apiToken,preview.conversationId);
             setPendingComposerImages([]);
           })()}
         />
@@ -4875,12 +4875,14 @@ function quickReplyStorageKey(userId:string,accountId:string){return`relayQuickR
 function tokenSubject(token:string){try{return String(JSON.parse(atob(token.split(".")[1].replace(/-/g,"+").replace(/_/g,"/"))).sub??"");}catch{return"";}}
 function tokenRole(token:string){try{return String(JSON.parse(atob(token.split(".")[1].replace(/-/g,"+").replace(/_/g,"/"))).role??"");}catch{return"";}}
 function storeSession(token:string,user:User,rememberMe:boolean){
+  currentAccessToken=token;
   clearStoredSession();
   const storage=rememberMe?localStorage:sessionStorage;
   storage.setItem("relayAccessToken",token);storage.setItem("relayUser",JSON.stringify(user));
   if(rememberMe)localStorage.setItem(REMEMBER_LOGIN_KEY,"true");
 }
 function storeRefreshedToken(token:string){
+  currentAccessToken=token;
   const storage=localStorage.getItem(REMEMBER_LOGIN_KEY)==="true"?localStorage:sessionStorage;
   storage.setItem("relayAccessToken",token);
 }
@@ -4888,13 +4890,22 @@ function clearStoredSession(){
   for(const storage of [localStorage,sessionStorage]){storage.removeItem("relayAccessToken");storage.removeItem("relayUser");}
   localStorage.removeItem(REMEMBER_LOGIN_KEY);
 }
+function refreshAccessTokenOnce(){
+  if(!refreshPromise)refreshPromise=refreshAccessToken().finally(()=>{refreshPromise=null;});
+  return refreshPromise;
+}
 async function authorizedFetch(path:string,token:string,init:RequestInit={}):Promise<{response:Response;token:string}>{
   const send=(accessToken:string)=>fetch(`${API_URL}${path}`,{...init,credentials:"include",headers:{...init.headers,authorization:`Bearer ${accessToken}`}});
-  let response=await send(token);if(response.status!==401)return{response,token};
-  refreshPromise??=refreshAccessToken();
-  let refreshedToken="";try{refreshedToken=await refreshPromise;}finally{refreshPromise=null;}
+  const firstToken=currentAccessToken||token;
+  let response=await send(firstToken);if(response.status!==401)return{response,token:firstToken};
+  if(currentAccessToken&&currentAccessToken!==firstToken){
+    response=await send(currentAccessToken);
+    if(response.status!==401)return{response,token:currentAccessToken};
+  }
+  const refreshedToken=await refreshAccessTokenOnce();
   if(!refreshedToken)return{response,token};
-  storeRefreshedToken(refreshedToken);response=await send(refreshedToken);return{response,token:refreshedToken};
+  storeRefreshedToken(refreshedToken);
+  response=await send(refreshedToken);return{response,token:refreshedToken};
 }
 async function refreshAccessToken(){const response=await fetch(`${API_URL}/api/v1/auth/refresh`,{method:"POST",credentials:"include"});if(!response.ok)return"";const body=await response.json() as {accessToken?:string};return body.accessToken??"";}
 
@@ -4927,12 +4938,13 @@ function MessageMedia({attachment,token,onToken,onReady,onPreview}:{attachment:{
   useEffect(()=>{
     let cancelled=false,acquired=false;
     let observer:IntersectionObserver|undefined;
+    const cacheKey=`${attachment.id}${attachment.mime.startsWith("image/")?":preview":""}`;
     const start=()=>{
       if(acquired)return;
       acquired=true;observer?.disconnect();
-      void acquireMedia(attachment.id,async()=>{
+      void acquireMedia(cacheKey,async()=>{
         const currentToken=tokenRef.current;
-        const result=await authorizedFetch(`/api/v1/media/${attachment.id}`,currentToken);
+        const result=await authorizedFetch(`/api/v1/media/${attachment.id}${attachment.mime.startsWith("image/")?"?preview=1":""}`,currentToken);
         if(result.token!==currentToken)onTokenRef.current(result.token);
         if(!result.response.ok)throw new Error(`HTTP ${result.response.status}`);
         return result.response.blob();
@@ -4941,11 +4953,11 @@ function MessageMedia({attachment,token,onToken,onReady,onPreview}:{attachment:{
     const element=hostRef.current;
     if(!element||typeof IntersectionObserver==="undefined")start();
     else{
-      observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting))start();},{root:element.closest(".messages"),rootMargin:"600px 0px"});
+      observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting))start();},{root:element.closest(".messages"),rootMargin:"200px 0px"});
       observer.observe(element);
     }
-    return()=>{cancelled=true;observer?.disconnect();if(acquired)releaseMedia(attachment.id);};
-  },[attachment.id]);
+    return()=>{cancelled=true;observer?.disconnect();if(acquired)releaseMedia(cacheKey);};
+  },[attachment.id,attachment.mime]);
   if(error)return <div ref={hostRef} className="message-media message-media-error">媒体加载失败 · {error}</div>;if(!url)return <div ref={hostRef} className="message-media message-media-loading">正在加载媒体…</div>;
   if(attachment.mime.startsWith("image/"))return <div ref={hostRef} className="message-media"><button type="button" className="message-media-preview" onClick={onPreview} aria-label={`查看图片 ${attachment.name}`}><Image src={url} alt={attachment.name} width={440} height={440} unoptimized onLoad={()=>onReadyRef.current()}/></button></div>;
   if(attachment.mime.startsWith("video/"))return <div ref={hostRef} className="message-media"><video src={url} controls preload="metadata" aria-label={attachment.name} onLoadedMetadata={()=>onReadyRef.current()}/></div>;

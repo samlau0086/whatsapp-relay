@@ -218,7 +218,7 @@ test("inbox bounds media downloads, avoids reconnect reloads, and pages message 
   ]);
   assert.match(ui,/const MEDIA_DOWNLOAD_CONCURRENCY=4/);
   assert.match(ui,/const MEDIA_CACHE_LIMIT=80/);
-  assert.match(ui,/rootMargin:"600px 0px"/);
+  assert.match(ui,/rootMargin:"200px 0px"/);
   assert.match(ui,/const MESSAGE_PAGE_SIZE=50/);
   assert.match(ui,/params\.set\("cursor",cursor\)/);
   assert.match(ui,/加载更早消息/);
