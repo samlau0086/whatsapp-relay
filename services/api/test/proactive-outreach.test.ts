@@ -54,3 +54,11 @@ test("proactive outreach queries use the existing contact country field",async()
   assert.match(source,/\bc\.country country_code\b/);
   assert.match(source,/\bco\.country country_code\b/);
 });
+
+test("proactive outreach locks only nullable-safe tables",async()=>{
+  const source=await readFile(new URL("../src/proactive-outreach.ts",import.meta.url),"utf8");
+  assert.match(source,/ORDER BY j\.planned_at FOR UPDATE OF j SKIP LOCKED LIMIT 1/);
+  assert.match(source,/WHERE c\.id=\$1 FOR UPDATE OF c,cv/);
+  assert.doesNotMatch(source,/ORDER BY j\.planned_at FOR UPDATE SKIP LOCKED/);
+  assert.doesNotMatch(source,/WHERE c\.id=\$1 FOR UPDATE[",`]/);
+});
