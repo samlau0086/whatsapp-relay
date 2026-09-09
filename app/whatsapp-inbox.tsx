@@ -1116,6 +1116,16 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     void loadMessages(apiToken, active.id);
   }
 
+  async function deleteMessage(message: ChatMessage) {
+    if (!active || !apiToken) return;
+    if (!(await confirmAction("删除后消息和关联附件将永久清除，无法恢复。", {title:"删除这条消息？", confirmLabel:"永久删除", tone:"warning"}))) return;
+    const result=await authorizedFetch(`/api/v1/messages/${message.id}`,apiToken,{method:"DELETE"});
+    if(result.token!==apiToken)setApiToken(result.token);
+    if(!result.response.ok){setToast(`删除失败（HTTP ${result.response.status}）`);return;}
+    setMessages(all=>({...all,[active.id]:(all[active.id]??[]).filter(item=>item.id!==message.id)}));
+    setReplyTo(value=>value?.message.id===message.id?null:value);
+    setToast("消息及关联附件已删除");
+  }
   async function retryMessage(message: ChatMessage) {
     if (!active || !apiToken || retryingMessageId) return;
     if (
@@ -1920,6 +1930,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                               <Bookmark size={14} />
                               <Plus size={9} />
                             </button>
+                            <button className="message-delete-action" onClick={() => void deleteMessage(message)} aria-label="删除这条消息" title="删除消息"><Trash2 size={14}/></button>
                             <button className="message-comment-action" onClick={()=>setExpandedMessageComments(all=>{const next=new Set(all);if(next.has(message.id))next.delete(message.id);else next.add(message.id);return next;})} aria-label="内部评论" title="内部评论（客户不可见）"><MessageSquare size={14}/>{(message.comments?.length??0)>0&&<i>{message.comments?.length??0}</i>}</button>
                           </div>
                           {message.quoted && (

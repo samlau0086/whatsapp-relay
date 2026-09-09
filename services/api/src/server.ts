@@ -105,6 +105,7 @@ app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"Rel
   "/api/v1/status-posts":{get:{summary:"List scheduled WhatsApp Status posts"}},
   "/api/v1/messages":{post:{summary:"发送单条消息",responses:{"202":{description:"已进入持久队列"}}}},
   "/api/v1/messages/{id}/retry":{post:{summary:"人工重新发送失败或待确认的消息",responses:{"202":{description:"原消息已重新进入持久队列"}}}},
+  "/api/v1/messages/{id}":{delete:{summary:"删除一条消息及其未被其他记录引用的媒体附件"}},
   "/api/v1/conversations/{id}/messages/failed":{delete:{summary:"清除当前会话中失败或待确认的发出消息"}},
   "/api/v1/admin/whatsapp-cloud/accounts":{get:{summary:"读取 Cloud API 账号"},post:{summary:"验证并添加 Cloud API 账号"}},
   "/api/v1/admin/whatsapp-cloud/accounts/{id}":{patch:{summary:"更新或停用 Cloud API 账号"}},
@@ -1918,6 +1919,28 @@ app.post("/api/v1/messages/:id/retry", { preHandler:authenticate }, async (reque
   return reply.code(202).send(result);
 });
 
+app.delete("/api/v1/messages/:id", {preHandler:authenticate}, async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const principal=request.principal;
+  const {id}=request.params as {id:string};
+  const result=await transaction(async client=>{
+    const found=await client.query("SELECT m.id,m.conversation_id,m.account_id,m.media_id,media.object_key FROM messages m LEFT JOIN media ON media.id=m.media_id WHERE m.id=$1 FOR UPDATE",[id]);
+    if(!found.rowCount||!canAccessAccount(principal,found.rows[0].account_id))return null;
+    const row=found.rows[0];
+    await client.query("DELETE FROM messages WHERE id=$1",[id]);
+    const mediaToDelete:string[]=[];
+    if(row.media_id&&row.object_key){
+      const removable=await client.query("DELETE FROM media m WHERE m.id=$1 AND NOT EXISTS (SELECT 1 FROM messages WHERE media_id=m.id) AND NOT EXISTS (SELECT 1 FROM order_attachments WHERE media_id=m.id) AND NOT EXISTS (SELECT 1 FROM order_items WHERE image_media_id=m.id) AND NOT EXISTS (SELECT 1 FROM orders WHERE rendered_media_id=m.id) AND NOT EXISTS (SELECT 1 FROM products WHERE image_media_id=m.id) AND NOT EXISTS (SELECT 1 FROM product_variants WHERE image_media_id=m.id) AND NOT EXISTS (SELECT 1 FROM email_attachments WHERE media_id=m.id) AND NOT EXISTS (SELECT 1 FROM material_assets WHERE media_id=m.id) AND NOT EXISTS (SELECT 1 FROM account_quick_replies WHERE media_id=m.id) RETURNING object_key",[row.media_id]);
+      if(removable.rowCount)mediaToDelete.push(String(removable.rows[0].object_key));
+    }
+    await client.query("UPDATE conversations SET last_message_at=(SELECT MAX(occurred_at) FROM messages WHERE conversation_id=$1),unread_count=(SELECT COUNT(*) FROM messages WHERE conversation_id=$1 AND direction='in' AND status<>'read') WHERE id=$1",[row.conversation_id]);
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'message.delete','message',$2,$3)",[principal.id,id,JSON.stringify({mediaDeleted:mediaToDelete.length>0})]);
+    return{mediaToDelete};
+  });
+  if(!result)return reply.code(404).send({error:"not_found"});
+  await Promise.allSettled(result.mediaToDelete.map(objectKey=>s3.send(new DeleteObjectCommand({Bucket:config.S3_BUCKET,Key:objectKey}))));
+  return reply.code(204).send();
+});
 app.delete("/api/v1/conversations/:id/messages/failed", {preHandler:authenticate}, async(request,reply)=>{
   if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
   const principal=request.principal;
