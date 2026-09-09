@@ -13,7 +13,8 @@ type Control = {type:"shutdown";logout?:boolean}|{type:"reconnect"};
 type ChatEphemeralSetting={expiration:number;settingTimestamp?:number;disappearingMode?:proto.IDisappearingMode};
 let socket:ReturnType<typeof makeWASocket>|undefined;let init:Init|undefined;let sendChain=Promise.resolve();let reconnectAttempt=0;let reconnectTimer:NodeJS.Timeout|undefined;let connectionOpen=false;let connectionGeneration=0;let mediaProxyAgent:UndiciProxyAgent|undefined;let messageCache:Awaited<ReturnType<typeof encryptedAuthState>>|undefined;const groupRefreshTimers=new Map<string,NodeJS.Timeout>();const chatEphemeralSettings=new Map<string,ChatEphemeralSetting>();const chatJidAliases=new Map<string,string>();
 const emit=(message:unknown):void=>{process.send?.(message);};
-const emitIdentity=(accountId:string,lid:string,pn:string,displayName?:string):void=>{const lidJid=jidNormalizedUser(lid),phoneJid=jidNormalizedUser(pn);if(!lidJid.endsWith("@lid")||!phoneJid.endsWith("@s.whatsapp.net"))return;emit({type:"event",kind:"contact_identity",payload:{eventId:`identity:${accountId}:${lidJid}:${phoneJid}`,accountId,lidJid,phoneJid,displayName,at:new Date().toISOString()}});};
+const emitIdentity=(accountId:string,lid:string,pn:string,displayName?:string,username?:string):void=>{const lidJid=jidNormalizedUser(lid),phoneJid=jidNormalizedUser(pn);if(!lidJid.endsWith("@lid")||!phoneJid.endsWith("@s.whatsapp.net"))return;emit({type:"event",kind:"contact_identity",payload:{eventId:`identity:${accountId}:${lidJid}:${phoneJid}:${username??""}`,accountId,lidJid,phoneJid,displayName,username,at:new Date().toISOString()}});};
+const emitContactUsername=(accountId:string,contact:{id?:string;phoneNumber?:string;username?:string;notify?:string;name?:string}):void=>{const username=String(contact.username??"").trim().replace(/^@/,"").toLowerCase();const phoneJid=contact.phoneNumber?jidNormalizedUser(contact.phoneNumber):contact.id?jidNormalizedUser(contact.id):"";if(!username||!phoneJid.endsWith("@s.whatsapp.net"))return;emit({type:"event",kind:"contact_username",payload:{eventId:`username:${accountId}:${phoneJid}:${username}`,accountId,phoneJid,username,displayName:contact.notify??contact.name,at:new Date().toISOString()}});};
 setInterval(()=>emit({type:"worker_heartbeat",at:new Date().toISOString()}),10_000).unref();
 
 process.on("message",(message:Init|Command|Control)=>{
@@ -59,7 +60,9 @@ async function connect(options:Init):Promise<void>{
   socket=activeSocket;
   activeSocket.ev.on("creds.update",auth.saveCreds);
   activeSocket.ev.on("lid-mapping.update",({lid,pn})=>{if(generation!==connectionGeneration)return;rememberChatJidAlias(lid,pn);void auth.saveLidMapping(lid,pn);emitIdentity(options.accountId,lid,pn);});
-  activeSocket.ev.on("messaging-history.set",({chats,lidPnMappings})=>{if(generation!==connectionGeneration)return;rememberChatEphemeralExpirations(chats);for(const mapping of lidPnMappings??[]){rememberChatJidAlias(mapping.lid,mapping.pn);emitIdentity(options.accountId,mapping.lid,mapping.pn);}});
+  activeSocket.ev.on("messaging-history.set",({chats,contacts,lidPnMappings})=>{if(generation!==connectionGeneration)return;rememberChatEphemeralExpirations(chats);for(const contact of contacts??[])emitContactUsername(options.accountId,contact);for(const mapping of lidPnMappings??[]){rememberChatJidAlias(mapping.lid,mapping.pn);emitIdentity(options.accountId,mapping.lid,mapping.pn);}});
+  activeSocket.ev.on("contacts.upsert",contacts=>{if(generation===connectionGeneration)for(const contact of contacts)emitContactUsername(options.accountId,contact);});
+  activeSocket.ev.on("contacts.update",contacts=>{if(generation===connectionGeneration)for(const contact of contacts)emitContactUsername(options.accountId,contact);});
   activeSocket.ev.on("chats.upsert",chats=>{if(generation===connectionGeneration)rememberChatEphemeralExpirations(chats);});
   activeSocket.ev.on("chats.update",chats=>{if(generation===connectionGeneration)rememberChatEphemeralExpirations(chats);});
   activeSocket.ev.on("connection.update",({connection,lastDisconnect,qr})=>{
