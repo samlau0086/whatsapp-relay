@@ -1924,7 +1924,7 @@ app.delete("/api/v1/messages/:id", {preHandler:authenticate}, async(request,repl
   const principal=request.principal;
   const {id}=request.params as {id:string};
   const result=await transaction(async client=>{
-    const found=await client.query("SELECT m.id,m.conversation_id,m.account_id,m.media_id,media.object_key FROM messages m LEFT JOIN media ON media.id=m.media_id WHERE m.id=$1 FOR UPDATE",[id]);
+    const found=await client.query("SELECT m.id,m.conversation_id,m.account_id,m.media_id,media.object_key FROM messages m LEFT JOIN media ON media.id=m.media_id WHERE m.id=$1 FOR UPDATE OF m",[id]);
     if(!found.rowCount||!canAccessAccount(principal,found.rows[0].account_id))return null;
     const row=found.rows[0];
     await client.query("DELETE FROM messages WHERE id=$1",[id]);
