@@ -155,9 +155,12 @@ test("outbound message echoes cannot replace synchronized contact names",async()
   ]);
   assert.match(worker,/const remotePushName\s*=\s*item\.key\.fromMe\s*\?\s*undefined\s*:\s*item\.pushName\s*\?\?\s*undefined/);
   assert.match(worker,/senderName:\s*remotePushName/);
+  assert.match(worker,/senderUsername:\s*remoteJidUsername\?\?participantUsername/);
   assert.match(hub,/const remoteDisplayName=payload\.direction==="in"\?String\(payload\.senderName\?\?""\)\.trim\(\):""/);
+  assert.match(hub,/const remoteUsername=payload\.direction==="in"\?String\(payload\.senderUsername\?\?""\)/);
   assert.match(hub,/displayName:remoteDisplayName/);
-  assert.match(hub,/display_name=COALESCE\(NULLIF\(\$5,''\),contacts\.display_name\)/);
+  assert.match(hub,/display_name=COALESCE\(NULLIF\(\$6,''\),contacts\.display_name\)/);
+  assert.match(hub,/whatsapp_username=COALESCE\(NULLIF\(EXCLUDED\.whatsapp_username,''\),contacts\.whatsapp_username\)/);
   assert.match(hub,/remoteDisplayName\|\|phone\|\|chatJid\.split\("@"\)\[0\],remoteDisplayName/);
   assert.match(hub,/const usableName=\(value:unknown\)=>\{const name=String\(value\?\?""\)\.trim\(\);return name&&!\/\^\\\+\?\\d\+\$\/\.test\(name\)\?name:null;\}/);
   assert.match(hub,/const suppliedName=usableName\(payload\.displayName\)/);
