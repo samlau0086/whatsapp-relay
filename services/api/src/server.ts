@@ -1928,17 +1928,19 @@ app.delete("/api/v1/messages/:id", {preHandler:authenticate}, async(request,repl
     if(!found.rowCount||!canAccessAccount(principal,found.rows[0].account_id))return null;
     const row=found.rows[0];
     await client.query("DELETE FROM messages WHERE id=$1",[id]);
-    const mediaToDelete:string[]=[];
-    if(row.media_id&&row.object_key){
-      const removable=await client.query("DELETE FROM media m WHERE m.id=$1 AND NOT EXISTS (SELECT 1 FROM messages WHERE media_id=m.id) AND NOT EXISTS (SELECT 1 FROM order_attachments WHERE media_id=m.id) AND NOT EXISTS (SELECT 1 FROM order_items WHERE image_media_id=m.id) AND NOT EXISTS (SELECT 1 FROM orders WHERE rendered_media_id=m.id) AND NOT EXISTS (SELECT 1 FROM products WHERE image_media_id=m.id) AND NOT EXISTS (SELECT 1 FROM product_variants WHERE image_media_id=m.id) AND NOT EXISTS (SELECT 1 FROM email_attachments WHERE media_id=m.id) AND NOT EXISTS (SELECT 1 FROM material_assets WHERE media_id=m.id) AND NOT EXISTS (SELECT 1 FROM account_quick_replies WHERE media_id=m.id) RETURNING object_key",[row.media_id]);
-      if(removable.rowCount)mediaToDelete.push(String(removable.rows[0].object_key));
-    }
     await client.query("UPDATE conversations SET last_message_at=(SELECT MAX(occurred_at) FROM messages WHERE conversation_id=$1),unread_count=(SELECT COUNT(*) FROM messages WHERE conversation_id=$1 AND direction='in' AND status<>'read') WHERE id=$1",[row.conversation_id]);
-    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'message.delete','message',$2,$3)",[principal.id,id,JSON.stringify({mediaDeleted:mediaToDelete.length>0})]);
-    return{mediaToDelete};
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'message.delete','message',$2,$3)",[principal.id,id,JSON.stringify({mediaId:row.media_id??null})]);
+    return{mediaId:row.media_id?String(row.media_id):null,objectKey:row.object_key?String(row.object_key):null};
   });
   if(!result)return reply.code(404).send({error:"not_found"});
-  await Promise.allSettled(result.mediaToDelete.map(objectKey=>s3.send(new DeleteObjectCommand({Bucket:config.S3_BUCKET,Key:objectKey}))));
+  if(result.mediaId&&result.objectKey){
+    try{
+      const removed=await transaction(async client=>client.query("DELETE FROM media WHERE id=$1 AND NOT EXISTS (SELECT 1 FROM messages WHERE media_id=$1) RETURNING object_key",[result.mediaId]));
+      if(removed.rowCount)await s3.send(new DeleteObjectCommand({Bucket:config.S3_BUCKET,Key:String(removed.rows[0].object_key)}));
+    }catch(error){
+      request.log.warn({error,mediaId:result.mediaId},"message media cleanup skipped");
+    }
+  }
   return reply.code(204).send();
 });
 app.delete("/api/v1/conversations/:id/messages/failed", {preHandler:authenticate}, async(request,reply)=>{
