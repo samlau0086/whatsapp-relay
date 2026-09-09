@@ -1282,7 +1282,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       const uploadNext=async()=>{for(;;){const index=nextIndex++;if(index>=images.length)return;const file=images[index];const form=new FormData();form.append("file",file);const result=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(active.accountId)}`,apiToken,{method:"POST",body:form});if(result.token!==apiToken)setApiToken(result.token);const body=await result.response.json().catch(()=>({})) as {mediaId?:string;fileName?:string;mimeType?:string;size?:number;sha256?:string;message?:string};if(!result.response.ok||!body.mediaId)throw new Error(body.message??`${file.name} 上传失败（HTTP ${result.response.status}）`);uploadedByIndex[index]={id:body.mediaId,fileName:body.fileName??file.name,mimeType:body.mimeType??file.type,size:body.size??file.size,sha256:body.sha256??"",createdAt:new Date().toISOString(),usageCount:0};}};
       await Promise.all(Array.from({length:Math.min(3,images.length)},()=>uploadNext()));
       uploaded.push(...uploadedByIndex.filter((item):item is MediaAsset=>Boolean(item)));
-      setPendingComposerImages(uploaded);
+      setPendingComposerImages(current=>[...current,...uploaded]);
       setDraft(caption);
       setToast(images.length>1?`${images.length} 张图片已准备发送`:"图片已准备发送，请添加说明后点击发送");
     }catch(reason){setToast(reason instanceof Error?reason.message:"图片上传失败");}

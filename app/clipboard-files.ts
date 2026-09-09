@@ -1,7 +1,7 @@
 export async function clipboardFiles(event:ClipboardEvent,{imagesOnly=false}:{imagesOnly?:boolean}={}){
   const direct=Array.from(event.clipboardData?.files??[]);
-  const items=Array.from(event.clipboardData?.items??[]).filter(item=>item.kind==="file"&&(!imagesOnly||item.type.startsWith("image/"))).map(item=>item.getAsFile()).filter((file):file is File=>Boolean(file));
-  const files=[...direct,...items].filter((file,index,all)=>(!imagesOnly||file.type.startsWith("image/"))&&all.findIndex(item=>item===file||(item.name===file.name&&item.size===file.size&&item.type===file.type))===index);
+  const itemFiles=Array.from(event.clipboardData?.items??[]).filter(item=>item.kind==="file"&&(!imagesOnly||item.type.startsWith("image/"))).map(item=>item.getAsFile()).filter((file):file is File=>Boolean(file));
+  const files=(itemFiles.length>direct.length?itemFiles:direct).filter(file=>!imagesOnly||file.type.startsWith("image/"));
   if(!files.length&&navigator.clipboard?.read){try{const contents=await navigator.clipboard.read();for(const content of contents){const type=content.types.find(value=>value.startsWith("image/"));if(type)files.push(blobFile(await content.getType(type),type));}}catch{return[];}}
   return files.map(file=>file.type.startsWith("image/")?new File([file],clipboardImageName(file.type),{type:file.type,lastModified:Date.now()}):file);
 }
