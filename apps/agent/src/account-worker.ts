@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import makeWASocket, { Browsers, BufferJSON, DisconnectReason, downloadMediaMessage, fetchLatestBaileysVersion, initAuthCreds, jidNormalizedUser, normalizeMessageContent, proto, type AnyMessageContent, type AuthenticationState, type GroupMetadata, type GroupParticipant, type SignalDataTypeMap, type WAMessage } from "@whiskeysockets/baileys";
+import makeWASocket, { Browsers, BufferJSON, DisconnectReason, downloadMediaMessage, fetchLatestBaileysVersion, initAuthCreds, jidNormalizedUser, normalizeMessageContent, proto, USyncQuery, USyncUser, type AnyMessageContent, type AuthenticationState, type GroupMetadata, type GroupParticipant, type SignalDataTypeMap, type WAMessage } from "@whiskeysockets/baileys";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { pino } from "pino";
 import { ProxyAgent as UndiciProxyAgent } from "undici";
@@ -15,6 +15,7 @@ let socket:ReturnType<typeof makeWASocket>|undefined;let init:Init|undefined;let
 const emit=(message:unknown):void=>{process.send?.(message);};
 const emitIdentity=(accountId:string,lid:string,pn:string,displayName?:string,username?:string):void=>{const lidJid=jidNormalizedUser(lid),phoneJid=jidNormalizedUser(pn);if(!lidJid.endsWith("@lid")||!phoneJid.endsWith("@s.whatsapp.net"))return;emit({type:"event",kind:"contact_identity",payload:{eventId:`identity:${accountId}:${lidJid}:${phoneJid}:${username??""}`,accountId,lidJid,phoneJid,displayName,username,at:new Date().toISOString()}});};
 const emitContactUsername=(accountId:string,contact:{id?:string;phoneNumber?:string;username?:string;notify?:string;name?:string}):void=>{const username=String(contact.username??"").trim().replace(/^@/,"").toLowerCase();const phoneJid=contact.phoneNumber?jidNormalizedUser(contact.phoneNumber):contact.id?jidNormalizedUser(contact.id):"";if(!username||!phoneJid.endsWith("@s.whatsapp.net"))return;emit({type:"event",kind:"contact_username",payload:{eventId:`username:${accountId}:${phoneJid}:${username}`,accountId,phoneJid,username,displayName:contact.notify??contact.name,at:new Date().toISOString()}});};
+async function resolveUsernameJid(activeSocket:ReturnType<typeof makeWASocket>,username:string):Promise<string>{const result=await activeSocket.executeUSyncQuery(new USyncQuery().withContext("message").withContactProtocol().withUsernameProtocol().withUser(new USyncUser().withUsername(username)));const resolved=jidNormalizedUser(String(result?.list?.[0]?.id??""));if(!resolved.endsWith("@s.whatsapp.net"))throw new Error("WhatsApp username not found");return resolved;}
 setInterval(()=>emit({type:"worker_heartbeat",at:new Date().toISOString()}),10_000).unref();
 
 process.on("message",(message:Init|Command|Control)=>{
@@ -216,7 +217,7 @@ async function execute(command:Command):Promise<void>{
       emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",whatsappMessageId:sent?.key.id,completedAt:new Date().toISOString()});
       return;
     }
-    const toJid=String(command.payload.toJid??"");if(!toJid)throw new Error("Missing destination JID");
+    const toUsername=String(command.payload.toUsername??"").trim().replace(/^@/,"").toLowerCase();let toJid=String(command.payload.toJid??"");if(toUsername){toJid=await resolveUsernameJid(socket,toUsername);emitContactUsername(init.accountId,{id:toJid,username:toUsername});}if(!toJid)throw new Error("Missing destination JID");
     const quotedId=String(command.payload.quotedWhatsappMessageId??"");
     const quotedMessage=quotedId?(await messageCache?.getMessage(quotedId))??{conversation:String(command.payload.quotedText??"[message]")}:undefined;
     const quotedParticipantJid=String(command.payload.quotedParticipantJid??"");

@@ -158,6 +158,7 @@ test("outbound message echoes cannot replace synchronized contact names",async()
   assert.match(worker,/senderUsername:\s*remoteJidUsername\?\?participantUsername/);
   assert.match(hub,/const remoteDisplayName=payload\.direction==="in"\?String\(payload\.senderName\?\?""\)\.trim\(\):""/);
   assert.match(hub,/const remoteUsername=payload\.direction==="in"\?String\(payload\.senderUsername\?\?""\)/);
+  assert.match(hub,/if\(!mergedContactId&&source\.agentId&&phone&&remoteUsername\)await syncContactUsername\(client,source\.agentId/);
   assert.match(hub,/displayName:remoteDisplayName/);
   assert.match(hub,/display_name=COALESCE\(NULLIF\(\$6,''\),contacts\.display_name\)/);
   assert.match(hub,/whatsapp_username=COALESCE\(NULLIF\(EXCLUDED\.whatsapp_username,''\),contacts\.whatsapp_username\)/);

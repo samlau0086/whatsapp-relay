@@ -23,6 +23,14 @@ test("new conversation rejects local or empty destinations",()=>{
   assert.equal(newConversationSchema.safeParse({accountId,phone:"+8613800138000",firstMessage:" ",clientMessageId:"new-chat-003"}).success,false);
 });
 
+test("new conversation accepts a WhatsApp username without a phone number",()=>{
+  const parsed=newConversationSchema.parse({accountId,whatsappUsername:"@Alice_123",firstMessage:"您好",clientMessageId:"new-chat-username"});
+  assert.equal(parsed.whatsappUsername,"alice_123");
+  assert.equal(parsed.phone,undefined);
+  assert.equal(newConversationSchema.safeParse({accountId,firstMessage:"您好",clientMessageId:"new-chat-empty"}).success,false);
+  assert.equal(newConversationSchema.safeParse({accountId,whatsappUsername:"not valid",firstMessage:"您好",clientMessageId:"new-chat-bad-username"}).success,false);
+});
+
 test("account automation accepts only supported default conversation modes",()=>{
   for(const mode of ["cautious","full","human_paused"])assert.equal(conversationAgentModeSchema.safeParse(mode).success,true);
   assert.equal(conversationAgentModeSchema.safeParse("active").success,false);
@@ -40,6 +48,16 @@ test("contact input normalizes WhatsApp numbers for create and edit",()=>{
   assert.equal(created.phone,"8613800138000");
   assert.equal(created.name,"Alice");
   assert.equal(contactCreateSchema.safeParse({accountId,phone:"100",name:"Alice"}).success,false);
+});
+
+test("contacts accept a WhatsApp username as the only provider identity",()=>{
+  const created=contactCreateSchema.parse({accountId,firstName:"Alice",whatsappUsername:"@Alice_123"});
+  assert.equal(created.phone,undefined);
+  assert.equal(created.whatsappUsername,"alice_123");
+  assert.equal(contactCreateSchema.safeParse({accountId,firstName:"Alice"}).success,false);
+  const updated=contactUpdateSchema.parse({alias:"Alice",firstName:"Alice",middleName:"",lastName:"",companyName:"",jobTitle:"",country:"",province:"",city:"",phone:null,whatsappUsername:"alice_123",note:"",emails:[],methods:[],addresses:[]});
+  assert.equal(updated.whatsappUsername,"alice_123");
+  assert.equal(contactUpdateSchema.safeParse({...updated,phone:null,whatsappUsername:null}).success,false);
 });
 
 test("text-to-speech validates text and speed",()=>{
@@ -97,7 +115,7 @@ test("CRM schemas enforce stages, tags, notes, and reminder dates",()=>{
 });
 
 test("contact profiles normalize names, email, and select one default address",()=>{
-  const profile=contactUpdateSchema.parse({alias:" Alice ",firstName:" Alice ",middleName:" Beth ",lastName:" Smith ",note:" Follow up ",preferredLanguage:"es",emails:[{label:"Work",email:" ALICE@EXAMPLE.COM ",isPrimary:false}],methods:[{type:"telegram",label:"Sales",value:" @alice "},{type:"linkedin",label:"Professional",value:"alice"}]});
+  const profile=contactUpdateSchema.parse({alias:" Alice ",firstName:" Alice ",middleName:" Beth ",lastName:" Smith ",whatsappUsername:"alice_123",note:" Follow up ",preferredLanguage:"es",emails:[{label:"Work",email:" ALICE@EXAMPLE.COM ",isPrimary:false}],methods:[{type:"telegram",label:"Sales",value:" @alice "},{type:"linkedin",label:"Professional",value:"alice"}]});
   assert.equal(profile.alias,"Alice");
   assert.equal(profile.firstName,"Alice");
   assert.equal(profile.middleName,"Beth");

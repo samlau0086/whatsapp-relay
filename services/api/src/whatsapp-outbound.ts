@@ -22,7 +22,8 @@ export type OutboundPayload={
   clientMessageId:string;
   type:string;
   messageId:string;
-  toJid:string;
+  toJid?:string;
+  toUsername?:string;
   destinationId?:string;
   text?:string;
   mediaId?:string;
