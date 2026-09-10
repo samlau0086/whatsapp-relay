@@ -65,7 +65,7 @@ test("channel contact search keeps a Messenger-aware trigram index",async()=>{
     readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
     readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
   ]);
-  const searchExpression=/COALESCE\((?:search_contact\.)?alias,''\) \|\| ' ' \|\| COALESCE\((?:search_contact\.)?display_name,''\) \|\| ' ' \|\|\s*COALESCE\((?:search_contact\.)?phone_e164,''\) \|\| ' ' \|\| (?:search_contact\.)?provider_user_id/;
+  const searchExpression=/COALESCE\((?:search_contact\.)?alias,''\) \|\| ' ' \|\| COALESCE\((?:search_contact\.)?display_name,''\) \|\| ' ' \|\|\s*COALESCE\((?:search_contact\.)?phone_e164,''\) \|\| ' ' \|\| (?:COALESCE\((?:search_contact\.)?provider_user_id,''\)|(?:search_contact\.)?provider_user_id)(?: \|\| ' ' \|\| COALESCE\((?:search_contact\.)?whatsapp_username,''\))?/;
   assert.match(migration,searchExpression);
   assert.match(server,searchExpression);
   assert.match(migration,/gin_trgm_ops/);
