@@ -41,6 +41,7 @@ import {useConversationFeed} from "./use-conversation-feed";
 import {ConversationPanel} from "./conversation-panel";
 import type {ContactMethod,ContactMethodType,Conversation,TagItem} from "./conversation-types";
 import { convertWeight, formatWeight, WEIGHT_UNITS, type WeightUnit } from "./weight";
+import { authorizedFetch, clearStoredSession, setCurrentAccessToken, storeSession } from "./auth-session";
 
 const API_URL = (process.env.NEXT_PUBLIC_RELAY_API_URL ?? "").replace(/\/$/, "");
 const REMEMBER_LOGIN_KEY="relayRememberLogin";
@@ -49,8 +50,6 @@ const CONVERSATION_LIST_HIDDEN_KEY="relayConversationListHidden";
 const COLORS = ["#6b4f3a", "#305f72", "#9b5f72", "#477a62", "#705b86"];
 const PRODUCT_PAGE_SIZES = [24,32,36,48,64] as const;
 const CONTACT_PAGE_SIZES = [24,32,48,64] as const;
-let refreshPromise:Promise<string>|null=null;
-let currentAccessToken="";
 const MESSAGE_PAGE_SIZE=50;
 const MEDIA_DOWNLOAD_CONCURRENCY=4;
 const MEDIA_CACHE_LIMIT=80;
@@ -517,7 +516,6 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
 
   const logout=useCallback(()=>{
     void fetch(`${API_URL}/api/v1/auth/logout`,{method:"POST",credentials:"include"}).catch(()=>undefined);
-    currentAccessToken="";
     clearStoredSession();
     conversationDetailsCache.clear();
     conversationAbortRef.current?.abort();conversationCursorRef.current=null;
@@ -783,7 +781,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       const token=storage.getItem("relayAccessToken")??"";
       const storedUser=storage.getItem("relayUser");
       if(!token){setLoading(false);setSessionReady(true);return;}
-      currentAccessToken=token;setApiToken(token);if(storedUser)try{setUser(JSON.parse(storedUser) as User);}catch{}
+      setCurrentAccessToken(token);setApiToken(token);if(storedUser)try{setUser(JSON.parse(storedUser) as User);}catch{}
       setAuthOpen(false);setSessionReady(true);
     },0);
     return()=>window.clearTimeout(timer);
@@ -4891,41 +4889,6 @@ function parseFormattedBytes(value:string){const amount=Number.parseFloat(value)
 function quickReplyStorageKey(userId:string,accountId:string){return`relayQuickReplies:${userId}:${accountId}`;}
 function tokenSubject(token:string){try{return String(JSON.parse(atob(token.split(".")[1].replace(/-/g,"+").replace(/_/g,"/"))).sub??"");}catch{return"";}}
 function tokenRole(token:string){try{return String(JSON.parse(atob(token.split(".")[1].replace(/-/g,"+").replace(/_/g,"/"))).role??"");}catch{return"";}}
-function storeSession(token:string,user:User,rememberMe:boolean){
-  currentAccessToken=token;
-  clearStoredSession();
-  const storage=rememberMe?localStorage:sessionStorage;
-  storage.setItem("relayAccessToken",token);storage.setItem("relayUser",JSON.stringify(user));
-  if(rememberMe)localStorage.setItem(REMEMBER_LOGIN_KEY,"true");
-}
-function storeRefreshedToken(token:string){
-  currentAccessToken=token;
-  const storage=localStorage.getItem(REMEMBER_LOGIN_KEY)==="true"?localStorage:sessionStorage;
-  storage.setItem("relayAccessToken",token);
-}
-function clearStoredSession(){
-  for(const storage of [localStorage,sessionStorage]){storage.removeItem("relayAccessToken");storage.removeItem("relayUser");}
-  localStorage.removeItem(REMEMBER_LOGIN_KEY);
-}
-function refreshAccessTokenOnce(){
-  if(!refreshPromise)refreshPromise=refreshAccessToken().finally(()=>{refreshPromise=null;});
-  return refreshPromise;
-}
-async function authorizedFetch(path:string,token:string,init:RequestInit={}):Promise<{response:Response;token:string}>{
-  const send=(accessToken:string)=>fetch(`${API_URL}${path}`,{...init,credentials:"include",headers:{...init.headers,authorization:`Bearer ${accessToken}`}});
-  const firstToken=currentAccessToken||token;
-  let response=await send(firstToken);if(response.status!==401)return{response,token:firstToken};
-  if(currentAccessToken&&currentAccessToken!==firstToken){
-    response=await send(currentAccessToken);
-    if(response.status!==401)return{response,token:currentAccessToken};
-  }
-  const refreshedToken=await refreshAccessTokenOnce();
-  if(!refreshedToken)return{response,token};
-  storeRefreshedToken(refreshedToken);
-  response=await send(refreshedToken);return{response,token:refreshedToken};
-}
-async function refreshAccessToken(){const response=await fetch(`${API_URL}/api/v1/auth/refresh`,{method:"POST",credentials:"include"});if(!response.ok)return"";const body=await response.json() as {accessToken?:string};return body.accessToken??"";}
-
 function EmptyState({title,text}:{title:string;text:string}){return <div className="empty-state"><b>{title}</b><span>{text}</span></div>;}
 
 function SecretField({label,value,onChange,placeholder,hint}:{label:string;value:string;onChange:(value:string)=>void;placeholder?:string;hint?:string}){

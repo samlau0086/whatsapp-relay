@@ -4,6 +4,7 @@
 import { ArrowDown, ArrowUp, Check, Copy, Download, GripVertical, Image as ImageIcon, Layers, LoaderCircle, Move, Plus, RefreshCw, Search, Settings2, Trash2, UploadCloud, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { confirmAction } from "./confirmation-ui";
+import { authorizedFetch } from "./auth-session";
 
 type RequestResult={response:Response;token:string};
 type Request=(path:string,init?:RequestInit)=>Promise<RequestResult>;
@@ -30,7 +31,7 @@ const PRESETS=[[1080,1080,"方形"],[1080,1350,"竖版"],[1080,1920,"故事"],[1
 const BINDINGS=[['name','产品名称'],['sku','SKU'],['currency','币种'],['defaultPrice','默认价格'],['priceRange','价格区间'],['tags','标签']] as const;
 
 export function ProductWorkspace({token,role,onToken,onToast,products}:{token:string;role:string;onToken:(token:string)=>void;onToast:(text:string)=>void;products:()=>React.ReactNode}){
-  const [section,setSection]=useState<"products"|"materials">("products"),[templatesOpen,setTemplatesOpen]=useState(false),request=useMemo<Request>(()=>async(path,init)=>{const result=await fetchWithToken(path,token,init);if(result.token!==token)onToken(result.token);return result;},[token,onToken]);
+  const [section,setSection]=useState<"products"|"materials">("products"),[templatesOpen,setTemplatesOpen]=useState(false),request=useMemo<Request>(()=>async(path,init)=>{const result=await authorizedFetch(path,token,init);if(result.token!==token)onToken(result.token);return result;},[token,onToken]);
   return <div className="product-workspace"><nav className="product-workspace-tabs"><button className={section==="products"?"active":""} onClick={()=>setSection("products")}>产品库</button><button className={section==="materials"?"active":""} onClick={()=>setSection("materials")}>素材库</button>{["admin","supervisor"].includes(role)&&<button className="template-manage-button" onClick={()=>setTemplatesOpen(true)}><Settings2 size={14}/>拼图模板</button>}</nav>{section==="products"?products():<MaterialLibrary request={request} role={role} onToast={onToast}/>} {templatesOpen&&<CollageTemplateManager request={request} onClose={()=>setTemplatesOpen(false)} onToast={onToast}/>}</div>;
 }
 
@@ -139,7 +140,6 @@ function mapMaterialDetail(item:Record<string,unknown>):MaterialDetail{return{id
 function productText(layer:CollageLayer,product:CollageProduct){const value={name:product.name,sku:product.sku,currency:product.currency,defaultPrice:`${product.currency} ${product.defaultUnitAmount.toFixed(2)}`,priceRange:`${product.currency} ${product.defaultUnitAmount.toFixed(2)}`,tags:""}[layer.binding??"name"];return`${layer.prefix??""}${value}${layer.suffix??""}`;}
 function bindingExample(binding:CollageLayer["binding"]){return({name:"示例产品",sku:"SKU-001",currency:"USD",defaultPrice:"USD 49.90",priceRange:"USD 39.90–49.90",tags:"新品 · 热卖"} as Record<string,string>)[binding??"name"];}
 function layerName(layer:CollageLayer){return layer.type==="productImage"?`产品图 · ${layer.slotId}`:layer.type==="productText"?`${BINDINGS.find(item=>item[0]===layer.binding)?.[1]} · ${layer.slotId}`:layer.type==="text"?`文字 · ${layer.text?.slice(0,12)}`:"图片 / Logo";}
-async function fetchWithToken(path:string,token:string,init?:RequestInit):Promise<RequestResult>{let response=await fetch(`${(process.env.NEXT_PUBLIC_RELAY_API_URL??"").replace(/\/$/,"")}${path}`,{...init,headers:{...init?.headers,authorization:`Bearer ${token}`}});if(response.status!==401)return{response,token};const refreshed=await fetch(`${(process.env.NEXT_PUBLIC_RELAY_API_URL??"").replace(/\/$/,"")}/api/v1/auth/refresh`,{method:"POST",credentials:"include"});if(!refreshed.ok)return{response,token};const body=await refreshed.json() as {accessToken:string};(localStorage.getItem("relayRememberLogin")==="true"?localStorage:sessionStorage).setItem("relayAccessToken",body.accessToken);response=await fetch(`${(process.env.NEXT_PUBLIC_RELAY_API_URL??"").replace(/\/$/,"")}${path}`,{...init,headers:{...init?.headers,authorization:`Bearer ${body.accessToken}`}});return{response,token:body.accessToken};}
 async function downloadMedia(asset:MaterialAsset,request:Request){const result=await request(`/api/v1/media/${asset.mediaId}`);if(result.response.ok)downloadBlob(await result.response.blob(),asset.fileName);}
 function downloadBlob(blob:Blob,name:string){const url=URL.createObjectURL(blob),anchor=document.createElement("a");anchor.href=url;anchor.download=name;anchor.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function safeName(value:string){return value.replace(/[\\/:*?"<>|]/g,"-").slice(0,120)||"materials";}
