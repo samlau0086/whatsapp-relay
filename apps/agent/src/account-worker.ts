@@ -11,7 +11,7 @@ type Init = {type:"init";accountId:string;dataDir:string;masterKey:string;baseUr
 type Command = {type:"command";sequence:number;commandId:string;command:string;payload:Record<string,unknown>};
 type Control = {type:"shutdown";logout?:boolean}|{type:"reconnect"};
 type ChatEphemeralSetting={expiration:number;settingTimestamp?:number;disappearingMode?:proto.IDisappearingMode};
-let socket:ReturnType<typeof makeWASocket>|undefined;let init:Init|undefined;let sendChain=Promise.resolve();let reconnectAttempt=0;let reconnectTimer:NodeJS.Timeout|undefined;let connectionOpen=false;let connectionGeneration=0;let mediaProxyAgent:UndiciProxyAgent|undefined;let messageCache:Awaited<ReturnType<typeof encryptedAuthState>>|undefined;const groupRefreshTimers=new Map<string,NodeJS.Timeout>();const chatEphemeralSettings=new Map<string,ChatEphemeralSetting>();const chatJidAliases=new Map<string,string>();
+let socket:ReturnType<typeof makeWASocket>|undefined;let init:Init|undefined;let reconnectAttempt=0;let reconnectTimer:NodeJS.Timeout|undefined;let connectionOpen=false;let connectionGeneration=0;let mediaProxyAgent:UndiciProxyAgent|undefined;let messageCache:Awaited<ReturnType<typeof encryptedAuthState>>|undefined;const groupRefreshTimers=new Map<string,NodeJS.Timeout>();const chatEphemeralSettings=new Map<string,ChatEphemeralSetting>();const chatJidAliases=new Map<string,string>();
 const emit=(message:unknown):void=>{process.send?.(message);};
 const emitIdentity=(accountId:string,lid:string,pn:string,displayName?:string,username?:string):void=>{const lidJid=jidNormalizedUser(lid),phoneJid=jidNormalizedUser(pn);if(!lidJid.endsWith("@lid")||!phoneJid.endsWith("@s.whatsapp.net"))return;emit({type:"event",kind:"contact_identity",payload:{eventId:`identity:${accountId}:${lidJid}:${phoneJid}:${username??""}`,accountId,lidJid,phoneJid,displayName,username,at:new Date().toISOString()}});};
 const emitContactUsername=(accountId:string,contact:{id?:string;phoneNumber?:string;username?:string;notify?:string;name?:string}):void=>{const username=String(contact.username??"").trim().replace(/^@/,"").toLowerCase();const phoneJid=contact.phoneNumber?jidNormalizedUser(contact.phoneNumber):contact.id?jidNormalizedUser(contact.id):"";if(!username||!phoneJid.endsWith("@s.whatsapp.net"))return;emit({type:"event",kind:"contact_username",payload:{eventId:`username:${accountId}:${phoneJid}:${username}`,accountId,phoneJid,username,displayName:contact.notify??contact.name,at:new Date().toISOString()}});};
@@ -22,7 +22,7 @@ process.on("message",(message:Init|Command|Control)=>{
   if(message.type==="init"){init=message;void connect(message);}
   if(message.type==="command"){
     emit({type:"command_accepted",commandId:message.commandId});
-    sendChain=sendChain.then(()=>{emit({type:"command_started",commandId:message.commandId});return execute(message);}).catch((error)=>emit({type:"command_result",sequence:message.sequence,commandId:message.commandId,outcome:"failed",errorCode:"send_failed",errorMessage:String(error),completedAt:new Date().toISOString()}));
+    void (async()=>{emit({type:"command_started",commandId:message.commandId});try{await execute(message);}catch(error){emit({type:"command_result",sequence:message.sequence,commandId:message.commandId,outcome:"failed",errorCode:"send_failed",errorMessage:String(error),completedAt:new Date().toISOString()});}})();
   }
   if(message.type==="reconnect"&&init){reconnectAttempt=0;void connect(init);}
   if(message.type==="shutdown")void shutdown(message.logout===true);
