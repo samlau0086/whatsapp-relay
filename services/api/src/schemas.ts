@@ -107,10 +107,11 @@ export const messageTranslationsSchema=z.object({
   generateAudio:z.boolean().default(false),
 });
 
+const normalizeWhatsAppUsername=(value:unknown)=>typeof value==="string"?(value.replace(/\p{Cf}/gu,"").trim().replace(/^@/,"").toLowerCase()||null):value;
 export const newConversationSchema = z.object({
   accountId: z.string().uuid(),
   phone: z.preprocess(value=>typeof value==="string"?(value.trim().replace(/[\s()+.-]/g,"")||null):value,z.string().refine(value=>/^[1-9]\d{6,14}$/.test(value),"请输入包含国家代码的有效号码").nullable().optional()),
-  whatsappUsername: z.preprocess(value=>typeof value==="string"?(value.trim().replace(/^@/,"").toLowerCase()||null):value,z.string().max(100).regex(/^[a-z0-9][a-z0-9._-]*$/,"请输入有效的 WhatsApp 用户名").nullable().optional()),
+  whatsappUsername: z.preprocess(normalizeWhatsAppUsername,z.string().max(100).regex(/^[a-z0-9][a-z0-9._-]*$/,"请输入有效的 WhatsApp 用户名").nullable().optional()),
   displayName: z.string().trim().min(1).max(80).optional(),
   firstMessage: z.string().trim().min(1).max(65536).optional(),
   message:z.discriminatedUnion("type",[
@@ -125,6 +126,7 @@ export const conversationTransferSchema=z.object({accountId:z.string().uuid(),ru
 export const conversationMergeSchema=z.object({accountId:z.string().uuid(),ruleStrategy:z.enum(["target","source"])});
 export const conversationAgentModeSchema=z.enum(["cautious","full","human_paused"]);
 export const contactAliasSchema=z.object({alias:z.string().trim().max(80)});
+
 const whatsappPhoneSchema=z.preprocess(value=>typeof value==="string"?(value.trim().replace(/[\s()+.-]/g,"")||null):value,z.string().refine(value=>/^[1-9]\d{6,14}$/.test(value),"请输入包含国家代码的有效号码").nullable().optional());
 const contactNamePartSchema=z.string().trim().max(80);
 const contactOrganizationFieldSchema=z.string().trim().max(160);
@@ -134,7 +136,7 @@ const contactMethodSchema=z.object({type:z.enum(["phone","wechat","telegram","li
 const contactAddressSchema=z.object({id:z.string().uuid().optional(),label:z.string().trim().min(1).max(40),recipientName:z.string().trim().max(80).default(""),phone:z.string().trim().max(40).default(""),address:z.string().trim().min(1).max(1000),countryCode:z.string().trim().regex(/^[A-Za-z]{2}$/).or(z.literal("")).transform(value=>value?value.toUpperCase():undefined).optional(),province:z.string().trim().max(100).transform(value=>value||undefined).optional(),city:z.string().trim().max(100).transform(value=>value||undefined).optional(),street1:z.string().trim().max(500).transform(value=>value||undefined).optional(),street2:z.string().trim().max(500).transform(value=>value||undefined).optional(),postalCode:z.string().trim().max(40).transform(value=>value||undefined).optional(),isDefault:z.boolean().default(false)});
 const calendarDateSchema=z.object({month:z.coerce.number().int().min(1).max(12),day:z.coerce.number().int().min(1).max(31),year:z.coerce.number().int().min(1900).max(2200).nullable().optional()}).superRefine((value,ctx)=>{const year=value.year??2024;if(new Date(Date.UTC(year,value.month-1,value.day)).getUTCMonth()!==value.month-1)ctx.addIssue({code:"custom",path:["day"],message:"invalid calendar date"});});
 const contactSpecialDateSchema=calendarDateSchema.and(z.object({id:z.string().uuid().optional(),kind:z.enum(["anniversary","birthday","custom"]).default("anniversary"),label:z.string().trim().min(1).max(80),leadDays:z.coerce.number().int().min(0).max(365).nullable().optional()}));
-const whatsappUsernameSchema=z.preprocess(value=>typeof value==="string"?(value.trim().replace(/^@/,"").toLowerCase()||null):value,z.string().max(100).regex(/^[a-z0-9][a-z0-9._-]*$/,"请输入有效的 WhatsApp 用户名").nullable().optional());
+const whatsappUsernameSchema=z.preprocess(normalizeWhatsAppUsername,z.string().max(100).regex(/^[a-z0-9][a-z0-9._-]*$/,"请输入有效的 WhatsApp 用户名").nullable().optional());
 export const contactCreateSchema=z.object({accountId:z.string().uuid(),name:z.string().trim().max(240).optional(),firstName:contactNamePartSchema.default(""),middleName:contactNamePartSchema.default(""),lastName:contactNamePartSchema.default(""),companyName:contactOrganizationFieldSchema.default(""),jobTitle:contactOrganizationFieldSchema.default(""),country:contactLocationFieldSchema.default(""),province:contactLocationFieldSchema.default(""),city:contactLocationFieldSchema.default(""),phone:whatsappPhoneSchema,whatsappUsername:whatsappUsernameSchema}).refine(value=>Boolean(value.name?.trim()||value.firstName||value.middleName||value.lastName),{path:["firstName"],message:"请输入联系人姓名"}).refine(value=>Boolean(value.phone||value.whatsappUsername),{path:["phone"],message:"手机号和 WhatsApp 用户名至少填写一个"});
 export const contactUpdateSchema=z.object({alias:z.string().trim().max(80),firstName:contactNamePartSchema.optional(),middleName:contactNamePartSchema.optional(),lastName:contactNamePartSchema.optional(),companyName:contactOrganizationFieldSchema.optional(),jobTitle:contactOrganizationFieldSchema.optional(),country:contactLocationFieldSchema.optional(),province:contactLocationFieldSchema.optional(),city:contactLocationFieldSchema.optional(),phone:whatsappPhoneSchema.optional(),whatsappUsername:whatsappUsernameSchema.nullable().optional(),note:z.string().trim().max(5000),timezone:z.string().trim().max(100).nullable().optional(),preferredLanguage:z.string().trim().regex(/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/).max(35).nullable().optional(),birthday:calendarDateSchema.nullable().optional(),specialDates:z.array(contactSpecialDateSchema).max(30).optional(),emails:z.array(contactEmailSchema).max(20),methods:z.array(contactMethodSchema).max(30),addresses:z.array(contactAddressSchema).max(20).default([])}).superRefine((value,ctx)=>{
   if(value.phone===null&&value.whatsappUsername===null)ctx.addIssue({code:"custom",path:["phone"],message:"手机号和 WhatsApp 用户名至少填写一个"});

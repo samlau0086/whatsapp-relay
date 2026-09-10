@@ -31,6 +31,14 @@ test("new conversation accepts a WhatsApp username without a phone number",()=>{
   assert.equal(newConversationSchema.safeParse({accountId,whatsappUsername:"not valid",firstMessage:"您好",clientMessageId:"new-chat-bad-username"}).success,false);
 });
 
+test("WhatsApp usernames ignore copied Unicode format controls",()=>{
+  const username="tarek.mhmed.zekree\u2069";
+  const conversation=newConversationSchema.parse({accountId,whatsappUsername:username,firstMessage:"hello",clientMessageId:"new-chat-hidden-control"});
+  assert.equal(conversation.whatsappUsername,"tarek.mhmed.zekree");
+  const contact=contactCreateSchema.parse({accountId,firstName:"Tarek",whatsappUsername:username});
+  assert.equal(contact.whatsappUsername,"tarek.mhmed.zekree");
+});
+
 test("account automation accepts only supported default conversation modes",()=>{
   for(const mode of ["cautious","full","human_paused"])assert.equal(conversationAgentModeSchema.safeParse(mode).success,true);
   assert.equal(conversationAgentModeSchema.safeParse("active").success,false);
