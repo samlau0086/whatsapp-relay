@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { PayPalApiError, PayPalClient, buildPayPalInvoice, clearPayPalTokenCache, isPayPalInvoiceAlreadyClosedError, paypalBaseUrl } from "../src/paypal.js";
+import { PayPalApiError, PayPalClient, buildPayPalInvoice, clearPayPalTokenCache, isPayPalInvoiceAlreadyClosedError, isPayPalInvoicePaidError, paypalBaseUrl } from "../src/paypal.js";
 import { renderPayPalTemplate, validatePayPalTemplate, type PayPalItemTemplateContext } from "../src/paypal-template.js";
 
 test("selects the official PayPal API host for each environment",()=>{
@@ -101,4 +101,10 @@ test("recognizes idempotent PayPal invoice cancellation failures",()=>{
   assert.equal(isPayPalInvoiceAlreadyClosedError(new PayPalApiError(409,"INVOICE_ALREADY_CANCELLED","Invoice has already been cancelled")),true);
   assert.equal(isPayPalInvoiceAlreadyClosedError(new PayPalApiError(401,"AUTHENTICATION_FAILURE","Authentication failed")),false);
   assert.equal(isPayPalInvoiceAlreadyClosedError(new PayPalApiError(422,"INVALID_REQUEST","Invoice is still open")),false);
+});
+
+test("recognizes cancellation failures caused by a paid invoice",()=>{
+  assert.equal(isPayPalInvoicePaidError(new PayPalApiError(422,"INVOICE_CANNOT_BE_CANCELLED","The invoice cannot be cancelled because it has been paid")),true);
+  assert.equal(isPayPalInvoicePaidError(new PayPalApiError(409,"INVOICE_ALREADY_CANCELLED","Invoice has already been cancelled")),false);
+  assert.equal(isPayPalInvoicePaidError(new PayPalApiError(401,"AUTHENTICATION_FAILURE","Authentication failed")),false);
 });

@@ -18,6 +18,12 @@ export function isPayPalInvoiceAlreadyClosedError(error:unknown):boolean{
   return /already\s+(?:been\s+)?cancel+ed|invoice\s+(?:is\s+)?cancel+ed|does\s+not\s+exist|not\s+found/i.test(String(error.code)+" "+String(error.message));
 }
 
+export function isPayPalInvoicePaidError(error:unknown):boolean{
+  if(!(error instanceof PayPalApiError))return false;
+  if(error.status!==400&&error.status!==409&&error.status!==422)return false;
+  return /(?:invoice|payment).*(?:paid|settled)|(?:paid|settled).*(?:invoice|payment)|cannot\s+(?:be\s+)?cancel+ed.*(?:paid|settled)/i.test(String(error.code)+" "+String(error.message));
+}
+
 export function paypalBaseUrl(environment:PayPalEnvironment):string{return environment==="live"?"https://api-m.paypal.com":"https://api-m.sandbox.paypal.com";}
 
 export function buildPayPalInvoice(input:PayPalInvoiceInput):Record<string,unknown>{
