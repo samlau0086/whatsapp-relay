@@ -833,14 +833,18 @@ app.delete("/api/v1/conversations/:id", { preHandler:authenticate }, async (requ
     if(outbound.rowCount)return"outbound_pending" as const;
     const pendingEmail=await client.query("SELECT 1 FROM email_messages WHERE conversation_id=$1 AND status IN ('queued','sending','retrying') LIMIT 1",[id]);
     if(pendingEmail.rowCount)return"email_pending" as const;
+    const conversationMedia=await client.query("SELECT DISTINCT m.id,m.object_key FROM messages msg JOIN media m ON m.id=msg.media_id WHERE msg.conversation_id=$1",[id]);
     await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'conversation.delete','conversation',$2,$3)",[principal.id,id,JSON.stringify({contactId:conversation.rows[0].contact_id,waJid:conversation.rows[0].provider_user_id})]);
     await client.query("DELETE FROM conversations WHERE id=$1",[id]);
-    return"deleted" as const;
+    const mediaIds=conversationMedia.rows.map(row=>row.id);
+    const mediaToDelete=mediaIds.length?await client.query(`DELETE FROM media m WHERE m.id=ANY($1::uuid[]) AND NOT EXISTS (SELECT 1 FROM messages msg WHERE msg.media_id=m.id) AND NOT EXISTS (SELECT 1 FROM order_attachments oa WHERE oa.media_id=m.id) AND NOT EXISTS (SELECT 1 FROM email_attachments ea WHERE ea.media_id=m.id) AND NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.image_media_id=m.id) AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.rendered_media_id=m.id) AND NOT EXISTS (SELECT 1 FROM products p WHERE p.image_media_id=m.id) AND NOT EXISTS (SELECT 1 FROM material_assets ma WHERE ma.media_id=m.id) AND NOT EXISTS (SELECT 1 FROM product_gallery_images pgi WHERE pgi.media_id=m.id) AND NOT EXISTS (SELECT 1 FROM whatsapp_status_campaigns wsc WHERE wsc.media_id=m.id) RETURNING object_key`,[mediaIds]):{rows:[]};
+    return{status:"deleted" as const,mediaKeys:mediaToDelete.rows.map(row=>String(row.object_key))};
   });
   if(result==="not_found")return reply.code(404).send({error:"not_found"});
   if(result==="payment_request_exists")return reply.code(409).send({error:"payment_request_exists",message:"该会话存在付款请求，请先处理或删除相关订单"});
   if(result==="outbound_pending")return reply.code(409).send({error:"outbound_pending",message:"该会话仍有待发送消息，请等待发送完成后再删除"});
   if(result==="email_pending")return reply.code(409).send({error:"email_pending",message:"该会话仍有待发送邮件，请等待发送完成后再删除"});
+  for(const objectKey of result.mediaKeys)await s3.send(new DeleteObjectCommand({Bucket:config.S3_BUCKET,Key:objectKey})).catch(error=>request.log.warn({error,objectKey},"conversation media cleanup failed"));
   return reply.code(204).send();
 });
 

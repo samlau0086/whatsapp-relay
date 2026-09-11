@@ -956,6 +956,27 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     finally{setContextBusy(false);}
   }
 
+  async function deleteContextConversation(){
+    if(!conversationMenu||contextBusy||!["admin","supervisor"].includes(userRole))return;
+    const item=conversationMenu.conversation;
+    if(!await confirmAction("会话“"+item.name+"”的消息、备注、提醒、订单、AI 记录及消息附件将一并永久删除，且无法恢复。",{title:"永久删除此会话？",confirmLabel:"永久删除",tone:"danger"}))return;
+    setContextBusy(true);
+    try{
+      const result=await authorizedFetch("/api/v1/conversations/"+item.id,apiToken,{method:"DELETE"});
+      if(result.token!==apiToken)setApiToken(result.token);
+      const body=await result.response.json().catch(()=>({})) as {message?:string};
+      if(!result.response.ok)throw new Error(body.message||("删除失败（HTTP "+result.response.status+"）"));
+      conversationDetailsCache.delete(item.id);
+      setConversations(all=>all.filter(value=>value.id!==item.id));
+      setMessages(all=>{const next={...all};delete next[item.id];return next;});
+      if(active?.id===item.id)setActiveId("");
+      setConversationMenu(null);
+      setToast("会话及其关联数据已永久删除");
+      await Promise.all([loadConversationCounts(result.token),loadConversations(result.token,{quiet:true})]);
+    }catch(error){setToast(error instanceof Error?error.message:"会话删除失败，请重试");}
+    finally{setContextBusy(false);}
+  }
+
   async function markConversationUnread(conversationId:string){
     if(!apiToken||markingUnreadId)return;
     setMarkingUnreadId(conversationId);
@@ -2659,6 +2680,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
         <ConversationContextMenu
           state={conversationMenu}
           tags={contextTags}
+          role={userRole}
           busy={contextBusy}
           onSection={(section) =>
             setConversationMenu((value) =>
@@ -2674,6 +2696,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           }}
           onStatus={() => void setContextConversationStatus()}
           onBlock={() => void blockContextContact()}
+          onDelete={() => void deleteContextConversation()}
           onEdit={() => {
             setContextContactId(conversationMenu.conversation.contactId);
             setConversationMenu(null);
@@ -2733,7 +2756,7 @@ const CUSTOMER_STAGES=[
 
 function stageName(value:string){return CUSTOMER_STAGES.find(item=>item[0]===value)?.[1]??"新线索";}
 
-function ConversationContextMenu({state,tags,busy,onSection,onTags,onStage,onToggleTag,onNote,onStatus,onBlock,onEdit,onTask}:{state:ConversationContextState;tags:TagItem[];busy:boolean;onSection:(section:ConversationContextState["section"])=>void;onTags:()=>void;onStage:(value:string)=>void;onToggleTag:(tag:TagItem)=>void;onNote:()=>void;onStatus:()=>void;onBlock:()=>void;onEdit:()=>void;onTask:()=>void}){
+function ConversationContextMenu({state,tags,role,busy,onSection,onTags,onStage,onToggleTag,onNote,onStatus,onBlock,onDelete,onEdit,onTask}:{state:ConversationContextState;tags:TagItem[];role:string;busy:boolean;onSection:(section:ConversationContextState["section"])=>void;onTags:()=>void;onStage:(value:string)=>void;onToggleTag:(tag:TagItem)=>void;onNote:()=>void;onStatus:()=>void;onBlock:()=>void;onDelete:()=>void;onEdit:()=>void;onTask:()=>void}){
   const item=state.conversation;
   return <div className="conversation-context-menu" style={{left:state.x,top:state.y}} role="menu" aria-label={`${item.name} 的快捷操作`} onClick={event=>event.stopPropagation()}>
     <header><span className="avatar small" style={{background:item.color}}>{item.conversationType==="group"?<Users size={15}/>:item.initials}</span><span><b>{item.name}</b><small>{item.conversationType==="group"?`${item.groupParticipantCount} 位成员`:item.phone||item.account}</small></span></header>
@@ -2746,6 +2769,7 @@ function ConversationContextMenu({state,tags,busy,onSection,onTags,onStage,onTog
       <i/>
       <button role="menuitem" className={item.conversationStatus==="closed"?"reopen":""} disabled={busy} onClick={onStatus}><CheckCheck size={15}/><span><b>{item.conversationStatus==="closed"?"重新打开会话":"关闭会话"}</b><small>{item.conversationStatus==="closed"?"恢复到全部会话":"移入已关闭会话"}</small></span></button>
       {item.conversationType!=="group"&&item.platform==="whatsapp"&&item.transport==="web"&&<button role="menuitem" className={item.blocked?"reopen":"danger"} disabled={busy} onClick={onBlock}><Ban size={15}/><span><b>{item.blocked?"解除拉黑":"拉黑联系人"}</b><small>{item.blocked?"允许对方再次发送消息":"阻止对方向此账号发送消息"}</small></span></button>}
+      {["admin","supervisor"].includes(role)&&<button role="menuitem" className="danger" disabled={busy} onClick={onDelete}><Trash2 size={15}/><span><b>永久删除会话</b><small>删除消息、关联数据及媒体文件</small></span></button>}
     </div>:state.section==="stage"?<div className="conversation-context-submenu"><button className="context-back" onClick={()=>onSection("root")}>‹ 返回快捷操作</button><h4>客户阶段</h4>{CUSTOMER_STAGES.map(([value,label])=><button key={value} disabled={busy} className={item.customerStage===value?"selected":""} onClick={()=>onStage(value)}><span>{label}</span>{item.customerStage===value&&<Check size={14}/>}</button>)}</div>:<div className="conversation-context-submenu tags"><button className="context-back" onClick={()=>onSection("root")}>‹ 返回快捷操作</button><h4>标签 <small>{item.tags.length}/20</small></h4>{busy&&!tags.length?<p>正在读取标签…</p>:tags.length?tags.map(tag=><button key={tag.id} disabled={busy||!item.tags.some(value=>value.id===tag.id)&&item.tags.length>=20} className={item.tags.some(value=>value.id===tag.id)?"selected":""} onClick={()=>onToggleTag(tag)}><i style={{background:tag.color}}/><span>{tag.name}</span>{item.tags.some(value=>value.id===tag.id)&&<Check size={14}/>}</button>):<p>暂时没有可用标签</p>}</div>}
   </div>;
 }
