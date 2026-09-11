@@ -1673,9 +1673,11 @@ async function isInternalCommentOnlyOrderUpdate(client:typeof pool,orderId:strin
   const current=await client.query("SELECT o.amount,o.currency,o.weight_unit,o.description,o.internal_comment,o.translate_on_send,o.target_language,o.payment_profile_id,o.address_id,o.shipping_amount,o.shipping_template_id,COALESCE((SELECT json_agg(json_build_object('name',i.product_name,'sku',i.product_sku,'quantity',i.quantity,'unitAmount',i.unit_amount,'weightAmount',i.weight_amount,'weightUnit',i.weight_unit,'imageMediaId',i.image_media_id,'imageUrl',i.image_url,'productId',i.product_id,'variantId',i.variant_id,'shippingClassId',i.shipping_class_id) ORDER BY i.position) FROM order_items i WHERE i.order_id=o.id),'[]'::json) items,COALESCE((SELECT json_agg(json_build_object('name',f.name,'amount',f.amount,'source',f.source) ORDER BY f.position) FROM order_fees f WHERE f.order_id=o.id),'[]'::json) fees FROM orders o WHERE o.id=$1 AND o.deleted_at IS NULL",[orderId]);
   if(!current.rowCount)return false;
   const row=current.rows[0];
-  const normalizeItem=(item:any)=>({name:String(item.name),sku:item.sku??null,quantity:Number(item.quantity),unitAmount:Number(item.unitAmount),weightAmount:item.weightAmount==null?null:Number(item.weightAmount),weightUnit:item.weightUnit??null,imageMediaId:item.imageMediaId??null,imageUrl:item.imageUrl??null,productId:item.productId??null,variantId:item.variantId??null,shippingClassId:item.shippingClassId??null});
-  const normalizeFee=(fee:any)=>({name:String(fee.name),amount:Number(fee.amount),source:fee.source??"manual"});
-  const same=(left:any,right:any)=>JSON.stringify(left)===JSON.stringify(right);
+  type ComparisonItem={name?:unknown;sku?:unknown;quantity?:unknown;unitAmount?:unknown;weightAmount?:unknown;weightUnit?:unknown;imageMediaId?:unknown;imageUrl?:unknown;productId?:unknown;variantId?:unknown;shippingClassId?:unknown};
+  type ComparisonFee={name?:unknown;amount?:unknown;source?:unknown};
+  const normalizeItem=(item:ComparisonItem)=>({name:String(item.name),sku:item.sku??null,quantity:Number(item.quantity),unitAmount:Number(item.unitAmount),weightAmount:item.weightAmount==null?null:Number(item.weightAmount),weightUnit:item.weightUnit??null,imageMediaId:item.imageMediaId??null,imageUrl:item.imageUrl??null,productId:item.productId??null,variantId:item.variantId??null,shippingClassId:item.shippingClassId??null});
+  const normalizeFee=(fee:ComparisonFee)=>({name:String(fee.name),amount:Number(fee.amount),source:fee.source??"manual"});
+  const same=(left:unknown,right:unknown)=>JSON.stringify(left)===JSON.stringify(right);
   const orderFees=orderFeesWithPayPalFee(data.fees,data.items,data.shippingAmount??0,paymentProfile);
   return Number(row.amount)===calculateOrderTotal(data.items,orderFees,data.shippingAmount??0)
     && String(row.currency)===data.currency
