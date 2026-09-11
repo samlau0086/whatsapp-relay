@@ -834,6 +834,7 @@ app.delete("/api/v1/conversations/:id", { preHandler:authenticate }, async (requ
     const pendingEmail=await client.query("SELECT 1 FROM email_messages WHERE conversation_id=$1 AND status IN ('queued','sending','retrying') LIMIT 1",[id]);
     if(pendingEmail.rowCount)return"email_pending" as const;
     const conversationMedia=await client.query("SELECT DISTINCT m.id,m.object_key FROM messages msg JOIN media m ON m.id=msg.media_id WHERE msg.conversation_id=$1",[id]);
+    await client.query("DELETE FROM conversation_merge_links WHERE source_conversation_id=$1 OR target_conversation_id=$1",[id]);
     await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'conversation.delete','conversation',$2,$3)",[principal.id,id,JSON.stringify({contactId:conversation.rows[0].contact_id,waJid:conversation.rows[0].provider_user_id})]);
     await client.query("DELETE FROM conversations WHERE id=$1",[id]);
     const mediaIds=conversationMedia.rows.map(row=>row.id);
