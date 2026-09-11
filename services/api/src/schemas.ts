@@ -361,6 +361,7 @@ export const paymentProfileCreateSchema=z.object({
   referenceTemplate:z.string().trim().min(1).max(500).default("Order #{{orderNumber}}"),
   noteTemplate:z.string().trim().max(4000).default("{{orderNotes}}"),
   itemNameTemplate:z.string().trim().min(1).max(500).default("{{productName}}"),
+  paymentTerm:z.enum(["DUE_ON_RECEIPT","NET_10","NET_15","NET_30","NET_45","NET_60","NET_90","NO_DUE_DATE"]).default("NET_30"),
   paypalFeeRatePercent:z.coerce.number().min(0).max(99.9999).default(0),
   paypalFixedFee:moneySchema.default(0),
   paypalFeeLabel:z.string().trim().min(1).max(80).default("PayPal 手续费"),

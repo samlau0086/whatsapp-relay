@@ -1,6 +1,9 @@
 export type PayPalEnvironment="sandbox"|"live";
+export const PAYPAL_PAYMENT_TERMS=["DUE_ON_RECEIPT","NET_10","NET_15","NET_30","NET_45","NET_60","NET_90","NO_DUE_DATE"] as const;
+export type PayPalPaymentTerm=typeof PAYPAL_PAYMENT_TERMS[number];
+export const DEFAULT_PAYPAL_PAYMENT_TERM:PayPalPaymentTerm="NET_30";
 export type PayPalInvoiceItem={name:string;quantity:number;unitAmount:number};
-export type PayPalInvoiceInput={requestId:string;reference:string;currency:string;note?:string;items:PayPalInvoiceItem[]};
+export type PayPalInvoiceInput={requestId:string;reference:string;currency:string;note?:string;items:PayPalInvoiceItem[];paymentTerm?:PayPalPaymentTerm};
 export type PayPalInvoiceResult={invoiceId:string;status:string;paymentUrl:string|null};
 export type PayPalInvoiceDetail=PayPalInvoiceResult&{transactionId:string|null};
 
@@ -12,7 +15,7 @@ export function paypalBaseUrl(environment:PayPalEnvironment):string{return envir
 
 export function buildPayPalInvoice(input:PayPalInvoiceInput):Record<string,unknown>{
   return{
-    detail:{reference:input.reference,invoice_date:new Date().toISOString().slice(0,10),currency_code:input.currency,note:input.note||undefined,payment_term:{term_type:"DUE_ON_RECEIPT"}},
+    detail:{reference:input.reference,invoice_date:new Date().toISOString().slice(0,10),currency_code:input.currency,note:input.note||undefined,payment_term:{term_type:input.paymentTerm??DEFAULT_PAYPAL_PAYMENT_TERM}},
     items:input.items.map(item=>({name:item.name,quantity:String(item.quantity),unit_amount:{currency_code:input.currency,value:item.unitAmount.toFixed(2)},unit_of_measure:"QUANTITY"})),
     configuration:{partial_payment:{allow_partial_payment:false},allow_tip:false},
   };
