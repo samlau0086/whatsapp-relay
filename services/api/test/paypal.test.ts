@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { PayPalApiError, PayPalClient, buildPayPalInvoice, clearPayPalTokenCache, paypalBaseUrl } from "../src/paypal.js";
+import { PayPalApiError, PayPalClient, buildPayPalInvoice, clearPayPalTokenCache, isPayPalInvoiceAlreadyClosedError, paypalBaseUrl } from "../src/paypal.js";
 import { renderPayPalTemplate, validatePayPalTemplate, type PayPalItemTemplateContext } from "../src/paypal-template.js";
 
 test("selects the official PayPal API host for each environment",()=>{
@@ -94,4 +94,11 @@ test("retries invoice tracking through the single-tracker endpoint when the batc
 test("reports Invoice tracking as unsupported only after both PayPal tracking endpoints return 404",async()=>{
   clearPayPalTokenCache();const request=async(input:string|URL|Request)=>{const url=String(input);if(url.endsWith("/v1/oauth2/token"))return Response.json({access_token:"token",expires_in:3600});if(url.endsWith("/v1/shipping/trackers-batch")||url.endsWith("/v1/shipping/trackers"))return Response.json({name:"RESOURCE_NOT_FOUND"},{status:404});throw new Error(`unexpected ${url}`);};
   await assert.rejects(()=>new PayPalClient({environment:"live",clientId:"client",clientSecret:"secret"},request as typeof fetch).addTracking({transactionId:"9AB12345CD678901E",carrier:"Fedex",trackingNumber:"876025996582"}),(error:unknown)=>error instanceof PayPalApiError&&error.status===409&&error.code==="paypal_invoice_tracking_unsupported");
+});
+
+test("recognizes idempotent PayPal invoice cancellation failures",()=>{
+  assert.equal(isPayPalInvoiceAlreadyClosedError(new PayPalApiError(404,"RESOURCE_NOT_FOUND","Invoice not found")),true);
+  assert.equal(isPayPalInvoiceAlreadyClosedError(new PayPalApiError(409,"INVOICE_ALREADY_CANCELLED","Invoice has already been cancelled")),true);
+  assert.equal(isPayPalInvoiceAlreadyClosedError(new PayPalApiError(401,"AUTHENTICATION_FAILURE","Authentication failed")),false);
+  assert.equal(isPayPalInvoiceAlreadyClosedError(new PayPalApiError(422,"INVALID_REQUEST","Invoice is still open")),false);
 });

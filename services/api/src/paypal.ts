@@ -11,6 +11,13 @@ export class PayPalApiError extends Error{
   constructor(public readonly status:number,public readonly code:string,message:string){super(message);this.name="PayPalApiError";}
 }
 
+export function isPayPalInvoiceAlreadyClosedError(error:unknown):boolean{
+  if(!(error instanceof PayPalApiError))return false;
+  if(error.status===404)return true;
+  if(error.status!==400&&error.status!==409&&error.status!==422)return false;
+  return /already\s+(?:been\s+)?cancel+ed|invoice\s+(?:is\s+)?cancel+ed|does\s+not\s+exist|not\s+found/i.test(String(error.code)+" "+String(error.message));
+}
+
 export function paypalBaseUrl(environment:PayPalEnvironment):string{return environment==="live"?"https://api-m.paypal.com":"https://api-m.sandbox.paypal.com";}
 
 export function buildPayPalInvoice(input:PayPalInvoiceInput):Record<string,unknown>{
