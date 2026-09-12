@@ -13,6 +13,9 @@ test("conversation transfer preserves conversation-owned records and original me
   assert.match(server,/co\.phone_e164/);
   assert.match(server,/co\.whatsapp_username/);
   assert.match(server,/transfer_conflict/);
+  assert.match(server,/target account already has this task occurrence/);
+  assert.match(server,/existingConversation/);
+  assert.match(server,/task_rule_conflict/);
 });
 
 test("conversation account transfer is explicitly confirmed in the inbox",async()=>{

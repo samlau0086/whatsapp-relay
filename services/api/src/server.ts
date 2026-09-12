@@ -741,6 +741,8 @@ app.post("/api/v1/conversations/:id/transfer", {preHandler:authenticate}, async(
     const target=await client.query("SELECT id,display_name,platform FROM channel_accounts WHERE id=$1",[targetAccountId]);
     if(!target.rowCount||!canAccessAccount(principal,targetAccountId))return{status:"target_forbidden" as const};
     if(target.rows[0].platform!==source.platform)return{status:"platform_mismatch" as const};
+    const existingConversation=await client.query("SELECT id FROM conversations WHERE account_id=$1 AND contact_id=$2 LIMIT 1 FOR UPDATE",[targetAccountId,source.contact_id]);
+    if(existingConversation.rowCount)return{status:"contact_conflict" as const};
     const duplicate=await client.query(`SELECT c.id
       FROM contacts co LEFT JOIN conversations c ON c.contact_id=co.id
       WHERE co.account_id=$1
@@ -760,7 +762,10 @@ app.post("/api/v1/conversations/:id/transfer", {preHandler:authenticate}, async(
       for(const conflict of ruleConflicts.rows as Array<{source_rule_id:string;target_rule_id:string}>){
         if(parsed.data.ruleStrategy==="source")await client.query(`UPDATE task_rules target SET title_template=source.title_template,description=source.description,month=source.month,day=source.day,start_time=source.start_time,duration_minutes=source.duration_minutes,lead_days=source.lead_days,send_mode=source.send_mode,enabled=source.enabled,recurrence=source.recurrence,tool_overrides=source.tool_overrides,updated_at=now()
           FROM task_rules source WHERE target.id=$1 AND source.id=$2`,[conflict.target_rule_id,conflict.source_rule_id]);
-        await client.query("UPDATE tasks SET rule_id=$1,updated_at=now() WHERE rule_id=$2",[conflict.target_rule_id,conflict.source_rule_id]);
+        await client.query(`UPDATE tasks source_task SET status='cancelled',last_error='Cancelled because the target account already has this task occurrence',updated_at=now()
+          WHERE source_task.rule_id=$2 AND source_task.occurrence_date IS NOT NULL AND EXISTS(
+            SELECT 1 FROM tasks target_task WHERE target_task.rule_id=$1 AND target_task.contact_id=source_task.contact_id AND target_task.occurrence_date=source_task.occurrence_date)`,[conflict.target_rule_id,conflict.source_rule_id]);
+        await client.query("UPDATE tasks SET rule_id=$1,updated_at=now() WHERE rule_id=$2 AND status<>'cancelled'",[conflict.target_rule_id,conflict.source_rule_id]);
         await client.query("UPDATE task_rules SET enabled=false,updated_at=now() WHERE id=$1",[conflict.source_rule_id]);
       }
     }
@@ -788,7 +793,7 @@ app.post("/api/v1/conversations/:id/merge", {preHandler:authenticate}, async(req
   if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
   const principal=request.principal,{id}=request.params as {id:string},targetAccountId=parsed.data.accountId;
   const result=await transaction(async client=>{
-    const sourceResult=await client.query(`SELECT c.id,c.account_id,c.contact_id,c.favorite,c.unread_count,co.provider_user_id,co.entity_type,a.platform,a.display_name account_name
+    const sourceResult=await client.query(`SELECT c.id,c.account_id,c.contact_id,c.favorite,c.unread_count,co.provider_user_id,co.phone_e164,co.whatsapp_username,co.entity_type,a.platform,a.display_name account_name
       FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN channel_accounts a ON a.id=c.account_id
       WHERE c.id=$1 FOR UPDATE OF c,co,a`,[id]);
     if(!sourceResult.rowCount||!canAccessAccount(principal,sourceResult.rows[0].account_id))return{status:"not_found" as const};
@@ -797,7 +802,12 @@ app.post("/api/v1/conversations/:id/merge", {preHandler:authenticate}, async(req
     if(source.entity_type==="group")return{status:"group_unsupported" as const};
     const targetResult=await client.query(`SELECT a.id account_id,a.display_name account_name,co.id contact_id,c.id conversation_id
       FROM channel_accounts a JOIN contacts co ON co.account_id=a.id JOIN conversations c ON c.contact_id=co.id
-      WHERE a.id=$1 AND a.platform=$2 AND co.provider_user_id=$3 FOR UPDATE OF a,co,c`,[targetAccountId,source.platform,source.provider_user_id]);
+      WHERE a.id=$1 AND a.platform=$2 AND c.account_id=a.id
+        AND (($3::text IS NOT NULL AND co.provider_user_id=$3)
+          OR ($4::text IS NOT NULL AND co.phone_e164=$4)
+          OR ($5::text IS NOT NULL AND co.whatsapp_username=$5))
+      ORDER BY CASE WHEN co.provider_user_id=$3 THEN 0 WHEN co.phone_e164=$4 THEN 1 ELSE 2 END,c.id
+      LIMIT 1 FOR UPDATE OF a,co,c`,[targetAccountId,source.platform,source.provider_user_id,source.phone_e164,source.whatsapp_username]);
     if(!targetResult.rowCount||!canAccessAccount(principal,targetAccountId))return{status:"target_conversation_not_found" as const};
     const target=targetResult.rows[0];
     const pending=await client.query("SELECT 1 FROM outbound_commands oc JOIN messages m ON m.id=oc.message_id WHERE m.conversation_id=$1 AND oc.state IN ('pending','dispatched') LIMIT 1",[id]);
@@ -2312,7 +2322,7 @@ app.post("/api/v1/media", { preHandler:authenticate }, async (request,reply) => 
   const media=await transaction(async client=>{const created=await client.query("INSERT INTO media(account_id,object_key,file_name,mime_type,byte_size,sha256) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",[query.accountId,objectKey,normalized.fileName,normalized.mimeType,normalized.bytes.length,sha256]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'media.upload','media',$3,$4)",[request.principal?.kind,request.principal?.id,created.rows[0].id,JSON.stringify({accountId:query.accountId,fileName:normalized.fileName,mimeType:normalized.mimeType,byteSize:normalized.bytes.length,sha256})]);return created;}); return reply.code(201).send({mediaId:media.rows[0].id,fileName:normalized.fileName,mimeType:normalized.mimeType,size:normalized.bytes.length,sha256});
 });
 
-app.setErrorHandler((error,request,reply)=>{app.log.error(error);const code=typeof error==="object"&&error!==null&&"code" in error?String((error as {code?:unknown}).code):"";if(request.url.match(/^\/api\/v1\/conversations\/[^/]+\/transfer(?:\?|$)/)&&code==="23505")return void reply.code(409).send({error:"transfer_conflict",message:"转移时发现目标账号已有冲突数据，请刷新页面后重试；如仍失败，请先处理重复联系人或任务规则"});if(request.url.match(/^\/api\/v1\/conversations\/[^/]+\/transfer(?:\?|$)/)&&code==="23503")return void reply.code(409).send({error:"transfer_reference_conflict",message:"转移涉及的关联数据不完整，请刷新页面后重试"});void reply.code((error as {statusCode?:number}).statusCode??500).send({error:"internal_error",message:config.NODE_ENV==="production"?"服务暂时不可用":error instanceof Error?error.message:String(error)});});
+app.setErrorHandler((error,request,reply)=>{app.log.error(error);const code=typeof error==="object"&&error!==null&&"code" in error?String((error as {code?:unknown}).code):"",constraint=typeof error==="object"&&error!==null&&"constraint" in error?String((error as {constraint?:unknown}).constraint):"";if(request.url.match(/^\/api\/v1\/conversations\/[^/]+\/transfer(?:\?|$)/)&&code==="23505"){if(/task_rules_account_contact_source_source_key|tasks_rule_occurrence_unique/.test(constraint))return void reply.code(409).send({error:"task_rule_conflict",message:"目标账号已有该联系人的重复任务规则或任务实例，请选择保留目标规则后继续转移"});if(/contacts_account_id_provider_user_id|conversations_account_id_contact_id/.test(constraint))return void reply.code(409).send({error:"contact_conflict",message:"目标账号已存在该联系人的会话，请使用合并会话完成转移"});return void reply.code(409).send({error:"transfer_conflict",message:"转移时发现目标账号已有冲突数据，请刷新页面后重试；如仍失败，请先处理重复联系人或任务规则"});}if(request.url.match(/^\/api\/v1\/conversations\/[^/]+\/transfer(?:\?|$)/)&&code==="23503")return void reply.code(409).send({error:"transfer_reference_conflict",message:"转移涉及的关联数据不完整，请刷新页面后重试"});void reply.code((error as {statusCode?:number}).statusCode??500).send({error:"internal_error",message:config.NODE_ENV==="production"?"服务暂时不可用":error instanceof Error?error.message:String(error)});});
 
 await registerAgentHub(app);
 
