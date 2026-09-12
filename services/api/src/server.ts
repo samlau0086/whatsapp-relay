@@ -760,25 +760,50 @@ app.post("/api/v1/conversations/:id/transfer", {preHandler:authenticate}, async(
        AND existing.id<>moving.id
       WHERE moving.account_id<>$2 AND moving.contact_id=$1`,[source.contact_id,targetAccountId]);
     if(ruleConflicts.rowCount&&!parsed.data.ruleStrategy)return{status:"task_rule_conflict" as const};
-    if(ruleConflicts.rowCount){
-      for(const conflict of ruleConflicts.rows as Array<{source_rule_id:string;target_rule_id:string}>){
-        await client.query(`UPDATE tasks SET status='cancelled',last_error='Cancelled because the target account already has this task rule',updated_at=now()
-          WHERE rule_id=$1 AND status NOT IN ('completed','cancelled','failed')`,[conflict.source_rule_id]);
-        if(parsed.data.ruleStrategy==="source"){
-          await client.query("UPDATE tasks SET rule_id=NULL,updated_at=now() WHERE rule_id=$1",[conflict.target_rule_id]);
-          await client.query("DELETE FROM task_rules WHERE id=$1",[conflict.target_rule_id]);
-        }else{
-          await client.query("DELETE FROM task_rules WHERE id=$1",[conflict.source_rule_id]);
-        }
-      }
+    if(ruleConflicts.rowCount&&parsed.data.ruleStrategy==="source"){
+      await client.query(`UPDATE tasks SET status='cancelled',last_error='Cancelled because the source task rule replaced the target task rule',updated_at=now(),rule_id=NULL
+        WHERE rule_id IN (SELECT target.id FROM task_rules target JOIN task_rules moving
+          ON moving.account_id<>$2 AND moving.contact_id=target.contact_id
+         AND moving.source=target.source AND moving.source_key=target.source_key
+         WHERE target.account_id=$2 AND target.contact_id=$1)`,[source.contact_id,targetAccountId]);
+      await client.query(`UPDATE task_rules target SET title_template=moving.title_template,description=moving.description,month=moving.month,day=moving.day,start_time=moving.start_time,duration_minutes=moving.duration_minutes,lead_days=moving.lead_days,send_mode=moving.send_mode,enabled=moving.enabled,recurrence=moving.recurrence,tool_overrides=moving.tool_overrides,updated_at=now()
+        FROM task_rules moving
+        WHERE target.account_id=$2 AND target.contact_id=$1 AND moving.account_id=$3
+          AND moving.contact_id=target.contact_id AND moving.source=target.source AND moving.source_key=target.source_key`,[source.contact_id,targetAccountId,source.account_id]);
+      await client.query(`DELETE FROM task_rules target USING task_rules moving
+        WHERE target.account_id=$2 AND target.contact_id=$1 AND moving.account_id<>$2
+          AND moving.contact_id=target.contact_id AND moving.source=target.source AND moving.source_key=target.source_key`,[source.contact_id,targetAccountId]);
+    }else if(ruleConflicts.rowCount){
+      await client.query(`UPDATE tasks SET status='cancelled',last_error='Cancelled because the target account already has this task rule',updated_at=now()
+        WHERE rule_id IN (SELECT moving.id FROM task_rules moving JOIN task_rules target
+          ON target.account_id=$2 AND target.contact_id=moving.contact_id
+         AND target.source=moving.source AND target.source_key=moving.source_key
+         WHERE moving.account_id<>$2 AND moving.contact_id=$1) AND status NOT IN ('completed','cancelled','failed')`,[source.contact_id,targetAccountId]);
+      await client.query(`DELETE FROM task_rules moving USING task_rules target
+        WHERE moving.account_id<>$2 AND target.account_id=$2 AND moving.contact_id=$1
+          AND target.contact_id=moving.contact_id AND target.source=moving.source AND target.source_key=moving.source_key`,[targetAccountId]);
     }
+    await client.query(`WITH ranked AS (
+        SELECT id,row_number() OVER (
+          PARTITION BY source,source_key
+          ORDER BY (account_id=$2) DESC,created_at DESC,id
+        ) AS position
+        FROM task_rules
+        WHERE contact_id=$1 AND account_id<>$3
+      ) UPDATE tasks SET rule_id=NULL,updated_at=now()
+      WHERE rule_id IN (SELECT id FROM ranked WHERE position>1)`,[source.contact_id,source.account_id,targetAccountId]);
+    await client.query(`WITH ranked AS (
+        SELECT id,row_number() OVER (
+          PARTITION BY source,source_key
+          ORDER BY (account_id=$2) DESC,created_at DESC,id
+        ) AS position
+        FROM task_rules
+        WHERE contact_id=$1 AND account_id<>$3
+      ) DELETE FROM task_rules WHERE id IN (SELECT id FROM ranked WHERE position>1)`,[source.contact_id,source.account_id,targetAccountId]);
     await client.query("UPDATE contacts SET account_id=$2,updated_at=now() WHERE id=$1",[source.contact_id,targetAccountId]);
     await client.query("UPDATE conversations SET account_id=$2 WHERE id=$1",[id,targetAccountId]);
     await client.query("UPDATE tasks SET account_id=$2,updated_at=now() WHERE conversation_id=$1 OR contact_id=$3",[id,targetAccountId,source.contact_id]);
-    await client.query(`UPDATE task_rules moving SET account_id=$2,updated_at=now()
-      WHERE moving.contact_id=$1 AND NOT EXISTS(
-        SELECT 1 FROM task_rules existing
-        WHERE existing.account_id=$2 AND existing.contact_id=moving.contact_id AND existing.source=moving.source AND existing.source_key=moving.source_key AND existing.id<>moving.id)`,[source.contact_id,targetAccountId]);
+    await client.query("UPDATE task_rules SET account_id=$2,updated_at=now() WHERE contact_id=$1 AND account_id<>$2",[source.contact_id,targetAccountId]);
     await client.query(`UPDATE tasks SET status=CASE WHEN status IN ('completed','cancelled','failed') THEN status ELSE 'cancelled' END,last_error=COALESCE(last_error,'Cancelled because the target account already has this task rule'),updated_at=now()
       WHERE rule_id IN (SELECT id FROM task_rules WHERE contact_id=$1 AND account_id<>$2)`,[source.contact_id,targetAccountId]);
     await client.query("DELETE FROM task_rules WHERE account_id=$1 AND contact_id=$2",[source.account_id,source.contact_id]);
