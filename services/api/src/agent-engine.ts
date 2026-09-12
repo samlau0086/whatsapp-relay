@@ -754,7 +754,7 @@ async function runConversationJob(job: Job): Promise<void> {
       [job.conversation_id],
     ),
     pool.query(
-      "SELECT o.id,o.display_order_number order_number,o.status,o.amount,o.currency,o.description,o.rendered_media_id,o.created_at,COALESCE((SELECT json_agg(json_build_object('name',i.product_name,'quantity',i.quantity,'unitAmount',i.unit_amount) ORDER BY i.position) FROM order_items i WHERE i.order_id=o.id),'[]'::json) items FROM orders o WHERE o.conversation_id=$1 AND o.deleted_at IS NULL ORDER BY o.created_at DESC LIMIT 10",
+      "SELECT o.id,o.display_order_number order_number,o.business_status status,o.amount,o.currency,o.description,o.rendered_media_id,o.created_at,COALESCE((SELECT json_agg(json_build_object('name',i.product_name,'quantity',i.quantity,'unitAmount',i.unit_amount) ORDER BY i.position) FROM order_items i WHERE i.order_id=o.id),'[]'::json) items FROM orders o WHERE o.conversation_id=$1 AND o.deleted_at IS NULL ORDER BY o.created_at DESC LIMIT 10",
       [job.conversation_id],
     ),
   ]);
@@ -1090,7 +1090,7 @@ export async function generateSalesReplySuggestion(
       [conversationId],
     ),
     pool.query(
-      "SELECT o.id,o.display_order_number order_number,o.status,o.amount,o.currency,o.description,o.created_at,COALESCE((SELECT json_agg(json_build_object('name',i.product_name,'quantity',i.quantity,'unitAmount',i.unit_amount) ORDER BY i.position) FROM order_items i WHERE i.order_id=o.id),'[]'::json) items FROM orders o WHERE o.conversation_id=$1 AND o.deleted_at IS NULL ORDER BY o.created_at DESC LIMIT 10",
+      "SELECT o.id,o.display_order_number order_number,o.business_status status,o.amount,o.currency,o.description,o.created_at,COALESCE((SELECT json_agg(json_build_object('name',i.product_name,'quantity',i.quantity,'unitAmount',i.unit_amount) ORDER BY i.position) FROM order_items i WHERE i.order_id=o.id),'[]'::json) items FROM orders o WHERE o.conversation_id=$1 AND o.deleted_at IS NULL ORDER BY o.created_at DESC LIMIT 10",
       [conversationId],
     ),
   ]);
