@@ -808,6 +808,7 @@ async function runConversationJob(job: Job): Promise<void> {
           reason: "memory_rebuilt",
           ...memory,
         },
+        true,
       );
       await finishRun(run.rows[0].id, {
         decision: "ignore",
@@ -1529,12 +1530,18 @@ async function saveMemory(
   conversationId: string,
   sourceMessageId: string | null,
   decision: AgentDecision,
+  replaceFacts = false,
 ): Promise<void> {
   await transaction(async (client) => {
     if (decision.summary?.trim())
       await client.query(
         "INSERT INTO conversation_memories(conversation_id,summary,source_message_id) VALUES($1,$2,$3) ON CONFLICT(conversation_id) DO UPDATE SET summary=EXCLUDED.summary,source_message_id=EXCLUDED.source_message_id,updated_at=now()",
         [conversationId, decision.summary.slice(0, 10000), sourceMessageId],
+      );
+    if (replaceFacts)
+      await client.query(
+        "DELETE FROM customer_memory_facts WHERE conversation_id=$1",
+        [conversationId],
       );
     for (const fact of (decision.facts ?? []).slice(0, 20)) {
       if (!fact.key?.trim() || !fact.value?.trim() || fact.confidence < 0.6)

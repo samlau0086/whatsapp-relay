@@ -5031,6 +5031,13 @@ function AgentMemoryPanel({conversationId,token,onToken,onToast}:{conversationId
   const rebuildAbortRef=useRef<AbortController|null>(null);
   const load=useCallback(async(signal?:AbortSignal)=>{const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory`,token,{signal});if(result.token!==token)onToken(result.token);if(result.response.ok)setMemory(await result.response.json());},[conversationId,token,onToken]);
   useEffect(()=>{const controller=new AbortController(),timer=window.setTimeout(()=>void load(controller.signal).catch(()=>undefined),0);return()=>{window.clearTimeout(timer);controller.abort();};},[load]);
+  useEffect(()=>{
+    const state=memory?.rebuild?.state;
+    if(state!=="pending"&&state!=="processing")return;
+    const controller=new AbortController();
+    const timer=window.setInterval(()=>void load(controller.signal).catch(()=>undefined),5000);
+    return()=>{window.clearInterval(timer);controller.abort();};
+  },[load,memory?.rebuild?.id,memory?.rebuild?.state]);
   useEffect(()=>()=>rebuildAbortRef.current?.abort(),[conversationId]);
   async function remove(id:string){const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory/facts/${id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);if(result.response.ok)await load();}
   async function edit(fact:{id:string;fact_key:string;fact_value:string}){const key=await promptAction({title:"编辑 AI 记忆",label:"记忆字段",defaultValue:fact.fact_key,placeholder:"例如：采购偏好",confirmLabel:"下一步",maxLength:120});if(!key?.trim())return;const value=await promptAction({title:"编辑 AI 记忆",label:"记忆内容",defaultValue:fact.fact_value,description:`字段：${key.trim()}`,placeholder:"输入需要记住的内容",confirmLabel:"保存记忆",multiline:true,maxLength:4000});if(!value?.trim())return;const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/memory/facts/${fact.id}`,token,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({key:key.trim(),value:value.trim()})});if(result.token!==token)onToken(result.token);if(result.response.ok)await load();}
