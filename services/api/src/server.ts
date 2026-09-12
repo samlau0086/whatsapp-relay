@@ -763,7 +763,7 @@ app.post("/api/v1/conversations/:id/transfer", {preHandler:authenticate}, async(
         if(parsed.data.ruleStrategy==="source")await client.query(`UPDATE task_rules target SET title_template=source.title_template,description=source.description,month=source.month,day=source.day,start_time=source.start_time,duration_minutes=source.duration_minutes,lead_days=source.lead_days,send_mode=source.send_mode,enabled=source.enabled,recurrence=source.recurrence,tool_overrides=source.tool_overrides,updated_at=now()
           FROM task_rules source WHERE target.id=$1 AND source.id=$2`,[conflict.target_rule_id,conflict.source_rule_id]);
         await client.query("UPDATE tasks SET status='cancelled',last_error='Cancelled because the target account already has this task rule',updated_at=now() WHERE rule_id=$1 AND status NOT IN ('completed','cancelled','failed')",[conflict.source_rule_id]);
-        await client.query("UPDATE task_rules SET enabled=false,updated_at=now() WHERE id=$1",[conflict.source_rule_id]);
+        await client.query("DELETE FROM task_rules WHERE id=$1",[conflict.source_rule_id]);
       }
     }
     await client.query("UPDATE contacts SET account_id=$2,updated_at=now() WHERE id=$1",[source.contact_id,targetAccountId]);
