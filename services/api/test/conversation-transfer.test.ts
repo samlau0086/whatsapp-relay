@@ -16,6 +16,7 @@ test("conversation transfer preserves conversation-owned records and original me
   assert.match(server,/target account already has this task occurrence/);
   assert.match(server,/existingConversation/);
   assert.match(server,/task_rule_conflict/);
+  assert.match(server,/task_rules.*\(source\|key\)/);
 });
 
 test("conversation account transfer is explicitly confirmed in the inbox",async()=>{
