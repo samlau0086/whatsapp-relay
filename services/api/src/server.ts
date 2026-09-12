@@ -769,7 +769,13 @@ app.post("/api/v1/conversations/:id/transfer", {preHandler:authenticate}, async(
     await client.query("UPDATE contacts SET account_id=$2,updated_at=now() WHERE id=$1",[source.contact_id,targetAccountId]);
     await client.query("UPDATE conversations SET account_id=$2 WHERE id=$1",[id,targetAccountId]);
     await client.query("UPDATE tasks SET account_id=$2,updated_at=now() WHERE conversation_id=$1 OR contact_id=$3",[id,targetAccountId,source.contact_id]);
-    await client.query("UPDATE task_rules SET account_id=$2,updated_at=now() WHERE contact_id=$1 AND NOT(id=ANY($3::uuid[]))",[source.contact_id,targetAccountId,ruleConflicts.rows.map(row=>String((row as {source_rule_id:string}).source_rule_id))]);
+    await client.query(`UPDATE task_rules moving SET account_id=$2,updated_at=now()
+      WHERE moving.contact_id=$1 AND NOT EXISTS(
+        SELECT 1 FROM task_rules existing
+        WHERE existing.account_id=$2 AND existing.contact_id=moving.contact_id AND existing.source=moving.source AND existing.source_key=moving.source_key AND existing.id<>moving.id)`,[source.contact_id,targetAccountId]);
+    await client.query(`UPDATE tasks SET status=CASE WHEN status IN ('completed','cancelled','failed') THEN status ELSE 'cancelled' END,last_error=COALESCE(last_error,'Cancelled because the target account already has this task rule'),updated_at=now()
+      WHERE rule_id IN (SELECT id FROM task_rules WHERE contact_id=$1 AND account_id<>$2)`,[source.contact_id,targetAccountId]);
+    await client.query("DELETE FROM task_rules WHERE contact_id=$1 AND account_id<>$2",[source.contact_id,targetAccountId]);
     await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'conversation.transfer','conversation',$2,$3)",[principal.id,id,JSON.stringify({fromAccountId:source.account_id,fromAccountName:source.account_name,toAccountId:targetAccountId,toAccountName:target.rows[0].display_name,contactId:source.contact_id})]);
     return{status:"transferred" as const,accountId:targetAccountId,accountName:String(target.rows[0].display_name)};
   });

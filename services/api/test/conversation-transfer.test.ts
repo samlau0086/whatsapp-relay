@@ -17,6 +17,8 @@ test("conversation transfer preserves conversation-owned records and original me
   assert.match(server,/existingConversation/);
   assert.match(server,/task_rule_conflict/);
   assert.match(server,/DELETE FROM task_rules/);
+  assert.match(server,/NOT EXISTS/);
+  assert.match(server,/account_id<>\$2/);
   assert.match(server,/task_rules.*\(source\|key\)/);
 });
 
