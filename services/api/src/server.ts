@@ -755,14 +755,17 @@ app.post("/api/v1/conversations/:id/transfer", {preHandler:authenticate}, async(
     if(pending.rowCount)return{status:"outbound_pending" as const};
     const ruleConflicts=await client.query(`SELECT moving.id source_rule_id,existing.id target_rule_id
       FROM task_rules moving JOIN task_rules existing
-      ON existing.account_id=$2 AND existing.contact_id=moving.contact_id AND existing.source=moving.source AND existing.source_key=moving.source_key AND existing.id<>moving.id
-      WHERE moving.contact_id=$1`,[source.contact_id,targetAccountId]);
+        ON existing.account_id=$2 AND existing.contact_id=moving.contact_id
+       AND existing.source=moving.source AND existing.source_key=moving.source_key
+       AND existing.id<>moving.id
+      WHERE moving.account_id=$3 AND moving.contact_id=$1`,[source.contact_id,targetAccountId,source.account_id]);
     if(ruleConflicts.rowCount&&!parsed.data.ruleStrategy)return{status:"task_rule_conflict" as const};
     if(ruleConflicts.rowCount){
       for(const conflict of ruleConflicts.rows as Array<{source_rule_id:string;target_rule_id:string}>){
+        await client.query(`UPDATE tasks SET status='cancelled',last_error='Cancelled because the target account already has this task rule',updated_at=now()
+          WHERE rule_id=$1 AND status NOT IN ('completed','cancelled','failed')`,[conflict.source_rule_id]);
         if(parsed.data.ruleStrategy==="source")await client.query(`UPDATE task_rules target SET title_template=source.title_template,description=source.description,month=source.month,day=source.day,start_time=source.start_time,duration_minutes=source.duration_minutes,lead_days=source.lead_days,send_mode=source.send_mode,enabled=source.enabled,recurrence=source.recurrence,tool_overrides=source.tool_overrides,updated_at=now()
           FROM task_rules source WHERE target.id=$1 AND source.id=$2`,[conflict.target_rule_id,conflict.source_rule_id]);
-        await client.query("UPDATE tasks SET status='cancelled',last_error='Cancelled because the target account already has this task rule',updated_at=now() WHERE rule_id=$1 AND status NOT IN ('completed','cancelled','failed')",[conflict.source_rule_id]);
         await client.query("DELETE FROM task_rules WHERE id=$1",[conflict.source_rule_id]);
       }
     }
@@ -2325,7 +2328,7 @@ app.post("/api/v1/media", { preHandler:authenticate }, async (request,reply) => 
   const media=await transaction(async client=>{const created=await client.query("INSERT INTO media(account_id,object_key,file_name,mime_type,byte_size,sha256) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",[query.accountId,objectKey,normalized.fileName,normalized.mimeType,normalized.bytes.length,sha256]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'media.upload','media',$3,$4)",[request.principal?.kind,request.principal?.id,created.rows[0].id,JSON.stringify({accountId:query.accountId,fileName:normalized.fileName,mimeType:normalized.mimeType,byteSize:normalized.bytes.length,sha256})]);return created;}); return reply.code(201).send({mediaId:media.rows[0].id,fileName:normalized.fileName,mimeType:normalized.mimeType,size:normalized.bytes.length,sha256});
 });
 
-app.setErrorHandler((error,request,reply)=>{app.log.error(error);const code=typeof error==="object"&&error!==null&&"code" in error?String((error as {code?:unknown}).code):"",constraint=typeof error==="object"&&error!==null&&"constraint" in error?String((error as {constraint?:unknown}).constraint):"";if(request.url.match(/^\/api\/v1\/conversations\/[^/]+\/transfer(?:\?|$)/)&&code==="23505"){if(/task_rules.*(source|key)|tasks.*occurrence/i.test(constraint))return void reply.code(409).send({error:"task_rule_conflict",message:"目标账号已有该联系人的重复任务规则或任务实例，请选择保留目标规则后继续转移"});if(/contacts.*(provider|key)|conversations.*(contact|key)/i.test(constraint))return void reply.code(409).send({error:"contact_conflict",message:"目标账号已存在该联系人的会话，请使用合并会话完成转移"});return void reply.code(409).send({error:"transfer_conflict",message:"转移时发现目标账号已有冲突数据，请刷新页面后重试；如仍失败，请先处理重复联系人或任务规则"});}if(request.url.match(/^\/api\/v1\/conversations\/[^/]+\/transfer(?:\?|$)/)&&code==="23503")return void reply.code(409).send({error:"transfer_reference_conflict",message:"转移涉及的关联数据不完整，请刷新页面后重试"});void reply.code((error as {statusCode?:number}).statusCode??500).send({error:"internal_error",message:config.NODE_ENV==="production"?"服务暂时不可用":error instanceof Error?error.message:String(error)});});
+app.setErrorHandler((error,request,reply)=>{app.log.error(error);const code=typeof error==="object"&&error!==null&&"code" in error?String((error as {code?:unknown}).code):"",constraint=typeof error==="object"&&error!==null&&"constraint" in error?String((error as {constraint?:unknown}).constraint):"";if(request.url.match(/^\/api\/v1\/conversations\/[^/]+\/transfer(?:\?|$)/)&&code==="23505"){if(/task_rules.*(source|key)|tasks.*occurrence/i.test(constraint))return void reply.code(409).send({error:"task_rule_conflict",message:`目标账号已有该联系人的重复任务规则或任务实例（${constraint||"数据库唯一约束"}）。请重新部署 API 后重试；若仍失败，请提供此约束名称`});if(/contacts.*(provider|key)|conversations.*(contact|key)/i.test(constraint))return void reply.code(409).send({error:"contact_conflict",message:"目标账号已存在该联系人的会话，请使用合并会话完成转移"});return void reply.code(409).send({error:"transfer_conflict",message:"转移时发现目标账号已有冲突数据，请刷新页面后重试；如仍失败，请先处理重复联系人或任务规则"});}if(request.url.match(/^\/api\/v1\/conversations\/[^/]+\/transfer(?:\?|$)/)&&code==="23503")return void reply.code(409).send({error:"transfer_reference_conflict",message:"转移涉及的关联数据不完整，请刷新页面后重试"});void reply.code((error as {statusCode?:number}).statusCode??500).send({error:"internal_error",message:config.NODE_ENV==="production"?"服务暂时不可用":error instanceof Error?error.message:String(error)});});
 
 await registerAgentHub(app);
 
