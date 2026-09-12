@@ -834,11 +834,13 @@ app.delete("/api/v1/conversations/:id", { preHandler:authenticate }, async (requ
     const pendingEmail=await client.query("SELECT 1 FROM email_messages WHERE conversation_id=$1 AND status IN ('queued','sending','retrying') LIMIT 1",[id]);
     if(pendingEmail.rowCount)return"email_pending" as const;
     const conversationMedia=await client.query("SELECT DISTINCT m.id,m.object_key FROM messages msg JOIN media m ON m.id=msg.media_id WHERE msg.conversation_id=$1",[id]);
-    await client.query("DELETE FROM conversation_merge_links WHERE source_conversation_id=$1 OR target_conversation_id=$1",[id]);
+    await client.query("DELETE FROM conversation_merge_links WHERE source_conversation_id=$1 OR target_conversation_id=$1",[id]).catch(error=>{
+      if((error as {code?:string}).code!=="42P01")throw error;
+    });
     await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'conversation.delete','conversation',$2,$3)",[principal.id,id,JSON.stringify({contactId:conversation.rows[0].contact_id,waJid:conversation.rows[0].provider_user_id})]);
     await client.query("DELETE FROM conversations WHERE id=$1",[id]);
     const mediaIds=conversationMedia.rows.map(row=>row.id);
-    const mediaToDelete=mediaIds.length?await client.query(`DELETE FROM media m WHERE m.id=ANY($1::uuid[]) AND NOT EXISTS (SELECT 1 FROM messages msg WHERE msg.media_id=m.id) AND NOT EXISTS (SELECT 1 FROM order_attachments oa WHERE oa.media_id=m.id) AND NOT EXISTS (SELECT 1 FROM email_attachments ea WHERE ea.media_id=m.id) AND NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.image_media_id=m.id) AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.rendered_media_id=m.id) AND NOT EXISTS (SELECT 1 FROM products p WHERE p.image_media_id=m.id) AND NOT EXISTS (SELECT 1 FROM material_assets ma WHERE ma.media_id=m.id) AND NOT EXISTS (SELECT 1 FROM product_gallery_images pgi WHERE pgi.media_id=m.id) AND NOT EXISTS (SELECT 1 FROM whatsapp_status_campaigns wsc WHERE wsc.media_id=m.id) RETURNING object_key`,[mediaIds]):{rows:[]};
+    const mediaToDelete=mediaIds.length?await client.query(`DELETE FROM media m WHERE m.id=ANY($1::uuid[]) AND NOT EXISTS (SELECT 1 FROM messages msg WHERE msg.media_id=m.id) AND NOT EXISTS (SELECT 1 FROM order_attachments oa WHERE oa.media_id=m.id) AND NOT EXISTS (SELECT 1 FROM email_attachments ea WHERE ea.media_id=m.id) AND NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.image_media_id=m.id) AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.rendered_media_id=m.id) AND NOT EXISTS (SELECT 1 FROM products p WHERE p.image_media_id=m.id) AND NOT EXISTS (SELECT 1 FROM material_assets ma WHERE ma.media_id=m.id) AND NOT EXISTS (SELECT 1 FROM product_gallery_images pgi WHERE pgi.media_id=m.id) AND NOT EXISTS (SELECT 1 FROM status_posts sp WHERE sp.media_id=m.id) RETURNING object_key`,[mediaIds]):{rows:[]};
     return{status:"deleted" as const,mediaKeys:mediaToDelete.rows.map(row=>String(row.object_key))};
   });
   if(result==="not_found")return reply.code(404).send({error:"not_found"});
