@@ -10,6 +10,9 @@ test("conversation transfer preserves conversation-owned records and original me
   assert.match(server,/UPDATE tasks SET account_id=\$2/);
   assert.doesNotMatch(server,/UPDATE messages SET account_id=.*transfer/);
   assert.match(server,/conversation\.transfer/);
+  assert.match(server,/co\.phone_e164/);
+  assert.match(server,/co\.whatsapp_username/);
+  assert.match(server,/transfer_conflict/);
 });
 
 test("conversation account transfer is explicitly confirmed in the inbox",async()=>{

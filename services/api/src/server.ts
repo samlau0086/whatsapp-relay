@@ -731,7 +731,7 @@ app.post("/api/v1/conversations/:id/transfer", {preHandler:authenticate}, async(
   if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
   const principal=request.principal,{id}=request.params as {id:string},targetAccountId=parsed.data.accountId;
   const result=await transaction(async client=>{
-    const current=await client.query(`SELECT c.account_id,c.contact_id,co.provider_user_id,co.entity_type,a.platform,a.display_name account_name
+    const current=await client.query(`SELECT c.account_id,c.contact_id,co.provider_user_id,co.phone_e164,co.whatsapp_username,co.entity_type,a.platform,a.display_name account_name
       FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN channel_accounts a ON a.id=c.account_id
       WHERE c.id=$1 FOR UPDATE OF c,co`,[id]);
     if(!current.rowCount||!canAccessAccount(principal,current.rows[0].account_id))return{status:"not_found" as const};
@@ -741,7 +741,13 @@ app.post("/api/v1/conversations/:id/transfer", {preHandler:authenticate}, async(
     const target=await client.query("SELECT id,display_name,platform FROM channel_accounts WHERE id=$1",[targetAccountId]);
     if(!target.rowCount||!canAccessAccount(principal,targetAccountId))return{status:"target_forbidden" as const};
     if(target.rows[0].platform!==source.platform)return{status:"platform_mismatch" as const};
-    const duplicate=await client.query("SELECT c.id FROM contacts co LEFT JOIN conversations c ON c.contact_id=co.id WHERE co.account_id=$1 AND co.provider_user_id=$2 LIMIT 1",[targetAccountId,source.provider_user_id]);
+    const duplicate=await client.query(`SELECT c.id
+      FROM contacts co LEFT JOIN conversations c ON c.contact_id=co.id
+      WHERE co.account_id=$1
+        AND (($2::text IS NOT NULL AND co.provider_user_id=$2)
+          OR ($3::text IS NOT NULL AND co.phone_e164=$3)
+          OR ($4::text IS NOT NULL AND co.whatsapp_username=$4))
+      LIMIT 1`,[targetAccountId,source.provider_user_id,source.phone_e164,source.whatsapp_username]);
     if(duplicate.rowCount)return{status:"contact_conflict" as const};
     const pending=await client.query("SELECT 1 FROM outbound_commands oc JOIN messages m ON m.id=oc.message_id WHERE m.conversation_id=$1 AND oc.state IN ('pending','dispatched') LIMIT 1",[id]);
     if(pending.rowCount)return{status:"outbound_pending" as const};
@@ -2306,7 +2312,7 @@ app.post("/api/v1/media", { preHandler:authenticate }, async (request,reply) => 
   const media=await transaction(async client=>{const created=await client.query("INSERT INTO media(account_id,object_key,file_name,mime_type,byte_size,sha256) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",[query.accountId,objectKey,normalized.fileName,normalized.mimeType,normalized.bytes.length,sha256]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'media.upload','media',$3,$4)",[request.principal?.kind,request.principal?.id,created.rows[0].id,JSON.stringify({accountId:query.accountId,fileName:normalized.fileName,mimeType:normalized.mimeType,byteSize:normalized.bytes.length,sha256})]);return created;}); return reply.code(201).send({mediaId:media.rows[0].id,fileName:normalized.fileName,mimeType:normalized.mimeType,size:normalized.bytes.length,sha256});
 });
 
-app.setErrorHandler((error,_request,reply)=>{app.log.error(error);void reply.code((error as {statusCode?:number}).statusCode??500).send({error:"internal_error",message:config.NODE_ENV==="production"?"服务暂时不可用":error instanceof Error?error.message:String(error)});});
+app.setErrorHandler((error,request,reply)=>{app.log.error(error);const code=typeof error==="object"&&error!==null&&"code" in error?String((error as {code?:unknown}).code):"";if(request.url.match(/^\/api\/v1\/conversations\/[^/]+\/transfer(?:\?|$)/)&&code==="23505")return void reply.code(409).send({error:"transfer_conflict",message:"转移时发现目标账号已有冲突数据，请刷新页面后重试；如仍失败，请先处理重复联系人或任务规则"});if(request.url.match(/^\/api\/v1\/conversations\/[^/]+\/transfer(?:\?|$)/)&&code==="23503")return void reply.code(409).send({error:"transfer_reference_conflict",message:"转移涉及的关联数据不完整，请刷新页面后重试"});void reply.code((error as {statusCode?:number}).statusCode??500).send({error:"internal_error",message:config.NODE_ENV==="production"?"服务暂时不可用":error instanceof Error?error.message:String(error)});});
 
 await registerAgentHub(app);
 
