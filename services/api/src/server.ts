@@ -758,26 +758,20 @@ app.post("/api/v1/conversations/:id/transfer", {preHandler:authenticate}, async(
         ON existing.account_id=$2 AND existing.contact_id=moving.contact_id
        AND existing.source=moving.source AND existing.source_key=moving.source_key
        AND existing.id<>moving.id
-      WHERE moving.account_id=$3 AND moving.contact_id=$1`,[source.contact_id,targetAccountId,source.account_id]);
+      WHERE moving.account_id<>$2 AND moving.contact_id=$1`,[source.contact_id,targetAccountId]);
     if(ruleConflicts.rowCount&&!parsed.data.ruleStrategy)return{status:"task_rule_conflict" as const};
     if(ruleConflicts.rowCount){
       for(const conflict of ruleConflicts.rows as Array<{source_rule_id:string;target_rule_id:string}>){
         await client.query(`UPDATE tasks SET status='cancelled',last_error='Cancelled because the target account already has this task rule',updated_at=now()
           WHERE rule_id=$1 AND status NOT IN ('completed','cancelled','failed')`,[conflict.source_rule_id]);
-        if(parsed.data.ruleStrategy==="source")await client.query(`UPDATE task_rules target SET title_template=source.title_template,description=source.description,month=source.month,day=source.day,start_time=source.start_time,duration_minutes=source.duration_minutes,lead_days=source.lead_days,send_mode=source.send_mode,enabled=source.enabled,recurrence=source.recurrence,tool_overrides=source.tool_overrides,updated_at=now()
-          FROM task_rules source WHERE target.id=$1 AND source.id=$2`,[conflict.target_rule_id,conflict.source_rule_id]);
-        await client.query("DELETE FROM task_rules WHERE id=$1",[conflict.source_rule_id]);
+        if(parsed.data.ruleStrategy==="source"){
+          await client.query("UPDATE tasks SET rule_id=NULL,updated_at=now() WHERE rule_id=$1",[conflict.target_rule_id]);
+          await client.query("DELETE FROM task_rules WHERE id=$1",[conflict.target_rule_id]);
+        }else{
+          await client.query("DELETE FROM task_rules WHERE id=$1",[conflict.source_rule_id]);
+        }
       }
     }
-    // Remove any remaining source-side duplicate rows before changing the
-    // contact/account ownership. The unique key is account + contact + rule
-    // identity, so the final account update must never see both rows.
-    await client.query(`DELETE FROM task_rules moving
-      USING task_rules existing
-      WHERE moving.account_id=$1 AND existing.account_id=$2
-        AND moving.contact_id=existing.contact_id
-        AND moving.source=existing.source
-        AND moving.source_key=existing.source_key`,[source.account_id,targetAccountId]);
     await client.query("UPDATE contacts SET account_id=$2,updated_at=now() WHERE id=$1",[source.contact_id,targetAccountId]);
     await client.query("UPDATE conversations SET account_id=$2 WHERE id=$1",[id,targetAccountId]);
     await client.query("UPDATE tasks SET account_id=$2,updated_at=now() WHERE conversation_id=$1 OR contact_id=$3",[id,targetAccountId,source.contact_id]);
