@@ -762,10 +762,7 @@ app.post("/api/v1/conversations/:id/transfer", {preHandler:authenticate}, async(
       for(const conflict of ruleConflicts.rows as Array<{source_rule_id:string;target_rule_id:string}>){
         if(parsed.data.ruleStrategy==="source")await client.query(`UPDATE task_rules target SET title_template=source.title_template,description=source.description,month=source.month,day=source.day,start_time=source.start_time,duration_minutes=source.duration_minutes,lead_days=source.lead_days,send_mode=source.send_mode,enabled=source.enabled,recurrence=source.recurrence,tool_overrides=source.tool_overrides,updated_at=now()
           FROM task_rules source WHERE target.id=$1 AND source.id=$2`,[conflict.target_rule_id,conflict.source_rule_id]);
-        await client.query(`UPDATE tasks source_task SET status='cancelled',last_error='Cancelled because the target account already has this task occurrence',updated_at=now()
-          WHERE source_task.rule_id=$2 AND source_task.occurrence_date IS NOT NULL AND EXISTS(
-            SELECT 1 FROM tasks target_task WHERE target_task.rule_id=$1 AND target_task.contact_id=source_task.contact_id AND target_task.occurrence_date=source_task.occurrence_date)`,[conflict.target_rule_id,conflict.source_rule_id]);
-        await client.query("UPDATE tasks SET rule_id=$1,updated_at=now() WHERE rule_id=$2 AND status<>'cancelled'",[conflict.target_rule_id,conflict.source_rule_id]);
+        await client.query("UPDATE tasks SET status='cancelled',last_error='Cancelled because the target account already has this task rule',updated_at=now() WHERE rule_id=$1 AND status NOT IN ('completed','cancelled','failed')",[conflict.source_rule_id]);
         await client.query("UPDATE task_rules SET enabled=false,updated_at=now() WHERE id=$1",[conflict.source_rule_id]);
       }
     }
