@@ -132,7 +132,7 @@ export async function discoverTargetedPages(userToken:string,debug:MetaTokenDebu
   const pages:Array<{id:string;name:string;access_token:string;tasks:string[]}>=[];
   for(const pageId of granularPageTargetIds(debug)){
     try{
-      const item=await metaRequest<MetaPage>(`${pageId}?fields=id,name,access_token,tasks`,userToken);
+      const item=await metaRequest<MetaPage>(`${pageId}?fields=id,name,access_token`,userToken);
       if(item.id!==pageId||!item.access_token)continue;
       pages.push({id:item.id,name:item.name??`Facebook Page ${item.id}`,access_token:item.access_token,tasks:Array.isArray(item.tasks)?item.tasks:[]});
     }catch{
@@ -163,7 +163,7 @@ export function messengerPageDiscoveryDiagnostic(permissions:MetaPermission[]|nu
   if(debug?.type&&debug.type!=="USER")return `Facebook 返回的 access token 类型是 ${debug.type}，不是当前 /me/accounts 流程需要的 USER token。请检查 Login for Business Configuration。`;
   const targetIds=granularPageTargetIds(debug);
   if(debug&&targetIds.length===0)return "Facebook 返回的是有效 User access token，所需权限也已授予，但 granular permissions 没有包含任何 Page target ID。这表示授权弹窗没有把具体 Page 授予应用；请在 Facebook 的业务集成设置中为 WSDesk 勾选目标 Page，或确认当前个人账号对该 Page 拥有 Facebook access 后重新授权。";
-  if(targetIds.length)return `Facebook token 已包含 Page target ID：${targetIds.join(", ")}，但 Facebook 既未在 /me/accounts 返回该 Page，也未允许通过目标 ID 取得 Page access token。目标 Page 无法安全连接；请在 Graph API Explorer 使用同一应用的 User token 请求 /${targetIds[0]}?fields=id,name,access_token,tasks，并查看 Facebook 返回的具体错误。`;
+  if(targetIds.length)return `Facebook token 已包含 Page target ID：${targetIds.join(", ")}，但 Facebook 既未在 /me/accounts 返回该 Page，也未允许通过目标 ID 取得 Page access token。目标 Page 无法安全连接；请在 Graph API Explorer 使用同一应用的 User token 请求 /${targetIds[0]}?fields=id,name,access_token，并查看 Facebook 返回的具体错误。`;
   return "Facebook 已实际授予所需权限，但 /me/accounts 返回 0 个 Page，且 token debugger 未返回 Page target 信息。请检查当前个人账号的 Page access，并在 Facebook 业务集成设置中确认 WSDesk 已获准访问目标 Page。";
 }
 
