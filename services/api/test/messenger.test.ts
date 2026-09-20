@@ -3,7 +3,7 @@ import {createHmac} from "node:crypto";
 import {readFile} from "node:fs/promises";
 import test from "node:test";
 import {messengerOutboundBody,validMessengerSignature,verifyMessengerPage} from "../src/messenger.js";
-import {messengerOAuthAuthorizationUrl,messengerOAuthCallbackHtml} from "../src/messenger-oauth.js";
+import {messengerOAuthAuthorizationUrl,messengerOAuthCallbackHtml,messengerPageDiscoveryDiagnostic} from "../src/messenger-oauth.js";
 import {MessengerReplyWindowClosedError,queueChannelCommand} from "../src/whatsapp-outbound.js";
 
 test("Messenger webhook signature validates the exact raw body",()=>{
@@ -107,7 +107,18 @@ test("Messenger OAuth uses Login for Business authorization-code flow and a stri
   const html=messengerOAuthCallbackHtml({sessionId:"00000000-0000-4000-8000-000000000057"});
   assert.match(html,/relaydesk:messenger-oauth/);
   assert.match(html,/window\.opener\.postMessage/);
+  assert.match(html,/window\.close\(\)/);
+  assert.match(html,/setTimeout/);
   assert.doesNotMatch(html,/access_token|page_access_token/);
+});
+
+test("Messenger OAuth explains empty Page discovery using actual token permissions",()=>{
+  assert.match(messengerPageDiscoveryDiagnostic([{permission:"pages_show_list",status:"declined"}]),/pages_show_list/);
+  assert.match(messengerPageDiscoveryDiagnostic([
+    {permission:"pages_show_list",status:"granted"},
+    {permission:"pages_manage_metadata",status:"granted"},
+    {permission:"pages_messaging",status:"granted"},
+  ]),/Facebook access with full control/);
 });
 
 test("Messenger OAuth migration stores only encrypted candidate tokens and tracks Page subscriptions",async()=>{

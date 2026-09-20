@@ -22,6 +22,9 @@ type OAuthSettingsRow={
 };
 type CandidateRow={page_id:string;page_name:string;page_access_token_encrypted:string;tasks:unknown};
 type MetaPageList={data?:Array<{id?:string;name?:string;access_token?:string;tasks?:string[]}>;paging?:{next?:string}};
+type MetaPermission={permission?:string;status?:string};
+
+const requiredPagePermissions=["pages_show_list","pages_manage_metadata","pages_messaging"] as const;
 
 class MetaOAuthError extends Error{
   constructor(readonly status:number,readonly code:string,detail:string){super(detail);}
@@ -67,7 +70,7 @@ export function messengerOAuthCallbackHtml(payload:{sessionId?:string;error?:str
   const fallback=new URL("/settings",target);
   if(payload.sessionId)fallback.searchParams.set("messengerOauth",payload.sessionId);
   if(payload.error)fallback.searchParams.set("messengerOauthError",payload.error);
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>RelayDesk · Facebook 授权</title></head><body><p>Facebook 授权已处理，正在返回 RelayDesk…</p><script>const payload=${message};if(window.opener&&!window.opener.closed){window.opener.postMessage(payload,${JSON.stringify(target)});window.close();}else{window.location.replace(${JSON.stringify(fallback.toString())});}</script></body></html>`;
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>RelayDesk · Facebook 授权</title></head><body><p>Facebook 授权已处理，正在返回 RelayDesk…</p><script>const payload=${message};if(window.opener&&!window.opener.closed)window.opener.postMessage(payload,${JSON.stringify(target)});window.close();setTimeout(()=>window.location.replace(${JSON.stringify(fallback.toString())}),500);</script></body></html>`;
 }
 
 async function oauthSettings():Promise<OAuthSettingsRow|null>{
@@ -112,6 +115,19 @@ async function discoverPages(userToken:string):Promise<Array<{id:string;name:str
     next=candidate&&new URL(candidate).hostname==="graph.facebook.com"?candidate:undefined;
   }
   return pages;
+}
+
+async function grantedPermissions(userToken:string):Promise<MetaPermission[]>{
+  const response=await metaRequest<{data?:MetaPermission[]}>("me/permissions?limit=100",userToken);
+  return response.data??[];
+}
+
+export function messengerPageDiscoveryDiagnostic(permissions:MetaPermission[]|null):string{
+  if(!permissions)return "Facebook 的 /me/accounts 返回 0 个 Page，且无法读取本次 token 的权限状态。请重新授权后再试。";
+  const statuses=new Map(permissions.map(item=>[item.permission??"",item.status??""]));
+  const missing=requiredPagePermissions.filter(permission=>statuses.get(permission)!=="granted");
+  if(missing.length)return `Facebook 本次签发的 token 未实际授予：${missing.join(", ")}。请先从 Facebook 的“业务集成”中移除 WSDesk，再使用当前 Configuration 重新授权。`;
+  return "Facebook 已实际授予 pages_show_list、pages_manage_metadata 和 pages_messaging，但 /me/accounts 返回 0 个 Page。请确认当前个人账号在目标 Page 的“Page access”中拥有 Facebook access with full control；仅 Business Manager 任务权限不足。";
 }
 
 async function verifyPage(pageId:string,pageToken:string):Promise<{id:string;name?:string}>{
@@ -234,12 +250,16 @@ export async function registerMessengerOAuthRoutes(app:FastifyInstance):Promise<
       const settings=await oauthSettings();
       if(!settings||!settings.enabled)throw new MetaOAuthError(409,"oauth_not_configured","Messenger OAuth is not configured");
       const userToken=await exchangeAuthorizationCode(settings,query.code);
-      const pages=await discoverPages(userToken);
+      const [pages,permissions]=await Promise.all([
+        discoverPages(userToken),
+        grantedPermissions(userToken).catch(()=>null),
+      ]);
+      const discoveryDiagnostic=pages.length?null:messengerPageDiscoveryDiagnostic(permissions);
       await transaction(async client=>{
         await client.query("DELETE FROM messenger_oauth_page_candidates WHERE session_id=$1",[session.id]);
         for(const page of pages)await client.query(`INSERT INTO messenger_oauth_page_candidates(session_id,page_id,page_name,page_access_token_encrypted,tasks)
           VALUES($1,$2,$3,$4,$5)`,[session.id,page.id,page.name,encryptAtRest(page.access_token,config.DATA_ENCRYPTION_KEY),JSON.stringify(page.tasks)]);
-        await client.query(`UPDATE messenger_oauth_sessions SET status='pages_ready',expires_at=now()+interval '30 minutes',last_error=NULL,updated_at=now() WHERE id=$1`,[session.id]);
+        await client.query(`UPDATE messenger_oauth_sessions SET status='pages_ready',expires_at=now()+interval '30 minutes',last_error=$2,updated_at=now() WHERE id=$1`,[session.id,discoveryDiagnostic]);
       });
       return reply.type("text/html").send(messengerOAuthCallbackHtml({sessionId:session.id}));
     }catch(error){
