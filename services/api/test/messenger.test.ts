@@ -114,11 +114,14 @@ test("Messenger OAuth uses Login for Business authorization-code flow and a stri
 
 test("Messenger OAuth explains empty Page discovery using actual token permissions",()=>{
   assert.match(messengerPageDiscoveryDiagnostic([{permission:"pages_show_list",status:"declined"}]),/pages_show_list/);
-  assert.match(messengerPageDiscoveryDiagnostic([
+  const granted=[
     {permission:"pages_show_list",status:"granted"},
     {permission:"pages_manage_metadata",status:"granted"},
     {permission:"pages_messaging",status:"granted"},
-  ]),/Facebook access with full control/);
+  ];
+  assert.match(messengerPageDiscoveryDiagnostic(granted,{type:"USER",is_valid:true,granular_scopes:[]}),/没有包含任何 Page target ID/);
+  assert.match(messengerPageDiscoveryDiagnostic(granted,{type:"USER",is_valid:true,granular_scopes:[{scope:"pages_show_list",target_ids:["123456789"]}]}),/123456789/);
+  assert.match(messengerPageDiscoveryDiagnostic(granted,{type:"SYSTEM_USER",is_valid:true}),/SYSTEM_USER/);
 });
 
 test("Messenger OAuth migration stores only encrypted candidate tokens and tracks Page subscriptions",async()=>{

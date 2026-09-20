@@ -23,6 +23,7 @@ type OAuthSettingsRow={
 type CandidateRow={page_id:string;page_name:string;page_access_token_encrypted:string;tasks:unknown};
 type MetaPageList={data?:Array<{id?:string;name?:string;access_token?:string;tasks?:string[]}>;paging?:{next?:string}};
 type MetaPermission={permission?:string;status?:string};
+type MetaTokenDebug={type?:string;is_valid?:boolean;scopes?:string[];granular_scopes?:Array<{scope?:string;target_ids?:string[]}>};
 
 const requiredPagePermissions=["pages_show_list","pages_manage_metadata","pages_messaging"] as const;
 
@@ -122,12 +123,25 @@ async function grantedPermissions(userToken:string):Promise<MetaPermission[]>{
   return response.data??[];
 }
 
-export function messengerPageDiscoveryDiagnostic(permissions:MetaPermission[]|null):string{
+async function debugAccessToken(settings:OAuthSettingsRow,userToken:string):Promise<MetaTokenDebug|null>{
+  const url=new URL(`${graphBase}/debug_token`);
+  url.searchParams.set("input_token",userToken);
+  const appToken=`${settings.app_id}|${decryptAtRest(settings.app_secret_encrypted,config.DATA_ENCRYPTION_KEY)}`;
+  const response=await metaRequest<{data?:MetaTokenDebug}>(url.toString(),appToken);
+  return response.data??null;
+}
+
+export function messengerPageDiscoveryDiagnostic(permissions:MetaPermission[]|null,debug:MetaTokenDebug|null=null):string{
   if(!permissions)return "Facebook 的 /me/accounts 返回 0 个 Page，且无法读取本次 token 的权限状态。请重新授权后再试。";
   const statuses=new Map(permissions.map(item=>[item.permission??"",item.status??""]));
   const missing=requiredPagePermissions.filter(permission=>statuses.get(permission)!=="granted");
   if(missing.length)return `Facebook 本次签发的 token 未实际授予：${missing.join(", ")}。请先从 Facebook 的“业务集成”中移除 WSDesk，再使用当前 Configuration 重新授权。`;
-  return "Facebook 已实际授予 pages_show_list、pages_manage_metadata 和 pages_messaging，但 /me/accounts 返回 0 个 Page。请确认当前个人账号在目标 Page 的“Page access”中拥有 Facebook access with full control；仅 Business Manager 任务权限不足。";
+  if(debug?.type&&debug.type!=="USER")return `Facebook 返回的 access token 类型是 ${debug.type}，不是当前 /me/accounts 流程需要的 USER token。请检查 Login for Business Configuration。`;
+  const granularTargets=new Map((debug?.granular_scopes??[]).map(item=>[item.scope??"",Array.isArray(item.target_ids)?item.target_ids:[]]));
+  const targetIds=[...new Set(requiredPagePermissions.flatMap(permission=>granularTargets.get(permission)??[]))];
+  if(debug&&targetIds.length===0)return "Facebook 返回的是有效 User access token，三项权限也已授予，但 granular permissions 没有包含任何 Page target ID。这表示授权弹窗没有把具体 Page 授予应用；请在 Facebook 的业务集成设置中为 WSDesk 勾选目标 Page，或确认当前个人账号对该 Page 拥有 Facebook access 后重新授权。";
+  if(targetIds.length)return `Facebook token 已包含 Page target ID：${targetIds.join(", ")}，但 /me/accounts 仍返回 0 个 Page。请确认其中包含目标 Page ID，并检查当前个人账号在该 Page 的 Facebook access；如果目标 ID 不在列表中，请重新编辑业务集成的 Page 授权。`;
+  return "Facebook 已实际授予三项权限，但 /me/accounts 返回 0 个 Page，且 token debugger 未返回 Page target 信息。请检查当前个人账号的 Page access，并在 Facebook 业务集成设置中确认 WSDesk 已获准访问目标 Page。";
 }
 
 async function verifyPage(pageId:string,pageToken:string):Promise<{id:string;name?:string}>{
@@ -250,11 +264,12 @@ export async function registerMessengerOAuthRoutes(app:FastifyInstance):Promise<
       const settings=await oauthSettings();
       if(!settings||!settings.enabled)throw new MetaOAuthError(409,"oauth_not_configured","Messenger OAuth is not configured");
       const userToken=await exchangeAuthorizationCode(settings,query.code);
-      const [pages,permissions]=await Promise.all([
+      const [pages,permissions,tokenDebug]=await Promise.all([
         discoverPages(userToken),
         grantedPermissions(userToken).catch(()=>null),
+        debugAccessToken(settings,userToken).catch(()=>null),
       ]);
-      const discoveryDiagnostic=pages.length?null:messengerPageDiscoveryDiagnostic(permissions);
+      const discoveryDiagnostic=pages.length?null:messengerPageDiscoveryDiagnostic(permissions,tokenDebug);
       await transaction(async client=>{
         await client.query("DELETE FROM messenger_oauth_page_candidates WHERE session_id=$1",[session.id]);
         for(const page of pages)await client.query(`INSERT INTO messenger_oauth_page_candidates(session_id,page_id,page_name,page_access_token_encrypted,tasks)
