@@ -269,6 +269,16 @@ export async function registerMessengerOAuthRoutes(app:FastifyInstance):Promise<
     }
   });
 
+  app.get("/api/v1/admin/messenger/oauth/sessions/latest",{preHandler:authenticate},async(request,reply)=>{
+    if(!adminOnly(request,reply))return;
+    const session=await pool.query(`SELECT id,status,expires_at,last_error,created_at,updated_at FROM messenger_oauth_sessions
+      WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1`,[request.principal!.id]);
+    if(!session.rowCount)return reply.code(404).send({error:"not_found"});
+    const row=session.rows[0];
+    const pages=await pool.query(`SELECT page_id,page_name,tasks FROM messenger_oauth_page_candidates WHERE session_id=$1 ORDER BY page_name`,[row.id]);
+    return{session:{id:row.id,status:row.status,expiresAt:row.expires_at,lastError:row.last_error,createdAt:row.created_at,updatedAt:row.updated_at},pages:pages.rows.map(page=>({pageId:page.page_id,pageName:page.page_name,tasks:page.tasks}))};
+  });
+
   app.get("/api/v1/admin/messenger/oauth/sessions/:id",{preHandler:authenticate},async(request,reply)=>{
     if(!adminOnly(request,reply))return;
     const {id}=request.params as {id:string};

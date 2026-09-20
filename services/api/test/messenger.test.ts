@@ -134,5 +134,7 @@ test("Messenger OAuth migration stores only encrypted candidate tokens and track
   assert.match(oauth,/encryptAtRest\(page\.access_token/);
   assert.match(oauth,/subscribed_apps/);
   assert.match(oauth,/\["messages","message_deliveries","message_reads"\]/);
+  assert.match(oauth,/oauth\/sessions\/latest/);
+  assert.match(oauth,/ORDER BY created_at DESC LIMIT 1/);
   assert.doesNotMatch(oauth,/INSERT INTO messenger_oauth_sessions[^;]*access_token/i);
 });
