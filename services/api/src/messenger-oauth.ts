@@ -26,7 +26,7 @@ type MetaPageList={data?:MetaPage[];paging?:{next?:string}};
 type MetaPermission={permission?:string;status?:string};
 type MetaTokenDebug={type?:string;is_valid?:boolean;scopes?:string[];granular_scopes?:Array<{scope?:string;target_ids?:string[]}>};
 
-const requiredPagePermissions=["pages_show_list","pages_manage_metadata","pages_messaging"] as const;
+const requiredPagePermissions=["pages_show_list","pages_read_engagement","pages_manage_metadata","pages_messaging"] as const;
 
 class MetaOAuthError extends Error{
   constructor(readonly status:number,readonly code:string,detail:string){super(detail);}
@@ -162,9 +162,9 @@ export function messengerPageDiscoveryDiagnostic(permissions:MetaPermission[]|nu
   if(missing.length)return `Facebook 本次签发的 token 未实际授予：${missing.join(", ")}。请先从 Facebook 的“业务集成”中移除 WSDesk，再使用当前 Configuration 重新授权。`;
   if(debug?.type&&debug.type!=="USER")return `Facebook 返回的 access token 类型是 ${debug.type}，不是当前 /me/accounts 流程需要的 USER token。请检查 Login for Business Configuration。`;
   const targetIds=granularPageTargetIds(debug);
-  if(debug&&targetIds.length===0)return "Facebook 返回的是有效 User access token，三项权限也已授予，但 granular permissions 没有包含任何 Page target ID。这表示授权弹窗没有把具体 Page 授予应用；请在 Facebook 的业务集成设置中为 WSDesk 勾选目标 Page，或确认当前个人账号对该 Page 拥有 Facebook access 后重新授权。";
+  if(debug&&targetIds.length===0)return "Facebook 返回的是有效 User access token，所需权限也已授予，但 granular permissions 没有包含任何 Page target ID。这表示授权弹窗没有把具体 Page 授予应用；请在 Facebook 的业务集成设置中为 WSDesk 勾选目标 Page，或确认当前个人账号对该 Page 拥有 Facebook access 后重新授权。";
   if(targetIds.length)return `Facebook token 已包含 Page target ID：${targetIds.join(", ")}，但 Facebook 既未在 /me/accounts 返回该 Page，也未允许通过目标 ID 取得 Page access token。目标 Page 无法安全连接；请在 Graph API Explorer 使用同一应用的 User token 请求 /${targetIds[0]}?fields=id,name,access_token,tasks，并查看 Facebook 返回的具体错误。`;
-  return "Facebook 已实际授予三项权限，但 /me/accounts 返回 0 个 Page，且 token debugger 未返回 Page target 信息。请检查当前个人账号的 Page access，并在 Facebook 业务集成设置中确认 WSDesk 已获准访问目标 Page。";
+  return "Facebook 已实际授予所需权限，但 /me/accounts 返回 0 个 Page，且 token debugger 未返回 Page target 信息。请检查当前个人账号的 Page access，并在 Facebook 业务集成设置中确认 WSDesk 已获准访问目标 Page。";
 }
 
 async function verifyPage(pageId:string,pageToken:string):Promise<{id:string;name?:string}>{

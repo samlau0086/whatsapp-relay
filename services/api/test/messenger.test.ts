@@ -116,6 +116,7 @@ test("Messenger OAuth explains empty Page discovery using actual token permissio
   assert.match(messengerPageDiscoveryDiagnostic([{permission:"pages_show_list",status:"declined"}]),/pages_show_list/);
   const granted=[
     {permission:"pages_show_list",status:"granted"},
+    {permission:"pages_read_engagement",status:"granted"},
     {permission:"pages_manage_metadata",status:"granted"},
     {permission:"pages_messaging",status:"granted"},
   ];
@@ -142,6 +143,7 @@ test("Messenger OAuth falls back to granular Page targets when accounts is empty
       is_valid:true,
       granular_scopes:[
         {scope:"pages_show_list",target_ids:["684424034752580"]},
+        {scope:"pages_read_engagement",target_ids:["684424034752580"]},
         {scope:"unrelated_scope",target_ids:["999"]},
       ],
     }),[{
