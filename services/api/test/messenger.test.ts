@@ -3,7 +3,7 @@ import {createHmac} from "node:crypto";
 import {readFile} from "node:fs/promises";
 import test from "node:test";
 import {messengerOutboundBody,validMessengerSignature,verifyMessengerPage} from "../src/messenger.js";
-import {messengerOAuthAuthorizationUrl,messengerOAuthCallbackHtml,messengerPageDiscoveryDiagnostic} from "../src/messenger-oauth.js";
+import {discoverTargetedPages,messengerOAuthAuthorizationUrl,messengerOAuthCallbackHtml,messengerPageDiscoveryDiagnostic} from "../src/messenger-oauth.js";
 import {MessengerReplyWindowClosedError,queueChannelCommand} from "../src/whatsapp-outbound.js";
 
 test("Messenger webhook signature validates the exact raw body",()=>{
@@ -122,6 +122,37 @@ test("Messenger OAuth explains empty Page discovery using actual token permissio
   assert.match(messengerPageDiscoveryDiagnostic(granted,{type:"USER",is_valid:true,granular_scopes:[]}),/没有包含任何 Page target ID/);
   assert.match(messengerPageDiscoveryDiagnostic(granted,{type:"USER",is_valid:true,granular_scopes:[{scope:"pages_show_list",target_ids:["123456789"]}]}),/123456789/);
   assert.match(messengerPageDiscoveryDiagnostic(granted,{type:"SYSTEM_USER",is_valid:true}),/SYSTEM_USER/);
+});
+
+test("Messenger OAuth falls back to granular Page targets when accounts is empty",async()=>{
+  const originalFetch=globalThis.fetch;
+  globalThis.fetch=async(input,init)=>{
+    assert.match(String(input),/\/684424034752580\?fields=id,name,access_token,tasks$/);
+    assert.equal((init?.headers as Record<string,string>).authorization,"Bearer user-token");
+    return new Response(JSON.stringify({
+      id:"684424034752580",
+      name:"MaesVanti Wholesale",
+      access_token:"page-token",
+      tasks:["MANAGE","MESSAGING"],
+    }),{status:200,headers:{"content-type":"application/json"}});
+  };
+  try{
+    assert.deepEqual(await discoverTargetedPages("user-token",{
+      type:"USER",
+      is_valid:true,
+      granular_scopes:[
+        {scope:"pages_show_list",target_ids:["684424034752580"]},
+        {scope:"unrelated_scope",target_ids:["999"]},
+      ],
+    }),[{
+      id:"684424034752580",
+      name:"MaesVanti Wholesale",
+      access_token:"page-token",
+      tasks:["MANAGE","MESSAGING"],
+    }]);
+  }finally{
+    globalThis.fetch=originalFetch;
+  }
 });
 
 test("Messenger OAuth migration stores only encrypted candidate tokens and tracks Page subscriptions",async()=>{

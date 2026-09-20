@@ -21,7 +21,8 @@ type OAuthSettingsRow={
   verify_token_hash:string;enabled:boolean;updated_at:string;
 };
 type CandidateRow={page_id:string;page_name:string;page_access_token_encrypted:string;tasks:unknown};
-type MetaPageList={data?:Array<{id?:string;name?:string;access_token?:string;tasks?:string[]}>;paging?:{next?:string}};
+type MetaPage={id?:string;name?:string;access_token?:string;tasks?:string[]};
+type MetaPageList={data?:MetaPage[];paging?:{next?:string}};
 type MetaPermission={permission?:string;status?:string};
 type MetaTokenDebug={type?:string;is_valid?:boolean;scopes?:string[];granular_scopes?:Array<{scope?:string;target_ids?:string[]}>};
 
@@ -118,6 +119,29 @@ async function discoverPages(userToken:string):Promise<Array<{id:string;name:str
   return pages;
 }
 
+function granularPageTargetIds(debug:MetaTokenDebug|null):string[]{
+  const requiredScopes=new Set<string>(requiredPagePermissions);
+  return [...new Set((debug?.granular_scopes??[])
+    .filter(item=>item.scope&&requiredScopes.has(item.scope))
+    .flatMap(item=>Array.isArray(item.target_ids)?item.target_ids:[])
+    .filter(id=>/^\d+$/.test(id)))]
+    .slice(0,100);
+}
+
+export async function discoverTargetedPages(userToken:string,debug:MetaTokenDebug|null):Promise<Array<{id:string;name:string;access_token:string;tasks:string[]}>>{
+  const pages:Array<{id:string;name:string;access_token:string;tasks:string[]}>=[];
+  for(const pageId of granularPageTargetIds(debug)){
+    try{
+      const item=await metaRequest<MetaPage>(`${pageId}?fields=id,name,access_token,tasks`,userToken);
+      if(item.id!==pageId||!item.access_token)continue;
+      pages.push({id:item.id,name:item.name??`Facebook Page ${item.id}`,access_token:item.access_token,tasks:Array.isArray(item.tasks)?item.tasks:[]});
+    }catch{
+      // A granular target is only usable when Meta also returns a Page access token for it.
+    }
+  }
+  return pages;
+}
+
 async function grantedPermissions(userToken:string):Promise<MetaPermission[]>{
   const response=await metaRequest<{data?:MetaPermission[]}>("me/permissions?limit=100",userToken);
   return response.data??[];
@@ -137,10 +161,9 @@ export function messengerPageDiscoveryDiagnostic(permissions:MetaPermission[]|nu
   const missing=requiredPagePermissions.filter(permission=>statuses.get(permission)!=="granted");
   if(missing.length)return `Facebook 本次签发的 token 未实际授予：${missing.join(", ")}。请先从 Facebook 的“业务集成”中移除 WSDesk，再使用当前 Configuration 重新授权。`;
   if(debug?.type&&debug.type!=="USER")return `Facebook 返回的 access token 类型是 ${debug.type}，不是当前 /me/accounts 流程需要的 USER token。请检查 Login for Business Configuration。`;
-  const granularTargets=new Map((debug?.granular_scopes??[]).map(item=>[item.scope??"",Array.isArray(item.target_ids)?item.target_ids:[]]));
-  const targetIds=[...new Set(requiredPagePermissions.flatMap(permission=>granularTargets.get(permission)??[]))];
+  const targetIds=granularPageTargetIds(debug);
   if(debug&&targetIds.length===0)return "Facebook 返回的是有效 User access token，三项权限也已授予，但 granular permissions 没有包含任何 Page target ID。这表示授权弹窗没有把具体 Page 授予应用；请在 Facebook 的业务集成设置中为 WSDesk 勾选目标 Page，或确认当前个人账号对该 Page 拥有 Facebook access 后重新授权。";
-  if(targetIds.length)return `Facebook token 已包含 Page target ID：${targetIds.join(", ")}，但 /me/accounts 仍返回 0 个 Page。请确认其中包含目标 Page ID，并检查当前个人账号在该 Page 的 Facebook access；如果目标 ID 不在列表中，请重新编辑业务集成的 Page 授权。`;
+  if(targetIds.length)return `Facebook token 已包含 Page target ID：${targetIds.join(", ")}，但 Facebook 既未在 /me/accounts 返回该 Page，也未允许通过目标 ID 取得 Page access token。目标 Page 无法安全连接；请在 Graph API Explorer 使用同一应用的 User token 请求 /${targetIds[0]}?fields=id,name,access_token,tasks，并查看 Facebook 返回的具体错误。`;
   return "Facebook 已实际授予三项权限，但 /me/accounts 返回 0 个 Page，且 token debugger 未返回 Page target 信息。请检查当前个人账号的 Page access，并在 Facebook 业务集成设置中确认 WSDesk 已获准访问目标 Page。";
 }
 
@@ -264,11 +287,12 @@ export async function registerMessengerOAuthRoutes(app:FastifyInstance):Promise<
       const settings=await oauthSettings();
       if(!settings||!settings.enabled)throw new MetaOAuthError(409,"oauth_not_configured","Messenger OAuth is not configured");
       const userToken=await exchangeAuthorizationCode(settings,query.code);
-      const [pages,permissions,tokenDebug]=await Promise.all([
+      const [listedPages,permissions,tokenDebug]=await Promise.all([
         discoverPages(userToken),
         grantedPermissions(userToken).catch(()=>null),
         debugAccessToken(settings,userToken).catch(()=>null),
       ]);
+      const pages=listedPages.length?listedPages:await discoverTargetedPages(userToken,tokenDebug);
       const discoveryDiagnostic=pages.length?null:messengerPageDiscoveryDiagnostic(permissions,tokenDebug);
       await transaction(async client=>{
         await client.query("DELETE FROM messenger_oauth_page_candidates WHERE session_id=$1",[session.id]);
