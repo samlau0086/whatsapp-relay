@@ -14,7 +14,7 @@ import { countries as COUNTRIES } from "countries-list";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { OrderTemplateEditor, type TemplateFormat } from "./order-template-editor";
 import { ProductCardTemplateEditor } from "./product-card-template-editor";
 import { ProductCardSendDialog } from "./product-card-send-dialog";
@@ -278,6 +278,8 @@ function conversationFilterKey(label:string):ConversationListFilter{
   if(label==="我的提醒")return"reminders";
   return"all";
 }
+const CONVERSATION_FILTER_LABELS:Record<string,string>={all:"全部会话",groups:"群会话",mine:"分配给我",unassigned:"未分配",reminders:"我的提醒",favorite:"收藏",blocked:"已拉黑",closed:"已关闭",archived:"已归档"};
+function conversationFilterFromUrl(value:string|null){return value&&CONVERSATION_FILTER_LABELS[value]?CONVERSATION_FILTER_LABELS[value]:"全部会话";}
 const DEFAULT_CURRENCY_CONFIG:CurrencyConfig={baseCurrency:"USD",currencies:[{code:"USD",name:"美元",rate:1},{code:"CNY",name:"人民币",rate:7.2},{code:"EUR",name:"欧元",rate:.92},{code:"GBP",name:"英镑",rate:.78},{code:"JPY",name:"日元",rate:157},{code:"HKD",name:"港币",rate:7.8},{code:"SGD",name:"新加坡元",rate:1.35},{code:"AUD",name:"澳元",rate:1.5},{code:"CAD",name:"加元",rate:1.37},{code:"AED",name:"阿联酋迪拉姆",rate:3.6725}]};
 
 function convertCurrency(amount:number,from:string,to:string,config:CurrencyConfig):number{if(from===to)return amount;const source=config.currencies.find(item=>item.code===from)?.rate,target=config.currencies.find(item=>item.code===to)?.rate;if(!source||!target)return amount;return amount/source*target;}
@@ -295,6 +297,7 @@ function mapCustomerAddress(item:Record<string,unknown>,id=String(item.id??"")):
 export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}) {
   const router=useRouter();
   const pathname=usePathname();
+  const searchParams=useSearchParams();
   const pathView=pathname.split("/")[1] as WorkspaceView;
   const routeView=pathView in WORKSPACE_PATHS?pathView:initialView;
   const [view,setWorkspaceView]=useState<WorkspaceView>(routeView);
@@ -308,7 +311,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [emailActivities,setEmailActivities]=useState<Record<string,EmailActivity[]>>({});
   const [activeId,setActiveId]=useState("");
   const [selectedAccount,setSelectedAccount]=useState("");
-  const [filter,setFilter]=useState("全部会话");
+  const [filter,setFilter]=useState(()=>conversationFilterFromUrl(searchParams.get("filter")));
   const [dateFilter,setDateFilter]=useState<ConversationDateFilter>("all");
   const [query,setQuery]=useState("");
   const [debouncedQuery,setDebouncedQuery]=useState("");
@@ -1420,12 +1423,23 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const profileText=(user?.displayName||user?.email||"坐席").slice(0,1).toUpperCase();
   const userRole=user?.role||tokenRole(apiToken);
   useEffect(()=>{setWorkspaceView(routeView);},[routeView]);
+  useEffect(()=>{
+    if(routeView!=="inbox")return;
+    const next=conversationFilterFromUrl(searchParams.get("filter"));
+    setFilter(current=>current===next?current:next);
+  },[routeView,searchParams]);
   const navigate=(nextView:WorkspaceView)=>{
     if(nextView===view)return;
     setWorkspaceView(nextView);
     router.push(WORKSPACE_PATHS[nextView]);
   };
-  const openInbox=(nextFilter="全部会话")=>{navigate("inbox");setFilter(nextFilter);};
+  const selectConversationFilter=(next:string)=>{
+    setFilter(next);
+    const params=new URLSearchParams(searchParams.toString());
+    params.set("filter",conversationFilterKey(next));
+    router.replace(`${WORKSPACE_PATHS.inbox}?${params.toString()}`);
+  };
+  const openInbox=(nextFilter="全部会话")=>{navigate("inbox");selectConversationFilter(nextFilter);};
   const openMobileInbox=(nextFilter="全部会话")=>{
     openInbox(nextFilter);
     if(window.matchMedia("(max-width: 700px)").matches)setMobileConversationOpen(true);
@@ -1708,7 +1722,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                 <button
                   key={label}
                   onClick={() => {
-                    setFilter(label);
+                    selectConversationFilter(label);
                     setSidebarOpen(false);
                   }}
                   className={
@@ -2412,7 +2426,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             const body=await result.response.json().catch(()=>({})) as {conversationId?:string;message?:string;error?:string};
             if(!result.response.ok||!body.conversationId){setToast(body.message??body.error??"创建会话失败");return;}
             navigate("inbox");
-            setFilter("全部会话");
+            selectConversationFilter("全部会话");
             dateFilterRef.current="all";
             setDateFilter("all");
             setSelectedAccount(contact.accountId);
@@ -2527,7 +2541,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           onCreated={async (conversationId, accountId, accessToken) => {
             setNewConversationOpen(false);
             navigate("inbox");
-            setFilter("全部会话");
+            selectConversationFilter("全部会话");
             dateFilterRef.current = "all";
             setDateFilter("all");
             setSelectedAccount(accountId);
@@ -5114,10 +5128,24 @@ function TemplateComposer({accountId,conversationId,token,onToken,onSent}:{accou
   return <div className="cloud-template-composer"><div><ShieldCheck size={16}/><span><b>发送已审核模板</b><small>Cloud API 客户服务窗口已关闭</small></span></div><label>模板<select value={selected} onChange={event=>{const next=templates.find(item=>`${item.name}:${item.language}`===event.target.value);setSelected(event.target.value);setHeaderMediaId("");setValues(Array.from({length:cloudTemplateVariableCount(next)},()=>("")));}}>{templates.map(item=><option key={`${item.name}:${item.language}`} value={`${item.name}:${item.language}`}>{item.name} · {item.language}</option>)}</select></label>{headerType&&<label>{headerType} 头部<select value={headerMediaId} onChange={event=>setHeaderMediaId(event.target.value)}><option value="">选择媒体</option>{headerAssets.map(asset=><option value={asset.id} key={asset.id}>{asset.fileName}</option>)}</select></label>}{bodyText&&<p>{bodyText}</p>}{values.map((value,index)=><label key={index}>变量 {index+1}<input value={value} onChange={event=>setValues(all=>all.map((item,i)=>i===index?event.target.value:item))} placeholder={`填写 {{${index+1}}}`}/></label>)}{error&&<span className="composer-error">{error}</span>}<button className="send-button" disabled={busy||!template||Boolean(headerType&&!headerMediaId)||values.some(value=>!value.trim())} onClick={()=>void send()}><Send size={16}/>{busy?"发送中…":"发送模板"}</button></div>;
 }
 
+type SettingsTab="cloud"|"messenger"|"apiKeys"|"agent"|"tasks"|"proactive"|"knowledge"|"translation"|"speech"|"email"|"currency"|"productImport"|"orders";
+const SETTINGS_TABS:ReadonlySet<SettingsTab>=new Set(["cloud","messenger","apiKeys","agent","tasks","proactive","knowledge","translation","speech","email","currency","productImport","orders"]);
 function SettingsPanel({token,role,accounts,onToken,onToast}:{token:string;role:string;accounts:Account[];onToken:(token:string)=>void;onToast:(text:string)=>void}){
-  const [tab,setTab]=useState<"cloud"|"messenger"|"apiKeys"|"agent"|"tasks"|"proactive"|"knowledge"|"translation"|"speech"|"email"|"currency"|"productImport"|"orders">(()=>typeof window!=="undefined"&&(new URLSearchParams(window.location.search).has("messengerOauth")||new URLSearchParams(window.location.search).has("messengerOauthError"))?"messenger":"cloud");
+  const router=useRouter();
+  const searchParams=useSearchParams();
+  const oauthTab=searchParams.has("messengerOauth")||searchParams.has("messengerOauthError");
+  const urlTab=searchParams.get("tab");
+  const initialTab:SettingsTab=urlTab&&SETTINGS_TABS.has(urlTab as SettingsTab)?urlTab as SettingsTab:oauthTab?"messenger":"cloud";
+  const [tab,setTab]=useState<SettingsTab>(initialTab);
+  useEffect(()=>{setTab(initialTab);},[initialTab]);
+  const selectTab=(next:SettingsTab)=>{
+    setTab(next);
+    const params=new URLSearchParams(searchParams.toString());
+    params.set("tab",next);
+    router.replace(`/settings?${params.toString()}`);
+  };
   if(role!=="admin")return <section className="management-panel"><EmptyState title="需要管理员权限" text="只有管理员可以查看或修改 AI Provider 与密钥配置。"/></section>;
-  return <section className="management-panel settings-panel"><header className="management-head"><div><span className="eyebrow">系统设置</span><h1>工作区配置</h1><p>集中管理 WhatsApp、Facebook Messenger、自动回复、知识库、Provider 和业务规则。</p></div></header><nav className="settings-tabs" aria-label="系统设置"><button className={tab==="cloud"?"active":""} onClick={()=>setTab("cloud")}><Phone size={15}/>WhatsApp API</button><button className={tab==="messenger"?"active":""} onClick={()=>setTab("messenger")}><Facebook size={15}/>Messenger Pages</button><button className={tab==="apiKeys"?"active":""} onClick={()=>setTab("apiKeys")}><ShieldCheck size={15}/>API 密钥</button><button className={tab==="agent"?"active":""} onClick={()=>setTab("agent")}><Bot size={15}/>AI Agent</button><button className={tab==="tasks"?"active":""} onClick={()=>setTab("tasks")}><Clock3 size={15}/>任务 Agent</button><button className={tab==="proactive"?"active":""} onClick={()=>setTab("proactive")}><Send size={15}/>主动触达</button><button className={tab==="knowledge"?"active":""} onClick={()=>setTab("knowledge")}><BookOpen size={15}/>知识库</button><button className={tab==="translation"?"active":""} onClick={()=>setTab("translation")}><Languages size={15}/>AI 翻译</button><button className={tab==="speech"?"active":""} onClick={()=>setTab("speech")}><Mic size={15}/>AI 语音</button><button className={tab==="email"?"active":""} onClick={()=>setTab("email")}><Mail size={15}/>邮件发送</button><button className={tab==="currency"?"active":""} onClick={()=>setTab("currency")}><CreditCard size={15}/>货币管理</button><button className={tab==="productImport"?"active":""} onClick={()=>setTab("productImport")}><Sparkles size={15}/>产品导入</button><button className={tab==="orders"?"active":""} onClick={()=>setTab("orders")}><ClipboardList size={15}/>订单设置</button></nav>{tab==="cloud"?<CloudApiSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="messenger"?<MessengerSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="apiKeys"?<ApiKeySettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="agent"?<AiAgentSettingsPanel token={token} accounts={accounts} onToken={onToken} onToast={onToast}/>:tab==="tasks"?<TaskAgentSettingsPanel token={token} accounts={accounts} onToken={onToken} onToast={onToast}/>:tab==="proactive"?<ProactiveOutreachSettingsPanel token={token} accounts={accounts} onToken={onToken} onToast={onToast}/>:tab==="knowledge"?<KnowledgeBaseSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="translation"?<TranslationSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="speech"?<TtsSettingsPanel token={token} role={role} onToken={onToken} onToast={onToast}/>:tab==="email"?<EmailSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="currency"?<CurrencySettingsPanel token={token} role={role} onToken={onToken} onToast={onToast}/>:tab==="productImport"?<ProductImportSourcesPanel token={token} onToken={onToken} onToast={onToast}/>:<OrderSettingsPanel token={token} onToken={onToken} onToast={onToast}/>}</section>;
+  return <section className="management-panel settings-panel"><header className="management-head"><div><span className="eyebrow">系统设置</span><h1>工作区配置</h1><p>集中管理 WhatsApp、Facebook Messenger、自动回复、知识库、Provider 和业务规则。</p></div></header><nav className="settings-tabs" aria-label="系统设置"><button className={tab==="cloud"?"active":""} onClick={()=>selectTab("cloud")}><Phone size={15}/>WhatsApp API</button><button className={tab==="messenger"?"active":""} onClick={()=>selectTab("messenger")}><Facebook size={15}/>Messenger Pages</button><button className={tab==="apiKeys"?"active":""} onClick={()=>selectTab("apiKeys")}><ShieldCheck size={15}/>API 密钥</button><button className={tab==="agent"?"active":""} onClick={()=>selectTab("agent")}><Bot size={15}/>AI Agent</button><button className={tab==="tasks"?"active":""} onClick={()=>selectTab("tasks")}><Clock3 size={15}/>任务 Agent</button><button className={tab==="proactive"?"active":""} onClick={()=>selectTab("proactive")}><Send size={15}/>主动触达</button><button className={tab==="knowledge"?"active":""} onClick={()=>selectTab("knowledge")}><BookOpen size={15}/>知识库</button><button className={tab==="translation"?"active":""} onClick={()=>selectTab("translation")}><Languages size={15}/>AI 翻译</button><button className={tab==="speech"?"active":""} onClick={()=>selectTab("speech")}><Mic size={15}/>AI 语音</button><button className={tab==="email"?"active":""} onClick={()=>selectTab("email")}><Mail size={15}/>邮件发送</button><button className={tab==="currency"?"active":""} onClick={()=>selectTab("currency")}><CreditCard size={15}/>货币管理</button><button className={tab==="productImport"?"active":""} onClick={()=>selectTab("productImport")}><Sparkles size={15}/>产品导入</button><button className={tab==="orders"?"active":""} onClick={()=>selectTab("orders")}><ClipboardList size={15}/>订单设置</button></nav>{tab==="cloud"?<CloudApiSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="messenger"?<MessengerSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="apiKeys"?<ApiKeySettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="agent"?<AiAgentSettingsPanel token={token} accounts={accounts} onToken={onToken} onToast={onToast}/>:tab==="tasks"?<TaskAgentSettingsPanel token={token} accounts={accounts} onToken={onToken} onToast={onToast}/>:tab==="proactive"?<ProactiveOutreachSettingsPanel token={token} accounts={accounts} onToken={onToken} onToast={onToast}/>:tab==="knowledge"?<KnowledgeBaseSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="translation"?<TranslationSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="speech"?<TtsSettingsPanel token={token} role={role} onToken={onToken} onToast={onToast}/>:tab==="email"?<EmailSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="currency"?<CurrencySettingsPanel token={token} role={role} onToken={onToken} onToast={onToast}/>:tab==="productImport"?<ProductImportSourcesPanel token={token} onToken={onToken} onToast={onToast}/>:<OrderSettingsPanel token={token} onToken={onToken} onToast={onToast}/>}</section>;
 }
 
 type ApiKeyScope="products:read"|"products:write"|"messages:read"|"messages:send";
