@@ -106,6 +106,7 @@ test("Messenger inbound messages enter the shared AI agent queue",async()=>{
 test("Messenger contact sync refreshes placeholder identities with profile fields",async()=>{
   const messenger=await readFile(new URL("../src/messenger.ts",import.meta.url),"utf8");
   assert.match(messenger,/fields=name,first_name,last_name,profile_pic/);
+  assert.match(messenger,/const profileName=name\|\|\[firstName,lastName\]\.filter\(Boolean\)\.join\(" "\)/);
   assert.match(messenger,/first_name=COALESCE\(NULLIF\(\$4,''\),contacts\.first_name\)/);
   assert.match(messenger,/last_name=COALESCE\(NULLIF\(\$5,''\),contacts\.last_name\)/);
   assert.doesNotMatch(messenger,/if\(!name\)try\{/);
@@ -184,7 +185,7 @@ test("Messenger OAuth migration stores only encrypted candidate tokens and track
   assert.match(migrator,/"057_messenger_oauth\.sql"/);
   assert.match(oauth,/encryptAtRest\(page\.access_token/);
   assert.match(oauth,/subscribed_apps/);
-  assert.match(oauth,/\["messages","message_deliveries","message_reads"\]/);
+  assert.match(oauth,/\["messages","message_deliveries","message_reads","message_echoes"\]/);
   assert.match(oauth,/oauth\/sessions\/latest/);
   assert.match(oauth,/ORDER BY created_at DESC LIMIT 1/);
   assert.doesNotMatch(oauth,/INSERT INTO messenger_oauth_sessions[^;]*access_token/i);

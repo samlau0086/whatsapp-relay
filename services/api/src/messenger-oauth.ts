@@ -7,7 +7,7 @@ import {pool,transaction} from "./db.js";
 import {decryptAtRest,encryptAtRest,hashSecret} from "./security.js";
 
 const graphBase=`https://graph.facebook.com/${config.META_GRAPH_API_VERSION}`;
-const subscriptionFields=["messages","message_deliveries","message_reads"] as const;
+const subscriptionFields=["messages","message_deliveries","message_reads","message_echoes"] as const;
 const settingsSchema=z.object({
   appId:z.string().trim().regex(/^\d+$/),
   configurationId:z.string().trim().regex(/^\d+$/),
