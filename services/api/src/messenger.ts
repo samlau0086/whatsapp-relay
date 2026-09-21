@@ -252,13 +252,20 @@ async function ensureMessengerContact(accountId:string,userId:string,token:strin
   let firstName="",lastName="";
   let avatarUrl:string|null=null;
   try{
-    const profile=await graphRequest<{first_name?:string;last_name?:string;profile_pic?:string}>(`${userId}?fields=first_name,last_name,profile_pic`,token);
+    const profile=await graphRequest<{first_name?:string;last_name?:string}>(`${userId}?fields=first_name,last_name`,token);
     firstName=String(profile.first_name??"").trim();
     lastName=String(profile.last_name??"").trim();
-    if(profile.profile_pic&&!existing.rows[0]?.avatar_url)avatarUrl=await storeMessengerAvatar(accountId,userId,profile.profile_pic).catch(()=>null);
+    if(!firstName&&!lastName)console.warn("Messenger contact profile returned no name",{accountId,userId});
   }catch(error){
     const details=error instanceof MessengerApiError?{status:error.status,code:error.code}:{error:String(error)};
-    console.warn("Messenger contact profile sync failed",{accountId,userId,...details});
+    console.warn("Messenger contact name sync failed",{accountId,userId,...details});
+  }
+  if(!existing.rows[0]?.avatar_url)try{
+    const profile=await graphRequest<{profile_pic?:string}>(`${userId}?fields=profile_pic`,token);
+    if(profile.profile_pic)avatarUrl=await storeMessengerAvatar(accountId,userId,profile.profile_pic).catch(()=>null);
+  }catch(error){
+    const details=error instanceof MessengerApiError?{status:error.status,code:error.code}:{error:String(error)};
+    console.warn("Messenger contact avatar sync failed",{accountId,userId,...details});
   }
   const existingName=String(existing.rows[0]?.display_name??"").trim();
   const manuallySetName=existingName&&!existingName.startsWith("Facebook ")?existingName:"";
