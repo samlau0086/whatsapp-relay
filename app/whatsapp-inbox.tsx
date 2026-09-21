@@ -1073,10 +1073,10 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     translationTargetLanguage?: string,
     targetConversationId?: string,
     targetAccountId?: string,
-  ) {
+  ): Promise<boolean> {
     const conversationId=targetConversationId??active?.id;
     const accountId=targetAccountId??active?.accountId;
-    if (!conversationId || !accountId || !apiToken || !text.trim()) return;
+    if (!conversationId || !accountId || !apiToken || !text.trim()) return false;
     const clientMessageId = crypto.randomUUID(),
       quoted = conversationId===effectiveActiveId&&selectedReply ? messageQuote(selectedReply) : undefined;
     setDraft("");
@@ -1134,14 +1134,15 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           item.id === clientMessageId ? { ...item, status: "failed" } : item,
         ),
       }));
-      return;
+      return false;
     }
     setToast(
       active.accountStatus === "online"
         ? "消息已进入发送队列"
         : "账号离线，消息已持久化排队",
     );
-    void loadMessages(apiToken, active.id);
+    void loadMessages(apiToken, conversationId);
+    return true;
   }
 
   async function deleteMessage(message: ChatMessage) {
@@ -1281,7 +1282,11 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     const target=targetConversationId?conversations.find(item=>item.id===targetConversationId)??(active?.id===targetConversationId?active:null):active;
     const conversationId=targetConversationId??target?.id,accountId=targetAccountId??target?.accountId;
     if(!conversationId||!accountId||!apiToken)return;
-    if(target?.platform==="messenger"&&caption.trim()){const message="Messenger 媒体首版不支持 caption，请先单独发送文字";setToast(message);if(throwOnFailure)throw new Error(message);return;}
+    if(target?.platform==="messenger"&&caption.trim()){
+      const textQueued=await queueTextMessage(caption,translationSourceText,translationTargetLanguage,conversationId,accountId);
+      if(!textQueued){const message="文字消息入队失败，图片未发送";setToast(message);if(throwOnFailure)throw new Error(message);return;}
+      caption="";translationSourceText=undefined;translationTargetLanguage=undefined;includeReply=false;
+    }
     const kind=mediaKind(asset.mimeType),clientMessageId=crypto.randomUUID(),quoted=conversationId===effectiveActiveId&&includeReply&&selectedReply?messageQuote(selectedReply):undefined;setDraft("");setReplyTo(null);
     setMessages(all=>({...all,[conversationId]:[...(all[conversationId]??[]),{id:clientMessageId,direction:"out",kind,text:caption,translationSourceText,translationTargetLanguage,quoted,platform:target?.platform??"whatsapp",pageId:target?.pageId??undefined,time:formatTime(new Date()),status:"queued",attachment:{id:asset.id,name:asset.fileName,mime:asset.mimeType,size:formatBytes(asset.size)},comments:[]}]}));
     const queued=await authorizedFetch("/api/v1/messages",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId,conversationId,clientMessageId,type:kind,text:caption||undefined,mediaId:asset.id,...(translationSourceText?{translationSourceText}:{}),...(translationTargetLanguage?{translationTargetLanguage}:{}),...(quoted?{quotedMessageId:quoted.id}:{})})});if(queued.token!==apiToken)setApiToken(queued.token);
