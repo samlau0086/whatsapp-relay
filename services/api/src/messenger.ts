@@ -257,14 +257,14 @@ async function ensureMessengerContact(accountId:string,userId:string,token:strin
     lastName=String(profile.last_name??"").trim();
     if(!firstName&&!lastName)console.warn("Messenger contact profile returned no name",{accountId,userId});
   }catch(error){
-    const details=error instanceof MessengerApiError?{status:error.status,code:error.code}:{error:String(error)};
+    const details=error instanceof MessengerApiError?{status:error.status,code:error.code,detail:error.detail}:{error:String(error)};
     console.warn("Messenger contact name sync failed",{accountId,userId,...details});
   }
   if(!existing.rows[0]?.avatar_url)try{
     const profile=await graphRequest<{profile_pic?:string}>(`${userId}?fields=profile_pic`,token);
     if(profile.profile_pic)avatarUrl=await storeMessengerAvatar(accountId,userId,profile.profile_pic).catch(()=>null);
   }catch(error){
-    const details=error instanceof MessengerApiError?{status:error.status,code:error.code}:{error:String(error)};
+    const details=error instanceof MessengerApiError?{status:error.status,code:error.code,detail:error.detail}:{error:String(error)};
     console.warn("Messenger contact avatar sync failed",{accountId,userId,...details});
   }
   const existingName=String(existing.rows[0]?.display_name??"").trim();
