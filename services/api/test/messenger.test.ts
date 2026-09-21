@@ -96,6 +96,14 @@ test("Messenger processing covers echo, delivery, read watermarks, and Page-scop
   assert.match(messenger,/platform:"messenger"/);
 });
 
+test("Messenger contact sync refreshes placeholder identities with profile fields",async()=>{
+  const messenger=await readFile(new URL("../src/messenger.ts",import.meta.url),"utf8");
+  assert.match(messenger,/fields=name,first_name,last_name,profile_pic/);
+  assert.match(messenger,/first_name=COALESCE\(NULLIF\(\$4,''\),contacts\.first_name\)/);
+  assert.match(messenger,/last_name=COALESCE\(NULLIF\(\$5,''\),contacts\.last_name\)/);
+  assert.doesNotMatch(messenger,/if\(!name\)try\{/);
+});
+
 test("Messenger OAuth uses Login for Business authorization-code flow and a strict callback target",()=>{
   const url=new URL(messengerOAuthAuthorizationUrl({appId:"123456789",configurationId:"987654321",state:"opaque-state"}));
   assert.equal(url.hostname,"www.facebook.com");

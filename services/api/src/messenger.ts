@@ -244,17 +244,24 @@ async function ingestMessengerMessage(input:{accountId:string;userId:string;mess
 }
 
 async function ensureMessengerContact(accountId:string,userId:string,token:string):Promise<string>{
-  const existing=await pool.query("SELECT id,display_name FROM contacts WHERE account_id=$1 AND provider_user_id=$2",[accountId,userId]);
-  let name=existing.rows[0]?.display_name?String(existing.rows[0].display_name):"";
+  const existing=await pool.query("SELECT id,display_name,first_name,last_name,avatar_url FROM contacts WHERE account_id=$1 AND provider_user_id=$2",[accountId,userId]);
+  let name="",firstName="",lastName="";
   let avatarUrl:string|null=null;
-  if(!name)try{
-    const profile=await graphRequest<{name?:string;profile_pic?:string}>(`${userId}?fields=name,profile_pic`,token);
-    name=profile.name??"";
-    if(profile.profile_pic)avatarUrl=await storeMessengerAvatar(accountId,userId,profile.profile_pic).catch(()=>null);
+  try{
+    const profile=await graphRequest<{name?:string;first_name?:string;last_name?:string;profile_pic?:string}>(`${userId}?fields=name,first_name,last_name,profile_pic`,token);
+    name=String(profile.name??"").trim();
+    firstName=String(profile.first_name??"").trim();
+    lastName=String(profile.last_name??"").trim();
+    if(profile.profile_pic&&!existing.rows[0]?.avatar_url)avatarUrl=await storeMessengerAvatar(accountId,userId,profile.profile_pic).catch(()=>null);
   }catch{}
-  const result=await pool.query(`INSERT INTO contacts(account_id,provider_user_id,display_name,avatar_url,last_seen_at)
-    VALUES($1,$2,$3,$4,now()) ON CONFLICT(account_id,provider_user_id) DO UPDATE SET display_name=COALESCE(NULLIF(EXCLUDED.display_name,''),contacts.display_name),
-    avatar_url=COALESCE(EXCLUDED.avatar_url,contacts.avatar_url),last_seen_at=now(),updated_at=now() RETURNING id`,[accountId,userId,name||`Facebook ${userId}`,avatarUrl]);
+  const fallbackName=existing.rows[0]?.display_name&& !String(existing.rows[0].display_name).startsWith("Facebook ")
+    ?String(existing.rows[0].display_name)
+    :`Facebook ${userId}`;
+  const result=await pool.query(`INSERT INTO contacts(account_id,provider_user_id,display_name,first_name,last_name,avatar_url,last_seen_at)
+    VALUES($1,$2,$3,NULLIF($4,''),NULLIF($5,''),$6,now()) ON CONFLICT(account_id,provider_user_id) DO UPDATE SET
+    display_name=COALESCE(NULLIF($3,''),contacts.display_name),
+    first_name=COALESCE(NULLIF($4,''),contacts.first_name),last_name=COALESCE(NULLIF($5,''),contacts.last_name),
+    avatar_url=COALESCE(EXCLUDED.avatar_url,contacts.avatar_url),last_seen_at=now(),updated_at=now() RETURNING id`,[accountId,userId,name||fallbackName,firstName,lastName,avatarUrl]);
   return String(result.rows[0].id);
 }
 
