@@ -249,24 +249,26 @@ async function ingestMessengerMessage(input:{accountId:string;userId:string;mess
 
 async function ensureMessengerContact(accountId:string,userId:string,token:string):Promise<string>{
   const existing=await pool.query("SELECT id,display_name,first_name,last_name,avatar_url FROM contacts WHERE account_id=$1 AND provider_user_id=$2",[accountId,userId]);
-  let name="",firstName="",lastName="";
+  let firstName="",lastName="";
   let avatarUrl:string|null=null;
   try{
-    const profile=await graphRequest<{name?:string;first_name?:string;last_name?:string;profile_pic?:string}>(`${userId}?fields=name,first_name,last_name,profile_pic`,token);
-    name=String(profile.name??"").trim();
+    const profile=await graphRequest<{first_name?:string;last_name?:string;profile_pic?:string}>(`${userId}?fields=first_name,last_name,profile_pic`,token);
     firstName=String(profile.first_name??"").trim();
     lastName=String(profile.last_name??"").trim();
     if(profile.profile_pic&&!existing.rows[0]?.avatar_url)avatarUrl=await storeMessengerAvatar(accountId,userId,profile.profile_pic).catch(()=>null);
-  }catch{}
+  }catch(error){
+    const details=error instanceof MessengerApiError?{status:error.status,code:error.code}:{error:String(error)};
+    console.warn("Messenger contact profile sync failed",{accountId,userId,...details});
+  }
   const existingName=String(existing.rows[0]?.display_name??"").trim();
   const manuallySetName=existingName&&!existingName.startsWith("Facebook ")?existingName:"";
-  const profileName=name||[firstName,lastName].filter(Boolean).join(" ");
+  const profileName=[firstName,lastName].filter(Boolean).join(" ");
   const fallbackName=manuallySetName||profileName||`Facebook ${userId}`;
   const result=await pool.query(`INSERT INTO contacts(account_id,provider_user_id,display_name,first_name,last_name,avatar_url,last_seen_at)
     VALUES($1,$2,$3,NULLIF($4,''),NULLIF($5,''),$6,now()) ON CONFLICT(account_id,provider_user_id) DO UPDATE SET
     display_name=COALESCE(NULLIF($3,''),contacts.display_name),
     first_name=COALESCE(NULLIF($4,''),contacts.first_name),last_name=COALESCE(NULLIF($5,''),contacts.last_name),
-    avatar_url=COALESCE(EXCLUDED.avatar_url,contacts.avatar_url),last_seen_at=now(),updated_at=now() RETURNING id`,[accountId,userId,name||fallbackName,firstName,lastName,avatarUrl]);
+    avatar_url=COALESCE(EXCLUDED.avatar_url,contacts.avatar_url),last_seen_at=now(),updated_at=now() RETURNING id`,[accountId,userId,fallbackName,firstName,lastName,avatarUrl]);
   return String(result.rows[0].id);
 }
 

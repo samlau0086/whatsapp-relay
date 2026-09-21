@@ -105,8 +105,9 @@ test("Messenger inbound messages enter the shared AI agent queue",async()=>{
 
 test("Messenger contact sync refreshes placeholder identities with profile fields",async()=>{
   const messenger=await readFile(new URL("../src/messenger.ts",import.meta.url),"utf8");
-  assert.match(messenger,/fields=name,first_name,last_name,profile_pic/);
-  assert.match(messenger,/const profileName=name\|\|\[firstName,lastName\]\.filter\(Boolean\)\.join\(" "\)/);
+  assert.match(messenger,/fields=first_name,last_name,profile_pic/);
+  assert.match(messenger,/const profileName=\[firstName,lastName\]\.filter\(Boolean\)\.join\(" "\)/);
+  assert.match(messenger,/Messenger contact profile sync failed/);
   assert.match(messenger,/first_name=COALESCE\(NULLIF\(\$4,''\),contacts\.first_name\)/);
   assert.match(messenger,/last_name=COALESCE\(NULLIF\(\$5,''\),contacts\.last_name\)/);
   assert.doesNotMatch(messenger,/if\(!name\)try\{/);
