@@ -1444,10 +1444,11 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   };
   const selectConversationFilter=(next:string)=>{
     setFilter(next);
-    const params=new URLSearchParams(searchParams.toString());
+    const params=new URLSearchParams(window.location.search);
     params.set("filter",conversationFilterKey(next));
     const nextUrl=`${WORKSPACE_PATHS.inbox}?${params.toString()}`;
     window.history.replaceState(window.history.state,"",nextUrl);
+    window.dispatchEvent(new PopStateEvent("popstate"));
   };
   const openInbox=(nextFilter="全部会话")=>{navigate("inbox");selectConversationFilter(nextFilter);};
   const openMobileInbox=(nextFilter="全部会话")=>{
