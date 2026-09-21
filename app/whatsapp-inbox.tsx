@@ -280,6 +280,8 @@ function conversationFilterKey(label:string):ConversationListFilter{
 }
 const CONVERSATION_FILTER_LABELS:Record<string,string>={all:"全部会话",groups:"群会话",mine:"分配给我",unassigned:"未分配",reminders:"我的提醒",favorite:"收藏",blocked:"已拉黑",closed:"已关闭",archived:"已归档"};
 function conversationFilterFromUrl(value:string|null){return value&&CONVERSATION_FILTER_LABELS[value]?CONVERSATION_FILTER_LABELS[value]:"全部会话";}
+const CONVERSATION_DATE_FILTERS=new Set<ConversationDateFilter>(["all","today","yesterday","day3","day5","day7","day15plus","unreplied","sendFailed"]);
+function conversationDateFilterFromUrl(value:string|null):ConversationDateFilter{return value&&CONVERSATION_DATE_FILTERS.has(value as ConversationDateFilter)?value as ConversationDateFilter:"all";}
 const DEFAULT_CURRENCY_CONFIG:CurrencyConfig={baseCurrency:"USD",currencies:[{code:"USD",name:"美元",rate:1},{code:"CNY",name:"人民币",rate:7.2},{code:"EUR",name:"欧元",rate:.92},{code:"GBP",name:"英镑",rate:.78},{code:"JPY",name:"日元",rate:157},{code:"HKD",name:"港币",rate:7.8},{code:"SGD",name:"新加坡元",rate:1.35},{code:"AUD",name:"澳元",rate:1.5},{code:"CAD",name:"加元",rate:1.37},{code:"AED",name:"阿联酋迪拉姆",rate:3.6725}]};
 
 function convertCurrency(amount:number,from:string,to:string,config:CurrencyConfig):number{if(from===to)return amount;const source=config.currencies.find(item=>item.code===from)?.rate,target=config.currencies.find(item=>item.code===to)?.rate;if(!source||!target)return amount;return amount/source*target;}
@@ -312,7 +314,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [activeId,setActiveId]=useState("");
   const [selectedAccount,setSelectedAccount]=useState("");
   const [filter,setFilter]=useState(()=>conversationFilterFromUrl(searchParams.get("filter")));
-  const [dateFilter,setDateFilter]=useState<ConversationDateFilter>("all");
+  const [dateFilter,setDateFilter]=useState<ConversationDateFilter>(()=>conversationDateFilterFromUrl(searchParams.get("date")));
   const [query,setQuery]=useState("");
   const [debouncedQuery,setDebouncedQuery]=useState("");
   const [selectedTag,setSelectedTag]=useState("");
@@ -616,6 +618,10 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const selectDateFilter=(next:ConversationDateFilter)=>{
     if(next===dateFilter)return;
     dateFilterRef.current=next;setDateFilter(next);
+    const params=new URLSearchParams(window.location.search);
+    params.set("date",next);
+    window.history.replaceState(window.history.state,"",`${WORKSPACE_PATHS.inbox}?${params.toString()}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
   };
 
   const handleDateFilterKeyDown=(event:React.KeyboardEvent<HTMLButtonElement>)=>{
@@ -1427,12 +1433,18 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     if(routeView!=="inbox")return;
     const next=conversationFilterFromUrl(searchParams.get("filter"));
     setFilter(current=>current===next?current:next);
+    const nextDateFilter=conversationDateFilterFromUrl(searchParams.get("date"));
+    dateFilterRef.current=nextDateFilter;
+    setDateFilter(current=>current===nextDateFilter?current:nextDateFilter);
   },[routeView,searchParams]);
   useEffect(()=>{
     if(routeView!=="inbox")return;
     const onPopState=()=>{
       const params=new URLSearchParams(window.location.search);
       setFilter(conversationFilterFromUrl(params.get("filter")));
+      const nextDateFilter=conversationDateFilterFromUrl(params.get("date"));
+      dateFilterRef.current=nextDateFilter;
+      setDateFilter(nextDateFilter);
     };
     window.addEventListener("popstate",onPopState);
     return()=>window.removeEventListener("popstate",onPopState);
@@ -2438,8 +2450,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             if(!result.response.ok||!body.conversationId){setToast(body.message??body.error??"创建会话失败");return;}
             navigate("inbox");
             selectConversationFilter("全部会话");
-            dateFilterRef.current="all";
-            setDateFilter("all");
+            selectDateFilter("all");
             setSelectedAccount(contact.accountId);
             await loadWorkspace(result.token,true);
             setActiveId(body.conversationId);
@@ -2553,8 +2564,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             setNewConversationOpen(false);
             navigate("inbox");
             selectConversationFilter("全部会话");
-            dateFilterRef.current = "all";
-            setDateFilter("all");
+            selectDateFilter("all");
             setSelectedAccount(accountId);
             await loadWorkspace(accessToken, true);
             setActiveId(conversationId);
