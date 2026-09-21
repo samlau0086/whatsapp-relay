@@ -1428,6 +1428,15 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     const next=conversationFilterFromUrl(searchParams.get("filter"));
     setFilter(current=>current===next?current:next);
   },[routeView,searchParams]);
+  useEffect(()=>{
+    if(routeView!=="inbox")return;
+    const onPopState=()=>{
+      const params=new URLSearchParams(window.location.search);
+      setFilter(conversationFilterFromUrl(params.get("filter")));
+    };
+    window.addEventListener("popstate",onPopState);
+    return()=>window.removeEventListener("popstate",onPopState);
+  },[routeView]);
   const navigate=(nextView:WorkspaceView)=>{
     if(nextView===view)return;
     setWorkspaceView(nextView);
@@ -1437,7 +1446,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     setFilter(next);
     const params=new URLSearchParams(searchParams.toString());
     params.set("filter",conversationFilterKey(next));
-    router.replace(`${WORKSPACE_PATHS.inbox}?${params.toString()}`);
+    const nextUrl=`${WORKSPACE_PATHS.inbox}?${params.toString()}`;
+    window.history.replaceState(window.history.state,"",nextUrl);
   };
   const openInbox=(nextFilter="全部会话")=>{navigate("inbox");selectConversationFilter(nextFilter);};
   const openMobileInbox=(nextFilter="全部会话")=>{
@@ -5131,18 +5141,25 @@ function TemplateComposer({accountId,conversationId,token,onToken,onSent}:{accou
 type SettingsTab="cloud"|"messenger"|"apiKeys"|"agent"|"tasks"|"proactive"|"knowledge"|"translation"|"speech"|"email"|"currency"|"productImport"|"orders";
 const SETTINGS_TABS:ReadonlySet<SettingsTab>=new Set(["cloud","messenger","apiKeys","agent","tasks","proactive","knowledge","translation","speech","email","currency","productImport","orders"]);
 function SettingsPanel({token,role,accounts,onToken,onToast}:{token:string;role:string;accounts:Account[];onToken:(token:string)=>void;onToast:(text:string)=>void}){
-  const router=useRouter();
   const searchParams=useSearchParams();
   const oauthTab=searchParams.has("messengerOauth")||searchParams.has("messengerOauthError");
   const urlTab=searchParams.get("tab");
   const initialTab:SettingsTab=urlTab&&SETTINGS_TABS.has(urlTab as SettingsTab)?urlTab as SettingsTab:oauthTab?"messenger":"cloud";
   const [tab,setTab]=useState<SettingsTab>(initialTab);
-  useEffect(()=>{setTab(initialTab);},[initialTab]);
+  useEffect(()=>{
+    const onPopState=()=>{
+      const params=new URLSearchParams(window.location.search);
+      const next=params.get("tab");
+      setTab(next&&SETTINGS_TABS.has(next as SettingsTab)?next as SettingsTab:oauthTab?"messenger":"cloud");
+    };
+    window.addEventListener("popstate",onPopState);
+    return()=>window.removeEventListener("popstate",onPopState);
+  },[oauthTab]);
   const selectTab=(next:SettingsTab)=>{
     setTab(next);
     const params=new URLSearchParams(searchParams.toString());
     params.set("tab",next);
-    router.replace(`/settings?${params.toString()}`);
+    window.history.replaceState(window.history.state,"",`/settings?${params.toString()}`);
   };
   if(role!=="admin")return <section className="management-panel"><EmptyState title="需要管理员权限" text="只有管理员可以查看或修改 AI Provider 与密钥配置。"/></section>;
   return <section className="management-panel settings-panel"><header className="management-head"><div><span className="eyebrow">系统设置</span><h1>工作区配置</h1><p>集中管理 WhatsApp、Facebook Messenger、自动回复、知识库、Provider 和业务规则。</p></div></header><nav className="settings-tabs" aria-label="系统设置"><button className={tab==="cloud"?"active":""} onClick={()=>selectTab("cloud")}><Phone size={15}/>WhatsApp API</button><button className={tab==="messenger"?"active":""} onClick={()=>selectTab("messenger")}><Facebook size={15}/>Messenger Pages</button><button className={tab==="apiKeys"?"active":""} onClick={()=>selectTab("apiKeys")}><ShieldCheck size={15}/>API 密钥</button><button className={tab==="agent"?"active":""} onClick={()=>selectTab("agent")}><Bot size={15}/>AI Agent</button><button className={tab==="tasks"?"active":""} onClick={()=>selectTab("tasks")}><Clock3 size={15}/>任务 Agent</button><button className={tab==="proactive"?"active":""} onClick={()=>selectTab("proactive")}><Send size={15}/>主动触达</button><button className={tab==="knowledge"?"active":""} onClick={()=>selectTab("knowledge")}><BookOpen size={15}/>知识库</button><button className={tab==="translation"?"active":""} onClick={()=>selectTab("translation")}><Languages size={15}/>AI 翻译</button><button className={tab==="speech"?"active":""} onClick={()=>selectTab("speech")}><Mic size={15}/>AI 语音</button><button className={tab==="email"?"active":""} onClick={()=>selectTab("email")}><Mail size={15}/>邮件发送</button><button className={tab==="currency"?"active":""} onClick={()=>selectTab("currency")}><CreditCard size={15}/>货币管理</button><button className={tab==="productImport"?"active":""} onClick={()=>selectTab("productImport")}><Sparkles size={15}/>产品导入</button><button className={tab==="orders"?"active":""} onClick={()=>selectTab("orders")}><ClipboardList size={15}/>订单设置</button></nav>{tab==="cloud"?<CloudApiSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="messenger"?<MessengerSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="apiKeys"?<ApiKeySettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="agent"?<AiAgentSettingsPanel token={token} accounts={accounts} onToken={onToken} onToast={onToast}/>:tab==="tasks"?<TaskAgentSettingsPanel token={token} accounts={accounts} onToken={onToken} onToast={onToast}/>:tab==="proactive"?<ProactiveOutreachSettingsPanel token={token} accounts={accounts} onToken={onToken} onToast={onToast}/>:tab==="knowledge"?<KnowledgeBaseSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="translation"?<TranslationSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="speech"?<TtsSettingsPanel token={token} role={role} onToken={onToken} onToast={onToast}/>:tab==="email"?<EmailSettingsPanel token={token} onToken={onToken} onToast={onToast}/>:tab==="currency"?<CurrencySettingsPanel token={token} role={role} onToken={onToken} onToast={onToast}/>:tab==="productImport"?<ProductImportSourcesPanel token={token} onToken={onToken} onToast={onToast}/>:<OrderSettingsPanel token={token} onToken={onToken} onToast={onToast}/>}</section>;
