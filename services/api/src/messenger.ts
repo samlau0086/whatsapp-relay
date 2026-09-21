@@ -6,6 +6,7 @@ import {authenticate} from "./auth.js";
 import {config} from "./config.js";
 import {pool,transaction} from "./db.js";
 import {createWebhookEvent} from "./agent-hub.js";
+import {enqueueInboundAgentWork} from "./agent-engine.js";
 import {decryptAtRest,encryptAtRest,hashSecret} from "./security.js";
 import {registerMessengerOAuthRoutes} from "./messenger-oauth.js";
 
@@ -239,7 +240,10 @@ async function ingestMessengerMessage(input:{accountId:string;userId:string;mess
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(account_id,provider_message_id) DO NOTHING RETURNING id`,[
       conversation.rows[0].id,input.accountId,input.direction==="in"?contact:null,String(input.message.mid),input.direction,normalized.kind,normalized.text,normalized.mediaId,input.direction==="in"?"received":"sent",occurredAt,JSON.stringify(input.message),
     ]);
-    if(inserted.rowCount)await createWebhookEvent(client,input.direction==="in"?"message.received":"message.sent",inserted.rows[0].id,{platform:"messenger",accountId:input.accountId,providerMessageId:String(input.message.mid),conversationId:conversation.rows[0].id,direction:input.direction,kind:normalized.kind,text:normalized.text});
+    if(inserted.rowCount){
+      await createWebhookEvent(client,input.direction==="in"?"message.received":"message.sent",inserted.rows[0].id,{platform:"messenger",accountId:input.accountId,providerMessageId:String(input.message.mid),conversationId:conversation.rows[0].id,direction:input.direction,kind:normalized.kind,text:normalized.text});
+      if(input.direction==="in"&&(normalized.kind==="text"||normalized.kind==="audio"||Boolean(normalized.text?.trim())))await enqueueInboundAgentWork(client,conversation.rows[0].id,inserted.rows[0].id);
+    }
   });
 }
 
