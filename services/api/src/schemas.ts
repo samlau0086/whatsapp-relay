@@ -166,7 +166,7 @@ export const accountTaskSettingsSchema=z.object({timezone:z.string().trim().min(
 export const tagCreateSchema=z.object({name:z.string().trim().min(1).max(40),color:z.string().regex(/^#[0-9A-Fa-f]{6}$/)});
 export const tagUpdateSchema=tagCreateSchema.partial().refine(value=>Object.keys(value).length>0,"at least one field is required");
 export const conversationTagsSchema=z.object({tagIds:z.array(z.string().uuid()).max(20)});
-export const noteSchema=z.object({body:z.string().trim().min(1).max(5000)});
+export const noteSchema=z.object({body:z.string().trim().min(1).max(5000),noteType:z.enum(["order","normal"]).default("normal")});
 export const reminderSchema=z.object({remindAt:z.string().datetime({offset:true}).transform(value=>new Date(value)).refine(value=>value.getTime()>Date.now(),"reminder must be in the future")});
 const moneySchema=z.coerce.number().nonnegative().max(99_999_999.99).refine(value=>Math.abs(value*100-Math.round(value*100))<1e-7,"amount supports at most two decimals");
 export const currencySchema=z.string().trim().transform(value=>value.toUpperCase()).pipe(z.string().regex(/^[A-Z]{3}$/,"currency must be a three-letter code"));

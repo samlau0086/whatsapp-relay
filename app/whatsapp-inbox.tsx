@@ -169,7 +169,7 @@ function fetchProductCurrencies(subject:string,token:string,force=false):Promise
   productCurrencyFlights.set(subject,pending);
   return pending;
 }
-type NoteItem={id:string;body:string;userId:string|null;authorName:string;createdAt:string;updatedAt:string};
+type NoteItem={id:string;body:string;noteType:"order"|"normal";userId:string|null;authorName:string;createdAt:string;updatedAt:string};
 type ContactEmail={id?:string;label:string;email:string;isPrimary:boolean};
 type ContactDate={month:number;day:number;year:number|null};
 type ContactSpecialDate=ContactDate&{id?:string;kind:"anniversary"|"birthday"|"custom";label:string;leadDays:number|null};
@@ -2989,7 +2989,7 @@ function CrmDetailsPanel({
     [tagQuery, setTagQuery] = useState(""),
     [tagMenuOpen, setTagMenuOpen] = useState(false),
     [tagEditing, setTagEditing] = useState<TagItem | null>(null),
-    [noteDraft, setNoteDraft] = useState(""),
+    [noteDraft, setNoteDraft] = useState(""), [noteType, setNoteType] = useState<"order"|"normal">("normal"),
     [contactTasks, setContactTasks] = useState<ContactTaskSummary[]>(()=>cachedDetails?.contactTasks??[]),
     [taskTitle, setTaskTitle] = useState(""),
     [taskKind, setTaskKind] = useState<"general"|"message">("general"),
@@ -3045,6 +3045,7 @@ function CrmDetailsPanel({
               userId: item.user_id ? String(item.user_id) : null,
               authorName: String(item.author_name ?? "已离职坐席"),
               createdAt: String(item.created_at),
+              noteType: item.note_type === "order" ? "order" : "normal",
               updatedAt: String(item.updated_at),
             }))
           : [],
@@ -3242,7 +3243,7 @@ function CrmDetailsPanel({
     const ok = await request(`/api/v1/conversations/${active.id}/notes`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ body: noteDraft.trim() }),
+      body: JSON.stringify({ body: noteDraft.trim(), noteType }),
     });
     if (ok) setNoteDraft("");
   }
@@ -3261,7 +3262,7 @@ function CrmDetailsPanel({
     await request(`/api/v1/conversations/${active.id}/notes/${note.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ body }),
+      body: JSON.stringify({ body, noteType: note.noteType }),
     });
   }
   async function deleteNote(note: NoteItem) {
@@ -3600,6 +3601,10 @@ function CrmDetailsPanel({
                 maxLength={5000}
                 placeholder="添加团队共享备注"
               />
+              <select value={noteType} onChange={(event) => setNoteType(event.target.value as "order"|"normal")} aria-label="备注类型">
+                <option value="order">订单备注（创建订单时同步到内部评论）</option>
+                <option value="normal">普通备注（仅客户资料）</option>
+              </select>
               <button
                 className="crm-primary"
                 disabled={busy || !noteDraft.trim()}
@@ -3613,7 +3618,7 @@ function CrmDetailsPanel({
                   const manageable = note.userId === user?.id || canManageTags;
                   return (
                     <article key={note.id}>
-                      <p>{note.body}</p>
+                      <p><em>{note.noteType === "order" ? "订单备注" : "普通备注"}</em>{note.body}</p>
                       <footer>
                         <span>
                           {note.authorName} · {formatDateTime(note.updatedAt)}
