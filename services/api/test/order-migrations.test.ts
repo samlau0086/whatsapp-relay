@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("order and product import migrations are included in startup migrations",async()=>{
-  const [migrator,inquiryMigration,importMigration,stockMigration,usernameMigration,optionalIdentityMigration,contactSearchUsernameMigration]=await Promise.all([
+  const [migrator,inquiryMigration,importMigration,stockMigration,usernameMigration,optionalIdentityMigration,contactSearchUsernameMigration,noteTypesMigration]=await Promise.all([
     readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
     readFile(new URL("../../../infra/postgres/migrations/080_inquiry_order_template.sql",import.meta.url),"utf8"),
     readFile(new URL("../../../infra/postgres/migrations/081_product_import_sources.sql",import.meta.url),"utf8"),
@@ -11,6 +11,7 @@ test("order and product import migrations are included in startup migrations",as
     readFile(new URL("../../../infra/postgres/migrations/083_contact_whatsapp_username.sql",import.meta.url),"utf8"),
     readFile(new URL("../../../infra/postgres/migrations/084_contact_provider_identity_optional.sql",import.meta.url),"utf8"),
     readFile(new URL("../../../infra/postgres/migrations/085_contact_search_username_index.sql",import.meta.url),"utf8"),
+    readFile(new URL("../../../infra/postgres/migrations/087_note_types.sql",import.meta.url),"utf8"),
   ]);
   assert.match(migrator,/079_order_item_external_urls\.sql/);
   assert.match(migrator,/080_inquiry_order_template\.sql/);
@@ -19,6 +20,7 @@ test("order and product import migrations are included in startup migrations",as
   assert.match(migrator,/083_contact_whatsapp_username\.sql/);
   assert.match(migrator,/084_contact_provider_identity_optional\.sql/);
   assert.match(migrator,/085_contact_search_username_index\.sql/);
+  assert.match(migrator,/087_note_types\.sql/);
   assert.match(inquiryMigration,/inq_template/);
   assert.match(importMigration,/product_import_sources/);
   assert.match(stockMigration,/is_out_of_stock/);
@@ -28,4 +30,6 @@ test("order and product import migrations are included in startup migrations",as
   assert.match(contactSearchUsernameMigration,/whatsapp_username/);
   assert.match(contactSearchUsernameMigration,/pg_get_indexdef/);
   assert.match(contactSearchUsernameMigration,/contacts_channel_search_trgm_idx/);
+  assert.match(noteTypesMigration,/ADD COLUMN IF NOT EXISTS note_type/);
+  assert.match(noteTypesMigration,/CHECK\(note_type IN \('order','normal'\)\)/);
 });
