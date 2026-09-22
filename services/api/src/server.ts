@@ -439,6 +439,7 @@ function countBlockedConversations(params:unknown[]){
     FROM contacts co JOIN conversations c ON c.account_id=co.account_id AND c.contact_id=co.id JOIN channel_accounts a ON a.id=c.account_id
     LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     WHERE co.whatsapp_blocked_at IS NOT NULL AND (a.transport='cloud' OR a.agent_id IS NOT NULL)
+      AND (a.platform IS DISTINCT FROM 'messenger' OR EXISTS(SELECT 1 FROM messenger_page_accounts active_page WHERE active_page.account_id=a.id))
       AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
       AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
@@ -496,7 +497,9 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
         AND task.due_at<now()+interval '3 days'
       ORDER BY task.due_at,task.id LIMIT 1
     ) reminder_task ON true`:""}
-    WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
+    WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL)
+      AND (a.platform IS DISTINCT FROM 'messenger' OR EXISTS(SELECT 1 FROM messenger_page_accounts active_page WHERE active_page.account_id=a.id))
+      AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::text IS NULL OR c.status::text=$3)
       AND ($14::uuid IS NULL OR EXISTS(SELECT 1 FROM conversation_tags selected_tag WHERE selected_tag.conversation_id=c.id AND selected_tag.tag_id=$14))
       AND ($15::text IS NULL OR c.customer_stage=$15::text)
@@ -548,7 +551,9 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
       COUNT(*) FILTER(WHERE c.status='closed')::int closed,COUNT(*) FILTER(WHERE c.status='archived')::int archived
     FROM conversations c JOIN channel_accounts a ON a.id=c.account_id
     LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
-    WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
+    WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL)
+      AND (a.platform IS DISTINCT FROM 'messenger' OR EXISTS(SELECT 1 FROM messenger_page_accounts active_page WHERE active_page.account_id=a.id))
+      AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
       AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
       AND ($7::boolean IS NOT TRUE OR EXISTS(SELECT 1 FROM messages failed_message WHERE failed_message.conversation_id=c.id AND failed_message.direction='out' AND failed_message.status='failed'))
@@ -557,6 +562,7 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
     FROM contacts co JOIN conversations c ON c.account_id=co.account_id AND c.contact_id=co.id JOIN channel_accounts a ON a.id=c.account_id
     LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     WHERE co.entity_type='group' AND c.status NOT IN ('closed','archived') AND (a.transport='cloud' OR a.agent_id IS NOT NULL)
+      AND (a.platform IS DISTINCT FROM 'messenger' OR EXISTS(SELECT 1 FROM messenger_page_accounts active_page WHERE active_page.account_id=a.id))
       AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
       AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
@@ -569,7 +575,9 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
       LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
       WHERE task.conversation_id IS NOT NULL AND task.assigned_user_id=$8::uuid AND c.status<>'closed'
         AND task.status NOT IN ('completed','cancelled','failed') AND task.due_at<now()+interval '3 days'
-        AND (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
+        AND (a.transport='cloud' OR a.agent_id IS NOT NULL)
+        AND (a.platform IS DISTINCT FROM 'messenger' OR EXISTS(SELECT 1 FROM messenger_page_accounts active_page WHERE active_page.account_id=a.id))
+        AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
         AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
         AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
         AND ($7::boolean IS NOT TRUE OR EXISTS(SELECT 1 FROM messages failed_message WHERE failed_message.conversation_id=c.id AND failed_message.direction='out' AND failed_message.status='failed'))
@@ -580,7 +588,9 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
       LEFT JOIN LATERAL (SELECT direction FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
       WHERE task.conversation_id IS NULL AND task.contact_id IS NOT NULL AND task.assigned_user_id=$8::uuid AND c.status<>'closed'
         AND task.status NOT IN ('completed','cancelled','failed') AND task.due_at<now()+interval '3 days'
-        AND (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
+        AND (a.transport='cloud' OR a.agent_id IS NOT NULL)
+        AND (a.platform IS DISTINCT FROM 'messenger' OR EXISTS(SELECT 1 FROM messenger_page_accounts active_page WHERE active_page.account_id=a.id))
+        AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
         AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
         AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
         AND ($7::boolean IS NOT TRUE OR EXISTS(SELECT 1 FROM messages failed_message WHERE failed_message.conversation_id=c.id AND failed_message.direction='out' AND failed_message.status='failed'))
