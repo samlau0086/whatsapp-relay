@@ -409,7 +409,9 @@ app.get("/api/v1/accounts", { preHandler:authenticate }, async (request) => {
     CASE WHEN a.platform='whatsapp' AND a.transport='cloud' THEN CASE WHEN c.credentials_verified_at IS NULL THEN 'unverified' ELSE 'verified' END
          WHEN a.platform='messenger' THEN CASE WHEN mp.credentials_verified_at IS NULL THEN 'unverified' ELSE 'verified' END END credentials_status
     FROM channel_accounts a LEFT JOIN whatsapp_cloud_accounts c ON c.account_id=a.id LEFT JOIN messenger_page_accounts mp ON mp.account_id=a.id
-    WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL) AND ($1::uuid[] IS NULL OR a.id=ANY($1)) ORDER BY a.display_name`, [ids ?? null]);
+    WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL)
+      AND (a.platform IS DISTINCT FROM 'messenger' OR mp.account_id IS NOT NULL)
+      AND ($1::uuid[] IS NULL OR a.id=ANY($1)) ORDER BY a.display_name`, [ids ?? null]);
   return { data:result.rows };
 });
 

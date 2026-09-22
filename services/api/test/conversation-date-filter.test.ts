@@ -57,6 +57,8 @@ test("conversation list and counts paths carry server-side filters without leaki
 
 test("conversation API applies a closed-open last-message range",async()=>{
   const server=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
+  const accountsRoute=server.slice(server.indexOf('app.get("/api/v1/accounts"'),server.indexOf('type ConversationFilter='));
+  assert.match(accountsRoute,/a\.platform IS DISTINCT FROM 'messenger' OR mp\.account_id IS NOT NULL/);
   assert.match(server,/c\.last_message_at>=\$6/);
   assert.match(server,/c\.last_message_at<\$7/);
   assert.match(server,/invalid_conversation_date_range/);
