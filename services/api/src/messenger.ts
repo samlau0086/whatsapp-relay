@@ -108,6 +108,21 @@ export async function registerMessengerRoutes(app:FastifyInstance):Promise<void>
     return{ok:true};
   });
 
+  app.delete("/api/v1/admin/messenger/pages/:id",{preHandler:authenticate},async(request,reply)=>{
+    if(request.principal?.kind!=="user"||request.principal.role!=="admin")return reply.code(403).send({error:"admin_required"});
+    const {id}=request.params as {id:string};
+    const removed=await transaction(async client=>{
+      const current=await client.query("SELECT page_id,auth_source FROM messenger_page_accounts WHERE account_id=$1 FOR UPDATE",[id]);
+      if(!current.rowCount)return null;
+      await client.query("DELETE FROM messenger_page_accounts WHERE account_id=$1",[id]);
+      await client.query("UPDATE channel_accounts SET status='offline',status_reason='messenger_disconnected' WHERE id=$1 AND platform='messenger'",[id]);
+      await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'messenger_page.disconnect','channel_account',$2,$3)",[request.principal!.id,id,JSON.stringify({pageId:current.rows[0].page_id,authSource:current.rows[0].auth_source})]);
+      return{pageId:String(current.rows[0].page_id)};
+    });
+    if(!removed)return reply.code(404).send({error:"not_found"});
+    return{ok:true,pageId:removed.pageId,historyPreserved:true};
+  });
+
   app.post("/api/v1/admin/messenger/pages/:id/test",{preHandler:authenticate},async(request,reply)=>{
     if(request.principal?.kind!=="user"||request.principal.role!=="admin")return reply.code(403).send({error:"admin_required"});
     const {id}=request.params as {id:string},row=await pageSetting(id);if(!row)return reply.code(404).send({error:"not_found"});

@@ -252,6 +252,26 @@ export async function registerMessengerOAuthRoutes(app:FastifyInstance):Promise<
     return{ok:true,verifyToken};
   });
 
+  app.delete("/api/v1/admin/messenger/oauth/settings",{preHandler:authenticate},async(request,reply)=>{
+    if(!adminOnly(request,reply))return;
+    const removed=await transaction(async client=>{
+      const settings=await client.query("SELECT singleton FROM messenger_oauth_settings WHERE singleton=true FOR UPDATE");
+      if(!settings.rowCount)return false;
+      const pages=await client.query("SELECT account_id FROM messenger_page_accounts WHERE auth_source='oauth' FOR UPDATE");
+      for(const row of pages.rows){
+        await client.query("DELETE FROM messenger_page_accounts WHERE account_id=$1",[row.account_id]);
+        await client.query("UPDATE channel_accounts SET status='offline',status_reason='messenger_oauth_removed' WHERE id=$1 AND platform='messenger'",[row.account_id]);
+      }
+      await client.query("DELETE FROM messenger_oauth_page_candidates");
+      await client.query("DELETE FROM messenger_oauth_sessions");
+      await client.query("DELETE FROM messenger_oauth_settings WHERE singleton=true");
+      await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'messenger_oauth.delete','messenger_oauth',NULL,$2)",[request.principal!.id,JSON.stringify({pageCount:pages.rowCount??0})]);
+      return true;
+    });
+    if(!removed)return reply.code(404).send({error:"not_configured"});
+    return{ok:true,removed:true,historyPreserved:true};
+  });
+
   app.post("/api/v1/admin/messenger/oauth/verify-token/reset",{preHandler:authenticate},async(request,reply)=>{
     if(!adminOnly(request,reply))return;
     const token=`rdm_${randomBytes(32).toString("base64url")}`,result=await pool.query(
