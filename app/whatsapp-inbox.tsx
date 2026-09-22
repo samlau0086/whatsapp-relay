@@ -41,7 +41,7 @@ import {useConversationFeed} from "./use-conversation-feed";
 import {ConversationPanel} from "./conversation-panel";
 import type {ContactMethod,ContactMethodType,Conversation,TagItem} from "./conversation-types";
 import { convertWeight, formatWeight, WEIGHT_UNITS, type WeightUnit } from "./weight";
-import { authorizedFetch, clearStoredSession, setCurrentAccessToken, storeSession } from "./auth-session";
+import { authorizedFetch, clearStoredSession, SESSION_EXPIRED_EVENT, setCurrentAccessToken, storeSession } from "./auth-session";
 
 const API_URL = (process.env.NEXT_PUBLIC_RELAY_API_URL ?? "").replace(/\/$/, "");
 const REMEMBER_LOGIN_KEY="relayRememberLogin";
@@ -529,6 +529,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     dateFilterRef.current="all";setDateFilter("all");setApiToken("");setUser(null);setAccounts([]);setConversations([]);setConversationCounts(EMPTY_CONVERSATION_COUNTS);setNextConversationCursor(null);setMessages({});setMessageCursors({});setLoadingOlderConversationId("");setOlderMessageErrors({});setFailedMessageCounts({});setEmailActivities({});setMessageTranslations({});setTranslationPreferences({});setTranslationReadyConversationId("");selectedConversationRef.current=null;setActiveId("");setSelectedTag("");setContextTags([]);setAuthOpen(false);setSessionReady(true);setLoading(false);
   },[]);
 
+  useEffect(()=>{
+    const handleSessionExpired=()=>logout();
+    window.addEventListener(SESSION_EXPIRED_EVENT,handleSessionExpired);
+    return()=>window.removeEventListener(SESSION_EXPIRED_EVENT,handleSessionExpired);
+  },[logout]);
+
   const loadAccounts=useCallback(async(token:string)=>{
     const result=await authorizedFetch("/api/v1/accounts",token);
     if(result.token!==token)setApiToken(result.token);
@@ -562,7 +568,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       const due=body.dueReminders?.find(item=>!notifiedReminders.current.has(item.id));
       if(due){notifiedReminders.current.add(due.id);setToast(`${due.display_name} 的任务已到期`);}
     }
-  },[dateFilter,selectedAccount,logout]);
+  },[dateFilter,selectedAccount]);
 
   const loadConversations=useCallback(async(token:string,options:{append?:boolean;quiet?:boolean;notify?:boolean}={})=>{
     const append=Boolean(options.append),quiet=Boolean(options.quiet);
