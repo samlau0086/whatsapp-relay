@@ -62,3 +62,19 @@ test("proactive outreach locks only nullable-safe tables",async()=>{
   assert.doesNotMatch(source,/ORDER BY j\.planned_at FOR UPDATE SKIP LOCKED/);
   assert.doesNotMatch(source,/WHERE c\.id=\$1 FOR UPDATE[",`]/);
 });
+
+test("proactive outreach upgrades legacy tables before saving settings or deferring jobs",async()=>{
+  const source=await readFile(new URL("../src/proactive-outreach.ts",import.meta.url),"utf8");
+  assert.match(source,/ALTER TABLE proactive_outreach_settings ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now\(\)/);
+  assert.match(source,/ALTER TABLE proactive_outreach_jobs ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now\(\)/);
+});
+
+test("manual outreach scan bypasses the background scan throttle",async()=>{
+  const [source,routes]=await Promise.all([
+    readFile(new URL("../src/proactive-outreach.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/proactive-routes.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(source,/scanProactiveOutreach\(force=false\)/);
+  assert.match(source,/if\(!force&&Date\.now\(\)-lastScan<60_000\)return/);
+  assert.match(routes,/proactive-outreach\/scan[\s\S]*?scanProactiveOutreach\(true\)/);
+});

@@ -143,6 +143,8 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.match(server,/d\.status='pending' AND r\.kind='followup'/);
   assert.match(server,/j\.state IN \('pending','processing'\)/);
   assert.match(server,/sent\.direction='out' AND sent\.status IN \('sent','delivered','read'\) AND r\.kind='followup'/);
+  assert.match(server,/proactive_outreach_jobs pj WHERE pj\.contact_id=c\.contact_id AND pj\.conversation_id=c\.id AND pj\.state IN \('pending','processing'\)/);
+  assert.match(server,/proactive_outreach_jobs pj JOIN messages sent ON sent\.id=pj\.message_id WHERE pj\.contact_id=c\.contact_id AND pj\.conversation_id=c\.id AND pj\.state='sent' AND sent\.direction='out' AND sent\.status IN \('sent','delivered','read'\)/);
   assert.match(countsRoute,/groups:Number\(groupRow\.groups\?\?0\)/);
   const summaryRoute=server.slice(server.indexOf('app.get("/api/v1/conversations/:id/summary"'),server.indexOf('app.get("/api/v1/conversations/:id/group"'));
   assert.match(summaryRoute,/filter==="groups"&&row\.conversation_type==="group"/);
