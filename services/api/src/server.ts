@@ -430,7 +430,7 @@ function followupCondition(parameter:string){
       OR EXISTS(SELECT 1 FROM proactive_outreach_jobs pj WHERE pj.contact_id=c.contact_id AND pj.conversation_id=c.id AND pj.state IN ('pending','processing'))))
     OR (${followup}='followed' AND (EXISTS(SELECT 1 FROM messages sent JOIN agent_runs r ON r.id=sent.ai_run_id WHERE sent.conversation_id=c.id AND sent.direction='out' AND sent.status IN ('sent','delivered','read') AND r.kind='followup')
       OR EXISTS(SELECT 1 FROM ai_drafts d JOIN agent_runs r ON r.id=d.run_id JOIN messages sent ON sent.conversation_id=d.conversation_id AND sent.client_message_id='draft-'||d.id::text WHERE d.conversation_id=c.id AND d.status='sent' AND sent.status IN ('sent','delivered','read') AND r.kind='followup')
-      OR EXISTS(SELECT 1 FROM proactive_outreach_jobs pj JOIN messages sent ON sent.id=pj.message_id WHERE pj.contact_id=c.contact_id AND pj.conversation_id=c.id AND pj.state='sent' AND sent.direction='out' AND sent.status IN ('sent','delivered','read'))))`;
+      OR EXISTS(SELECT 1 FROM proactive_outreach_jobs pj JOIN messages sent ON sent.id=pj.message_id WHERE pj.contact_id=c.contact_id AND pj.conversation_id=c.id AND pj.state='sent' AND sent.direction='out' AND sent.status IN ('sent','delivered','read')))))`;
 }
 
 function parseConversationRange(query:ConversationQuery){

@@ -162,6 +162,15 @@ test("follow-up count parameters are explicitly typed in every comparison",async
   assert.match(condition,/const followup=`\$\{parameter\}::text`/);
   assert.equal((condition.match(/\$\{followup\}/g)??[]).length,4);
   assert.equal((condition.match(/\$\{parameter\}/g)??[]).length,1);
+  const sql=condition.match(/return `([\s\S]*?)`;/)?.[1];
+  assert.ok(sql,"follow-up SQL condition must exist");
+  let depth=0;
+  for(const char of sql.replace(/'(?:''|[^'])*'/g,"")){
+    if(char==="(")depth++;
+    if(char===")")depth--;
+    assert.ok(depth>=0,"follow-up SQL closes an unopened parenthesis");
+  }
+  assert.equal(depth,0,"follow-up SQL must close every parenthesis before ORDER BY");
   const blocked=server.slice(server.indexOf("function countBlockedConversations("),server.indexOf('app.get("/api/v1/conversations",'));
   assert.match(blocked,/followupCondition\("\$8"\)/);
 });
