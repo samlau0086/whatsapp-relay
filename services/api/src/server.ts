@@ -423,10 +423,11 @@ const CONVERSATION_ORDER_STATUSES=new Set(["none","any","quotation","pending_con
 const CONVERSATION_FOLLOWUP_STATUSES=new Set(["pending_confirmation","queued","followed"]);
 
 function followupCondition(parameter:string){
-  return `(${parameter}::text IS NULL
-    OR (${parameter}='pending_confirmation' AND EXISTS(SELECT 1 FROM ai_drafts d JOIN agent_runs r ON r.id=d.run_id WHERE d.conversation_id=c.id AND d.status='pending' AND r.kind='followup'))
-    OR (${parameter}='queued' AND EXISTS(SELECT 1 FROM agent_jobs j WHERE j.conversation_id=c.id AND j.kind='followup' AND j.state IN ('pending','processing')))
-    OR (${parameter}='followed' AND (EXISTS(SELECT 1 FROM messages sent JOIN agent_runs r ON r.id=sent.ai_run_id WHERE sent.conversation_id=c.id AND sent.direction='out' AND sent.status IN ('sent','delivered','read') AND r.kind='followup')
+  const followup=`${parameter}::text`;
+  return `(${followup} IS NULL
+    OR (${followup}='pending_confirmation' AND EXISTS(SELECT 1 FROM ai_drafts d JOIN agent_runs r ON r.id=d.run_id WHERE d.conversation_id=c.id AND d.status='pending' AND r.kind='followup'))
+    OR (${followup}='queued' AND EXISTS(SELECT 1 FROM agent_jobs j WHERE j.conversation_id=c.id AND j.kind='followup' AND j.state IN ('pending','processing')))
+    OR (${followup}='followed' AND (EXISTS(SELECT 1 FROM messages sent JOIN agent_runs r ON r.id=sent.ai_run_id WHERE sent.conversation_id=c.id AND sent.direction='out' AND sent.status IN ('sent','delivered','read') AND r.kind='followup')
       OR EXISTS(SELECT 1 FROM ai_drafts d JOIN agent_runs r ON r.id=d.run_id JOIN messages sent ON sent.conversation_id=d.conversation_id AND sent.client_message_id='draft-'||d.id::text WHERE d.conversation_id=c.id AND d.status='sent' AND sent.status IN ('sent','delivered','read') AND r.kind='followup'))))`;
 }
 

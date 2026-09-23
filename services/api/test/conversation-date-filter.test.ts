@@ -150,6 +150,16 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.match(summaryRoute,/filter==="reminders"&&row\.status!=="closed"/);
 });
 
+test("follow-up count parameters are explicitly typed in every comparison",async()=>{
+  const server=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
+  const condition=server.slice(server.indexOf("function followupCondition("),server.indexOf("function parseConversationRange("));
+  assert.match(condition,/const followup=`\$\{parameter\}::text`/);
+  assert.equal((condition.match(/\$\{followup\}/g)??[]).length,4);
+  assert.equal((condition.match(/\$\{parameter\}/g)??[]).length,1);
+  const blocked=server.slice(server.indexOf("function countBlockedConversations("),server.indexOf('app.get("/api/v1/conversations",'));
+  assert.match(blocked,/followupCondition\("\$8"\)/);
+});
+
 test("performance reports retain representative HTTP failure details",async()=>{
   const [runner,workflow]=await Promise.all([
     readFile(new URL("../../../performance/conversations/run.mjs",import.meta.url),"utf8"),
