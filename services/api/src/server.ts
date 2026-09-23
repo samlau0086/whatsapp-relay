@@ -553,7 +553,8 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
   const range=parseConversationRange(query);if(!range)return reply.code(400).send({error:"invalid_conversation_date_range"});
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null,accountIds=request.principal?.accountIds??null;
   const countParams=[query.accountId??null,accountIds,range.from,range.before,query.unreplied==="true",query.before??null,query.sendFailed==="true",principalUserId,query.followup??null];
-  const blockedPromise=countBlockedConversations([...countParams.slice(0,7),query.followup??null]);
+  const followupCountParams=[...countParams.slice(0,7),query.followup??null];
+  const blockedPromise=countBlockedConversations(followupCountParams);
   const dueReminderPromise=request.principal?.kind==="user"?pool.query(`SELECT task.id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164,co.provider_user_id) display_name,task.due_at remind_at
     FROM tasks task JOIN contacts co ON co.id=task.contact_id
     WHERE task.assigned_user_id=$1 AND task.status NOT IN ('completed','cancelled','failed') AND task.due_at<=now()
@@ -584,8 +585,8 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
       AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
       AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
       AND ($7::boolean IS NOT TRUE OR EXISTS(SELECT 1 FROM messages failed_message WHERE failed_message.conversation_id=c.id AND failed_message.direction='out' AND failed_message.status='failed'))
-      AND ${followupCondition("$9")}
-    `,countParams),
+      AND ${followupCondition("$8")}
+    `,followupCountParams),
     pool.query(`SELECT COUNT(*)::int reminders FROM (
       SELECT c.id FROM tasks task
       JOIN conversations c ON c.id=task.conversation_id

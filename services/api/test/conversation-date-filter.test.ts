@@ -133,7 +133,11 @@ test("conversation API applies a closed-open last-message range",async()=>{
   const primaryCountQuery=countsRoute.slice(countsRoute.indexOf('pool.query(`SELECT COUNT(*) FILTER'),countsRoute.indexOf('pool.query(`SELECT COUNT(*)::int groups'));
   assert.doesNotMatch(primaryCountQuery,/JOIN contacts/);
   assert.match(countsRoute,/c\.account_id=co\.account_id AND c\.contact_id=co\.id/);
-  assert.match(countsRoute,/co\.entity_type='group'[\s\S]*?followupCondition\("\$9"\)/);
+  const groupCountQuery=countsRoute.slice(countsRoute.indexOf('pool.query(`SELECT COUNT(*)::int groups'),countsRoute.indexOf('pool.query(`SELECT COUNT(*)::int reminders'));
+  assert.match(groupCountQuery,/co\.entity_type='group'[\s\S]*?followupCondition\("\$8"\)/);
+  assert.match(groupCountQuery,/`\s*,followupCountParams\)/);
+  assert.doesNotMatch(groupCountQuery,/\$9\b/);
+  assert.match(countsRoute,/const followupCountParams=\[\.\.\.countParams\.slice\(0,7\),query\.followup\?\?null\]/);
   assert.match(conversationRoute,/followupCondition\("\$19"\)/);
   assert.match(server,/invalid_followup_filter/);
   assert.match(server,/d\.status='pending' AND r\.kind='followup'/);
