@@ -2,7 +2,8 @@ export type ConversationDateFilter="all"|"today"|"yesterday"|"day3"|"day5"|"day7
 export type ConversationListFilter="all"|"groups"|"mine"|"unassigned"|"favorite"|"closed"|"archived"|"reminders"|"blocked";
 export type ConversationCustomerStage="new"|"considering"|"qualified"|"won"|"lost";
 export type ConversationLatestOrderStatus="none"|"any"|"quotation"|"pending_confirmation"|"pending_payment"|"paid"|"processing"|"shipped"|"completed"|"cancelled";
-export type ConversationListOptions={filter?:ConversationListFilter;accountId?:string;q?:string;tagId?:string;customerStage?:ConversationCustomerStage;latestOrderStatus?:ConversationLatestOrderStatus;country?:string;cursor?:string;limit?:number};
+export type ConversationFollowupFilter="pending_confirmation"|"queued"|"followed";
+export type ConversationListOptions={filter?:ConversationListFilter;accountId?:string;q?:string;tagId?:string;customerStage?:ConversationCustomerStage;latestOrderStatus?:ConversationLatestOrderStatus;followup?:ConversationFollowupFilter;country?:string;cursor?:string;limit?:number};
 
 export const CONVERSATION_DATE_FILTERS:Array<{value:ConversationDateFilter;label:string}>=[
   {value:"all",label:"全部"},
@@ -39,6 +40,7 @@ export function conversationListPath(filter:ConversationDateFilter,now=new Date(
   if(options.tagId)params.set("tagId",options.tagId);
   if(options.customerStage)params.set("customerStage",options.customerStage);
   if(options.latestOrderStatus)params.set("latestOrderStatus",options.latestOrderStatus);
+  if(options.followup)params.set("followup",options.followup);
   if(options.country)params.set("country",options.country);
   if(options.cursor)params.set("cursor",options.cursor);
   if(filter==="unreplied")params.set("unreplied","true");
@@ -49,9 +51,10 @@ export function conversationListPath(filter:ConversationDateFilter,now=new Date(
   return`/api/v1/conversations?${params.toString()}`;
 }
 
-export function conversationCountsPath(filter:ConversationDateFilter,now=new Date(),accountId=""):string{
+export function conversationCountsPath(filter:ConversationDateFilter,now=new Date(),accountId="",followup?:ConversationFollowupFilter):string{
   const params=new URLSearchParams();
   if(accountId)params.set("accountId",accountId);
+  if(followup)params.set("followup",followup);
   if(filter==="unreplied")params.set("unreplied","true");
   if(filter==="sendFailed")params.set("sendFailed","true");
   const range=conversationDateRange(filter,now);

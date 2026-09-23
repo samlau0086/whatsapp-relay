@@ -53,6 +53,10 @@ test("conversation list and counts paths carry server-side filters without leaki
   assert.match(summary,/\/api\/v1\/conversations\/conversation-id\/summary\?/);
   assert.match(summary,/filter=mine/);assert.match(summary,/tagId=tag-id/);assert.match(summary,/customerStage=qualified/);assert.match(summary,/latestOrderStatus=any/);assert.doesNotMatch(summary,/[?&]limit=/);
   assert.match(conversationListPath("all",now,{filter:"groups"}),/filter=groups/);
+  const combined=conversationListPath("today",now,{followup:"queued"});
+  assert.match(combined,/followup=queued/);assert.match(combined,/lastMessageFrom=/);
+  assert.match(conversationCountsPath("today",now,"","pending_confirmation"),/followup=pending_confirmation/);
+  assert.match(conversationSummaryPath("id","yesterday",now,{followup:"followed"}),/followup=followed/);
 });
 
 test("conversation API applies a closed-open last-message range",async()=>{
@@ -129,7 +133,12 @@ test("conversation API applies a closed-open last-message range",async()=>{
   const primaryCountQuery=countsRoute.slice(countsRoute.indexOf('pool.query(`SELECT COUNT(*) FILTER'),countsRoute.indexOf('pool.query(`SELECT COUNT(*)::int groups'));
   assert.doesNotMatch(primaryCountQuery,/JOIN contacts/);
   assert.match(countsRoute,/c\.account_id=co\.account_id AND c\.contact_id=co\.id/);
-  assert.match(countsRoute,/co\.entity_type='group'[\s\S]*?countParams\.slice\(0,7\)/);
+  assert.match(countsRoute,/co\.entity_type='group'[\s\S]*?followupCondition\("\$9"\)/);
+  assert.match(conversationRoute,/followupCondition\("\$19"\)/);
+  assert.match(server,/invalid_followup_filter/);
+  assert.match(server,/d\.status='pending' AND r\.kind='followup'/);
+  assert.match(server,/j\.state IN \('pending','processing'\)/);
+  assert.match(server,/sent\.direction='out' AND sent\.status IN \('sent','delivered','read'\) AND r\.kind='followup'/);
   assert.match(countsRoute,/groups:Number\(groupRow\.groups\?\?0\)/);
   const summaryRoute=server.slice(server.indexOf('app.get("/api/v1/conversations/:id/summary"'),server.indexOf('app.get("/api/v1/conversations/:id/group"'));
   assert.match(summaryRoute,/filter==="groups"&&row\.conversation_type==="group"/);
@@ -206,6 +215,7 @@ test("inbox uses debounced search, cursor loading, realtime reconciliation, and 
   assert.match(panel,/conversation-tag-chip/);
   assert.match(panel,/aria-label="按客户阶段筛选会话"/);
   assert.match(panel,/aria-label="按最新订单状态筛选会话"/);
+  assert.match(panel,/aria-label="按主动跟进状态筛选会话"/);
   assert.match(panel,/移除标签/);
   assert.match(feed,/60_000/);
   assert.match(feed,/100/);

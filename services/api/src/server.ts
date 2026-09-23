@@ -416,10 +416,19 @@ app.get("/api/v1/accounts", { preHandler:authenticate }, async (request) => {
 });
 
 type ConversationFilter="all"|"groups"|"mine"|"unassigned"|"favorite"|"closed"|"archived"|"reminders"|"blocked";
-type ConversationQuery={accountId?:string;status?:string;q?:string;tagId?:string;customerStage?:string;latestOrderStatus?:string;country?:string;filter?:string;limit?:string;before?:string;cursor?:string;lastMessageFrom?:string;lastMessageBefore?:string;unreplied?:string;sendFailed?:string};
+type ConversationQuery={accountId?:string;status?:string;q?:string;tagId?:string;customerStage?:string;latestOrderStatus?:string;followup?:string;country?:string;filter?:string;limit?:string;before?:string;cursor?:string;lastMessageFrom?:string;lastMessageBefore?:string;unreplied?:string;sendFailed?:string};
 const CONVERSATION_FILTERS=new Set<ConversationFilter>(["all","groups","mine","unassigned","favorite","closed","archived","reminders","blocked"]);
 const CONVERSATION_CUSTOMER_STAGES=new Set(["new","considering","qualified","won","lost"]);
 const CONVERSATION_ORDER_STATUSES=new Set(["none","any","quotation","pending_confirmation","pending_payment","paid","processing","shipped","completed","cancelled"]);
+const CONVERSATION_FOLLOWUP_STATUSES=new Set(["pending_confirmation","queued","followed"]);
+
+function followupCondition(parameter:string){
+  return `(${parameter}::text IS NULL
+    OR (${parameter}='pending_confirmation' AND EXISTS(SELECT 1 FROM ai_drafts d JOIN agent_runs r ON r.id=d.run_id WHERE d.conversation_id=c.id AND d.status='pending' AND r.kind='followup'))
+    OR (${parameter}='queued' AND EXISTS(SELECT 1 FROM agent_jobs j WHERE j.conversation_id=c.id AND j.kind='followup' AND j.state IN ('pending','processing')))
+    OR (${parameter}='followed' AND (EXISTS(SELECT 1 FROM messages sent JOIN agent_runs r ON r.id=sent.ai_run_id WHERE sent.conversation_id=c.id AND sent.direction='out' AND sent.status IN ('sent','delivered','read') AND r.kind='followup')
+      OR EXISTS(SELECT 1 FROM ai_drafts d JOIN agent_runs r ON r.id=d.run_id JOIN messages sent ON sent.conversation_id=d.conversation_id AND sent.client_message_id='draft-'||d.id::text WHERE d.conversation_id=c.id AND d.status='sent' AND sent.status IN ('sent','delivered','read') AND r.kind='followup'))))`;
+}
 
 function parseConversationRange(query:ConversationQuery){
   const from=query.lastMessageFrom?new Date(query.lastMessageFrom):null,before=query.lastMessageBefore?new Date(query.lastMessageBefore):null;
@@ -446,6 +455,7 @@ function countBlockedConversations(params:unknown[]){
       AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
       AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
       AND ($7::boolean IS NOT TRUE OR EXISTS(SELECT 1 FROM messages failed_message WHERE failed_message.conversation_id=c.id AND failed_message.direction='out' AND failed_message.status='failed'))
+      AND ${followupCondition("$8")}
   `,params);
 }
 
@@ -454,6 +464,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
   if(query.accountId&&!canAccessAccount(request.principal,query.accountId))return reply.code(403).send({error:"account_forbidden"});
   if(query.unreplied!==undefined&&query.unreplied!=="true"&&query.unreplied!=="false")return reply.code(400).send({error:"invalid_unreplied_filter"});
   if(query.sendFailed!==undefined&&query.sendFailed!=="true"&&query.sendFailed!=="false")return reply.code(400).send({error:"invalid_send_failed_filter"});
+  if(query.followup&&!CONVERSATION_FOLLOWUP_STATUSES.has(query.followup))return reply.code(400).send({error:"invalid_followup_filter"});
   if(query.filter&&!CONVERSATION_FILTERS.has(query.filter as ConversationFilter))return reply.code(400).send({error:"invalid_conversation_filter"});
   if(query.customerStage&&!CONVERSATION_CUSTOMER_STAGES.has(query.customerStage))return reply.code(400).send({error:"invalid_customer_stage_filter"});
   if(query.latestOrderStatus&&!CONVERSATION_ORDER_STATUSES.has(query.latestOrderStatus))return reply.code(400).send({error:"invalid_latest_order_status_filter"});
@@ -509,6 +520,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
       AND ($5::timestamptz IS NULL OR c.last_message_at<$5) AND ($6::timestamptz IS NULL OR c.last_message_at>=$6) AND ($7::timestamptz IS NULL OR c.last_message_at<$7)
       AND ($8::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in')
       AND ($17::boolean IS NOT TRUE OR EXISTS(SELECT 1 FROM messages failed_message WHERE failed_message.conversation_id=c.id AND failed_message.direction='out' AND failed_message.status='failed'))
+      AND ${followupCondition("$19")}
       ${candidateFilter}
       ${latestOrderFilter}
       ${candidateCursor}
@@ -526,7 +538,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
     LEFT JOIN LATERAL (SELECT text_content,kind,direction,status,occurred_at FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true
     ORDER BY candidates.sort_at ${reminderMode?"ASC":"DESC"},c.id DESC`,
-    [query.accountId??null,accountIds,query.status??null,keyword,query.before??null,range.from,range.before,query.unreplied==="true",principalUserId,filter,cursor?.sortAt??null,cursor?.id??null,limit+1,query.tagId??null,query.customerStage??null,query.latestOrderStatus??null,query.sendFailed==="true",query.country?.trim().toUpperCase()??null]);
+    [query.accountId??null,accountIds,query.status??null,keyword,query.before??null,range.from,range.before,query.unreplied==="true",principalUserId,filter,cursor?.sortAt??null,cursor?.id??null,limit+1,query.tagId??null,query.customerStage??null,query.latestOrderStatus??null,query.sendFailed==="true",query.country?.trim().toUpperCase()??null,query.followup??null]);
   const hasMore=result.rows.length>limit,data=result.rows.slice(0,limit),last=data[data.length-1];
   return{data,nextCursor:hasMore&&last?Buffer.from(JSON.stringify({sortAt:last.sort_at,id:last.id}),"utf8").toString("base64url"):null,total:null};
 });
@@ -536,10 +548,11 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
   if(query.accountId&&!canAccessAccount(request.principal,query.accountId))return reply.code(403).send({error:"account_forbidden"});
   if(query.unreplied!==undefined&&query.unreplied!=="true"&&query.unreplied!=="false")return reply.code(400).send({error:"invalid_unreplied_filter"});
   if(query.sendFailed!==undefined&&query.sendFailed!=="true"&&query.sendFailed!=="false")return reply.code(400).send({error:"invalid_send_failed_filter"});
+  if(query.followup&&!CONVERSATION_FOLLOWUP_STATUSES.has(query.followup))return reply.code(400).send({error:"invalid_followup_filter"});
   const range=parseConversationRange(query);if(!range)return reply.code(400).send({error:"invalid_conversation_date_range"});
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null,accountIds=request.principal?.accountIds??null;
-  const countParams=[query.accountId??null,accountIds,range.from,range.before,query.unreplied==="true",query.before??null,query.sendFailed==="true",principalUserId];
-  const blockedPromise=countBlockedConversations(countParams.slice(0,7));
+  const countParams=[query.accountId??null,accountIds,range.from,range.before,query.unreplied==="true",query.before??null,query.sendFailed==="true",principalUserId,query.followup??null];
+  const blockedPromise=countBlockedConversations([...countParams.slice(0,7),query.followup??null]);
   const dueReminderPromise=request.principal?.kind==="user"?pool.query(`SELECT task.id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164,co.provider_user_id) display_name,task.due_at remind_at
     FROM tasks task JOIN contacts co ON co.id=task.contact_id
     WHERE task.assigned_user_id=$1 AND task.status NOT IN ('completed','cancelled','failed') AND task.due_at<=now()
@@ -559,6 +572,7 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
       AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
       AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
       AND ($7::boolean IS NOT TRUE OR EXISTS(SELECT 1 FROM messages failed_message WHERE failed_message.conversation_id=c.id AND failed_message.direction='out' AND failed_message.status='failed'))
+      AND ${followupCondition("$9")}
     `,countParams),
     pool.query(`SELECT COUNT(*)::int groups
     FROM contacts co JOIN conversations c ON c.account_id=co.account_id AND c.contact_id=co.id JOIN channel_accounts a ON a.id=c.account_id
@@ -569,7 +583,8 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
       AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
       AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
       AND ($7::boolean IS NOT TRUE OR EXISTS(SELECT 1 FROM messages failed_message WHERE failed_message.conversation_id=c.id AND failed_message.direction='out' AND failed_message.status='failed'))
-    `,countParams.slice(0,7)),
+      AND ${followupCondition("$9")}
+    `,countParams),
     pool.query(`SELECT COUNT(*)::int reminders FROM (
       SELECT c.id FROM tasks task
       JOIN conversations c ON c.id=task.conversation_id
@@ -583,6 +598,7 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
         AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
         AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
         AND ($7::boolean IS NOT TRUE OR EXISTS(SELECT 1 FROM messages failed_message WHERE failed_message.conversation_id=c.id AND failed_message.direction='out' AND failed_message.status='failed'))
+        AND ${followupCondition("$9")}
       UNION
       SELECT c.id FROM tasks task
       JOIN conversations c ON c.contact_id=task.contact_id
@@ -596,6 +612,7 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
         AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
         AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
         AND ($7::boolean IS NOT TRUE OR EXISTS(SELECT 1 FROM messages failed_message WHERE failed_message.conversation_id=c.id AND failed_message.direction='out' AND failed_message.status='failed'))
+        AND ${followupCondition("$9")}
     ) reminder_conversations`,countParams),
     dueReminderPromise
   ]);
@@ -607,6 +624,7 @@ app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(requ
   const {id}=request.params as {id:string},query=request.query as ConversationQuery;
   if(query.unreplied!==undefined&&query.unreplied!=="true"&&query.unreplied!=="false")return reply.code(400).send({error:"invalid_unreplied_filter"});
   if(query.sendFailed!==undefined&&query.sendFailed!=="true"&&query.sendFailed!=="false")return reply.code(400).send({error:"invalid_send_failed_filter"});
+  if(query.followup&&!CONVERSATION_FOLLOWUP_STATUSES.has(query.followup))return reply.code(400).send({error:"invalid_followup_filter"});
   if(query.filter&&!CONVERSATION_FILTERS.has(query.filter as ConversationFilter))return reply.code(400).send({error:"invalid_conversation_filter"});
   if(query.tagId&&!isPostgresUuid(query.tagId))return reply.code(400).send({error:"invalid_tag_filter"});
   if(query.customerStage&&!CONVERSATION_CUSTOMER_STAGES.has(query.customerStage))return reply.code(400).send({error:"invalid_customer_stage_filter"});
@@ -635,6 +653,7 @@ app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(requ
     ) reminder_task ON true WHERE c.id=$1`,[id,principalUserId]);
   const row=result.rows[0];if(!row||!canAccessAccount(request.principal,String(row.account_id)))return reply.code(404).send({error:"not_found"});
   const hasFailedOutgoing=query.sendFailed!=="true"||Boolean((await pool.query("SELECT 1 FROM messages WHERE conversation_id=$1 AND direction='out' AND status='failed' LIMIT 1",[id])).rowCount);
+  const hasFollowup=!query.followup||Boolean((await pool.query(`SELECT 1 FROM conversations c WHERE c.id=$1 AND ${followupCondition("$2")}`,[id,query.followup])).rowCount);
   const lastAt=row.last_message_at?new Date(row.last_message_at).getTime():null,from=range.from?new Date(range.from).getTime():null,before=range.before?new Date(range.before).getTime():null,legacyBefore=query.before?new Date(query.before).getTime():null;
   const filter=query.filter as ConversationFilter|undefined;
   const matches=(!query.accountId||row.account_id===query.accountId)
@@ -646,6 +665,7 @@ app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(requ
     &&(legacyBefore===null||lastAt!==null&&lastAt<legacyBefore)&&(from===null||lastAt!==null&&lastAt>=from)&&(before===null||lastAt!==null&&lastAt<before)
     &&(query.unreplied!=="true"||row.last_message_direction==="in")
     &&hasFailedOutgoing
+    &&hasFollowup
     &&((!filter&&Boolean(query.status))||(!filter&&row.status!=="closed"&&row.status!=="archived")||(filter==="all"&&row.status!=="closed"&&row.status!=="archived")||(filter==="blocked"&&row.blocked)||(filter==="groups"&&row.conversation_type==="group"&&row.status!=="closed"&&row.status!=="archived")||(filter==="mine"&&row.status!=="closed"&&row.assigned_user_id===principalUserId)||(filter==="unassigned"&&row.status!=="closed"&&!row.assigned_user_id)||(filter==="favorite"&&row.status!=="closed"&&row.favorite)||(filter==="closed"&&row.status==="closed")||(filter==="archived"&&row.status==="archived")||(filter==="reminders"&&row.status!=="closed"&&row.remind_at));
   return{data:row,matches:Boolean(matches)};
 });

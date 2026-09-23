@@ -33,7 +33,7 @@ import { TaskCenter } from "./task-center";
 import {StatusCenter} from "./status-center";
 import {LANGUAGES,LanguageFlagIcon,LanguagePicker,languageName,languageShortCode} from "./language-picker";
 import {countryLabel,CountryPicker,RegionPicker} from "./country-picker";
-import { conversationCountsPath, conversationListPath, conversationSummaryPath, type ConversationCustomerStage, type ConversationDateFilter, type ConversationLatestOrderStatus, type ConversationListFilter } from "./conversation-date-filter";
+import { conversationCountsPath, conversationListPath, conversationSummaryPath, type ConversationCustomerStage, type ConversationDateFilter, type ConversationFollowupFilter, type ConversationLatestOrderStatus, type ConversationListFilter } from "./conversation-date-filter";
 import { QUICK_REPLY_VARIABLES, quickReplyCountryName, quickReplyVariableNames, renderQuickReplyVariables, type QuickReplyVariable, type QuickReplyVariableValues } from "./quick-reply-variables";
 import { confirmAction, ConfirmationHost, promptAction, PromptHost } from "./confirmation-ui";
 import {formatMessageTime,formatMessageTimeTitle} from "./message-time";
@@ -282,6 +282,8 @@ const CONVERSATION_FILTER_LABELS:Record<string,string>={all:"全部会话",group
 function conversationFilterFromUrl(value:string|null){return value&&CONVERSATION_FILTER_LABELS[value]?CONVERSATION_FILTER_LABELS[value]:"全部会话";}
 const CONVERSATION_DATE_FILTERS=new Set<ConversationDateFilter>(["all","today","yesterday","day3","day5","day7","day15plus","unreplied","sendFailed"]);
 function conversationDateFilterFromUrl(value:string|null):ConversationDateFilter{return value&&CONVERSATION_DATE_FILTERS.has(value as ConversationDateFilter)?value as ConversationDateFilter:"all";}
+const CONVERSATION_FOLLOWUP_FILTERS=new Set<ConversationFollowupFilter>(["pending_confirmation","queued","followed"]);
+function conversationFollowupFilterFromUrl(value:string|null):""|ConversationFollowupFilter{return value&&CONVERSATION_FOLLOWUP_FILTERS.has(value as ConversationFollowupFilter)?value as ConversationFollowupFilter:"";}
 const DEFAULT_CURRENCY_CONFIG:CurrencyConfig={baseCurrency:"USD",currencies:[{code:"USD",name:"美元",rate:1},{code:"CNY",name:"人民币",rate:7.2},{code:"EUR",name:"欧元",rate:.92},{code:"GBP",name:"英镑",rate:.78},{code:"JPY",name:"日元",rate:157},{code:"HKD",name:"港币",rate:7.8},{code:"SGD",name:"新加坡元",rate:1.35},{code:"AUD",name:"澳元",rate:1.5},{code:"CAD",name:"加元",rate:1.37},{code:"AED",name:"阿联酋迪拉姆",rate:3.6725}]};
 
 function convertCurrency(amount:number,from:string,to:string,config:CurrencyConfig):number{if(from===to)return amount;const source=config.currencies.find(item=>item.code===from)?.rate,target=config.currencies.find(item=>item.code===to)?.rate;if(!source||!target)return amount;return amount/source*target;}
@@ -315,6 +317,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [selectedAccount,setSelectedAccount]=useState("");
   const [filter,setFilter]=useState(()=>conversationFilterFromUrl(searchParams.get("filter")));
   const [dateFilter,setDateFilter]=useState<ConversationDateFilter>(()=>conversationDateFilterFromUrl(searchParams.get("date")));
+  const [followupFilter,setFollowupFilter]=useState<""|ConversationFollowupFilter>(()=>conversationFollowupFilterFromUrl(searchParams.get("followup")));
   const [query,setQuery]=useState("");
   const [debouncedQuery,setDebouncedQuery]=useState("");
   const [selectedTag,setSelectedTag]=useState("");
@@ -561,7 +564,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   },[logout,syncConversationTags]);
 
   const loadConversationCounts=useCallback(async(token:string)=>{
-    const result=await authorizedFetch(conversationCountsPath(dateFilter,new Date(),selectedAccount),token);
+    const result=await authorizedFetch(conversationCountsPath(dateFilter,new Date(),selectedAccount,followupFilter||undefined),token);
     if(result.token!==token)setApiToken(result.token);
     if(result.response.status===401)return;
     if(result.response.ok){
@@ -570,7 +573,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       const due=body.dueReminders?.find(item=>!notifiedReminders.current.has(item.id));
       if(due){notifiedReminders.current.add(due.id);setToast(`${due.display_name} 的任务已到期`);}
     }
-  },[dateFilter,selectedAccount]);
+  },[dateFilter,selectedAccount,followupFilter]);
 
   const loadConversations=useCallback(async(token:string,options:{append?:boolean;quiet?:boolean;notify?:boolean}={})=>{
     const append=Boolean(options.append),quiet=Boolean(options.quiet);
@@ -581,7 +584,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     if(append){setLoadingMoreConversations(true);setLoadMoreError("");}else if(!quiet)setLoading(true);
     if(!append)setLoadError("");
     try{
-      const path=conversationListPath(dateFilter,new Date(),{filter:conversationFilterKey(filter),accountId:selectedAccount,q:debouncedQuery,tagId:selectedTag,customerStage:selectedCustomerStage||undefined,latestOrderStatus:selectedLatestOrderStatus||undefined,country:selectedCountry||undefined,cursor:append?conversationCursorRef.current??undefined:undefined,limit:40});
+      const path=conversationListPath(dateFilter,new Date(),{filter:conversationFilterKey(filter),accountId:selectedAccount,q:debouncedQuery,tagId:selectedTag,customerStage:selectedCustomerStage||undefined,latestOrderStatus:selectedLatestOrderStatus||undefined,followup:followupFilter||undefined,country:selectedCountry||undefined,cursor:append?conversationCursorRef.current??undefined:undefined,limit:40});
       const conversationResult=await authorizedFetch(path,token,{signal:!append?conversationAbortRef.current?.signal:undefined});
       if(conversationResult.token!==token)setApiToken(conversationResult.token);
       if(conversationResult.response.status===401){logout();return;}
@@ -616,7 +619,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       if((error as {name?:string}).name==="AbortError")return;
       if(sequence===workspaceLoadSequence.current){const message=error instanceof Error?error.message:"会话数据加载失败";if(append)setLoadMoreError(message);else setLoadError(message);}
     }finally{if(append)setLoadingMoreConversations(false);if(sequence===workspaceLoadSequence.current)setLoading(false);}
-  },[dateFilter,filter,selectedAccount,debouncedQuery,selectedTag,selectedCustomerStage,selectedLatestOrderStatus,selectedCountry,logout,notifyIncomingConversation]);
+  },[dateFilter,filter,selectedAccount,debouncedQuery,selectedTag,selectedCustomerStage,selectedLatestOrderStatus,followupFilter,selectedCountry,logout,notifyIncomingConversation]);
 
   const loadWorkspace=useCallback(async(token:string,quiet=false)=>{
     if(!quiet)setLoading(true);
@@ -630,6 +633,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     params.set("date",next);
     window.history.replaceState(window.history.state,"",`${WORKSPACE_PATHS.inbox}?${params.toString()}`);
     window.dispatchEvent(new PopStateEvent("popstate"));
+  };
+  const selectFollowupFilter=(next:""|ConversationFollowupFilter)=>{
+    setFollowupFilter(next);
+    const params=new URLSearchParams(window.location.search);
+    if(next)params.set("followup",next);else params.delete("followup");
+    window.history.replaceState(window.history.state,"",`${WORKSPACE_PATHS.inbox}?${params.toString()}`);
   };
 
   const handleDateFilterKeyDown=(event:React.KeyboardEvent<HTMLButtonElement>)=>{
@@ -726,7 +735,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     for(let offset=0;offset<ids.length;offset+=6){
       const chunk=ids.slice(offset,offset+6);
       await Promise.all(chunk.map(async id=>{
-        const path=conversationSummaryPath(id,dateFilter,new Date(),{filter:conversationFilterKey(filter),accountId:selectedAccount,q:debouncedQuery,tagId:selectedTag,customerStage:selectedCustomerStage||undefined,latestOrderStatus:selectedLatestOrderStatus||undefined});
+        const path=conversationSummaryPath(id,dateFilter,new Date(),{filter:conversationFilterKey(filter),accountId:selectedAccount,q:debouncedQuery,tagId:selectedTag,customerStage:selectedCustomerStage||undefined,latestOrderStatus:selectedLatestOrderStatus||undefined,followup:followupFilter||undefined});
         const result=await authorizedFetch(path,apiToken);
         if(result.token!==apiToken)setApiToken(result.token);
         if(result.response.status===401){logout();return;}
@@ -754,7 +763,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     });
     if(ids.includes(effectiveActiveId))await loadMessages(apiToken,effectiveActiveId);
     await refreshRealtimeCounts(apiToken);
-  },[apiToken,dateFilter,filter,selectedAccount,debouncedQuery,selectedTag,selectedCustomerStage,selectedLatestOrderStatus,effectiveActiveId,loadMessages,logout,notifyIncomingConversation,refreshRealtimeCounts]);
+  },[apiToken,dateFilter,filter,selectedAccount,debouncedQuery,selectedTag,selectedCustomerStage,selectedLatestOrderStatus,followupFilter,effectiveActiveId,loadMessages,logout,notifyIncomingConversation,refreshRealtimeCounts]);
 
   const reconcileConversationFeed=useCallback(async()=>{
     await Promise.all([loadConversations(apiToken,{quiet:true}),loadConversationCounts(apiToken),effectiveActiveId?loadMessages(apiToken,effectiveActiveId):Promise.resolve()]);
@@ -813,12 +822,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   },[apiToken,loadAccounts]);
   useEffect(()=>{
     if(view!=="inbox"||!apiToken)return;
-    const key=[tokenSubject(apiToken),view,dateFilter,filter,selectedAccount,debouncedQuery,selectedTag,selectedCustomerStage,selectedLatestOrderStatus].join("|");
+    const key=[tokenSubject(apiToken),view,dateFilter,followupFilter,filter,selectedAccount,debouncedQuery,selectedTag,selectedCustomerStage,selectedLatestOrderStatus,selectedCountry].join("|");
     if(conversationLoadKeyRef.current===key)return;
     conversationLoadKeyRef.current=key;
     conversationCursorRef.current=null;setNextConversationCursor(null);conversationListRef.current?.scrollTo({top:0});
     void Promise.all([loadConversations(apiToken),loadConversationCounts(apiToken)]);
-  },[view,apiToken,dateFilter,filter,selectedAccount,debouncedQuery,selectedTag,selectedCustomerStage,selectedLatestOrderStatus,loadConversations,loadConversationCounts]);
+  },[view,apiToken,dateFilter,followupFilter,filter,selectedAccount,debouncedQuery,selectedTag,selectedCustomerStage,selectedLatestOrderStatus,selectedCountry,loadConversations,loadConversationCounts]);
   useEffect(()=>{const timer=window.setTimeout(()=>{if(window.matchMedia("(max-width: 1280px)").matches)setDetailsOpen(false);},0);return()=>window.clearTimeout(timer);},[]);
   useEffect(()=>{
     const readBoolean=(key:string)=>window.localStorage.getItem(key)==="1";
@@ -1449,6 +1458,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     const nextDateFilter=conversationDateFilterFromUrl(searchParams.get("date"));
     dateFilterRef.current=nextDateFilter;
     setDateFilter(current=>current===nextDateFilter?current:nextDateFilter);
+    setFollowupFilter(current=>{const nextFollowup=conversationFollowupFilterFromUrl(searchParams.get("followup"));return current===nextFollowup?current:nextFollowup;});
   },[routeView,searchParams]);
   useEffect(()=>{
     if(routeView!=="inbox")return;
@@ -1458,6 +1468,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       const nextDateFilter=conversationDateFilterFromUrl(params.get("date"));
       dateFilterRef.current=nextDateFilter;
       setDateFilter(nextDateFilter);
+      setFollowupFilter(conversationFollowupFilterFromUrl(params.get("followup")));
     };
     window.addEventListener("popstate",onPopState);
     return()=>window.removeEventListener("popstate",onPopState);
@@ -1796,7 +1807,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             </section>
           </aside>
 
-          <ConversationPanel filter={filter} subtitle={debouncedQuery||selectedTag||selectedCustomerStage||selectedLatestOrderStatus||selectedCountry?`已加载 ${visible.length} 条结果`:`${counts[conversationFilterKey(filter)]} 个真实会话`} query={query} onQuery={setQuery} tags={contextTags} tagId={selectedTag} onTagId={setSelectedTag} onTagOpen={()=>void loadConversationTags(apiToken)} customerStage={selectedCustomerStage} onCustomerStage={setSelectedCustomerStage} latestOrderStatus={selectedLatestOrderStatus} onLatestOrderStatus={setSelectedLatestOrderStatus} country={selectedCountry} onCountry={setSelectedCountry} onOpenSidebar={()=>setSidebarOpen(true)} collapsed={conversationListHidden} onToggleCollapsed={()=>setConversationListHidden(value=>!value)} onRefresh={()=>void loadWorkspace(apiToken)} dateFilter={dateFilter} onDateFilter={selectDateFilter} onDateKeyDown={handleDateFilterKeyDown} mobileOpen={mobileConversationOpen} onCloseMobile={()=>setMobileConversationOpen(false)} listRef={conversationListRef} sentinelRef={conversationLoadSentinelRef} items={visible} rows={conversationVirtualizer.getVirtualItems()} totalSize={conversationVirtualizer.getTotalSize()} measure={conversationVirtualizer.measureElement} effectiveActiveId={effectiveActiveId} clock={clock} markingUnreadId={markingUnreadId} onSelect={selectConversation} onMenu={openConversationMenu} onMarkUnread={id=>void markConversationUnread(id)} loading={loading} loadError={loadError} hasAccounts={Boolean(accounts.length)} loadingMore={loadingMoreConversations} loadMoreError={loadMoreError} hasMore={Boolean(nextConversationCursor)} onLoadMore={()=>void loadConversations(apiToken,{append:true})}/>
+          <ConversationPanel filter={filter} subtitle={debouncedQuery||selectedTag||selectedCustomerStage||selectedLatestOrderStatus||selectedCountry?`已加载 ${visible.length} 条结果`:`${counts[conversationFilterKey(filter)]} 个真实会话`} query={query} onQuery={setQuery} tags={contextTags} tagId={selectedTag} onTagId={setSelectedTag} onTagOpen={()=>void loadConversationTags(apiToken)} customerStage={selectedCustomerStage} onCustomerStage={setSelectedCustomerStage} latestOrderStatus={selectedLatestOrderStatus} onLatestOrderStatus={setSelectedLatestOrderStatus} followup={followupFilter} onFollowup={selectFollowupFilter} country={selectedCountry} onCountry={setSelectedCountry} onOpenSidebar={()=>setSidebarOpen(true)} collapsed={conversationListHidden} onToggleCollapsed={()=>setConversationListHidden(value=>!value)} onRefresh={()=>void loadWorkspace(apiToken)} dateFilter={dateFilter} onDateFilter={selectDateFilter} onDateKeyDown={handleDateFilterKeyDown} mobileOpen={mobileConversationOpen} onCloseMobile={()=>setMobileConversationOpen(false)} listRef={conversationListRef} sentinelRef={conversationLoadSentinelRef} items={visible} rows={conversationVirtualizer.getVirtualItems()} totalSize={conversationVirtualizer.getTotalSize()} measure={conversationVirtualizer.measureElement} effectiveActiveId={effectiveActiveId} clock={clock} markingUnreadId={markingUnreadId} onSelect={selectConversation} onMenu={openConversationMenu} onMarkUnread={id=>void markConversationUnread(id)} loading={loading} loadError={loadError} hasAccounts={Boolean(accounts.length)} loadingMore={loadingMoreConversations} loadMoreError={loadMoreError} hasMore={Boolean(nextConversationCursor)} onLoadMore={()=>void loadConversations(apiToken,{append:true})}/>
 
           <section className="chat-panel">
             {active ? (
