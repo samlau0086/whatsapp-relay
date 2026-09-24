@@ -26,6 +26,8 @@ export async function ensureProactiveOutreachTables():Promise<void>{
     await pool.query("ALTER TABLE proactive_outreach_jobs ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()");
     await pool.query(`CREATE TABLE IF NOT EXISTS proactive_outreach_events(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),account_id uuid NOT NULL REFERENCES channel_accounts(id) ON DELETE CASCADE,contact_id uuid NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,job_id uuid REFERENCES proactive_outreach_jobs(id) ON DELETE SET NULL,event_type text NOT NULL,reason text NOT NULL,metadata jsonb NOT NULL DEFAULT '{}',created_at timestamptz NOT NULL DEFAULT now())`);
     await pool.query("ALTER TABLE proactive_outreach_events ADD COLUMN IF NOT EXISTS planned_at timestamptz");
+    await pool.query("ALTER TABLE proactive_outreach_events DROP CONSTRAINT IF EXISTS proactive_outreach_events_event_type_check");
+    await pool.query("ALTER TABLE proactive_outreach_events ADD CONSTRAINT proactive_outreach_events_event_type_check CHECK(event_type IN ('planned','started','sent','skipped','cancelled','suppressed','restored','failed','draft_generation'))");
     await pool.query("ALTER TABLE proactive_outreach_events ADD COLUMN IF NOT EXISTS metadata jsonb NOT NULL DEFAULT '{}'");
     await pool.query("CREATE INDEX IF NOT EXISTS proactive_outreach_settings_enabled_idx ON proactive_outreach_settings (enabled) WHERE enabled");
     await pool.query("CREATE INDEX IF NOT EXISTS proactive_outreach_jobs_claim_idx ON proactive_outreach_jobs (planned_at,created_at) WHERE state='pending'");
