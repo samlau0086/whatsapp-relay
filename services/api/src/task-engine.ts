@@ -173,12 +173,14 @@ export async function processOneTaskCycle(): Promise<boolean> {
       "UPDATE tasks SET status='in_progress',updated_at=now() WHERE id=$1",
       [draft.rows[0].id],
     );
+    await client.query("INSERT INTO task_execution_logs(task_id,event_type,outcome,planned_at,message) SELECT id,'draft_generation','started',send_at,'开始生成发送草稿' FROM tasks WHERE id=$1",[draft.rows[0].id]);
     return String(draft.rows[0].id);
   });
   if (draftId) {
     try {
       await generateTaskDraft(draftId);
     } catch (error) {
+      await logTaskExecution(draftId,"draft_generation","failed",error instanceof Error?error.message:String(error));
       console.error("Task draft generation failed", {
         taskId: draftId,
         error: String(error),
@@ -212,10 +214,15 @@ export async function processOneTaskCycle(): Promise<boolean> {
         taskId: readyId,
         error: detail,
       });
+      await logTaskExecution(readyId,"dispatch","failed",detail);
     }
     return true;
   }
   return false;
+}
+
+async function logTaskExecution(taskId:string,eventType:string,outcome:"started"|"succeeded"|"failed"|"skipped"|"cancelled",message?:string,metadata:Record<string,unknown>={}) {
+  await pool.query("INSERT INTO task_execution_logs(task_id,event_type,outcome,planned_at,message,metadata) SELECT id,$2,$3,send_at,$4,$5 FROM tasks WHERE id=$1",[taskId,eventType,outcome,message??null,JSON.stringify(metadata)]);
 }
 
 async function ensureContactRulesAndTasks(): Promise<void> {
@@ -560,6 +567,7 @@ export async function generateTaskDraft(taskId: string): Promise<void> {
         ],
       );
     });
+    await logTaskExecution(taskId,"draft_generation","succeeded","草稿生成完成");
   } catch (error) {
     const detail = (
       error instanceof Error ? error.message : String(error)
@@ -572,6 +580,7 @@ export async function generateTaskDraft(taskId: string): Promise<void> {
       "UPDATE tasks SET status='failed',last_error=$2,updated_at=now() WHERE id=$1",
       [taskId, detail],
     );
+    await logTaskExecution(taskId,"draft_generation","failed",detail);
     throw error;
   }
 }
@@ -670,6 +679,7 @@ export async function dispatchTask(
       agentId: queued.agentId,
     };
   });
+  if(result) await logTaskExecution(taskId,"dispatch","succeeded","消息已加入发送队列",{messageId:result.messageId});
   if (result?.agentId) void dispatchPending(result.agentId);
   return result;
 }
