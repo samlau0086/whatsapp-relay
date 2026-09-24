@@ -131,7 +131,7 @@ export async function scanProactiveOutreach(force=false){
 }
 
 function insideWindow(timeZone:string,start:string,end:string){const p=new Intl.DateTimeFormat("en-GB",{timeZone,hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date()).reduce<Record<string,string>>((r,x)=>({...r,[x.type]:x.value}),{}),now=`${p.hour}:${p.minute}`;return start<=end?now>=start&&now<=end:now>=start||now<=end;}
-async function deferProactiveJob(client:PoolClient,job:Record<string,unknown>,plannedAt:Date,reason:string,metadata:Record<string,unknown>){await client.query("UPDATE proactive_outreach_jobs SET state='pending',planned_at=$2,last_error=$3,payload=payload || $4::jsonb,updated_at=now() WHERE id=$1",[job.id,plannedAt.toISOString(),reason,JSON.stringify(metadata)]);await audit(client,String(job.account_id),String(job.contact_id),String(job.id),"skipped",reason,String(job.planned_at),metadata);}
+async function deferProactiveJob(client:PoolClient,job:Record<string,unknown>,plannedAt:Date,reason:string,metadata:Record<string,unknown>){await client.query("UPDATE proactive_outreach_jobs SET state='pending',planned_at=$2,last_error=$3,payload=payload || $4::jsonb,updated_at=now() WHERE id=$1",[job.id,plannedAt.toISOString(),reason,JSON.stringify(metadata)]);await audit(client,String(job.account_id),String(job.contact_id),String(job.id),"skipped",reason,job.planned_at as Date,metadata);}
 
 export async function processOneProactiveOutreach():Promise<boolean>{
   await scanProactiveOutreach();

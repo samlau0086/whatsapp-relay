@@ -69,6 +69,12 @@ test("proactive outreach upgrades legacy tables before saving settings or deferr
   assert.match(source,/ALTER TABLE proactive_outreach_jobs ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now\(\)/);
 });
 
+test("deferred outreach preserves the PostgreSQL timestamp parameter",async()=>{
+  const source=await readFile(new URL("../src/proactive-outreach.ts",import.meta.url),"utf8");
+  assert.match(source,/"skipped",reason,job\.planned_at as Date,metadata/);
+  assert.doesNotMatch(source,/String\(job\.planned_at\)/);
+});
+
 test("manual outreach scan bypasses the background scan throttle",async()=>{
   const [source,routes]=await Promise.all([
     readFile(new URL("../src/proactive-outreach.ts",import.meta.url),"utf8"),
