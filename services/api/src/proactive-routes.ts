@@ -35,6 +35,59 @@ export async function registerProactiveRoutes(app:FastifyInstance){await ensureP
       ORDER BY created_at DESC,id DESC LIMIT $5 OFFSET $6`,[query.accountId??null,accountIds,query.q?.trim()||null,query.outcome||null,limit,offset]);
     return{items:result.rows,total:Number(result.rows[0]?.total_count??0)};
   });
+  app.delete("/api/v1/execution-logs/:category/:id",{preHandler:authenticate},async(request,reply)=>{
+    if(!elevated(request.principal?.role))return reply.code(403).send({error:"supervisor_required"});
+    const {category,id}=request.params as {category:string;id:string};
+    if(category!=="task"&&category!=="proactive")return reply.code(400).send({error:"invalid_category"});
+    const accountIds=await proactiveAccountIds(request.principal);
+    const result=category==="task"
+      ? await pool.query("DELETE FROM task_execution_logs l USING tasks t WHERE l.id=$1::uuid AND t.id=l.task_id AND ($2::uuid[] IS NULL OR t.account_id=ANY($2))",[id,accountIds])
+      : await pool.query("DELETE FROM proactive_outreach_events e WHERE e.id=$1::uuid AND ($2::uuid[] IS NULL OR e.account_id=ANY($2))",[id,accountIds]);
+    if(!result.rowCount)return reply.code(404).send({error:"not_found"});
+    return reply.code(204).send();
+  });
+  app.post("/api/v1/execution-logs/delete",{preHandler:authenticate},async(request,reply)=>{
+    if(!elevated(request.principal?.role))return reply.code(403).send({error:"supervisor_required"});
+    const body=(request.body??{}) as {items?:Array<{category?:string;id?:string}>};
+    const items=(body.items??[]).filter(item=>(item.category==="task"||item.category==="proactive")&&typeof item.id==="string");
+    if(!items.length||items.length>200)return reply.code(400).send({error:"invalid_items"});
+    const accountIds=await proactiveAccountIds(request.principal);
+    const taskIds=items.filter(item=>item.category==="task").map(item=>item.id as string);
+    const proactiveIds=items.filter(item=>item.category==="proactive").map(item=>item.id as string);
+    const deleted=await transaction(async client=>{
+      let count=0;
+      if(taskIds.length){const result=await client.query("DELETE FROM task_execution_logs l USING tasks t WHERE l.id=ANY($1::uuid[]) AND t.id=l.task_id AND ($2::uuid[] IS NULL OR t.account_id=ANY($2))",[taskIds,accountIds]);count+=result.rowCount??0;}
+      if(proactiveIds.length){const result=await client.query("DELETE FROM proactive_outreach_events e WHERE e.id=ANY($1::uuid[]) AND ($2::uuid[] IS NULL OR e.account_id=ANY($2))",[proactiveIds,accountIds]);count+=result.rowCount??0;}
+      return count;
+    });
+    return{deleted};
+  });
+  app.delete("/api/v1/execution-logs",{preHandler:authenticate},async(request,reply)=>{
+    if(!elevated(request.principal?.role))return reply.code(403).send({error:"supervisor_required"});
+    const query=request.query as {accountId?:string;q?:string;outcome?:string};
+    const accountIds=await proactiveAccountIds(request.principal);
+    if(query.accountId&&accountIds!==null&&!accountIds.includes(query.accountId))return reply.code(403).send({error:"account_forbidden"});
+    const deleted=await transaction(async client=>{
+      const targets=await client.query(`WITH entries AS (
+        SELECT e.id::text id,'proactive' category,e.account_id,e.event_type,
+          CASE WHEN e.event_type='sent' THEN 'succeeded' WHEN e.event_type='failed' THEN 'failed' WHEN e.event_type='skipped' THEN 'skipped' WHEN e.event_type='cancelled' THEN 'cancelled' ELSE 'started' END outcome,
+          e.reason detail,COALESCE(NULLIF(c.alias,''),c.display_name,c.phone_e164) contact_name,a.display_name account_name
+        FROM proactive_outreach_events e JOIN channel_accounts a ON a.id=e.account_id JOIN contacts c ON c.id=e.contact_id
+        UNION ALL
+        SELECT l.id::text,'task',t.account_id,l.event_type,l.outcome,l.message,COALESCE(NULLIF(c.alias,''),c.display_name,c.phone_e164),a.display_name
+        FROM task_execution_logs l JOIN tasks t ON t.id=l.task_id JOIN channel_accounts a ON a.id=t.account_id LEFT JOIN contacts c ON c.id=t.contact_id
+      ) SELECT category,id FROM entries WHERE ($1::uuid IS NULL OR account_id=$1) AND ($2::uuid[] IS NULL OR account_id=ANY($2))
+        AND ($3::text IS NULL OR contact_name ILIKE '%'||$3||'%' OR account_name ILIKE '%'||$3||'%' OR event_type ILIKE '%'||$3||'%')
+        AND ($4::text IS NULL OR outcome=$4)`,[query.accountId??null,accountIds,query.q?.trim()||null,query.outcome||null]);
+      const taskIds=targets.rows.filter(row=>row.category==="task").map(row=>row.id);
+      const proactiveIds=targets.rows.filter(row=>row.category==="proactive").map(row=>row.id);
+      let count=0;
+      if(taskIds.length){const result=await client.query("DELETE FROM task_execution_logs WHERE id=ANY($1::uuid[])",[taskIds]);count+=result.rowCount??0;}
+      if(proactiveIds.length){const result=await client.query("DELETE FROM proactive_outreach_events WHERE id=ANY($1::uuid[])",[proactiveIds]);count+=result.rowCount??0;}
+      return count;
+    });
+    return{deleted};
+  });
   app.get("/api/v1/proactive-outreach/jobs",{preHandler:authenticate},async(request,reply)=>{const query=request.query as {accountId?:string;q?:string;limit?:string;offset?:string};const accountIds=await proactiveAccountIds(request.principal);if(query.accountId&&accountIds!==null&&!accountIds.includes(query.accountId))return reply.code(403).send({error:"account_forbidden"});const limit=Math.min(200,Math.max(1,Number(query.limit)||100)),offset=Math.max(0,Number(query.offset)||0),result=await pool.query(`SELECT j.id,j.account_id,j.contact_id,j.conversation_id,j.trigger_kind,j.planned_at,j.state,j.created_at,a.display_name account_name,COALESCE(NULLIF(c.alias,''),c.display_name,c.phone_e164) contact_name,COUNT(*) OVER()::int total_count FROM proactive_outreach_jobs j JOIN channel_accounts a ON a.id=j.account_id JOIN contacts c ON c.id=j.contact_id WHERE ($1::uuid IS NULL OR j.account_id=$1) AND ($2::uuid[] IS NULL OR j.account_id=ANY($2)) AND j.state IN ('pending','processing') AND ($3::text IS NULL OR c.alias ILIKE '%'||$3||'%' OR c.display_name ILIKE '%'||$3||'%' OR c.phone_e164 ILIKE '%'||$3||'%' OR a.display_name ILIKE '%'||$3||'%' OR j.trigger_kind ILIKE '%'||$3||'%') ORDER BY j.planned_at,j.id LIMIT $4 OFFSET $5`,[query.accountId??null,accountIds,query.q?.trim()||null,limit,offset]);return{items:result.rows.map(row=>({id:String(row.id),accountId:String(row.account_id),contactId:String(row.contact_id),conversationId:row.conversation_id?String(row.conversation_id):null,triggerKind:String(row.trigger_kind),plannedAt:new Date(String(row.planned_at)).toISOString(),state:String(row.state),createdAt:new Date(String(row.created_at)).toISOString(),accountName:String(row.account_name),contactName:String(row.contact_name??"")})),total:Number(result.rows[0]?.total_count??0),hasMore:offset+Number(result.rowCount??0)<Number(result.rows[0]?.total_count??0)};});
   app.get("/api/v1/proactive-outreach/events",{preHandler:authenticate},async(request,reply)=>{const query=request.query as {accountId?:string;limit?:string;offset?:string};const accountIds=await proactiveAccountIds(request.principal);if(query.accountId&&accountIds!==null&&!accountIds.includes(query.accountId))return reply.code(403).send({error:"account_forbidden"});const limit=Math.min(200,Math.max(1,Number(query.limit)||100)),offset=Math.max(0,Number(query.offset)||0),result=await pool.query(`SELECT e.id,e.account_id,e.contact_id,e.job_id,e.event_type,e.reason,e.created_at,COALESCE(NULLIF(c.alias,''),c.display_name,c.phone_e164) contact_name,a.display_name account_name,j.planned_at FROM proactive_outreach_events e JOIN channel_accounts a ON a.id=e.account_id JOIN contacts c ON c.id=e.contact_id LEFT JOIN proactive_outreach_jobs j ON j.id=e.job_id WHERE ($1::uuid IS NULL OR e.account_id=$1) AND ($2::uuid[] IS NULL OR e.account_id=ANY($2)) ORDER BY e.created_at DESC LIMIT $3 OFFSET $4`,[query.accountId??null,accountIds,limit,offset]);return{items:result.rows,total:result.rowCount??0};});
   app.get("/api/v1/accounts/:id/proactive-outreach",{preHandler:authenticate},async(request,reply)=>{const {id}=request.params as {id:string};if(!canAccessAccount(request.principal,id))return reply.code(404).send({error:"not_found"});const settings=await pool.query("SELECT * FROM proactive_outreach_settings WHERE account_id=$1",[id]);const stats=await pool.query("SELECT event_type,count(*)::int count FROM proactive_outreach_events WHERE account_id=$1 AND created_at>now()-interval '365 days' GROUP BY event_type",[id]);const upcoming=await pool.query("SELECT j.id,j.contact_id,j.trigger_kind,j.planned_at,j.state,COALESCE(NULLIF(c.alias,''),c.display_name,c.phone_e164) contact_name FROM proactive_outreach_jobs j JOIN contacts c ON c.id=j.contact_id WHERE j.account_id=$1 AND j.state IN ('pending','processing') ORDER BY j.planned_at LIMIT 50",[id]);return{...(settings.rows[0]??{account_id:id,enabled:false,max_touches_per_year:5,max_touches_per_day:20,local_send_start:"10:00",local_send_end:"17:00",country_holidays:{},message_templates:{}}),stats:stats.rows,upcoming:upcoming.rows};});
