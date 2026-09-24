@@ -416,11 +416,12 @@ app.get("/api/v1/accounts", { preHandler:authenticate }, async (request) => {
 });
 
 type ConversationFilter="all"|"groups"|"mine"|"unassigned"|"favorite"|"closed"|"archived"|"reminders"|"blocked";
-type ConversationQuery={accountId?:string;status?:string;q?:string;tagId?:string;customerStage?:string;latestOrderStatus?:string;followup?:string;country?:string;filter?:string;limit?:string;before?:string;cursor?:string;lastMessageFrom?:string;lastMessageBefore?:string;unreplied?:string;sendFailed?:string};
+type ConversationQuery={accountId?:string;status?:string;q?:string;tagId?:string;customerStage?:string;latestOrderStatus?:string;followup?:string;agentMode?:string;country?:string;filter?:string;limit?:string;before?:string;cursor?:string;lastMessageFrom?:string;lastMessageBefore?:string;unreplied?:string;sendFailed?:string};
 const CONVERSATION_FILTERS=new Set<ConversationFilter>(["all","groups","mine","unassigned","favorite","closed","archived","reminders","blocked"]);
 const CONVERSATION_CUSTOMER_STAGES=new Set(["new","considering","qualified","won","lost"]);
 const CONVERSATION_ORDER_STATUSES=new Set(["none","any","quotation","pending_confirmation","pending_payment","paid","processing","shipped","completed","cancelled"]);
 const CONVERSATION_FOLLOWUP_STATUSES=new Set(["pending_confirmation","queued","followed"]);
+const CONVERSATION_AGENT_MODES=new Set(["cautious","full","human_paused"]);
 
 function followupCondition(parameter:string){
   const followup=`${parameter}::text`;
@@ -471,6 +472,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
   if(query.filter&&!CONVERSATION_FILTERS.has(query.filter as ConversationFilter))return reply.code(400).send({error:"invalid_conversation_filter"});
   if(query.customerStage&&!CONVERSATION_CUSTOMER_STAGES.has(query.customerStage))return reply.code(400).send({error:"invalid_customer_stage_filter"});
   if(query.latestOrderStatus&&!CONVERSATION_ORDER_STATUSES.has(query.latestOrderStatus))return reply.code(400).send({error:"invalid_latest_order_status_filter"});
+  if(query.agentMode&&!CONVERSATION_AGENT_MODES.has(query.agentMode))return reply.code(400).send({error:"invalid_agent_mode_filter"});
   const range=parseConversationRange(query);if(!range)return reply.code(400).send({error:"invalid_conversation_date_range"});
   const cursor=parseConversationCursor(query.cursor);if(cursor==="invalid")return reply.code(400).send({error:"invalid_cursor"});
   if(query.tagId&&!isPostgresUuid(query.tagId))return reply.code(400).send({error:"invalid_tag_filter"});
@@ -500,11 +502,12 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
   const countryFilter=query.country?.trim()?"AND UPPER(COALESCE((SELECT country FROM contacts WHERE id=c.contact_id),''))=$18::text":"";
   const candidateCursor=!cursor?"":reminderMode?"AND (reminder_task.due_at>$11 OR (reminder_task.due_at=$11 AND c.id<$12::uuid))":`AND (${latestSort}<$11 OR (${latestSort}=$11 AND c.id<$12::uuid))`;
   const result=await pool.query(`WITH parameter_types AS NOT MATERIALIZED (
-    SELECT $4::text keyword_value,$9::uuid principal_user_id,$10::text filter_value,$11::timestamptz cursor_at,$12::uuid cursor_id,$14::uuid tag_id,$15::text customer_stage,$16::text latest_order_status,$17::boolean send_failed,$18::text country
+    SELECT $4::text keyword_value,$9::uuid principal_user_id,$10::text filter_value,$11::timestamptz cursor_at,$12::uuid cursor_id,$14::uuid tag_id,$15::text customer_stage,$16::text latest_order_status,$17::boolean send_failed,$18::text country,$20::text agent_mode
   ), ${searchCte} candidates AS MATERIALIZED (
     SELECT c.id,${reminderMode?"reminder_task.due_at":latestSort} sort_at
     FROM ${candidateSource} JOIN channel_accounts a ON a.id=c.account_id
     LEFT JOIN LATERAL (SELECT direction,occurred_at FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
+    LEFT JOIN conversation_agent_state cas ON cas.conversation_id=c.id
     ${latestOrderJoin}
     ${reminderMode?`JOIN LATERAL (
       SELECT task.due_at FROM tasks task
@@ -519,6 +522,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
       AND ($3::text IS NULL OR c.status::text=$3)
       AND ($14::uuid IS NULL OR EXISTS(SELECT 1 FROM conversation_tags selected_tag WHERE selected_tag.conversation_id=c.id AND selected_tag.tag_id=$14))
       AND ($15::text IS NULL OR c.customer_stage=$15::text)
+      AND ($20::text IS NULL OR COALESCE(cas.mode,'human_paused')=$20::text)
       ${countryFilter}
       AND ($5::timestamptz IS NULL OR c.last_message_at<$5) AND ($6::timestamptz IS NULL OR c.last_message_at>=$6) AND ($7::timestamptz IS NULL OR c.last_message_at<$7)
       AND ($8::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in')
@@ -541,7 +545,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
     LEFT JOIN LATERAL (SELECT text_content,kind,direction,status,occurred_at FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true
     ORDER BY candidates.sort_at ${reminderMode?"ASC":"DESC"},c.id DESC`,
-    [query.accountId??null,accountIds,query.status??null,keyword,query.before??null,range.from,range.before,query.unreplied==="true",principalUserId,filter,cursor?.sortAt??null,cursor?.id??null,limit+1,query.tagId??null,query.customerStage??null,query.latestOrderStatus??null,query.sendFailed==="true",query.country?.trim().toUpperCase()??null,query.followup??null]);
+    [query.accountId??null,accountIds,query.status??null,keyword,query.before??null,range.from,range.before,query.unreplied==="true",principalUserId,filter,cursor?.sortAt??null,cursor?.id??null,limit+1,query.tagId??null,query.customerStage??null,query.latestOrderStatus??null,query.sendFailed==="true",query.country?.trim().toUpperCase()??null,query.followup??null,query.agentMode??null]);
   const hasMore=result.rows.length>limit,data=result.rows.slice(0,limit),last=data[data.length-1];
   return{data,nextCursor:hasMore&&last?Buffer.from(JSON.stringify({sortAt:last.sort_at,id:last.id}),"utf8").toString("base64url"):null,total:null};
 });
@@ -633,11 +637,12 @@ app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(requ
   if(query.tagId&&!isPostgresUuid(query.tagId))return reply.code(400).send({error:"invalid_tag_filter"});
   if(query.customerStage&&!CONVERSATION_CUSTOMER_STAGES.has(query.customerStage))return reply.code(400).send({error:"invalid_customer_stage_filter"});
   if(query.latestOrderStatus&&!CONVERSATION_ORDER_STATUSES.has(query.latestOrderStatus))return reply.code(400).send({error:"invalid_latest_order_status_filter"});
+  if(query.agentMode&&!CONVERSATION_AGENT_MODES.has(query.agentMode))return reply.code(400).send({error:"invalid_agent_mode_filter"});
   const range=parseConversationRange(query);if(!range)return reply.code(400).send({error:"invalid_conversation_date_range"});
   const keyword=query.q?.trim().toLocaleLowerCase()||"";if(keyword.length>100)return reply.code(400).send({error:"conversation_query_too_long"});
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null;
   const result=await pool.query(`SELECT c.id,c.status,c.favorite,c.unread_count,CASE WHEN c.summary_updated_at IS NOT NULL THEN c.last_message_at ELSE m.occurred_at END last_message_at,
-    c.created_at,c.service_window_expires_at,c.service_window_expires_at reply_window_expires_at,c.assigned_user_id,c.customer_stage,co.id contact_id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164,co.provider_user_id) display_name,
+    c.created_at,c.service_window_expires_at,c.service_window_expires_at reply_window_expires_at,c.assigned_user_id,c.customer_stage,COALESCE((SELECT mode FROM conversation_agent_state WHERE conversation_id=c.id),'human_paused') agent_mode,co.id contact_id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164,co.provider_user_id) display_name,
     co.alias,co.display_name contact_name,co.phone_e164,co.provider_user_id,co.avatar_url,co.whatsapp_blocked_at IS NOT NULL blocked,(SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) primary_email,
     CASE WHEN co.entity_type='group' THEN 'group' ELSE 'direct' END conversation_type,wg.group_jid,wg.subject group_subject,wg.participant_count group_participant_count,wg.active group_active,c.last_message_sender_name,
     COALESCE((SELECT json_agg(json_build_object('id',method.id,'type',method.type,'label',method.label,'value',method.value) ORDER BY method.position,method.id) FROM contact_methods method WHERE method.contact_id=co.id),'[]'::json) contact_methods,
@@ -664,6 +669,7 @@ app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(requ
     &&(!query.status||row.status===query.status)
     &&(!query.tagId||Array.isArray(row.tags)&&row.tags.some((tag:{id?:unknown})=>String(tag.id)===query.tagId))
     &&(!query.customerStage||row.customer_stage===query.customerStage)
+    &&(!query.agentMode||row.agent_mode===query.agentMode)
     &&(!query.latestOrderStatus||(query.latestOrderStatus==="none"&&!row.latest_order_status)||(query.latestOrderStatus==="any"&&Boolean(row.latest_order_status))||row.latest_order_status===query.latestOrderStatus)
     &&(!keyword||[row.display_name,row.phone_e164,row.last_message].some(value=>String(value??"").toLocaleLowerCase().includes(keyword)))
     &&(legacyBefore===null||lastAt!==null&&lastAt<legacyBefore)&&(from===null||lastAt!==null&&lastAt>=from)&&(before===null||lastAt!==null&&lastAt<before)

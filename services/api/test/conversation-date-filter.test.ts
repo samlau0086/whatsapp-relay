@@ -57,6 +57,9 @@ test("conversation list and counts paths carry server-side filters without leaki
   assert.match(combined,/followup=queued/);assert.match(combined,/lastMessageFrom=/);
   assert.match(conversationCountsPath("today",now,"","pending_confirmation"),/followup=pending_confirmation/);
   assert.match(conversationSummaryPath("id","yesterday",now,{followup:"followed"}),/followup=followed/);
+  assert.match(conversationListPath("all",now,{agentMode:"cautious"}),/agentMode=cautious/);
+  assert.match(conversationSummaryPath("id","all",now,{agentMode:"human_paused"}),/agentMode=human_paused/);
+  assert.doesNotMatch(conversationCountsPath("all",now),/agentMode=/);
 });
 
 test("conversation API applies a closed-open last-message range",async()=>{
@@ -75,6 +78,8 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.match(server,/invalid_tag_filter/);
   assert.match(server,/invalid_customer_stage_filter/);
   assert.match(server,/invalid_latest_order_status_filter/);
+  assert.match(server,/invalid_agent_mode_filter/);
+  assert.match(server,/COALESCE\(cas\.mode,'human_paused'\)=\$20::text/);
   assert.match(server,/selected_tag\.tag_id=\$14/);
   assert.match(server,/c\.customer_stage=\$15::text/);
   assert.match(server,/ORDER BY created_at DESC,id DESC LIMIT 1/);

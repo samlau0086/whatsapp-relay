@@ -1,19 +1,19 @@
 "use client";
 
-import {Check,ChevronDown,Clock3,Globe2,Menu,PanelLeftClose,PanelLeftOpen,RefreshCw,Search,ShoppingCart,Tag,UserRound,X} from "lucide-react";
+import {Bot,Check,ChevronDown,Clock3,Globe2,Menu,PanelLeftClose,PanelLeftOpen,RefreshCw,Search,ShoppingCart,Tag,UserRound,X} from "lucide-react";
 import {useEffect,useMemo,useRef,useState,type KeyboardEvent,type MouseEvent,type PointerEvent as ReactPointerEvent,type RefObject,type WheelEvent} from "react";
-import {CONVERSATION_DATE_FILTERS,type ConversationCustomerStage,type ConversationDateFilter,type ConversationFollowupFilter,type ConversationLatestOrderStatus} from "./conversation-date-filter";
+import {CONVERSATION_DATE_FILTERS,type ConversationAgentMode,type ConversationCustomerStage,type ConversationDateFilter,type ConversationFollowupFilter,type ConversationLatestOrderStatus} from "./conversation-date-filter";
 import type {Conversation} from "./conversation-types";
 import {ConversationVirtualList} from "./conversation-virtual-list";
 import {CountryPicker} from "./country-picker";
 
 export function ConversationPanel({
-  filter,subtitle,query,onQuery,tags,tagId,onTagId,onTagOpen,customerStage,onCustomerStage,latestOrderStatus,onLatestOrderStatus,followup,onFollowup,country,onCountry,onOpenSidebar,collapsed,onToggleCollapsed,onRefresh,dateFilter,onDateFilter,onDateKeyDown,
+  filter,subtitle,query,onQuery,tags,tagId,onTagId,onTagOpen,customerStage,onCustomerStage,latestOrderStatus,onLatestOrderStatus,followup,onFollowup,agentMode,onAgentMode,country,onCountry,onOpenSidebar,collapsed,onToggleCollapsed,onRefresh,dateFilter,onDateFilter,onDateKeyDown,
   mobileOpen,onCloseMobile,listRef,sentinelRef,items,rows,totalSize,measure,effectiveActiveId,clock,markingUnreadId,onSelect,onMenu,onMarkUnread,
   loading,loadError,hasAccounts,loadingMore,loadMoreError,hasMore,onLoadMore,
 }:{
   filter:string;subtitle:string;query:string;onQuery:(value:string)=>void;tags:Array<{id:string;name:string;color:string}>;tagId:string;onTagId:(value:string)=>void;onTagOpen:()=>void;onOpenSidebar:()=>void;collapsed:boolean;onToggleCollapsed:()=>void;onRefresh:()=>void;mobileOpen:boolean;onCloseMobile:()=>void;
-  customerStage:""|ConversationCustomerStage;onCustomerStage:(value:""|ConversationCustomerStage)=>void;latestOrderStatus:""|ConversationLatestOrderStatus;onLatestOrderStatus:(value:""|ConversationLatestOrderStatus)=>void;country:string;onCountry:(value:string)=>void;
+  customerStage:""|ConversationCustomerStage;onCustomerStage:(value:""|ConversationCustomerStage)=>void;latestOrderStatus:""|ConversationLatestOrderStatus;onLatestOrderStatus:(value:""|ConversationLatestOrderStatus)=>void;agentMode:""|ConversationAgentMode;onAgentMode:(value:""|ConversationAgentMode)=>void;country:string;onCountry:(value:string)=>void;
   followup:""|ConversationFollowupFilter;onFollowup:(value:""|ConversationFollowupFilter)=>void;
   dateFilter:ConversationDateFilter;onDateFilter:(value:ConversationDateFilter)=>void;onDateKeyDown:(event:KeyboardEvent<HTMLButtonElement>)=>void;
   listRef:RefObject<HTMLDivElement|null>;sentinelRef:RefObject<HTMLDivElement|null>;items:Conversation[];rows:Array<{index:number;start:number}>;totalSize:number;
@@ -75,6 +75,9 @@ export function ConversationPanel({
       <label><ShoppingCart size={14}/><select aria-label="按最新订单状态筛选会话" value={latestOrderStatus} onChange={event=>onLatestOrderStatus(event.target.value as ""|ConversationLatestOrderStatus)}>
         <option value="">全部订单情况</option><option value="none">未创建订单</option><option value="any">已创建订单</option>
         <option value="quotation">报价</option><option value="pending_confirmation">待确认</option><option value="pending_payment">待付款</option><option value="paid">已付款</option><option value="processing">处理中</option><option value="shipped">已发货</option><option value="completed">已完成</option><option value="cancelled">已取消</option>
+      </select><ChevronDown size={13}/></label>
+      <label><Bot size={14}/><select aria-label="按接管模式筛选会话" value={agentMode} onChange={event=>onAgentMode(event.target.value as ""|ConversationAgentMode)}>
+        <option value="">全部接管模式</option><option value="cautious">谨慎接管</option><option value="full">完全接管</option><option value="human_paused">人工接管</option>
       </select><ChevronDown size={13}/></label>
       <label className="conversation-followup-filter"><Clock3 size={14}/><select aria-label="按主动跟进状态筛选会话" value={followup} onChange={event=>onFollowup(event.target.value as ""|ConversationFollowupFilter)}>
         <option value="">全部跟进状态</option><option value="pending_confirmation">跟进待确认</option><option value="queued">跟进队列</option><option value="followed">已跟进</option>

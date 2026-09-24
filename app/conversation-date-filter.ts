@@ -3,7 +3,8 @@ export type ConversationListFilter="all"|"groups"|"mine"|"unassigned"|"favorite"
 export type ConversationCustomerStage="new"|"considering"|"qualified"|"won"|"lost";
 export type ConversationLatestOrderStatus="none"|"any"|"quotation"|"pending_confirmation"|"pending_payment"|"paid"|"processing"|"shipped"|"completed"|"cancelled";
 export type ConversationFollowupFilter="pending_confirmation"|"queued"|"followed";
-export type ConversationListOptions={filter?:ConversationListFilter;accountId?:string;q?:string;tagId?:string;customerStage?:ConversationCustomerStage;latestOrderStatus?:ConversationLatestOrderStatus;followup?:ConversationFollowupFilter;country?:string;cursor?:string;limit?:number};
+export type ConversationAgentMode="cautious"|"full"|"human_paused";
+export type ConversationListOptions={filter?:ConversationListFilter;accountId?:string;q?:string;tagId?:string;customerStage?:ConversationCustomerStage;latestOrderStatus?:ConversationLatestOrderStatus;followup?:ConversationFollowupFilter;agentMode?:ConversationAgentMode;country?:string;cursor?:string;limit?:number};
 
 export const CONVERSATION_DATE_FILTERS:Array<{value:ConversationDateFilter;label:string}>=[
   {value:"all",label:"全部"},
@@ -41,6 +42,7 @@ export function conversationListPath(filter:ConversationDateFilter,now=new Date(
   if(options.customerStage)params.set("customerStage",options.customerStage);
   if(options.latestOrderStatus)params.set("latestOrderStatus",options.latestOrderStatus);
   if(options.followup)params.set("followup",options.followup);
+  if(options.agentMode)params.set("agentMode",options.agentMode);
   if(options.country)params.set("country",options.country);
   if(options.cursor)params.set("cursor",options.cursor);
   if(filter==="unreplied")params.set("unreplied","true");

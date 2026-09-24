@@ -33,7 +33,7 @@ import { TaskCenter } from "./task-center";
 import {StatusCenter} from "./status-center";
 import {LANGUAGES,LanguageFlagIcon,LanguagePicker,languageName,languageShortCode} from "./language-picker";
 import {countryLabel,CountryPicker,RegionPicker} from "./country-picker";
-import { conversationCountsPath, conversationListPath, conversationSummaryPath, type ConversationCustomerStage, type ConversationDateFilter, type ConversationFollowupFilter, type ConversationLatestOrderStatus, type ConversationListFilter } from "./conversation-date-filter";
+import { conversationCountsPath, conversationListPath, conversationSummaryPath, type ConversationAgentMode, type ConversationCustomerStage, type ConversationDateFilter, type ConversationFollowupFilter, type ConversationLatestOrderStatus, type ConversationListFilter } from "./conversation-date-filter";
 import { QUICK_REPLY_VARIABLES, quickReplyCountryName, quickReplyVariableNames, renderQuickReplyVariables, type QuickReplyVariable, type QuickReplyVariableValues } from "./quick-reply-variables";
 import { confirmAction, ConfirmationHost, promptAction, PromptHost } from "./confirmation-ui";
 import {formatMessageTime,formatMessageTimeTitle} from "./message-time";
@@ -323,6 +323,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [selectedTag,setSelectedTag]=useState("");
   const [selectedCustomerStage,setSelectedCustomerStage]=useState<""|ConversationCustomerStage>("");
   const [selectedLatestOrderStatus,setSelectedLatestOrderStatus]=useState<""|ConversationLatestOrderStatus>("");
+  const [selectedAgentMode,setSelectedAgentMode]=useState<""|ConversationAgentMode>("");
   const [selectedCountry,setSelectedCountry]=useState("");
   const [conversationCounts,setConversationCounts]=useState<ConversationCounts>(EMPTY_CONVERSATION_COUNTS);
   const [nextConversationCursor,setNextConversationCursor]=useState<string|null>(null);
@@ -584,7 +585,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     if(append){setLoadingMoreConversations(true);setLoadMoreError("");}else if(!quiet)setLoading(true);
     if(!append)setLoadError("");
     try{
-      const path=conversationListPath(dateFilter,new Date(),{filter:conversationFilterKey(filter),accountId:selectedAccount,q:debouncedQuery,tagId:selectedTag,customerStage:selectedCustomerStage||undefined,latestOrderStatus:selectedLatestOrderStatus||undefined,followup:followupFilter||undefined,country:selectedCountry||undefined,cursor:append?conversationCursorRef.current??undefined:undefined,limit:40});
+      const path=conversationListPath(dateFilter,new Date(),{filter:conversationFilterKey(filter),accountId:selectedAccount,q:debouncedQuery,tagId:selectedTag,customerStage:selectedCustomerStage||undefined,latestOrderStatus:selectedLatestOrderStatus||undefined,followup:followupFilter||undefined,agentMode:selectedAgentMode||undefined,country:selectedCountry||undefined,cursor:append?conversationCursorRef.current??undefined:undefined,limit:40});
       const conversationResult=await authorizedFetch(path,token,{signal:!append?conversationAbortRef.current?.signal:undefined});
       if(conversationResult.token!==token)setApiToken(conversationResult.token);
       if(conversationResult.response.status===401){logout();return;}
@@ -619,7 +620,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       if((error as {name?:string}).name==="AbortError")return;
       if(sequence===workspaceLoadSequence.current){const message=error instanceof Error?error.message:"会话数据加载失败";if(append)setLoadMoreError(message);else setLoadError(message);}
     }finally{if(append)setLoadingMoreConversations(false);if(sequence===workspaceLoadSequence.current)setLoading(false);}
-  },[dateFilter,filter,selectedAccount,debouncedQuery,selectedTag,selectedCustomerStage,selectedLatestOrderStatus,followupFilter,selectedCountry,logout,notifyIncomingConversation]);
+  },[dateFilter,filter,selectedAccount,debouncedQuery,selectedTag,selectedCustomerStage,selectedLatestOrderStatus,followupFilter,selectedAgentMode,selectedCountry,logout,notifyIncomingConversation]);
 
   const loadWorkspace=useCallback(async(token:string,quiet=false)=>{
     if(!quiet)setLoading(true);
@@ -735,7 +736,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     for(let offset=0;offset<ids.length;offset+=6){
       const chunk=ids.slice(offset,offset+6);
       await Promise.all(chunk.map(async id=>{
-        const path=conversationSummaryPath(id,dateFilter,new Date(),{filter:conversationFilterKey(filter),accountId:selectedAccount,q:debouncedQuery,tagId:selectedTag,customerStage:selectedCustomerStage||undefined,latestOrderStatus:selectedLatestOrderStatus||undefined,followup:followupFilter||undefined});
+        const path=conversationSummaryPath(id,dateFilter,new Date(),{filter:conversationFilterKey(filter),accountId:selectedAccount,q:debouncedQuery,tagId:selectedTag,customerStage:selectedCustomerStage||undefined,latestOrderStatus:selectedLatestOrderStatus||undefined,followup:followupFilter||undefined,agentMode:selectedAgentMode||undefined});
         const result=await authorizedFetch(path,apiToken);
         if(result.token!==apiToken)setApiToken(result.token);
         if(result.response.status===401){logout();return;}
@@ -763,7 +764,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     });
     if(ids.includes(effectiveActiveId))await loadMessages(apiToken,effectiveActiveId);
     await refreshRealtimeCounts(apiToken);
-  },[apiToken,dateFilter,filter,selectedAccount,debouncedQuery,selectedTag,selectedCustomerStage,selectedLatestOrderStatus,followupFilter,effectiveActiveId,loadMessages,logout,notifyIncomingConversation,refreshRealtimeCounts]);
+  },[apiToken,dateFilter,filter,selectedAccount,debouncedQuery,selectedTag,selectedCustomerStage,selectedLatestOrderStatus,followupFilter,selectedAgentMode,effectiveActiveId,loadMessages,logout,notifyIncomingConversation,refreshRealtimeCounts]);
 
   const reconcileConversationFeed=useCallback(async()=>{
     await Promise.all([loadConversations(apiToken,{quiet:true}),loadConversationCounts(apiToken),effectiveActiveId?loadMessages(apiToken,effectiveActiveId):Promise.resolve()]);
@@ -822,12 +823,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   },[apiToken,loadAccounts]);
   useEffect(()=>{
     if(view!=="inbox"||!apiToken)return;
-    const key=[tokenSubject(apiToken),view,dateFilter,followupFilter,filter,selectedAccount,debouncedQuery,selectedTag,selectedCustomerStage,selectedLatestOrderStatus,selectedCountry].join("|");
+    const key=[tokenSubject(apiToken),view,dateFilter,followupFilter,filter,selectedAccount,debouncedQuery,selectedTag,selectedCustomerStage,selectedLatestOrderStatus,selectedAgentMode,selectedCountry].join("|");
     if(conversationLoadKeyRef.current===key)return;
     conversationLoadKeyRef.current=key;
     conversationCursorRef.current=null;setNextConversationCursor(null);conversationListRef.current?.scrollTo({top:0});
     void Promise.all([loadConversations(apiToken),loadConversationCounts(apiToken)]);
-  },[view,apiToken,dateFilter,followupFilter,filter,selectedAccount,debouncedQuery,selectedTag,selectedCustomerStage,selectedLatestOrderStatus,selectedCountry,loadConversations,loadConversationCounts]);
+  },[view,apiToken,dateFilter,followupFilter,filter,selectedAccount,debouncedQuery,selectedTag,selectedCustomerStage,selectedLatestOrderStatus,selectedAgentMode,selectedCountry,loadConversations,loadConversationCounts]);
   useEffect(()=>{const timer=window.setTimeout(()=>{if(window.matchMedia("(max-width: 1280px)").matches)setDetailsOpen(false);},0);return()=>window.clearTimeout(timer);},[]);
   useEffect(()=>{
     const readBoolean=(key:string)=>window.localStorage.getItem(key)==="1";
@@ -1807,7 +1808,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             </section>
           </aside>
 
-          <ConversationPanel filter={filter} subtitle={debouncedQuery||selectedTag||selectedCustomerStage||selectedLatestOrderStatus||selectedCountry?`已加载 ${visible.length} 条结果`:`${counts[conversationFilterKey(filter)]} 个真实会话`} query={query} onQuery={setQuery} tags={contextTags} tagId={selectedTag} onTagId={setSelectedTag} onTagOpen={()=>void loadConversationTags(apiToken)} customerStage={selectedCustomerStage} onCustomerStage={setSelectedCustomerStage} latestOrderStatus={selectedLatestOrderStatus} onLatestOrderStatus={setSelectedLatestOrderStatus} followup={followupFilter} onFollowup={selectFollowupFilter} country={selectedCountry} onCountry={setSelectedCountry} onOpenSidebar={()=>setSidebarOpen(true)} collapsed={conversationListHidden} onToggleCollapsed={()=>setConversationListHidden(value=>!value)} onRefresh={()=>void loadWorkspace(apiToken)} dateFilter={dateFilter} onDateFilter={selectDateFilter} onDateKeyDown={handleDateFilterKeyDown} mobileOpen={mobileConversationOpen} onCloseMobile={()=>setMobileConversationOpen(false)} listRef={conversationListRef} sentinelRef={conversationLoadSentinelRef} items={visible} rows={conversationVirtualizer.getVirtualItems()} totalSize={conversationVirtualizer.getTotalSize()} measure={conversationVirtualizer.measureElement} effectiveActiveId={effectiveActiveId} clock={clock} markingUnreadId={markingUnreadId} onSelect={selectConversation} onMenu={openConversationMenu} onMarkUnread={id=>void markConversationUnread(id)} loading={loading} loadError={loadError} hasAccounts={Boolean(accounts.length)} loadingMore={loadingMoreConversations} loadMoreError={loadMoreError} hasMore={Boolean(nextConversationCursor)} onLoadMore={()=>void loadConversations(apiToken,{append:true})}/>
+          <ConversationPanel filter={filter} subtitle={debouncedQuery||selectedTag||selectedCustomerStage||selectedLatestOrderStatus||selectedAgentMode||selectedCountry?`已加载 ${visible.length} 条结果`:`${counts[conversationFilterKey(filter)]} 个真实会话`} query={query} onQuery={setQuery} tags={contextTags} tagId={selectedTag} onTagId={setSelectedTag} onTagOpen={()=>void loadConversationTags(apiToken)} customerStage={selectedCustomerStage} onCustomerStage={setSelectedCustomerStage} latestOrderStatus={selectedLatestOrderStatus} onLatestOrderStatus={setSelectedLatestOrderStatus} agentMode={selectedAgentMode} onAgentMode={setSelectedAgentMode} followup={followupFilter} onFollowup={selectFollowupFilter} country={selectedCountry} onCountry={setSelectedCountry} onOpenSidebar={()=>setSidebarOpen(true)} collapsed={conversationListHidden} onToggleCollapsed={()=>setConversationListHidden(value=>!value)} onRefresh={()=>void loadWorkspace(apiToken)} dateFilter={dateFilter} onDateFilter={selectDateFilter} onDateKeyDown={handleDateFilterKeyDown} mobileOpen={mobileConversationOpen} onCloseMobile={()=>setMobileConversationOpen(false)} listRef={conversationListRef} sentinelRef={conversationLoadSentinelRef} items={visible} rows={conversationVirtualizer.getVirtualItems()} totalSize={conversationVirtualizer.getTotalSize()} measure={conversationVirtualizer.measureElement} effectiveActiveId={effectiveActiveId} clock={clock} markingUnreadId={markingUnreadId} onSelect={selectConversation} onMenu={openConversationMenu} onMarkUnread={id=>void markConversationUnread(id)} loading={loading} loadError={loadError} hasAccounts={Boolean(accounts.length)} loadingMore={loadingMoreConversations} loadMoreError={loadMoreError} hasMore={Boolean(nextConversationCursor)} onLoadMore={()=>void loadConversations(apiToken,{append:true})}/>
 
           <section className="chat-panel">
             {active ? (
@@ -1894,7 +1895,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                   onToken={setApiToken}
                   onToast={setToast}
                   onUseDraft={setDraft}
-                  onSent={() => void loadMessages(apiToken, active.id)}
+                  onSent={() => {void loadMessages(apiToken, active.id);void loadConversations(apiToken);}}
                 />}
                 {active.accountStatus !== "online" && (
                   <div className="offline-banner">
@@ -5085,7 +5086,7 @@ function AgentConversationBar({conversationId,token,refreshKey,onToken,onToast,o
   const sessionKey=`${conversationId}:${token}`,authenticationFailed=blockedSession===sessionKey;
   const load=useCallback(async()=>{try{const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/agent`,token);if(result.token!==token)onToken(result.token);if(result.response.status===401){setBlockedSession(sessionKey);return;}if(result.response.ok){setBlockedSession("");setState(await result.response.json());}}catch{}},[conversationId,token,onToken,sessionKey]);
   useEffect(()=>{if(authenticationFailed)return;const first=window.setTimeout(()=>void load(),0),poll=window.setInterval(()=>void load(),8000);return()=>{window.clearTimeout(first);window.clearInterval(poll);};},[load,refreshKey,authenticationFailed]);
-  async function setMode(mode:"cautious"|"full"|"human_paused"){setBusy(true);const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/agent`,token,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({mode})});if(result.token!==token)onToken(result.token);setBusy(false);if(result.response.ok){onToast(mode==="cautious"?"已启用谨慎接管，证据不足时将等待人工确认":mode==="full"?"已启用完全接管，Agent 回复无需人工确认":"已切换人工接管，待跟进任务已取消");await load();}}
+  async function setMode(mode:"cautious"|"full"|"human_paused"){setBusy(true);const result=await authorizedFetch(`/api/v1/conversations/${conversationId}/agent`,token,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({mode})});if(result.token!==token)onToken(result.token);setBusy(false);if(result.response.ok){onToast(mode==="cautious"?"已启用谨慎接管，证据不足时将等待人工确认":mode==="full"?"已启用完全接管，Agent 回复无需人工确认":"已切换人工接管，待跟进任务已取消");await load();onSent();}}
   async function resolveDraft(action:"send"|"dismiss"){if(!state?.draft)return;setBusy(true);const result=await authorizedFetch(`/api/v1/ai-drafts/${state.draft.id}/${action}`,token,{method:"POST",headers:{"content-type":"application/json"},body:action==="send"?JSON.stringify({text:state.draft.text_content}):undefined});if(result.token!==token)onToken(result.token);setBusy(false);if(result.response.ok){onToast(action==="send"?"AI 草稿已进入发送队列，Agent 已转为人工接管":"AI 草稿已忽略");await load();onSent();}}
   if(!state)return null;const paused=state.mode==="human_paused",full=state.mode==="full",enabled=state.account_enabled;
   return <div className={`agent-conversation-bar ${paused?"paused":full?"full":""} ${enabled?"":"disabled"}`}><span><Bot size={15}/><b>{enabled?(paused?"人工接管":full?"完全接管":"谨慎接管"):"AI 自动回复未配置"}</b><small>{enabled?(paused?"当前会话不会自动回复或跟进":full?"当前会话完全由 Agent 回复，无需人工确认":"可靠回复自动发送，证据不足时等待人工确认"):"请先在系统设置中启用该账号的 AI 能力"}</small></span><div className="takeover-switch" role="group" aria-label="会话接管方式"><button className={!paused&&!full&&enabled?"active cautious":""} disabled={busy||!enabled} onClick={()=>void setMode("cautious")} aria-pressed={!paused&&!full&&enabled}><ShieldCheck size={15}/>谨慎接管</button><button className={full&&enabled?"active full":""} disabled={busy||!enabled} onClick={()=>void setMode("full")} aria-pressed={full&&enabled}><Bot size={15}/>完全接管</button><button className={paused&&enabled?"active human":""} disabled={busy||!enabled} onClick={()=>void setMode("human_paused")} aria-pressed={paused&&enabled}><Users size={15}/>人工接管</button></div>{state.draft&&<div className="agent-draft"><span><Sparkles size={14}/><b>AI 建议回复</b><small>{state.draft.reason}</small></span><div className="agent-draft-copy"><section><b>发送内容</b><p>{state.draft.text_content}</p></section><section className="zh"><b>中文参考</b><p>{state.draft.reply_zh||"历史建议未生成中文参考"}</p></section></div><div><button onClick={()=>onUseDraft(state.draft!.text_content)}>放入输入框</button><button onClick={()=>void resolveDraft("dismiss")}>忽略</button><button className="primary" onClick={()=>void resolveDraft("send")}>确认发送</button></div></div>}</div>;
