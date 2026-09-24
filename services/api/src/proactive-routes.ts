@@ -18,14 +18,16 @@ export async function registerProactiveRoutes(app:FastifyInstance){await ensureP
     const result=await pool.query(`WITH entries AS (
       SELECT e.id::text id,'proactive' category,e.job_id::text subject_id,e.account_id,e.contact_id,e.event_type,
         CASE WHEN e.event_type='sent' THEN 'succeeded' WHEN e.event_type='failed' THEN 'failed' WHEN e.event_type='skipped' THEN 'skipped' WHEN e.event_type='cancelled' THEN 'cancelled' ELSE 'started' END outcome,
-        e.reason detail,e.planned_at,e.created_at,j.message_id,
-        COALESCE(NULLIF(c.alias,''),c.display_name,c.phone_e164) contact_name,a.display_name account_name
+        e.reason detail,e.planned_at,e.created_at,j.message_id,e.metadata,
+        COALESCE(NULLIF(c.alias,''),c.display_name,c.phone_e164) contact_name,a.display_name account_name,COALESCE(agent.timezone,task_settings.timezone,'Asia/Shanghai') system_timezone
       FROM proactive_outreach_events e JOIN channel_accounts a ON a.id=e.account_id JOIN contacts c ON c.id=e.contact_id
+      LEFT JOIN account_agent_settings agent ON agent.account_id=e.account_id LEFT JOIN account_task_settings task_settings ON task_settings.account_id=e.account_id
       LEFT JOIN proactive_outreach_jobs j ON j.id=e.job_id
       UNION ALL
       SELECT l.id::text,'task',l.task_id::text,t.account_id,t.contact_id,l.event_type,l.outcome,l.message,l.planned_at,l.created_at,
-        NULL::uuid,COALESCE(NULLIF(c.alias,''),c.display_name,c.phone_e164),a.display_name
+        NULL::uuid,'{}'::jsonb,COALESCE(NULLIF(c.alias,''),c.display_name,c.phone_e164),a.display_name,COALESCE(agent.timezone,task_settings.timezone,'Asia/Shanghai')
       FROM task_execution_logs l JOIN tasks t ON t.id=l.task_id JOIN channel_accounts a ON a.id=t.account_id LEFT JOIN contacts c ON c.id=t.contact_id
+      LEFT JOIN account_agent_settings agent ON agent.account_id=t.account_id LEFT JOIN account_task_settings task_settings ON task_settings.account_id=t.account_id
     ) SELECT *,COUNT(*) OVER()::int total_count FROM entries
       WHERE ($1::uuid IS NULL OR account_id=$1) AND ($2::uuid[] IS NULL OR account_id=ANY($2))
         AND ($3::text IS NULL OR contact_name ILIKE '%'||$3||'%' OR account_name ILIKE '%'||$3||'%' OR event_type ILIKE '%'||$3||'%')
