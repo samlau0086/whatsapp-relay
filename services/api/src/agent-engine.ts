@@ -1762,13 +1762,13 @@ export async function pauseAgentForHuman(
     "UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error='human_takeover' WHERE conversation_id=$1 AND state='pending' AND kind IN ('reply','followup')",
     [conversationId],
   );
-  await client.query(
-    "UPDATE proactive_outreach_jobs SET state='skipped',completed_at=now(),last_error='human_takeover',updated_at=now() WHERE conversation_id=$1 AND state='awaiting_approval' AND payload->>'draftId' IN (SELECT id::text FROM ai_drafts WHERE conversation_id=$1 AND status='pending')",
+  const drafts=await client.query(
+    "UPDATE ai_drafts SET status='dismissed',resolved_at=now() WHERE conversation_id=$1 AND status='pending' RETURNING id",
     [conversationId],
   );
-  await client.query(
-    "UPDATE ai_drafts SET status='dismissed',resolved_at=now() WHERE conversation_id=$1 AND status='pending'",
-    [conversationId],
+  if(drafts.rowCount)await client.query(
+    "UPDATE proactive_outreach_jobs SET state='skipped',completed_at=now(),last_error='human_takeover',updated_at=now() WHERE conversation_id=$1 AND state='awaiting_approval' AND payload->>'draftId'=ANY($2::text[])",
+    [conversationId,drafts.rows.map(row=>row.id)],
   );
 }
 

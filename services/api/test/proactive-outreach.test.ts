@@ -87,11 +87,13 @@ test("manual outreach scan bypasses the background scan throttle",async()=>{
 
 test("superseded approval drafts cannot reappear or be sent again",async()=>{
   const source=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
-  const staleGuard=/NOT EXISTS \(SELECT 1 FROM messages m WHERE m\.conversation_id=d\.conversation_id AND m\.direction='out' AND m\.sender_user_id IS NOT NULL AND m\.occurred_at>=d\.created_at\)/;
+  const staleGuard=/NOT EXISTS \(SELECT 1 FROM messages m WHERE m\.conversation_id=d\.conversation_id AND m\.direction='out' AND m\.status IN \('queued','dispatching','sent','delivered','read'\) AND \(m\.occurred_at>=d\.created_at OR .*m\.text_content.*d\.text_content/;
   const readRoute=source.slice(source.indexOf('app.get("/api/v1/conversations/:id/agent"'),source.indexOf('app.post("/api/v1/conversations/:id/reply-suggestion"'));
   const sendRoute=source.slice(source.indexOf('app.post("/api/v1/ai-drafts/:id/send"'),source.indexOf('app.post("/api/v1/ai-drafts/:id/dismiss"'));
-  assert.match(readRoute,staleGuard);
-  assert.match(sendRoute,staleGuard);
+  assert.match(source,staleGuard);
+  assert.match(source,/m\.occurred_at>=d\.created_at-interval '7 days' AND EXISTS \(SELECT 1 FROM proactive_outreach_jobs pj WHERE pj\.payload->>'draftId'=d\.id::text\)/);
+  assert.match(readRoute,/\$\{currentDraftGuard\}/);
+  assert.match(sendRoute,/\$\{currentDraftGuard\} FOR UPDATE OF d/);
   assert.match(sendRoute,/proactive_outreach_events\(account_id,contact_id,job_id,event_type,reason,planned_at\).*'sent','human_approved'/);
 });
 
@@ -101,4 +103,10 @@ test("outreach cadence counts confirmed messages including human-approved drafts
   assert.match(source,/sent_job\.state='sent' AND sent_message\.status IN \('sent','delivered','read'\)/);
   assert.match(source,/state IN \('pending','processing','awaiting_approval'\)/);
   assert.match(source,/Number\(state\.touches\)>Number\(\(job\.payload/);
+  assert.match(source,/state\.last_contact_at.*proactiveCadenceDays\(Number\(state\.touches\)\)\*DAY/);
+  assert.match(source,/const duplicate=await client\.query\("SELECT 1 FROM messages WHERE conversation_id=\$1 AND direction='out'.*regexp_replace\(lower\(btrim\(text_content\)\).*LIMIT 1"/);
+  assert.match(source,/if\(duplicate\.rowCount\).*last_error='already_sent'/);
+  assert.match(source,/SELECT d\.id FROM ai_drafts d JOIN proactive_outreach_jobs pj.*pj\.state='awaiting_approval'.*m\.occurred_at>=d\.created_at-interval '7 days'.*FOR UPDATE OF d/);
+  assert.match(source,/UPDATE ai_drafts SET status='dismissed'.*id=ANY\(\$1::uuid\[\]\)/);
+  assert.match(source,/UPDATE proactive_outreach_jobs SET state='skipped'.*last_error='draft_superseded'.*payload->>'draftId'=ANY\(\$1::text\[\]\)/);
 });
