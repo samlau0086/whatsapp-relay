@@ -43,7 +43,12 @@ type MessageArgs = IdArgs & { limit: number; cursor?: string; before?: string; d
 server.registerTool("list_messages", { description: "List messages in a conversation with cursor pagination.", inputSchema: { conversationId: z.string().uuid(), limit: pageSize, cursor, before: z.string().datetime().optional(), direction: z.enum(["in", "out"]).optional(), from: z.string().datetime().optional(), until: z.string().datetime().optional() } }, wrapped<MessageArgs>("list_messages", ({ conversationId, limit, cursor, before, direction, from, until }) => api.get(`/conversations/${conversationId}/messages`, { limit, cursor, before, direction, from, until })));
 
 type ContactSearchArgs = { query?: string; limit: number; cursor?: string; blacklist?: boolean };
-server.registerTool("search_contacts", { description: "Search person contacts in the bound account.", inputSchema: { query: z.string().max(100).optional(), limit: pageSize, cursor, blacklist: z.boolean().optional() } }, wrapped<ContactSearchArgs>("search_contacts", ({ query, limit, cursor, blacklist }) => { const offset = cursor ? decodeOffset(cursor) : 0; return api.get("/contacts", { q: query, limit, offset, blacklist: blacklist === undefined ? undefined : String(blacklist) }).then((body: any) => ({ ...body, nextCursor: body.hasMore ? encodeOffset(body.nextOffset) : null })); }));
+type ContactListResponse = { data: unknown[]; total: number; hasMore: boolean; nextOffset: number };
+server.registerTool("search_contacts", { description: "Search person contacts in the bound account.", inputSchema: { query: z.string().max(100).optional(), limit: pageSize, cursor, blacklist: z.boolean().optional() } }, wrapped<ContactSearchArgs>("search_contacts", async ({ query, limit, cursor, blacklist }) => {
+  const offset = cursor ? decodeOffset(cursor) : 0;
+  const body = await api.get<ContactListResponse>("/contacts", { q: query, limit, offset, blacklist: blacklist === undefined ? undefined : String(blacklist) });
+  return { ...body, nextCursor: body.hasMore ? encodeOffset(body.nextOffset) : null };
+}));
 server.registerTool("get_contact", { description: "Get a contact profile by ID.", inputSchema: { contactId: z.string().uuid() } }, wrapped<{ contactId: string }>("get_contact", ({ contactId }) => api.get(`/contacts/${contactId}`)));
 
 type GroupArgs = { limit: number; cursor?: string };
