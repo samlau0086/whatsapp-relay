@@ -59,8 +59,13 @@ button { color:inherit; }
 .filter-row.selected { font-weight:650; }
 .accounts-block { border-top:1px solid var(--line); padding-top:17px; }
 .account-status { display:flex; gap:8px; align-items:center; padding:7px 6px; }
-.account-status-copy { min-width:0; flex:1; }
-.account-status b { line-height:1.35; overflow-wrap:anywhere; }
+.account-status-copy { min-width:0; flex:1; display:flex; flex-direction:column; gap:4px; }
+.account-status .account-name { display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.25; }
+.account-metric-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:2px 5px; width:100%; }
+.account-metric-grid span { min-width:0; display:flex; align-items:baseline; gap:2px; white-space:nowrap; overflow:hidden; }
+.account-metric-grid em { color:#94a09a; font-size:9px; font-style:normal; }
+.account-metric-grid strong { color:#3c6e59; font-size:10px; font-weight:700; overflow:hidden; text-overflow:ellipsis; }
+.account-connection { display:flex; align-items:center; gap:5px; margin-top:0 !important; }
 .account-status.muted { opacity:.62; }
 .status-dot { width:6px; height:6px; display:inline-block; border-radius:50%; background:#b6bfbb; }
 .status-dot.online { background:#20bb70; box-shadow:0 0 0 2px #dff7ea; }
@@ -809,6 +814,7 @@ button { color:inherit; }
 }
 .workspace-title .eyebrow,.filters .section-label{font-size:13px}.workspace-title h1{font-size:23px}
 .account-switcher b,.account-status b{font-size:15px}.account-switcher small,.account-status small{font-size:13px}
+.account-status .account-metric-grid em{font-size:10px}.account-status .account-metric-grid strong{font-size:11px}.account-status .account-connection{font-size:11px}
 .filter-row{height:43px;font-size:15px}.filter-row em{font-size:13px}
 .conversation-head h2{font-size:20px}.conversation-head span{font-size:13px}.search-box{height:44px}.search-box input{font-size:15px}.conversation-date-tabs button{height:35px;font-size:13px}
 @media(max-height:900px) and (min-width:701px){
