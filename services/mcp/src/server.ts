@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { audit } from "./audit.js";
-import { loadContext } from "./context.js";
+import { loadContext, WRITE_SCOPES } from "./context.js";
 import { RelayApiClient, RelayApiError } from "./relay-api-client.js";
 
 const context = loadContext();
@@ -33,6 +33,32 @@ function wrapped<TArgs>(tool: string, handler: (args: TArgs) => Promise<unknown>
     }
   };
 }
+
+const operationCatalog = [
+  { name: "list_conversations", mode: "read", scope: null, description: "查询会话列表" },
+  { name: "get_conversation", mode: "read", scope: null, description: "查询会话摘要" },
+  { name: "list_messages", mode: "read", scope: null, description: "查询会话消息" },
+  { name: "search_contacts", mode: "read", scope: null, description: "搜索联系人" },
+  { name: "get_contact", mode: "read", scope: null, description: "查询联系人资料" },
+  { name: "list_whatsapp_groups", mode: "read", scope: null, description: "查询 WhatsApp 群组" },
+  { name: "get_conversation_details", mode: "read", scope: null, description: "查询会话标签、备注、提醒和订单摘要" },
+  { name: "list_tags", mode: "read", scope: null, description: "查询可用标签及其 ID" },
+  { name: "send_message", mode: "write", scope: "messages:send", description: "发送单条文本消息" },
+  { name: "update_conversation", mode: "write", scope: "conversations:write", description: "更新会话状态、收藏、已读状态或客户阶段" },
+  { name: "set_conversation_tags", mode: "write", scope: "conversations:write", description: "整体替换会话标签" },
+  { name: "update_contact", mode: "write", scope: "contacts:write", description: "更新联系人有限资料字段" },
+] as const;
+
+server.registerTool("list_mcp_operations", {
+  description: "List all RelayDesk MCP operations, including disabled write operations and the scope required to enable them.",
+  inputSchema: {},
+}, wrapped<Record<string, never>>("list_mcp_operations", async () => ({
+  data: operationCatalog.map(operation => ({
+    ...operation,
+    enabled: operation.scope === null || context.writeScopes.has(operation.scope as typeof WRITE_SCOPES[number]),
+  })),
+  meta: { writeScopes: [...context.writeScopes] },
+})));
 
 type ConversationArgs = { status?: "open" | "closed" | "archived"; filter?: "all" | "groups" | "mine" | "unassigned" | "favorite" | "closed" | "archived" | "reminders" | "blocked"; query?: string; unreadOnly?: boolean; limit: number; cursor?: string; before?: string; lastMessageFrom?: string; lastMessageBefore?: string };
 server.registerTool("list_conversations", { description: "List conversations for the bound WhatsApp account.", inputSchema: { status: z.enum(["open", "closed", "archived"]).optional(), filter: z.enum(["all", "groups", "mine", "unassigned", "favorite", "closed", "archived", "reminders", "blocked"]).optional(), query: z.string().max(100).optional(), unreadOnly: z.boolean().optional(), limit: pageSize, cursor, before: z.string().datetime().optional(), lastMessageFrom: z.string().datetime().optional(), lastMessageBefore: z.string().datetime().optional() } }, wrapped<ConversationArgs>("list_conversations", (args) => api.get("/conversations", { status: args.status, filter: args.filter, q: args.query, unreplied: args.unreadOnly ? "true" : undefined, limit: args.limit, cursor: args.cursor, before: args.before, lastMessageFrom: args.lastMessageFrom, lastMessageBefore: args.lastMessageBefore })));

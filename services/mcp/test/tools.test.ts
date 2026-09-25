@@ -35,13 +35,21 @@ test("stdio lists write tools only when enabled and sends with the bound account
     const readOnly = await connect(url);
     try {
       assert.equal((await readOnly.listTools()).tools.some(tool => tool.name === "send_message"), false);
+      const operations = await readOnly.callTool({ name: "list_mcp_operations", arguments: {} });
+      const operationRows = operations.structuredContent?.data as Array<{ name: string; enabled: boolean }>;
+      assert.equal(operationRows.find(operation => operation.name === "send_message")?.enabled, false);
     } finally { await readOnly.close(); }
 
     const writable = await connect(url, "messages:send,conversations:write,contacts:write");
     try {
       const names = (await writable.listTools()).tools.map(tool => tool.name);
+      assert.ok(names.includes("list_mcp_operations"));
       for (const name of ["send_message", "update_conversation", "set_conversation_tags", "update_contact"]) assert.ok(names.includes(name));
       assert.ok(names.includes("list_tags"));
+      const operations = await writable.callTool({ name: "list_mcp_operations", arguments: {} });
+      const operationRows = operations.structuredContent?.data as Array<{ name: string; enabled: boolean }>;
+      assert.equal(operationRows.find(operation => operation.name === "send_message")?.enabled, true);
+      assert.equal(operationRows.find(operation => operation.name === "update_contact")?.enabled, true);
       const missingConfirmation = await writable.callTool({ name: "send_message", arguments: { conversationId, text: "Hello", idempotencyKey: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" } });
       assert.equal(missingConfirmation.isError, true);
       assert.equal(requests.length, 0);
