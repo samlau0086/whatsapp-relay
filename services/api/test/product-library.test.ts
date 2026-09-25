@@ -155,6 +155,21 @@ test("product card sending recovers from a lost response without duplicating the
   assert.match(server,/left\(client_message_id,length\(\$3\)\+1\)=\$3\|\|':'/);
 });
 
+test("workspace product reads and MCP-compatible writes require product scopes and audit changes",async()=>{
+  const server=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
+  const list=server.slice(server.indexOf('app.get("/api/v1/products"'),server.indexOf('app.patch("/api/v1/product-labels"'));
+  const create=server.slice(server.indexOf('app.post("/api/v1/products",'),server.indexOf('app.post("/api/v1/products/bulk-import"'));
+  const stock=server.slice(server.indexOf('app.patch("/api/v1/products/:id/stock"'),server.indexOf('app.delete("/api/v1/products/:id"'));
+  assert.match(list,/hasScope\(request\.principal,"products:read"\)/);
+  assert.match(create,/hasScope\(request\.principal,"products:write"\)/);
+  assert.match(create,/principal\.kind==="user"\?principal\.id:null/);
+  assert.match(create,/principal\.kind,principal\.id/);
+  assert.match(create,/idempotency_conflict/);
+  assert.match(stock,/hasScope\(request\.principal,"products:write"\)/);
+  assert.match(stock,/product\.stock_update/);
+  assert.match(stock,/transaction\(async client/);
+});
+
 test("product cards load variant media and render all variant price tiers",async()=>{
   const [server,image]=await Promise.all([readFile(new URL("../src/server.ts",import.meta.url),"utf8"),readFile(new URL("../src/product-card-image.ts",import.meta.url),"utf8")]);
   assert.match(server,/'objectKey',vm\.object_key/);

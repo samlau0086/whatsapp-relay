@@ -5,7 +5,7 @@ export type McpContext = {
   writeScopes: ReadonlySet<WriteScope>;
 };
 
-export const WRITE_SCOPES = ["messages:send", "conversations:write", "contacts:write"] as const;
+export const WRITE_SCOPES = ["messages:send", "conversations:write", "contacts:write", "products:write"] as const;
 export type WriteScope = typeof WRITE_SCOPES[number];
 
 export function loadContext(env: NodeJS.ProcessEnv = process.env): McpContext {

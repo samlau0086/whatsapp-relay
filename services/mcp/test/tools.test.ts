@@ -44,12 +44,13 @@ test("stdio lists write tools only when enabled and sends with the bound account
     try {
       const names = (await writable.listTools()).tools.map(tool => tool.name);
       assert.ok(names.includes("list_mcp_operations"));
-      for (const name of ["send_message", "update_conversation", "set_conversation_tags", "update_contact"]) assert.ok(names.includes(name));
+      for (const name of ["send_message", "retry_message", "update_conversation", "set_conversation_tags", "add_conversation_note", "update_contact"]) assert.ok(names.includes(name));
       assert.ok(names.includes("list_tags"));
       const operations = await writable.callTool({ name: "list_mcp_operations", arguments: {} });
       const operationRows = operations.structuredContent?.data as Array<{ name: string; enabled: boolean }>;
       assert.equal(operationRows.find(operation => operation.name === "send_message")?.enabled, true);
       assert.equal(operationRows.find(operation => operation.name === "update_contact")?.enabled, true);
+      assert.equal(operationRows.find(operation => operation.name === "retry_message")?.enabled, true);
       const missingConfirmation = await writable.callTool({ name: "send_message", arguments: { conversationId, text: "Hello", idempotencyKey: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" } });
       assert.equal(missingConfirmation.isError, true);
       assert.equal(requests.length, 0);
@@ -81,6 +82,21 @@ test("stdio lists write tools only when enabled and sends with the bound account
       assert.match(requests[4].url, new RegExp(`/contacts/${contactId}/fields`));
       assert.deepEqual(requests[4].body, { alias: "Jimmy" });
       for (const request of requests) assert.equal(new URL(request.url, url).searchParams.get("accountId"), accountId);
+      const noteWithoutApproval = await writable.callTool({ name: "add_conversation_note", arguments: { conversationId, body: "Follow up" } });
+      assert.equal(noteWithoutApproval.isError, true);
+      assert.equal(requests.length, 5);
+      await writable.callTool({ name: "add_conversation_note", arguments: { conversationId, body: "Follow up", confirm: true } });
+      assert.equal(requests[5].method, "POST");
+      assert.deepEqual(requests[5].body, { body: "Follow up", noteType: "normal" });
+      const messageId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+      const retryWithoutApproval = await writable.callTool({ name: "retry_message", arguments: { messageId, clientMessageId: "retry-12345678" } });
+      assert.equal(retryWithoutApproval.isError, true);
+      assert.equal(requests.length, 6);
+      await writable.callTool({ name: "retry_message", arguments: { messageId, clientMessageId: "retry-12345678", confirm: true } });
+      assert.equal(requests[6].method, "POST");
+      assert.match(requests[6].url, new RegExp(`/messages/${messageId}/retry`));
+      assert.equal(new URL(requests[6].url, url).searchParams.get("accountId"), accountId);
+      assert.deepEqual(requests[6].body, { clientMessageId: "retry-12345678" });
       const firstTags = await writable.callTool({ name: "list_tags", arguments: { limit: 1 } });
       assert.deepEqual(firstTags.structuredContent?.data, [{ id: "tag-1" }]);
       const nextCursor = firstTags.structuredContent?.nextCursor;

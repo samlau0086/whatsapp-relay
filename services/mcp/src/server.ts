@@ -12,7 +12,7 @@ const server = new McpServer({ name: "relaydesk-mcp", version: "0.1.0" });
 const pageSize = z.number().int().min(1).max(100).default(40);
 const cursor = z.string().max(512).optional();
 
-function wrapped<TArgs>(tool: string, handler: (args: TArgs) => Promise<unknown>) {
+function wrapped<TArgs>(tool: string, handler: (args: TArgs) => Promise<unknown>, workspace = false) {
   return async (args: TArgs) => {
     const requestId = randomUUID();
     const started = Date.now();
@@ -22,7 +22,7 @@ function wrapped<TArgs>(tool: string, handler: (args: TArgs) => Promise<unknown>
       const output = body.data;
       const count = Array.isArray(output) ? output.length : undefined;
       const nextCursor = body.nextCursor ?? null;
-      const payload = { data: output, meta: { accountScope: context.accountId ?? "all", ...(body.total === undefined ? {} : { total: body.total }), ...(body.hasMore === undefined ? {} : { hasMore: body.hasMore }) }, nextCursor, requestId };
+      const payload = { data: output, meta: { accountScope: workspace ? "workspace" : context.accountId ?? "all", ...(body.total === undefined ? {} : { total: body.total }), ...(body.hasMore === undefined ? {} : { hasMore: body.hasMore }) }, nextCursor, requestId };
       audit({ tool, accountId: context.accountId, requestId, ok: true, durationMs: Date.now() - started, resultCount: count });
       return { content: [{ type: "text" as const, text: JSON.stringify(payload) }], structuredContent: payload };
     } catch (error) {
@@ -43,19 +43,26 @@ const operationCatalog = [
   { name: "list_whatsapp_groups", mode: "read", scope: null, description: "查询 WhatsApp 群组" },
   { name: "get_conversation_details", mode: "read", scope: null, description: "查询会话标签、备注、提醒和订单摘要" },
   { name: "list_tags", mode: "read", scope: null, description: "查询可用标签及其 ID" },
+  { name: "search_products", mode: "read", scope: "products:read", description: "搜索工作区产品库" },
+  { name: "get_product_by_sku", mode: "read", scope: "products:read", description: "按 SKU 查询产品" },
   { name: "send_message", mode: "write", scope: "messages:send", description: "发送单条文本消息" },
   { name: "update_conversation", mode: "write", scope: "conversations:write", description: "更新会话状态、收藏、已读状态或客户阶段" },
   { name: "set_conversation_tags", mode: "write", scope: "conversations:write", description: "整体替换会话标签" },
+  { name: "add_conversation_note", mode: "write", scope: "conversations:write", description: "添加会话团队备注" },
   { name: "update_contact", mode: "write", scope: "contacts:write", description: "更新联系人有限资料字段" },
+  { name: "retry_message", mode: "write", scope: "messages:send", description: "重试失败或不确定的出站消息" },
+  { name: "create_product", mode: "write", scope: "products:write", description: "创建产品" },
+  { name: "update_product", mode: "write", scope: "products:write", description: "按 SKU 更新产品基础资料" },
+  { name: "set_product_stock", mode: "write", scope: "products:write", description: "切换产品库存状态" },
 ] as const;
 
 server.registerTool("list_mcp_operations", {
   description: "List all RelayDesk MCP operations, including disabled write operations and the scope required to enable them.",
-  inputSchema: {},
-}, wrapped<Record<string, never>>("list_mcp_operations", async () => ({
+  inputSchema: { includeDisabled: z.boolean().optional().describe("Include operations that are not enabled by the current MCP configuration.") },
+}, wrapped<{ includeDisabled?: boolean }>("list_mcp_operations", async () => ({
   data: operationCatalog.map(operation => ({
     ...operation,
-    enabled: operation.scope === null || context.writeScopes.has(operation.scope as typeof WRITE_SCOPES[number]),
+    enabled: operation.mode === "read" || context.writeScopes.has(operation.scope as typeof WRITE_SCOPES[number]),
   })),
   meta: { writeScopes: [...context.writeScopes] },
 })));
@@ -89,7 +96,47 @@ server.registerTool("list_tags", { description: "List available tags and IDs for
   return { data: body.data.slice(offset, offset + limit), total: body.data.length, nextCursor: offset + limit < body.data.length ? encodeOffset(offset + limit) : null };
 }));
 
+type Product = Record<string, unknown> & { priceTiers?: Array<Record<string, unknown>>; variants?: Array<Record<string, unknown>> };
+function publicProduct(product: Product) {
+  const { id, sku, name, description, category, brand, currency, isInStock, defaultUnitAmount, priceTiers, tags, imageUrl, galleryImages, variants, createdAt, updatedAt } = product;
+  const prices = (priceTiers ?? []).map(tier => ({ minQuantity: tier.minQuantity, unitAmount: tier.unitAmount }));
+  return { id, sku, name, description, category, brand, currency, isInStock, defaultUnitAmount, priceTiers: prices, tags, imageUrl, galleryImages, variants: (variants ?? []).map(variant => ({ id: variant.id, sku: variant.sku, attributes: variant.attributes, priceTiers: Array.isArray(variant.priceTiers) ? variant.priceTiers.map((tier: Record<string, unknown>) => ({ minQuantity: tier.minQuantity, unitAmount: tier.unitAmount })) : [] })), createdAt, updatedAt };
+}
+
+type ProductSearchArgs = { query?: string; exact?: boolean; tag?: string; category?: string; brand?: string; currency?: string; stock?: "in_stock" | "out_of_stock"; limit: number; cursor?: string };
+server.registerTool("search_products", { description: "Search the shared workspace product library. Requires products:read on the API key; results exclude internal cost, margin, notes and supplier links.", inputSchema: { query: z.string().trim().max(100).optional(), exact: z.boolean().optional(), tag: z.string().trim().max(40).optional(), category: z.string().trim().max(80).optional(), brand: z.string().trim().max(80).optional(), currency: z.string().regex(/^[A-Za-z]{3}$/).optional(), stock: z.enum(["in_stock", "out_of_stock"]).optional(), limit: pageSize, cursor } }, wrapped<ProductSearchArgs>("search_products", async ({ query, exact, tag, category, brand, currency, stock, limit, cursor }) => {
+  const offset = cursor ? decodeOffset(cursor) : 0;
+  const body = await api.getWorkspace<{ data: Product[]; total: number; hasMore: boolean; nextOffset: number | null }>("/products", { q: query, exact: exact === undefined ? undefined : String(exact), tag, category, brand, currency, stock, limit, offset });
+  if (!Array.isArray(body.data) || !Number.isInteger(body.total) || typeof body.hasMore !== "boolean" || (body.hasMore && !Number.isInteger(body.nextOffset))) throw new RelayApiError("upstream_unavailable", 502);
+  return { data: body.data.map(publicProduct), total: body.total, hasMore: body.hasMore, nextCursor: body.hasMore ? encodeOffset(body.nextOffset!) : null };
+}, true));
+
+server.registerTool("get_product_by_sku", { description: "Get a product from the shared workspace library by exact SKU. Requires products:read on the API key.", inputSchema: { sku: z.string().trim().min(1).max(80) } }, wrapped<{ sku: string }>("get_product_by_sku", async ({ sku }) => {
+  const body = await api.writeWorkspace<{ data: Product[] }>("POST", "/products/query", { skus: [sku] });
+  if (!Array.isArray(body.data)) throw new RelayApiError("upstream_unavailable", 502);
+  if (!body.data.length) throw new RelayApiError("not_found", 404);
+  return publicProduct(body.data[0]);
+}, true));
+
 const confirmation = z.literal(true).describe("Set only after approving this exact operation in the MCP client.");
+const productLabels = z.array(z.object({ name: z.string().trim().min(1).max(40), color: z.string().regex(/^#[0-9A-Fa-f]{6}$/) })).max(30);
+if (context.writeScopes.has("products:write")) {
+  type CreateProductArgs = { clientProductId: string; sku: string; name: string; currency: string; priceTiers: Array<{ minQuantity: number; unitAmount: number }>; description?: string; category?: string; brand?: string; tags?: Array<{ name: string; color: string }>; isInStock?: boolean; confirm: true };
+  server.registerTool("create_product", { description: "Create one product in the shared workspace library. Requires products:write on the API key, client approval, and a stable clientProductId UUID for retries. No images or internal costs.", annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }, inputSchema: { clientProductId: z.string().uuid(), sku: z.string().trim().min(1).max(80), name: z.string().trim().min(1).max(120), currency: z.string().regex(/^[A-Za-z]{3}$/), priceTiers: z.array(z.object({ minQuantity: z.number().int().min(1).max(999999), unitAmount: z.number().min(0).max(99999999.99) })).min(1).max(50).refine(tiers => tiers[0]?.minQuantity === 1 && tiers.every((tier, index) => index === 0 || tier.minQuantity > tiers[index - 1].minQuantity)), description: z.string().trim().max(2000).optional(), category: z.string().trim().max(80).optional(), brand: z.string().trim().max(80).optional(), tags: productLabels.optional(), isInStock: z.boolean().optional(), confirm: confirmation } }, wrapped<CreateProductArgs>("create_product", async ({ clientProductId, sku, name, currency, priceTiers, description, category, brand, tags, isInStock }) => {
+    const fields = { clientProductId, sku, name, currency, priceTiers, description, category, brand, tags, isInStock };
+    const product = await api.writeWorkspace<Product & { deduplicated: boolean }>("POST", "/products", fields);
+    return { ...publicProduct(product), deduplicated: product.deduplicated };
+  }, true));
+  type UpdateProductArgs = { sku: string; name?: string; description?: string; category?: string; brand?: string; tags?: Array<{ name: string; color: string }>; confirm: true };
+  server.registerTool("update_product", { description: "Update one product by SKU (name, description, category, brand or replacement tags). Requires products:write and client approval.", annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true }, inputSchema: { sku: z.string().trim().min(1).max(80), name: z.string().trim().min(1).max(120).optional(), description: z.string().trim().max(2000).optional(), category: z.string().trim().max(80).optional(), brand: z.string().trim().max(80).optional(), tags: productLabels.optional(), confirm: confirmation } }, wrapped<UpdateProductArgs>("update_product", async ({ sku, name, description, category, brand, tags }) => {
+    if ([name, description, category, brand, tags].every(value => value === undefined)) throw new RelayApiError("invalid_argument", 400);
+    const fields = { sku, name, description, category, brand, tags };
+    const result = await api.writeWorkspace<{ products: Product[] }>("PATCH", "/products/bulk-update", { products: [fields] });
+    if (!Array.isArray(result.products) || result.products.length !== 1) throw new RelayApiError("upstream_unavailable", 502);
+    return publicProduct(result.products[0]);
+  }, true));
+  server.registerTool("set_product_stock", { description: "Set stock availability for one product by ID in the shared workspace library. Requires products:write and client approval.", annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true }, inputSchema: { productId: z.string().uuid(), isInStock: z.boolean(), confirm: confirmation } }, wrapped<{ productId: string; isInStock: boolean; confirm: true }>("set_product_stock", ({ productId, isInStock }) => api.writeWorkspace("PATCH", `/products/${productId}/stock`, { isInStock }), true));
+}
 if (context.writeScopes.has("messages:send")) {
   type SendArgs = IdArgs & { text: string; idempotencyKey: string; confirm: true };
   server.registerTool("send_message", { description: "Queue one text message to an existing conversation. Requires client approval and a stable idempotencyKey for retries.", annotations: { readOnlyHint: false, destructiveHint: true }, inputSchema: { conversationId: z.string().uuid(), text: z.string().trim().min(1).max(65536), idempotencyKey: z.string().uuid(), confirm: confirmation } }, wrapped<SendArgs>("send_message", async ({ conversationId, text, idempotencyKey }) => {
@@ -109,6 +156,13 @@ if (context.writeScopes.has("conversations:write")) {
   }));
   type TagsArgs = IdArgs & { tagIds: string[]; confirm: true };
   server.registerTool("set_conversation_tags", { description: "Replace all tags on a conversation with exactly these tagIds, including an empty list to clear them. Requires client approval.", annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true }, inputSchema: { conversationId: z.string().uuid(), tagIds: z.array(z.string().uuid()).max(20), confirm: confirmation } }, wrapped<TagsArgs>("set_conversation_tags", ({ conversationId, tagIds }) => api.write("PUT", `/conversations/${conversationId}/tags`, { tagIds })));
+  type NoteArgs = IdArgs & { body: string; noteType?: "normal" | "order"; confirm: true };
+  server.registerTool("add_conversation_note", { description: "Add a shared note to a conversation. Requires client approval.", annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }, inputSchema: { conversationId: z.string().uuid(), body: z.string().trim().min(1).max(5000), noteType: z.enum(["normal", "order"]).optional(), confirm: confirmation } }, wrapped<NoteArgs>("add_conversation_note", ({ conversationId, body, noteType }) => api.write("POST", `/conversations/${conversationId}/notes`, { body, noteType: noteType ?? "normal" })));
+}
+
+if (context.writeScopes.has("messages:send")) {
+  type RetryArgs = { messageId: string; clientMessageId: string; confirm: true };
+  server.registerTool("retry_message", { description: "Retry one failed or uncertain outgoing message with a stable idempotency key. Requires client approval.", annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true }, inputSchema: { messageId: z.string().uuid(), clientMessageId: z.string().min(8).max(128), confirm: confirmation } }, wrapped<RetryArgs>("retry_message", ({ messageId, clientMessageId }) => api.write("POST", `/messages/${messageId}/retry`, { clientMessageId })));
 }
 
 if (context.writeScopes.has("contacts:write")) {

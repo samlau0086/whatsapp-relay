@@ -14,14 +14,22 @@ export class RelayApiClient {
     return this.request<T>("GET", path, undefined, params);
   }
 
+  async getWorkspace<T>(path: string, params: Record<string, string | number | undefined> = {}): Promise<T> {
+    return this.request<T>("GET", path, undefined, params, false);
+  }
+
   async write<T>(method: "POST" | "PATCH" | "PUT", path: string, body: Record<string, unknown>): Promise<T> {
     return this.request<T>(method, path, body);
   }
 
-  private async request<T>(method: "GET" | "POST" | "PATCH" | "PUT", path: string, payload?: Record<string, unknown>, params: Record<string, string | number | undefined> = {}): Promise<T> {
+  async writeWorkspace<T>(method: "POST" | "PATCH" | "PUT", path: string, body: Record<string, unknown>): Promise<T> {
+    return this.request<T>(method, path, body, {}, false);
+  }
+
+  private async request<T>(method: "GET" | "POST" | "PATCH" | "PUT", path: string, payload?: Record<string, unknown>, params: Record<string, string | number | undefined> = {}, boundAccount = true): Promise<T> {
     const url = new URL(`/api/v1${path}`, `${this.context.apiBaseUrl}/`);
     for (const [key, value] of Object.entries(params)) if (key !== "accountId" && value !== undefined && value !== "") url.searchParams.set(key, String(value));
-    if (this.context.accountId) url.searchParams.set("accountId", this.context.accountId);
+    if (boundAccount && this.context.accountId) url.searchParams.set("accountId", this.context.accountId);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
     try {
