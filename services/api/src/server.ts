@@ -9,7 +9,7 @@ import { ifNoneMatchMatches, IMMUTABLE_PRIVATE_CACHE_CONTROL, strongEtag } from 
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { authenticate, canAccessAccount, hasScope, type Principal } from "./auth.js";
-import { whatsappAccountTransferSchema, apiKeyCreateSchema, contactAliasSchema, contactCreateSchema, contactUpdateSchema, conversationAgentModeSchema, conversationMergeSchema, conversationTagsSchema, conversationTransferSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, materialSendBatchStatusSchema, materialSendSchema, messageCommentSchema, messageCommentVoteSchema, messageRetrySchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderBusinessStatusUpdateSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderTrackingSchema, orderUpdateSchema, paymentSendSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productLabelCatalogDeleteSchema, productLabelCatalogUpdateSchema, productNameTranslationPreviewSchema, productSkuQuerySchema, productUpdateSchema, quickReplySyncSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, transcriptionProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
+import { whatsappAccountTransferSchema, apiKeyCreateSchema, contactAliasSchema, contactCreateSchema, contactFieldsSchema, contactUpdateSchema, conversationAgentModeSchema, conversationMergeSchema, conversationTagsSchema, conversationTransferSchema, currencySchema, currencySettingsSchema, customerStageSchema, emailProviderSettingsSchema, emailProviderTestSchema, emailSendSchema, enrollmentSchema, loginSchema, materialSendBatchStatusSchema, materialSendSchema, messageCommentSchema, messageCommentVoteSchema, messageRetrySchema, messageSchema, messageTranslationsSchema, newConversationSchema, noteSchema, orderAddressSchema, orderBusinessStatusUpdateSchema, orderSchema, orderSendSchema, orderSettingsSchema, orderTrackingSchema, orderUpdateSchema, paymentSendSchema, paypalSettingsSchema, productBulkEditSchema, productBulkImportSchema, productBulkUpdateSchema, productCardBatchStatusSchema, productCardSendSchema, productCreateSchema, productLabelCatalogDeleteSchema, productLabelCatalogUpdateSchema, productNameTranslationPreviewSchema, productSkuQuerySchema, productUpdateSchema, quickReplySyncSchema, reminderSchema, tagCreateSchema, tagUpdateSchema, textToSpeechSchema, translationPreferenceQuerySchema, translationPreferenceSchema, translationPreviewSchema, translationProviderSettingsSchema, transcriptionProviderSettingsSchema, ttsProviderSettingsSchema } from "./schemas.js";
 import { decryptAtRest, encryptAtRest, hashPassword, hashSecret, signToken, verifyPassword } from "./security.js";
 import { registerAgentHub, dispatchPending, disconnectAgent, markStaleAgentsOffline, clearAgentAttention, notifyAgentAccountRemoved } from "./agent-hub.js";
 import { generateSpeech, ttsProviderFailureMessage, TTS_PROVIDERS, ttsProviderDefaults, type TtsProvider } from "./tts-providers.js";
@@ -96,6 +96,7 @@ app.get("/health", async () => { await pool.query("SELECT 1"); return { status:"
 app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"RelayDesk API",version:"0.1.0"}, paths:{
   "/api/v1/contacts":{get:{summary:"List contacts"}},
   "/api/v1/contacts/{id}":{get:{summary:"Read contact profile"},patch:{summary:"Update contact profile"}},
+  "/api/v1/contacts/{id}/fields":{patch:{summary:"Update limited contact fields"}},
   "/api/v1/tasks":{get:{summary:"List tasks"},post:{summary:"Create a task"}},
   "/api/v1/tasks/{id}":{get:{summary:"Read task details"},patch:{summary:"Update a task"},delete:{summary:"Cancel a task"}},
   "/api/v1/tasks/{id}/generate":{post:{summary:"Generate a personalized message draft"}},
@@ -747,18 +748,20 @@ app.post("/api/v1/conversations/:id/group/direct-conversation",{preHandler:authe
 });
 
 app.patch("/api/v1/conversations/:id", { preHandler:authenticate }, async (request,reply) => {
-  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  if(!hasScope(request.principal,"conversations:write"))return reply.code(403).send({error:"insufficient_scope",requiredScope:"conversations:write"});
   const {id}=request.params as {id:string};const body=(request.body??{}) as {assignedToMe?:boolean;favorite?:boolean;status?:string;read?:boolean;unread?:boolean;customerStage?:string};
+  if(request.principal?.kind!=="user"&&body.assignedToMe!==undefined)return reply.code(403).send({error:"user_required"});
   if(body.assignedToMe!==undefined&&typeof body.assignedToMe!=="boolean"||body.favorite!==undefined&&typeof body.favorite!=="boolean"||body.read!==undefined&&typeof body.read!=="boolean"||body.unread!==undefined&&typeof body.unread!=="boolean"||body.read&&body.unread)return reply.code(400).send({error:"invalid_request"});
   if(body.status!==undefined&&!['open','closed','archived'].includes(body.status))return reply.code(400).send({error:"invalid_status"});
   if(body.customerStage!==undefined&&!customerStageSchema.safeParse(body.customerStage).success)return reply.code(400).send({error:"invalid_customer_stage"});
   const current=await pool.query("SELECT c.account_id,a.agent_id,co.provider_user_id,co.entity_type FROM conversations c JOIN channel_accounts a ON a.id=c.account_id JOIN contacts co ON co.id=c.contact_id WHERE c.id=$1",[id]);
-  if(!current.rowCount||!canAccessAccount(request.principal,current.rows[0].account_id))return reply.code(404).send({error:"not_found"});
+  const query=request.query as {accountId?:string};
+  if(!current.rowCount||!canAccessAccount(request.principal,current.rows[0].account_id)||(query.accountId&&query.accountId!==String(current.rows[0].account_id)))return reply.code(404).send({error:"not_found"});
   if(current.rows[0].entity_type==="group"&&body.customerStage!==undefined)return reply.code(409).send({error:"group_feature_unavailable"});
-  const updated=await pool.query("UPDATE conversations SET assigned_user_id=CASE WHEN $2::boolean IS NULL THEN assigned_user_id WHEN $2 THEN $6::uuid ELSE NULL END,favorite=COALESCE($3,favorite),status=COALESCE($4::conversation_status,status),closed_at=CASE WHEN $4='closed' THEN now() WHEN $4='open' THEN NULL ELSE closed_at END,unread_count=CASE WHEN $8 THEN GREATEST(unread_count,1) WHEN $5 THEN 0 ELSE unread_count END,customer_stage=COALESCE($7,customer_stage) WHERE id=$1 RETURNING id,account_id,status,favorite,assigned_user_id,unread_count,closed_at,customer_stage",[id,body.assignedToMe??null,body.favorite??null,body.status??null,body.read??false,request.principal.id,body.customerStage??null,body.unread??false]);
+  const updated=await pool.query("UPDATE conversations SET assigned_user_id=CASE WHEN $2::boolean IS NULL THEN assigned_user_id WHEN $2 THEN $6::uuid ELSE NULL END,favorite=COALESCE($3,favorite),status=COALESCE($4::conversation_status,status),closed_at=CASE WHEN $4='closed' THEN now() WHEN $4='open' THEN NULL ELSE closed_at END,unread_count=CASE WHEN $8 THEN GREATEST(unread_count,1) WHEN $5 THEN 0 ELSE unread_count END,customer_stage=COALESCE($7,customer_stage) WHERE id=$1 RETURNING id,account_id,status,favorite,assigned_user_id,unread_count,closed_at,customer_stage",[id,body.assignedToMe??null,body.favorite??null,body.status??null,body.read??false,request.principal!.id,body.customerStage??null,body.unread??false]);
   if(body.read&&current.rows[0].agent_id&&current.rows[0].provider_user_id)clearAgentAttention(String(current.rows[0].agent_id),String(current.rows[0].account_id),String(current.rows[0].provider_user_id));
   if(["closed","archived"].includes(updated.rows[0].status)||["won","lost"].includes(updated.rows[0].customer_stage))await pool.query("UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error='conversation_no_longer_eligible' WHERE conversation_id=$1 AND state='pending' AND kind IN ('reply','followup')",[id]);
-  await pool.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'conversation.update','conversation',$2,$3)",[request.principal.id,id,JSON.stringify(body)]);
+  await pool.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'conversation.update','conversation',$3,$4)",[request.principal!.kind,request.principal!.id,id,JSON.stringify(body)]);
   return updated.rows[0];
 });
 
@@ -1019,6 +1022,24 @@ app.get("/api/v1/contacts/:id",{preHandler:authenticate},async(request,reply)=>{
   const {id}=request.params as {id:string},query=request.query as {accountId?:string},profile=await contactProfileById(pool,id);
   if(!profile||!canAccessAccount(request.principal,profile.accountId)||(query.accountId&&query.accountId!==String(profile.accountId)))return reply.code(404).send({error:"not_found"});
   return profile;
+});
+
+app.patch("/api/v1/contacts/:id/fields",{preHandler:authenticate},async(request,reply)=>{
+  if(!hasScope(request.principal,"contacts:write"))return reply.code(403).send({error:"insufficient_scope",requiredScope:"contacts:write"});
+  const parsed=contactFieldsSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
+  const {id}=request.params as {id:string},query=request.query as {accountId?:string};
+  const fields={alias:"alias",note:"note",firstName:"first_name",middleName:"middle_name",lastName:"last_name",companyName:"company_name",jobTitle:"job_title"} as const;
+  const entries=Object.entries(parsed.data) as Array<[keyof typeof fields,string]>;
+  const updated=await transaction(async client=>{
+    const current=await client.query("SELECT account_id FROM contacts WHERE id=$1 AND entity_type='person' FOR UPDATE",[id]);
+    if(!current.rowCount||!canAccessAccount(request.principal,current.rows[0].account_id)||(query.accountId&&query.accountId!==String(current.rows[0].account_id)))return false;
+    const assignments=entries.map(([key],index)=>`${fields[key]}=$${index+2}`).join(",");
+    await client.query(`UPDATE contacts SET ${assignments},updated_at=now() WHERE id=$1`,[id,...entries.map(([,value])=>value||null)]);
+    await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'contact.fields.update','contact',$3,$4)",[request.principal!.kind,request.principal!.id,id,JSON.stringify({fields:entries.map(([key])=>key)})]);
+    return true;
+  });
+  if(!updated)return reply.code(404).send({error:"not_found"});
+  return contactProfileById(pool,id);
 });
 
 app.patch("/api/v1/contacts/:id",{preHandler:authenticate},async(request,reply)=>{
@@ -1470,10 +1491,10 @@ app.get("/api/v1/conversations/:id/addresses",{preHandler:authenticate},async(re
 });
 
 app.put("/api/v1/conversations/:id/tags",{preHandler:authenticate},async(request,reply)=>{
-  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const parsed=conversationTagsSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});const {id}=request.params as {id:string};
-  const current=await pool.query("SELECT account_id FROM conversations WHERE id=$1",[id]);if(!current.rowCount||!canAccessAccount(request.principal,current.rows[0].account_id))return reply.code(404).send({error:"not_found"});
+  if(!hasScope(request.principal,"conversations:write"))return reply.code(403).send({error:"insufficient_scope",requiredScope:"conversations:write"});const parsed=conversationTagsSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});const {id}=request.params as {id:string};
+  const current=await pool.query("SELECT account_id FROM conversations WHERE id=$1",[id]),query=request.query as {accountId?:string};if(!current.rowCount||!canAccessAccount(request.principal,current.rows[0].account_id)||(query.accountId&&query.accountId!==String(current.rows[0].account_id)))return reply.code(404).send({error:"not_found"});
   const unique=[...new Set(parsed.data.tagIds)];const result=await transaction(async client=>{if(unique.length){const found=await client.query("SELECT id FROM tags WHERE id=ANY($1::uuid[])",[unique]);if(found.rowCount!==unique.length)return null;}await client.query("DELETE FROM conversation_tags WHERE conversation_id=$1",[id]);if(unique.length)await client.query("INSERT INTO conversation_tags(conversation_id,tag_id) SELECT $1,unnest($2::uuid[])",[id,unique]);const selected=await client.query("SELECT t.id,t.name,t.color FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=$1 ORDER BY lower(t.name)",[id]);return selected.rows;});
-  if(!result)return reply.code(400).send({error:"unknown_tag"});await auditCrm(request.principal.id,"conversation.tags","conversation",id,{tagIds:unique});return{data:result};
+  if(!result)return reply.code(400).send({error:"unknown_tag"});await pool.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'conversation.tags','conversation',$3,$4)",[request.principal!.kind,request.principal!.id,id,JSON.stringify({tagIds:unique})]);return{data:result};
 });
 
 app.post("/api/v1/conversations/:id/notes",{preHandler:authenticate},async(request,reply)=>{
@@ -2015,6 +2036,7 @@ app.put("/api/v1/conversations/:conversationId/messages/:messageId/comments/:com
 });
 
 app.post("/api/v1/messages", { preHandler:authenticate }, async (request, reply) => {
+  if(!hasScope(request.principal,"messages:send"))return reply.code(403).send({error:"insufficient_scope",requiredScope:"messages:send"});
   const parsed=messageSchema.safeParse(request.body); if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
   if(!canAccessAccount(request.principal,parsed.data.accountId))return reply.code(403).send({error:"account_forbidden"});
   const result=await transaction(async(client)=>{
@@ -2026,7 +2048,11 @@ app.post("/api/v1/messages", { preHandler:authenticate }, async (request, reply)
       if(parsed.data.type==="template")throw Object.assign(new Error("group_template_unsupported"),{statusCode:409});
     }
     if(parsed.data.mediaId){const media=await client.query("SELECT id FROM media WHERE id=$1 AND (account_id=$2 OR account_id IS NULL) AND status='ready'",[parsed.data.mediaId,parsed.data.accountId]);if(!media.rowCount)throw Object.assign(new Error("media_not_found"),{statusCode:404});}
-    const existing=await client.query("SELECT id,status FROM messages WHERE account_id=$1 AND client_message_id=$2",[parsed.data.accountId,parsed.data.clientMessageId]); if(existing.rowCount)return {messageId:existing.rows[0].id,status:existing.rows[0].status,deduplicated:true,agentId:conversation.rows[0].agent_id};
+    const existing=await client.query("SELECT id,status,conversation_id,kind,text_content FROM messages WHERE account_id=$1 AND client_message_id=$2",[parsed.data.accountId,parsed.data.clientMessageId]);
+    if(existing.rowCount){
+      if(String(existing.rows[0].conversation_id)!==parsed.data.conversationId||existing.rows[0].kind!==parsed.data.type||(parsed.data.type==="text"&&existing.rows[0].text_content!==parsed.data.text))throw Object.assign(new Error("idempotency_conflict"),{statusCode:409});
+      return {messageId:existing.rows[0].id,status:existing.rows[0].status,deduplicated:true,agentId:conversation.rows[0].agent_id};
+    }
     const quoted=parsed.data.quotedMessageId?await client.query("SELECT id,provider_message_id,direction,kind,text_content,sender_provider_user_id FROM messages WHERE id=$1 AND account_id=$2 AND conversation_id=$3",[parsed.data.quotedMessageId,parsed.data.accountId,parsed.data.conversationId]):null;
     if(parsed.data.quotedMessageId&&(!quoted?.rowCount||!quoted.rows[0].provider_message_id))throw Object.assign(new Error("quoted_message_not_found"),{statusCode:404});
     if(parsed.data.quotedMessageId&&conversation.rows[0].transport==="web"&&Number(conversation.rows[0].agent_protocol_version)!==2)throw Object.assign(new Error("agent_upgrade_required"),{statusCode:409});
@@ -2045,6 +2071,7 @@ app.post("/api/v1/messages", { preHandler:authenticate }, async (request, reply)
 });
 
 app.post("/api/v1/messages/:id/retry", { preHandler:authenticate }, async (request, reply) => {
+  if(!hasScope(request.principal,"messages:send"))return reply.code(403).send({error:"insufficient_scope",requiredScope:"messages:send"});
   const {id}=request.params as {id:string};
   const parsed=messageRetrySchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
   const result=await transaction(async client=>{

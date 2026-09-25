@@ -7,8 +7,8 @@ export const loginSchema = z.object({
   password: z.string().min(1),
   rememberMe: z.boolean().default(false),
 });
-export const apiKeyScopeSchema=z.enum(["products:read","products:write","messages:read","messages:send"]);
-export const apiKeyCreateSchema=z.object({name:z.string().trim().min(1).max(120),scopes:z.array(apiKeyScopeSchema).min(1).max(4),expiresInDays:z.union([z.literal(30),z.literal(90),z.literal(365),z.null()]).default(90)}).superRefine((value,ctx)=>{if(new Set(value.scopes).size!==value.scopes.length)ctx.addIssue({code:"custom",path:["scopes"],message:"api key scopes must be unique"});});
+export const apiKeyScopeSchema=z.enum(["products:read","products:write","messages:read","messages:send","conversations:write","contacts:write"]);
+export const apiKeyCreateSchema=z.object({name:z.string().trim().min(1).max(120),scopes:z.array(apiKeyScopeSchema).min(1).max(6),expiresInDays:z.union([z.literal(30),z.literal(90),z.literal(365),z.null()]).default(90)}).superRefine((value,ctx)=>{if(new Set(value.scopes).size!==value.scopes.length)ctx.addIssue({code:"custom",path:["scopes"],message:"api key scopes must be unique"});});
 const templateParameterSchema=z.union([
   z.object({type:z.literal("text"),text:z.string().trim().min(1).max(1024)}),
   z.object({type:z.enum(["image","video","document"]),mediaId:z.string().uuid()}),
@@ -147,6 +147,7 @@ export const contactUpdateSchema=z.object({alias:z.string().trim().max(80),first
   if(value.addresses.filter(item=>item.isDefault).length>1)ctx.addIssue({code:"custom",path:["addresses"],message:"only one default address is allowed"});
   value.addresses.forEach((item,index)=>{if(item.province&&!item.countryCode)ctx.addIssue({code:"custom",path:["addresses",index,"countryCode"],message:"country code is required when province is set"});});
 }).transform(value=>({...value,emails:value.emails.map((item,index)=>({...item,isPrimary:value.emails.some(email=>email.isPrimary)?item.isPrimary:index===0})),addresses:value.addresses.map((item,index)=>({...item,isDefault:value.addresses.some(address=>address.isDefault)?item.isDefault:index===0}))}));
+export const contactFieldsSchema=z.object({alias:z.string().trim().max(80).optional(),note:z.string().trim().max(5000).optional(),firstName:contactNamePartSchema.optional(),middleName:contactNamePartSchema.optional(),lastName:contactNamePartSchema.optional(),companyName:contactOrganizationFieldSchema.optional(),jobTitle:contactOrganizationFieldSchema.optional()}).strict().refine(value=>Object.keys(value).length>0,"at least one field is required");
 
 export const taskStatusSchema=z.enum(["planned","in_progress","waiting_approval","scheduled","completed","overdue","failed","cancelled"]);
 export const taskToolSchema=z.enum(["knowledge_search","contact_profile_read","conversation_memory_read","recent_messages_read","order_summary_read","create_task","generate_draft","queue_message"]);

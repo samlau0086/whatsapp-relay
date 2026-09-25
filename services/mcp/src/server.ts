@@ -56,6 +56,44 @@ server.registerTool("get_contact", { description: "Get a contact profile by ID."
 type GroupArgs = { limit: number; cursor?: string };
 server.registerTool("list_whatsapp_groups", { description: "List WhatsApp group conversations in the bound account.", inputSchema: { limit: pageSize, cursor } }, wrapped<GroupArgs>("list_whatsapp_groups", ({ limit, cursor }) => api.get("/conversations", { filter: "groups", limit, cursor })));
 server.registerTool("get_conversation_details", { description: "Get tags, notes, reminder and order details for a conversation.", inputSchema: { conversationId: z.string().uuid() } }, wrapped<IdArgs>("get_conversation_details", ({ conversationId }) => api.get(`/conversations/${conversationId}/details`)));
+server.registerTool("list_tags", { description: "List available tags and IDs for conversation tagging.", inputSchema: { limit: pageSize, cursor } }, wrapped<GroupArgs>("list_tags", async ({ limit, cursor }) => {
+  const offset = cursor ? decodeOffset(cursor) : 0;
+  const body = await api.get<{ data: unknown[] }>("/tags");
+  if (!Array.isArray(body.data)) throw new RelayApiError("upstream_unavailable", 502);
+  return { data: body.data.slice(offset, offset + limit), total: body.data.length, nextCursor: offset + limit < body.data.length ? encodeOffset(offset + limit) : null };
+}));
+
+const confirmation = z.literal(true).describe("Set only after approving this exact operation in the MCP client.");
+if (context.writeScopes.has("messages:send")) {
+  type SendArgs = IdArgs & { text: string; idempotencyKey: string; confirm: true };
+  server.registerTool("send_message", { description: "Queue one text message to an existing conversation. Requires client approval and a stable idempotencyKey for retries.", annotations: { readOnlyHint: false, destructiveHint: true }, inputSchema: { conversationId: z.string().uuid(), text: z.string().trim().min(1).max(65536), idempotencyKey: z.string().uuid(), confirm: confirmation } }, wrapped<SendArgs>("send_message", async ({ conversationId, text, idempotencyKey }) => {
+    const summary = await api.get<{ data: { account_id: string } }>(`/conversations/${conversationId}/summary`);
+    const accountId = summary.data?.account_id;
+    if (!accountId || (context.accountId && accountId !== context.accountId)) throw new RelayApiError("account_forbidden", 403);
+    const result = await api.write<{ messageId: string; status: string; deduplicated: boolean }>("POST", "/messages", { accountId, conversationId, clientMessageId: `mcp-${idempotencyKey}`, type: "text", text });
+    return { messageId: result.messageId, status: result.status, deduplicated: result.deduplicated };
+  }));
+}
+
+if (context.writeScopes.has("conversations:write")) {
+  type UpdateArgs = IdArgs & { status?: "open" | "closed" | "archived"; favorite?: boolean; read?: boolean; unread?: boolean; customerStage?: string };
+  server.registerTool("update_conversation", { description: "Update status, favorite, unread state or customer stage of a conversation.", annotations: { readOnlyHint: false, idempotentHint: true }, inputSchema: { conversationId: z.string().uuid(), status: z.enum(["open", "closed", "archived"]).optional(), favorite: z.boolean().optional(), read: z.literal(true).optional(), unread: z.literal(true).optional(), customerStage: z.enum(["new","considering","qualified","won","lost"]).optional() } }, wrapped<UpdateArgs>("update_conversation", ({ conversationId, ...fields }) => {
+    if (!Object.keys(fields).length || (fields.read && fields.unread)) throw new RelayApiError("invalid_argument", 400);
+    return api.write("PATCH", `/conversations/${conversationId}`, fields);
+  }));
+  type TagsArgs = IdArgs & { tagIds: string[]; confirm: true };
+  server.registerTool("set_conversation_tags", { description: "Replace all tags on a conversation with exactly these tagIds, including an empty list to clear them. Requires client approval.", annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true }, inputSchema: { conversationId: z.string().uuid(), tagIds: z.array(z.string().uuid()).max(20), confirm: confirmation } }, wrapped<TagsArgs>("set_conversation_tags", ({ conversationId, tagIds }) => api.write("PUT", `/conversations/${conversationId}/tags`, { tagIds })));
+}
+
+if (context.writeScopes.has("contacts:write")) {
+  type ContactFields = { alias?: string; note?: string; firstName?: string; middleName?: string; lastName?: string; companyName?: string; jobTitle?: string };
+  type UpdateContactArgs = { contactId: string } & ContactFields;
+  server.registerTool("update_contact", { description: "Update selected contact name, company, alias or note fields without replacing emails and addresses.", annotations: { readOnlyHint: false, idempotentHint: true }, inputSchema: { contactId: z.string().uuid(), alias: z.string().trim().max(80).optional(), note: z.string().trim().max(5000).optional(), firstName: z.string().trim().max(80).optional(), middleName: z.string().trim().max(80).optional(), lastName: z.string().trim().max(80).optional(), companyName: z.string().trim().max(160).optional(), jobTitle: z.string().trim().max(160).optional() } }, wrapped<UpdateContactArgs>("update_contact", async ({ contactId, ...fields }) => {
+    if (!Object.keys(fields).length) throw new RelayApiError("invalid_argument", 400);
+    await api.write("PATCH", `/contacts/${contactId}/fields`, fields);
+    return { contactId, updatedFields: Object.keys(fields) };
+  }));
+}
 
 function encodeOffset(offset: number): string { return Buffer.from(JSON.stringify({ offset }), "utf8").toString("base64url"); }
 function decodeOffset(value: string): number { try { const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as { offset?: unknown }; if (!Number.isInteger(parsed.offset) || Number(parsed.offset) < 0) throw new Error("invalid"); return Number(parsed.offset); } catch { throw new RelayApiError("invalid_argument", 400, "invalid contact cursor"); } }

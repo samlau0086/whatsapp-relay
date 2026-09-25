@@ -11,13 +11,21 @@ export class RelayApiClient {
   constructor(private readonly context: McpContext, private readonly fetchImpl: typeof fetch = fetch) {}
 
   async get<T>(path: string, params: Record<string, string | number | undefined> = {}): Promise<T> {
+    return this.request<T>("GET", path, undefined, params);
+  }
+
+  async write<T>(method: "POST" | "PATCH" | "PUT", path: string, body: Record<string, unknown>): Promise<T> {
+    return this.request<T>(method, path, body);
+  }
+
+  private async request<T>(method: "GET" | "POST" | "PATCH" | "PUT", path: string, payload?: Record<string, unknown>, params: Record<string, string | number | undefined> = {}): Promise<T> {
     const url = new URL(`/api/v1${path}`, `${this.context.apiBaseUrl}/`);
+    for (const [key, value] of Object.entries(params)) if (key !== "accountId" && value !== undefined && value !== "") url.searchParams.set(key, String(value));
     if (this.context.accountId) url.searchParams.set("accountId", this.context.accountId);
-    for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== "") url.searchParams.set(key, String(value));
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
     try {
-      const response = await this.fetchImpl(url, { headers: { authorization: `Bearer ${this.context.apiKey}`, accept: "application/json" }, signal: controller.signal });
+      const response = await this.fetchImpl(url, { method, headers: { authorization: `Bearer ${this.context.apiKey}`, accept: "application/json", ...(payload ? { "content-type": "application/json" } : {}) }, ...(payload ? { body: JSON.stringify(payload) } : {}), signal: controller.signal });
       const text = await response.text();
       let body: unknown = null;
       try { body = text ? JSON.parse(text) : null; } catch { body = null; }
