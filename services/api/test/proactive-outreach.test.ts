@@ -84,3 +84,21 @@ test("manual outreach scan bypasses the background scan throttle",async()=>{
   assert.match(source,/if\(!force&&Date\.now\(\)-lastScan<60_000\)return/);
   assert.match(routes,/proactive-outreach\/scan[\s\S]*?scanProactiveOutreach\(true\)/);
 });
+
+test("superseded approval drafts cannot reappear or be sent again",async()=>{
+  const source=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
+  const staleGuard=/NOT EXISTS \(SELECT 1 FROM messages m WHERE m\.conversation_id=d\.conversation_id AND m\.direction='out' AND m\.sender_user_id IS NOT NULL AND m\.occurred_at>=d\.created_at\)/;
+  const readRoute=source.slice(source.indexOf('app.get("/api/v1/conversations/:id/agent"'),source.indexOf('app.post("/api/v1/conversations/:id/reply-suggestion"'));
+  const sendRoute=source.slice(source.indexOf('app.post("/api/v1/ai-drafts/:id/send"'),source.indexOf('app.post("/api/v1/ai-drafts/:id/dismiss"'));
+  assert.match(readRoute,staleGuard);
+  assert.match(sendRoute,staleGuard);
+  assert.match(sendRoute,/proactive_outreach_events\(account_id,contact_id,job_id,event_type,reason,planned_at\).*'sent','human_approved'/);
+});
+
+test("outreach cadence counts confirmed messages including human-approved drafts",async()=>{
+  const source=await readFile(new URL("../src/proactive-outreach.ts",import.meta.url),"utf8");
+  assert.equal((source.match(/proactive_outreach_jobs sent_job JOIN messages sent_message/g)??[]).length,2);
+  assert.match(source,/sent_job\.state='sent' AND sent_message\.status IN \('sent','delivered','read'\)/);
+  assert.match(source,/state IN \('pending','processing','awaiting_approval'\)/);
+  assert.match(source,/Number\(state\.touches\)>Number\(\(job\.payload/);
+});

@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { agentRunKind, buildReplyTimingContext, buildSalesSuggestionConversationState, captionOrderDetailsImage, chunkText, compactMemoryMessages, detectOrderDetailsLanguage, extractProductSkuCandidates, groundOrderDetailsImageReply, groundOrderNumberReply, isConversationAgentActive, isConversationJobEligible, isPredominantlyChinese, isReplySourceCurrent, isWithinBusinessHours, passesAutoReplyGate, resolveOrderDetailsImage, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
+import { agentRunKind, buildReplyTimingContext, buildSalesSuggestionConversationState, captionOrderDetailsImage, chunkText, compactMemoryMessages, detectOrderDetailsLanguage, extractProductSkuCandidates, groundOrderDetailsImageReply, groundOrderNumberReply, isConversationAgentActive, isConversationJobEligible, isPredominantlyChinese, isReplySourceCurrent, isWithinBusinessHours, passesAutoReplyGate, pauseAgentForHuman, resolveOrderDetailsImage, shouldAutoReply, type AgentDecision } from "../src/agent-engine.js";
+
+test("human messages dismiss pending drafts and their outreach approvals",async()=>{
+  const queries:string[]=[];
+  const client={query:async(sql:string)=>{queries.push(sql);return{rows:[],rowCount:0};}};
+  await pauseAgentForHuman(client as never,"conversation-id");
+  assert.match(queries[0],/conversations WHERE id=\$1 FOR UPDATE/);
+  assert.match(queries.find(sql=>sql.startsWith("UPDATE proactive_outreach_jobs"))??"",/state='awaiting_approval'.*status='pending'/);
+  assert.match(queries.at(-1)??"",/UPDATE ai_drafts SET status='dismissed'.*status='pending'/);
+});
 
 test("chunkText creates bounded overlapping chunks",()=>{
   const input=("A paragraph with useful knowledge. ").repeat(120);

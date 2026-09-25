@@ -1753,12 +1753,21 @@ export async function pauseAgentForHuman(
   client: PoolClient,
   conversationId: string,
 ): Promise<void> {
+  await client.query("SELECT id FROM conversations WHERE id=$1 FOR UPDATE", [conversationId]);
   await client.query(
     "INSERT INTO conversation_agent_state(conversation_id,mode,pause_reason) VALUES($1,'human_paused','human_message') ON CONFLICT(conversation_id) DO UPDATE SET mode='human_paused',pause_reason='human_message',updated_at=now()",
     [conversationId],
   );
   await client.query(
     "UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error='human_takeover' WHERE conversation_id=$1 AND state='pending' AND kind IN ('reply','followup')",
+    [conversationId],
+  );
+  await client.query(
+    "UPDATE proactive_outreach_jobs SET state='skipped',completed_at=now(),last_error='human_takeover',updated_at=now() WHERE conversation_id=$1 AND state='awaiting_approval' AND payload->>'draftId' IN (SELECT id::text FROM ai_drafts WHERE conversation_id=$1 AND status='pending')",
+    [conversationId],
+  );
+  await client.query(
+    "UPDATE ai_drafts SET status='dismissed',resolved_at=now() WHERE conversation_id=$1 AND status='pending'",
     [conversationId],
   );
 }
