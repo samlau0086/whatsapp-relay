@@ -59,6 +59,8 @@ button { color:inherit; }
 .filter-row.selected { font-weight:650; }
 .accounts-block { border-top:1px solid var(--line); padding-top:17px; }
 .account-status { display:flex; gap:8px; align-items:center; padding:7px 6px; }
+.account-status-copy { min-width:0; flex:1; }
+.account-status b { line-height:1.35; overflow-wrap:anywhere; }
 .account-status.muted { opacity:.62; }
 .status-dot { width:6px; height:6px; display:inline-block; border-radius:50%; background:#b6bfbb; }
 .status-dot.online { background:#20bb70; box-shadow:0 0 0 2px #dff7ea; }

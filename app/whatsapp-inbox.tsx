@@ -107,7 +107,8 @@ function releaseMedia(id:string){
   pruneMediaCache();
 }
 
-type Account = { id:string; name:string; phone:string; status:string; reason:string; platform:"whatsapp"|"messenger"; pageId?:string; transport:"web"|"cloud"; webhookStatus?:string; credentialsStatus?:string; lastEvent?:string };
+type AccountStats = { todayInitiated:number; todayReplied:number; totalInitiated:number; totalReplied:number };
+type Account = { id:string; name:string; phone:string; status:string; reason:string; platform:"whatsapp"|"messenger"; pageId?:string; transport:"web"|"cloud"; webhookStatus?:string; credentialsStatus?:string; lastEvent?:string; stats:AccountStats };
 type ProductPriceTier={minQuantity:number;unitAmount:number;costAmount?:number;profitMargin?:number};
 type ProductVariant={id:string;attributes:Record<string,string>;sku:string;priceTiers:ProductPriceTier[];imageMediaId:string|null;imageUrl:string|null;imageName:string};
 type ShippingClass={id:string;name:string;enabled:boolean};
@@ -545,7 +546,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     if(result.response.status===401){logout();return;}
     if(!result.response.ok)throw new Error(`账号 API 响应异常（${result.response.status}）`);
     const body=await result.response.json() as {data:Array<Record<string,unknown>>};
-    const nextAccounts=body.data.map(item=>({id:String(item.id),name:String(item.display_name),phone:String(item.phone_e164??""),status:String(item.status),reason:String(item.status_reason??""),platform:item.platform==="messenger"?"messenger" as const:"whatsapp" as const,pageId:item.page_id?String(item.page_id):undefined,transport:String(item.transport??"web") as "web"|"cloud",webhookStatus:item.webhook_status?String(item.webhook_status):undefined,credentialsStatus:item.credentials_status?String(item.credentials_status):undefined,lastEvent:item.last_event_at?String(item.last_event_at):undefined}));
+    const nextAccounts=body.data.map(item=>({id:String(item.id),name:String(item.display_name),phone:String(item.phone_e164??""),status:String(item.status),reason:String(item.status_reason??""),platform:item.platform==="messenger"?"messenger" as const:"whatsapp" as const,pageId:item.page_id?String(item.page_id):undefined,transport:String(item.transport??"web") as "web"|"cloud",webhookStatus:item.webhook_status?String(item.webhook_status):undefined,credentialsStatus:item.credentials_status?String(item.credentials_status):undefined,lastEvent:item.last_event_at?String(item.last_event_at):undefined,stats:{todayInitiated:Number(item.today_initiated??0),todayReplied:Number(item.today_replied??0),totalInitiated:Number(item.total_initiated??0),totalReplied:Number(item.total_replied??0)}}));
     setAccounts(nextAccounts);
     setSelectedAccount(current=>current&&!nextAccounts.some(account=>account.id===current)?"":current);
   },[logout]);
@@ -1799,6 +1800,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                         ? "已连接"
                         : account.reason || statusText(account.status)
                     }
+                    stats={account.stats}
                     online={account.status === "online"}
                   />
                 ))
@@ -4988,7 +4990,7 @@ function SecretField({label,value,onChange,placeholder,hint}:{label:string;value
   async function copy(){if(!value)return;let copiedValue=false;if(navigator.clipboard?.writeText)try{await navigator.clipboard.writeText(value);copiedValue=true;}catch{}if(!copiedValue){const input=document.createElement("textarea");input.value=value;input.style.position="fixed";input.style.opacity="0";document.body.appendChild(input);input.select();copiedValue=document.execCommand("copy");input.remove();}setCopied(copiedValue);if(copiedValue)window.setTimeout(()=>setCopied(false),1600);}
   return <label>{label}<div className="secret-input"><input type={visible?"text":"password"} autoComplete="new-password" value={value} onChange={event=>onChange(event.target.value)} placeholder={placeholder}/><button type="button" onClick={()=>setVisible(value=>!value)} aria-label={visible?`隐藏${label}`:`显示${label}`} title={visible?"隐藏":"显示"}>{visible?<EyeOff size={16}/>:<Eye size={16}/>}</button><button type="button" onClick={()=>void copy()} disabled={!value} aria-label={`复制${label}`} title={copied?"已复制":"复制"}>{copied?<Check size={16}/>:<Copy size={16}/>}</button></div>{hint&&<small>{hint}</small>}</label>;
 }
-function AccountStatus({initials,color,name,detail,online=false}:{initials:string;color:string;name:string;detail:string;online?:boolean}){return <div className={`account-status ${online?"":"muted"}`}><span className={`avatar tiny ${color}`}>{initials}</span><span><b>{name}</b><small><i className={`status-dot ${online?"online":""}`}/>{detail}</small></span></div>;}
+function AccountStatus({initials,color,name,detail,stats,online=false}:{initials:string;color:string;name:string;detail:string;stats:AccountStats;online?:boolean}){const todayRate=stats.todayInitiated?Math.round(stats.todayReplied/stats.todayInitiated*100):0,totalRate=stats.totalInitiated?Math.round(stats.totalReplied/stats.totalInitiated*100):0;const metrics=`今发${stats.todayInitiated} / 今回${stats.todayReplied} / 今回复率${todayRate}% / 总发${stats.totalInitiated} / 总回${stats.totalReplied} / 总回复率${totalRate}%`;return <div className={`account-status ${online?"":"muted"}`}><span className={`avatar tiny ${color}`}>{initials}</span><span className="account-status-copy"><b title={`${name}（${metrics}）`}>{name}（{metrics}）</b><small><i className={`status-dot ${online?"online":""}`}/>{detail}</small></span></div>;}
 function MessageStatus({status}:{status?:ChatMessage["status"]}){if(status==="queued"||status==="dispatching")return <span className="message-state queued"><Clock3 size={12}/>{status==="queued"?"排队中":"发送中"}</span>;if(status==="failed"||status==="uncertain")return <span className="message-state failed"><X size={12}/>{status==="failed"?"失败":"待确认"}</span>;if(status==="read")return <span className="message-state read"><CheckCheck size={13}/>已读</span>;if(status==="delivered")return <span className="message-state"><CheckCheck size={13}/>已送达</span>;return <span className="message-state"><Check size={13}/>已发送</span>;}
 function QueueDiagnostic({message}:{message:ChatMessage}){const diagnostic=message.queueDiagnostic;if(!diagnostic?.commandId)return <small className="message-queue-diagnostic warning"><Info size={11}/>未找到发送命令，请刷新页面后重试</small>;const agentOnline=diagnostic.agentStatus==="online",accountOnline=diagnostic.accountStatus==="online",label=message.status==="dispatching"?"Agent 已接收，正在执行":!agentOnline?"等待 Agent 上线":!accountOnline?"等待 WhatsApp 账号上线":diagnostic.lastError?"等待自动重试":"等待 Agent 接收";const detail=[`命令 ${diagnostic.commandId.slice(0,8)}`,`尝试 ${diagnostic.attempt}`,diagnostic.lastError||"",diagnostic.agentLastSeenAt?`Agent 最近运行 ${formatDateTime(diagnostic.agentLastSeenAt)}`:""].filter(Boolean).join(" · ");return <small className={`message-queue-diagnostic ${agentOnline&&accountOnline?"":"warning"}`}><Info size={11}/><span><b>{label}</b><em>{detail}</em></span></small>;}
 

@@ -408,7 +408,33 @@ app.get("/api/v1/accounts", { preHandler:authenticate }, async (request) => {
          WHEN a.platform='messenger' THEN CASE WHEN mp.webhook_verified_at IS NULL THEN 'pending' ELSE 'verified' END END webhook_status,
     CASE WHEN a.platform='whatsapp' AND a.transport='cloud' THEN CASE WHEN c.credentials_verified_at IS NULL THEN 'unverified' ELSE 'verified' END
          WHEN a.platform='messenger' THEN CASE WHEN mp.credentials_verified_at IS NULL THEN 'unverified' ELSE 'verified' END END credentials_status
+    ,COALESCE(account_stats.today_initiated,0)::int today_initiated
+    ,COALESCE(account_stats.today_replied,0)::int today_replied
+    ,COALESCE(account_stats.total_initiated,0)::int total_initiated
+    ,COALESCE(account_stats.total_replied,0)::int total_replied
     FROM channel_accounts a LEFT JOIN whatsapp_cloud_accounts c ON c.account_id=a.id LEFT JOIN messenger_page_accounts mp ON mp.account_id=a.id
+    LEFT JOIN LATERAL (
+      SELECT
+        COUNT(*) FILTER (WHERE first_message.direction='out' AND first_message.first_at >= CURRENT_DATE) AS today_initiated,
+        COUNT(*) FILTER (WHERE first_message.direction='out' AND reply.reply_at >= CURRENT_DATE) AS today_replied,
+        COUNT(*) FILTER (WHERE first_message.direction='out') AS total_initiated,
+        COUNT(*) FILTER (WHERE first_message.direction='out' AND reply.reply_at IS NOT NULL) AS total_replied
+      FROM (
+        SELECT conversation_id, MIN(occurred_at) AS first_at,
+               (ARRAY_AGG(direction ORDER BY occurred_at, id))[1] AS direction
+        FROM messages
+        WHERE account_id=a.id
+        GROUP BY conversation_id
+      ) first_message
+      LEFT JOIN LATERAL (
+        SELECT MIN(inbound.occurred_at) AS reply_at
+        FROM messages inbound
+        WHERE inbound.account_id=a.id
+          AND inbound.conversation_id=first_message.conversation_id
+          AND inbound.direction='in'
+          AND inbound.occurred_at > first_message.first_at
+      ) reply ON true
+    ) account_stats ON true
     WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL)
       AND (a.platform IS DISTINCT FROM 'messenger' OR mp.account_id IS NOT NULL)
       AND ($1::uuid[] IS NULL OR a.id=ANY($1)) ORDER BY a.display_name`, [ids ?? null]);
