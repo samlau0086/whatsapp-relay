@@ -22,14 +22,14 @@ export class RelayApiClient {
       let body: unknown = null;
       try { body = text ? JSON.parse(text) : null; } catch { body = null; }
       if (!response.ok) {
-        const upstream = body && typeof body === "object" && "error" in body ? String((body as { error?: unknown }).error) : undefined;
-        const code = response.status === 401 ? "unauthorized" : response.status === 403 ? "account_forbidden" : response.status === 404 ? "not_found" : response.status === 429 ? "rate_limited" : upstream ?? "upstream_unavailable";
-        throw new RelayApiError(code, response.status);
+        const code = response.status === 401 ? "unauthorized" : response.status === 403 ? "account_forbidden" : response.status === 404 ? "not_found" : response.status === 429 ? "rate_limited" : response.status >= 500 ? "upstream_unavailable" : "invalid_argument";
+        throw new RelayApiError(code, response.status, `Relay API returned HTTP ${response.status}`);
       }
+      if (body === null || typeof body !== "object") throw new RelayApiError("upstream_unavailable", 502, "Relay API returned a non-JSON response; check RELAY_API_BASE_URL");
       return body as T;
     } catch (error) {
       if (error instanceof RelayApiError) throw error;
-      throw new RelayApiError("upstream_unavailable", 503, error instanceof Error && error.name === "AbortError" ? "Relay API timeout" : "Relay API unavailable");
+      throw new RelayApiError("upstream_unavailable", 503, error instanceof Error && error.name === "AbortError" ? "Relay API timeout; check RELAY_API_BASE_URL" : "Cannot connect to Relay API; check RELAY_API_BASE_URL and network access");
     } finally { clearTimeout(timeout); }
   }
 }

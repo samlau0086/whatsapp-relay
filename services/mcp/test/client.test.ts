@@ -20,5 +20,17 @@ test("RelayApiClient maps upstream authorization failures", async () => {
 
 test("RelayApiClient maps timeout and network errors", async () => {
   const client = new RelayApiClient({ apiBaseUrl: "https://relay.test", apiKey: "bad", accountId: "account-1" }, async () => { throw new Error("offline"); });
-  await assert.rejects(client.get("/contacts"), (error: unknown) => error instanceof RelayApiError && error.code === "upstream_unavailable");
+  await assert.rejects(client.get("/contacts"), (error: unknown) => error instanceof RelayApiError && error.code === "upstream_unavailable" && /Cannot connect/.test(error.message) && !error.message.includes("bad"));
+});
+
+test("RelayApiClient rejects HTML from a misconfigured API base URL", async () => {
+  const client = new RelayApiClient({ apiBaseUrl: "https://relay.test", apiKey: "rdk_secret", accountId: null }, async () => new Response("<html>Web app</html>", { status: 200 }));
+  await assert.rejects(client.get("/contacts"), (error: unknown) => error instanceof RelayApiError && error.code === "upstream_unavailable" && /non-JSON response/.test(error.message) && !error.message.includes("Web app"));
+});
+
+test("RelayApiClient reports HTTP failures without leaking upstream response bodies", async () => {
+  for (const [status, code] of [[403, "account_forbidden"], [404, "not_found"], [429, "rate_limited"], [500, "upstream_unavailable"]] as const) {
+    const client = new RelayApiClient({ apiBaseUrl: "https://relay.test", apiKey: "rdk_secret", accountId: null }, async () => new Response("private upstream details", { status }));
+    await assert.rejects(client.get("/contacts"), (error: unknown) => error instanceof RelayApiError && error.code === code && error.status === status && error.message === `Relay API returned HTTP ${status}`);
+  }
 });

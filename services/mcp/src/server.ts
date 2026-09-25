@@ -28,7 +28,8 @@ function wrapped<TArgs>(tool: string, handler: (args: TArgs) => Promise<unknown>
     } catch (error) {
       const code = error instanceof RelayApiError ? error.code : "upstream_unavailable";
       audit({ tool, accountId: context.accountId, requestId, ok: false, durationMs: Date.now() - started, errorCode: code });
-      return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: { code, message: code }, requestId }) }] };
+      const message = error instanceof RelayApiError ? error.message : code;
+      return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: { code, message }, requestId }) }] };
     }
   };
 }
@@ -47,6 +48,7 @@ type ContactListResponse = { data: unknown[]; total: number; hasMore: boolean; n
 server.registerTool("search_contacts", { description: "Search person contacts in the bound account.", inputSchema: { query: z.string().max(100).optional(), limit: pageSize, cursor, blacklist: z.boolean().optional() } }, wrapped<ContactSearchArgs>("search_contacts", async ({ query, limit, cursor, blacklist }) => {
   const offset = cursor ? decodeOffset(cursor) : 0;
   const body = await api.get<ContactListResponse>("/contacts", { q: query, limit, offset, blacklist: blacklist === undefined ? undefined : String(blacklist) });
+  if (!Array.isArray(body.data) || typeof body.hasMore !== "boolean" || !Number.isInteger(body.nextOffset) || !Number.isInteger(body.total)) throw new RelayApiError("upstream_unavailable", 502, "Relay API returned an invalid contacts response; check RELAY_API_BASE_URL");
   return { ...body, nextCursor: body.hasMore ? encodeOffset(body.nextOffset) : null };
 }));
 server.registerTool("get_contact", { description: "Get a contact profile by ID.", inputSchema: { contactId: z.string().uuid() } }, wrapped<{ contactId: string }>("get_contact", ({ contactId }) => api.get(`/contacts/${contactId}`)));
