@@ -108,6 +108,14 @@ test("superseded approval drafts cannot reappear or be sent again",async()=>{
   assert.match(sendRoute,/proactive_outreach_events\(account_id,contact_id,job_id,event_type,reason,planned_at\).*'sent','human_approved'/);
 });
 
+test("human-approved outreach can send to a WhatsApp username when no phone JID exists",async()=>{
+  const source=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
+  const sendRoute=source.slice(source.indexOf('app.post("/api/v1/ai-drafts/:id/send"'),source.indexOf('app.post("/api/v1/ai-drafts/:id/dismiss"'));
+  assert.match(sendRoute,/co\.provider_user_id,co\.whatsapp_username/);
+  assert.match(sendRoute,/toJid=String\(row\.provider_user_id\?\?""\)\.trim\(\),toUsername=String\(row\.whatsapp_username\?\?""\)\.trim\(\)/);
+  assert.match(sendRoute,/\.\.\.\(toJid\?\{toJid\}:\{toUsername\}\)/);
+});
+
 test("outreach cadence counts confirmed messages including human-approved drafts",async()=>{
   const source=await readFile(new URL("../src/proactive-outreach.ts",import.meta.url),"utf8");
   assert.equal((source.match(/proactive_outreach_jobs sent_job JOIN messages sent_message/g)??[]).length,2);
