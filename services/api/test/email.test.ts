@@ -39,3 +39,14 @@ test("email queue migration and worker include durability controls",async()=>{
   assert.match(email,/attempt<5/);
   assert.match(migrator,/032_email_delivery\.sql/);
 });
+
+test("conversation email tables are included in startup migrations",async()=>{
+  const [migration,migrator]=await Promise.all([
+    readFile(new URL("../../../infra/postgres/migrations/089_conversation_email.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(migrator,/089_conversation_email\.sql/);
+  assert.match(migration,/CREATE TABLE IF NOT EXISTS account_email_mailboxes/);
+  assert.match(migration,/CREATE TABLE IF NOT EXISTS message_email_details/);
+  assert.match(migration,/CREATE TABLE IF NOT EXISTS message_email_attachments/);
+});
