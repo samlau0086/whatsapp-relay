@@ -9,3 +9,12 @@ test("unconfirmed WhatsApp Web sends stop as uncertain instead of being resent",
   assert.doesNotMatch(requeue,/a\.transport='web'.*state='pending'/s);
   assert.match(requeue,/automatic retry stopped to prevent duplicates/);
 });
+
+test("message retry preserves a username destination when the phone JID is absent",async()=>{
+  const source=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
+  const retry=source.slice(source.indexOf('app.post("/api/v1/messages/:id/retry"'),source.indexOf('app.delete("/api/v1/messages/:id"'));
+  assert.match(retry,/co\.provider_user_id,co\.whatsapp_username/);
+  assert.match(retry,/String\(row\.provider_user_id\?\?""\)\.trim\(\),toUsername=String\(row\.whatsapp_username\?\?""\)/);
+  assert.match(retry,/if\(!toJid&&!toUsername\)throw/);
+  assert.match(retry,/destinationId:toJid/);
+});

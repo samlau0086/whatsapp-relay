@@ -2082,7 +2082,7 @@ app.post("/api/v1/messages/:id/retry", { preHandler:authenticate }, async (reque
   const parsed=messageRetrySchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
   const result=await transaction(async client=>{
     const original=await client.query(
-      `SELECT m.*,c.id conversation_id,c.account_id,a.agent_id,agent.capabilities,co.provider_user_id,co.entity_type,wg.active group_active,oc.payload command_payload
+      `SELECT m.*,c.id conversation_id,c.account_id,a.agent_id,agent.capabilities,co.provider_user_id,co.whatsapp_username,co.entity_type,wg.active group_active,oc.payload command_payload
          FROM messages m
          JOIN conversations c ON c.id=m.conversation_id
          JOIN channel_accounts a ON a.id=c.account_id
@@ -2104,7 +2104,10 @@ app.post("/api/v1/messages/:id/retry", { preHandler:authenticate }, async (reque
     if(commandPayload?.retryRequestId===parsed.data.clientMessageId)return{messageId:id,status:String(row.status),deduplicated:true,agentId:row.agent_id};
     if(row.direction!=="out"||!["failed","uncertain"].includes(String(row.status)))throw Object.assign(new Error("message_not_retryable"),{statusCode:409});
     if(!commandPayload)throw Object.assign(new Error("original_command_not_found"),{statusCode:409});
-    const payload={...commandPayload,retryRequestId:parsed.data.clientMessageId,messageId:id,conversationId:String(row.conversation_id),accountId:String(row.account_id),toJid:String(row.provider_user_id)};
+    const toJid=String(row.provider_user_id??"").trim(),toUsername=String(row.whatsapp_username??"").trim().replace(/^@/,"").toLowerCase();
+    if(!toJid&&!toUsername)throw Object.assign(new Error("missing_destination"),{statusCode:409});
+    const {toJid:_,toUsername:__,destinationId:___,...basePayload}=commandPayload;
+    const payload={...basePayload,retryRequestId:parsed.data.clientMessageId,messageId:id,conversationId:String(row.conversation_id),accountId:String(row.account_id),...(toJid?{toJid,destinationId:toJid}:{toUsername})};
     const queued=await queueChannelCommand(client,{accountId:String(row.account_id),conversationId:String(row.conversation_id),messageId:id,payload:payload as unknown as Parameters<typeof queueChannelCommand>[1]["payload"]});
     await client.query("UPDATE messages SET status='queued',failure_code=NULL,failure_message=NULL,provider_message_id=NULL WHERE id=$1",[id]);
     await client.query("UPDATE conversations SET status='open',closed_at=NULL WHERE id=$1",[row.conversation_id]);
