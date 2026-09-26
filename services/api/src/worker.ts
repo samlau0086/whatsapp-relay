@@ -4,6 +4,7 @@ import { decryptAtRest, signWebhook } from "./security.js";
 import { config } from "./config.js";
 import { processOneAgentJob } from "./agent-engine.js";
 import { processOneEmail } from "./email.js";
+import { syncOneMailbox } from "./mailboxes.js";
 import { processOneTaskCycle } from "./task-engine.js";
 import {processOneCloudOutbound,processOneCloudWebhook,syncDueCloudTemplates} from "./whatsapp-cloud.js";
 import {processOneMessengerOutbound,processOneMessengerWebhook} from "./messenger.js";
@@ -18,6 +19,7 @@ process.on("SIGINT",()=>{stopping=true;});
 while(!stopping){
   const agentWork=await processOneAgentJob();
   const emailWork=await processOneEmail();
+  const mailboxWork=await syncOneMailbox();
   const taskWork=await processOneTaskCycle();
   const proactiveWork=await processOneProactiveOutreach();
   const statusWork=await processOneStatusCycle();
@@ -27,7 +29,7 @@ while(!stopping){
   const messengerInbound=await processOneMessengerWebhook();
   const templateSync=await syncDueCloudTemplates();
   const delivery=await claimWebhook();
-  if(delivery)await deliverWebhook(delivery);else if(!agentWork&&!emailWork&&!taskWork&&!proactiveWork&&!statusWork&&!cloudOutbound&&!cloudInbound&&!messengerOutbound&&!messengerInbound&&!templateSync)await sleep(750);
+  if(delivery)await deliverWebhook(delivery);else if(!agentWork&&!emailWork&&!mailboxWork&&!taskWork&&!proactiveWork&&!statusWork&&!cloudOutbound&&!cloudInbound&&!messengerOutbound&&!messengerInbound&&!templateSync)await sleep(750);
   await requeueCommands();
   await recoverStaleStatusCommands();
   await enforceRetention();
