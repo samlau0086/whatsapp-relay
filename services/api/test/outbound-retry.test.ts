@@ -18,3 +18,12 @@ test("message retry preserves a username destination when the phone JID is absen
   assert.match(retry,/if\(!toJid&&!toUsername\)throw/);
   assert.match(retry,/destinationId:toJid/);
 });
+
+test("direct WhatsApp messages preserve a username destination when the phone JID is absent",async()=>{
+  const source=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
+  const send=source.slice(source.indexOf('app.post("/api/v1/messages"'),source.indexOf('app.post("/api/v1/messages/:id/retry"'));
+  assert.match(send,/co\.provider_user_id,co\.whatsapp_username/);
+  assert.match(send,/const toJid=String\(conversation\.rows\[0\]\.provider_user_id\?\?""\)\.trim\(\),toUsername=String\(conversation\.rows\[0\]\.whatsapp_username\?\?""\)/);
+  assert.match(send,/if\(!toJid&&!toUsername\)throw/);
+  assert.match(send,/\.\.\.\(toJid\?\{toJid,destinationId:toJid\}:\{toUsername\}\)/);
+});
