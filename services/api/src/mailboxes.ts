@@ -103,7 +103,7 @@ export async function syncOneMailbox():Promise<boolean>{
       await pool.query("UPDATE account_email_mailboxes SET uid_validity=$2,last_uid=$3,last_error=NULL,last_synced_at=now() WHERE id=$1",[row.id,validity,Math.max(0,Number(box.uidNext)-1)]);
       return true;
     }
-    let lastUid=Number(row.last_uid),errors:string[]=[];
+    let lastUid=Number(row.last_uid);const errors:string[]=[];
     if(Number(box.uidNext)>lastUid+1){
       let seen=0;
       for await(const item of client.fetch(`${lastUid+1}:*`,{uid:true,source:true},{uid:true})){
