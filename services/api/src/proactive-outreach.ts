@@ -54,6 +54,10 @@ export function resolveProactiveLanguage(preferredLanguage:unknown,fallbackLangu
   return fallback||"auto";
 }
 
+export function proactiveReplyTranslation(draft:Pick<ProactiveReplyDraft,"reply"|"replyZh">,reply:string):string|null{
+  return draft.reply.trim()===reply.trim()?draft.replyZh.trim()||null:null;
+}
+
 function parseTime(value:string){const [hour,minute]=String(value??"").split(":").map(Number);return{hour:Number.isFinite(hour)?hour:0,minute:Number.isFinite(minute)?minute:0};}
 function localParts(date:Date,timeZone:string){const parts=new Intl.DateTimeFormat("en-CA",{timeZone,year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",weekday:"short",hourCycle:"h23"}).formatToParts(date);const get=(type:string)=>Number(parts.find(part=>part.type===type)?.value);const weekdayLabel=String(parts.find(part=>part.type==="weekday")?.value??"Sun");return{year:get("year"),month:get("month"),day:get("day"),hour:get("hour"),minute:get("minute"),weekday:["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].indexOf(weekdayLabel)};}
 function zonedDate(year:number,month:number,day:number,hour:number,minute:number,timeZone:string){let value=Date.UTC(year,month-1,day,hour,minute);for(let index=0;index<3;index+=1){const parts=localParts(new Date(value),timeZone);const target=Date.UTC(year,month-1,day,hour,minute);const actual=Date.UTC(parts.year,parts.month-1,parts.day,parts.hour,parts.minute);value+=target-actual;}return new Date(value);}
@@ -179,13 +183,14 @@ export async function processOneProactiveOutreach():Promise<boolean>{
       if(String(job.mode)==="cautious"){
         await client.query("UPDATE ai_drafts SET status='dismissed',resolved_at=now() WHERE conversation_id=$1 AND status='pending'",[job.conversation_id]);
         const run=await client.query("INSERT INTO agent_runs(conversation_id,kind,decision,confidence,response_text,status,completed_at) VALUES($1,'followup','draft',1,$2,'completed',now()) RETURNING id",[job.conversation_id,reply]);
-        const savedDraft=await client.query("INSERT INTO ai_drafts(conversation_id,run_id,text_content,reply_zh,reason,citations) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",[job.conversation_id,run.rows[0].id,reply,draft.replyZh||null,"主动触达处于谨慎接管，需要人工确认后发送",JSON.stringify(draft.citations??[])]);
+        const savedDraft=await client.query("INSERT INTO ai_drafts(conversation_id,run_id,text_content,reply_zh,reason,citations) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",[job.conversation_id,run.rows[0].id,reply,proactiveReplyTranslation(draft,reply),"主动触达处于谨慎接管，需要人工确认后发送",JSON.stringify(draft.citations??[])]);
         await client.query("UPDATE proactive_outreach_jobs SET state='awaiting_approval',last_error=NULL,payload=payload || $2::jsonb,updated_at=now() WHERE id=$1",[job.id,JSON.stringify({draftId:savedDraft.rows[0].id,generationMode,fallbackReason,usedTemplateId:selectedTemplate?.id??null})]);
         await audit(client,job.account_id,job.contact_id,job.id,"draft_generation","cautious_confirmation",job.planned_at,{draftId:savedDraft.rows[0].id});
         return;
       }
       const payload:Record<string,unknown>={type:"text",text:reply};
-      const message=await client.query("INSERT INTO messages(conversation_id,account_id,client_message_id,direction,kind,text_content,status,occurred_at) VALUES($1,$2,$3,'out',$4,$5,'queued',now()) RETURNING id",[job.conversation_id,job.account_id,`proactive-${job.id}`,"text",reply]);
+      const translationSourceText=proactiveReplyTranslation(draft,reply);
+      const message=await client.query("INSERT INTO messages(conversation_id,account_id,client_message_id,direction,kind,text_content,translation_source_text,translation_target_language,status,occurred_at) VALUES($1,$2,$3,'out',$4,$5,$6,$7,'queued',now()) RETURNING id",[job.conversation_id,job.account_id,`proactive-${job.id}`,"text",reply,translationSourceText,translationSourceText&&draft.language!=="auto"?draft.language:null]);
       const queued=await queueChannelCommand(client,{accountId:job.account_id,conversationId:job.conversation_id,messageId:message.rows[0].id,payload:{accountId:job.account_id,conversationId:job.conversation_id,messageId:message.rows[0].id,clientMessageId:`proactive-${job.id}`,toJid:String(job.provider_user_id),...(payload as Record<string,unknown>),type:String(payload.type??"text")}});
       await client.query("UPDATE proactive_outreach_jobs SET state='sent',message_id=$2,completed_at=now(),last_error=NULL,payload=payload || $3::jsonb,updated_at=now() WHERE id=$1",[job.id,message.rows[0].id,JSON.stringify({generationMode,fallbackReason,usedTemplateId:selectedTemplate?.id??null,templateScenario,templateCustomerStage:customerStage,holidaySkipped:false})]);
       await audit(client,job.account_id,job.contact_id,job.id,"sent",generationMode==="ai"?"ai_personalized":"system_template_fallback",job.planned_at);

@@ -1,13 +1,24 @@
 import assert from "node:assert/strict";
 import {readFile} from "node:fs/promises";
 import test from "node:test";
-import {isHolidayBlocked,nextDailyProactiveRunAt,nextEligibleProactiveRunAt,normalizeProactiveMessageTemplates,proactiveTemplateScenario,renderProactiveMessageTemplate,resolveProactiveLanguage,selectProactiveMessageTemplate} from "../src/proactive-outreach.js";
+import {isHolidayBlocked,nextDailyProactiveRunAt,nextEligibleProactiveRunAt,normalizeProactiveMessageTemplates,proactiveReplyTranslation,proactiveTemplateScenario,renderProactiveMessageTemplate,resolveProactiveLanguage,selectProactiveMessageTemplate} from "../src/proactive-outreach.js";
 
 const holidays={global:[{id:"christmas",name:"圣诞节",month:12,day:25,regions:["global"]}]};
 
 test("proactive reply language prefers contact settings",()=>{
   assert.equal(resolveProactiveLanguage("auto","en_US"),"en_US");
   assert.equal(resolveProactiveLanguage("zh_TW","en_US"),"zh_TW");
+});
+
+test("proactive translation accompanies only the matching generated message",async()=>{
+  const draft={reply:"Hola, ¿todavía necesita ayuda?",replyZh:"您好，您还需要帮助吗？"};
+  assert.equal(proactiveReplyTranslation(draft,draft.reply),draft.replyZh);
+  assert.equal(proactiveReplyTranslation(draft,"  Hola, ¿todavía necesita ayuda?  "),draft.replyZh);
+  assert.equal(proactiveReplyTranslation(draft,"Hello from the fallback template"),null);
+  assert.equal(proactiveReplyTranslation({...draft,replyZh:"  "},draft.reply),null);
+  const source=await readFile(new URL("../src/proactive-outreach.ts",import.meta.url),"utf8");
+  assert.match(source,/INSERT INTO messages\(conversation_id,account_id,client_message_id,direction,kind,text_content,translation_source_text,translation_target_language,status,occurred_at\)/);
+  assert.match(source,/reply,translationSourceText,translationSourceText&&draft\.language!=="auto"\?draft\.language:null/);
 });
 
 test("holiday blocking skips weekends and configured holidays",()=>{
