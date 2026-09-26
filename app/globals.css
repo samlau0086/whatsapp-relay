@@ -698,6 +698,7 @@ button { color:inherit; }
 .provider-form>label,.provider-form-grid label{font-size:13px}.provider-form label small{font-size:12px}
 .provider-form input[type="text"],.provider-form input[type="url"],.provider-form input[type="password"],.provider-form input:not([type]){height:42px;font-size:13px}
 .settings-panel .agent-card label,.settings-panel .agent-card select,.settings-panel .agent-card textarea{font-size:13px;line-height:1.5}
+.mailbox-settings-panel{max-width:1240px}.mailbox-settings-panel>header{align-items:center}.mailbox-settings-panel>.provider-form{margin-top:16px;background:#f8fbf9}.mailbox-editor{display:grid;gap:12px}.mailbox-editor .provider-form-grid{align-items:end}.mailbox-editor-options{display:flex;gap:18px;flex-wrap:wrap;padding-top:4px}.mailbox-editor-options label{display:flex;align-items:center;gap:7px;margin:0!important}.mailbox-editor footer{margin-top:2px}.mailbox-editor .secret-input{margin-top:5px}
 .kb-assignment legend,.kb-assignment label{font-size:13px}
 .knowledge-create input,.knowledge-create button,.knowledge-select,.knowledge-name-editor input{font-size:13px}
 .knowledge-list small,.knowledge-detail header p,.knowledge-documents article small{font-size:12px}

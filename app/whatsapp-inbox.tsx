@@ -5698,7 +5698,62 @@ function MailboxSettingsPanel({token,onToken,onToast,accounts}:{token:string;onT
   async function save(){if(!editing)return;setBusy(true);setError("");const id=editing.id?String(editing.id):"";const result=await authorizedFetch(id?`/api/v1/admin/mailboxes/${id}`:"/api/v1/admin/mailboxes",token,{method:id?"PUT":"POST",headers:{"content-type":"application/json"},body:JSON.stringify(editing)});if(result.token!==token)onToken(result.token);if(!result.response.ok){const body=await result.response.json().catch(()=>({}));setError(String(body.message??body.error??"保存失败"));}else{setEditing(null);onToast("邮箱配置已保存");await load();}setBusy(false);}
   async function remove(id:string){if(!confirm("删除后将停止后续收发，历史邮件会保留。"))return;const result=await authorizedFetch(`/api/v1/admin/mailboxes/${id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);if(result.response.ok){onToast("邮箱配置已删除");await load();}}
   async function test(id:string){const result=await authorizedFetch(`/api/v1/admin/mailboxes/${id}/test`,token,{method:"POST"});if(result.token!==token)onToken(result.token);onToast(result.response.ok?"连接测试成功":"连接测试失败");}
-  return <section className="provider-form agent-card"><header><div><h2>会话邮箱配置</h2><p>邮箱归属于 WhatsApp 账号，支持 IMAP 收件与 SMTP 发件。</p></div><button className="primary-action" onClick={()=>setEditing(blank())}><Plus size={14}/>新增邮箱</button></header>{items.map(item=><article key={String(item.id)} className="api-key-list"><div><b>{String(item.address)}</b><small>{accounts.find(account=>account.id===String(item.account_id))?.name??String(item.account_id)} · {Boolean(item.is_primary)?"主邮箱":"备用邮箱"} · {Boolean(item.enabled)?"已启用":"已停用"}</small>{item.last_error&&<small className="login-error">{String(item.last_error)}</small>}</div><span><button className="secondary-action" onClick={()=>void test(String(item.id))}>测试连接</button><button className="secondary-action" onClick={()=>setEditing({...item,accountId:String(item.account_id),imapHost:String(item.imap_host??""),imapPort:Number(item.imap_port??993),imapUsername:String(item.imap_username??""),smtpHost:String(item.smtp_host??""),smtpPort:Number(item.smtp_port??465),smtpTls:String(item.smtp_tls??"tls")})}>编辑</button><button className="danger-text" onClick={()=>void remove(String(item.id))}><Trash2 size={13}/>删除</button></span></article>)}{!items.length&&<p className="empty-note">尚未配置会话邮箱</p>}{editing&&<div className="provider-form"><div className="provider-form-grid"><label>映射 WhatsApp 账号<select value={String(editing.accountId??"")} onChange={e=>setEditing({...editing,accountId:e.target.value})}>{accounts.filter(a=>a.platform==="whatsapp").map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label><label>邮箱地址<input type="email" value={String(editing.address??"")} onChange={e=>setEditing({...editing,address:e.target.value})}/></label></div><div className="provider-form-grid"><label>IMAP 主机<input value={String(editing.imapHost??"")} onChange={e=>setEditing({...editing,imapHost:e.target.value})}/></label><label>IMAP 端口<input type="number" value={Number(editing.imapPort??993)} onChange={e=>setEditing({...editing,imapPort:Number(e.target.value)})}/></label></div><div className="provider-form-grid"><label>SMTP 主机<input value={String(editing.smtpHost??"")} onChange={e=>setEditing({...editing,smtpHost:e.target.value})}/></label><label>SMTP 端口<input type="number" value={Number(editing.smtpPort??465)} onChange={e=>setEditing({...editing,smtpPort:Number(e.target.value)})}/></label></div><div className="provider-form-grid"><label>IMAP 用户名<input value={String(editing.imapUsername??"")} onChange={e=>setEditing({...editing,imapUsername:e.target.value})}/></label><label>IMAP 密码<SecretField label="IMAP 密码" value={String(editing.imapPassword??"")} onChange={value=>setEditing({...editing,imapPassword:value})}/></label></div><div className="provider-form-grid"><label>SMTP 用户名<input value={String(editing.smtpUsername??"")} onChange={e=>setEditing({...editing,smtpUsername:e.target.value})}/></label><label>SMTP 密码<SecretField label="SMTP 密码" value={String(editing.smtpPassword??"")} onChange={value=>setEditing({...editing,smtpPassword:value})}/></label></div><label><input type="checkbox" checked={Boolean(editing.isPrimary)} onChange={e=>setEditing({...editing,isPrimary:e.target.checked})}/>设为主发件邮箱</label><label><input type="checkbox" checked={editing.enabled!==false} onChange={e=>setEditing({...editing,enabled:e.target.checked})}/>启用收发</label>{error&&<span className="login-error">{error}</span>}<footer><button className="secondary-action" onClick={()=>setEditing(null)}>取消</button><button className="primary-action" disabled={busy||!String(editing.address??"").trim()} onClick={()=>void save()}>{busy?"保存中…":"保存邮箱配置"}</button></footer></div>}</section>;
+  return (
+    <section className="provider-form agent-card mailbox-settings-panel">
+      <header>
+        <div>
+          <h2>会话邮箱配置</h2>
+          <p>邮箱归属于 WhatsApp 账号；收件使用 IMAP，发件优先使用已启用的 Resend API，否则使用此邮箱的 SMTP。</p>
+        </div>
+        <button className="primary-action" onClick={() => setEditing(blank())}><Plus size={14}/>新增邮箱</button>
+      </header>
+      {items.map(item => (
+        <article key={String(item.id)} className="api-key-list">
+          <div>
+            <b>{String(item.address)}</b>
+            <small>{accounts.find(account => account.id === String(item.account_id))?.name ?? String(item.account_id)} · {Boolean(item.is_primary) ? "主邮箱" : "备用邮箱"} · {Boolean(item.enabled) ? "已启用" : "已停用"}</small>
+            {item.last_error && <small className="login-error">{String(item.last_error)}</small>}
+          </div>
+          <span>
+            <button className="secondary-action" onClick={() => void test(String(item.id))}>测试连接</button>
+            <button className="secondary-action" onClick={() => setEditing({...item, accountId: String(item.account_id), imapHost: String(item.imap_host ?? ""), imapPort: Number(item.imap_port ?? 993), imapUsername: String(item.imap_username ?? ""), smtpHost: String(item.smtp_host ?? ""), smtpPort: Number(item.smtp_port ?? 465), smtpTls: String(item.smtp_tls ?? "tls")})}>编辑</button>
+            <button className="danger-text" onClick={() => void remove(String(item.id))}><Trash2 size={13}/>删除</button>
+          </span>
+        </article>
+      ))}
+      {!items.length && <p className="empty-note">尚未配置会话邮箱</p>}
+      {editing && (
+        <div className="provider-form mailbox-editor">
+          <div className="provider-form-grid">
+            <label>映射 WhatsApp 账号<select value={String(editing.accountId ?? "")} onChange={e => setEditing({...editing, accountId: e.target.value})}>{accounts.filter(a => a.platform === "whatsapp").map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
+            <label>邮箱地址<input type="email" value={String(editing.address ?? "")} onChange={e => setEditing({...editing, address: e.target.value})}/></label>
+          </div>
+          <div className="provider-form-grid">
+            <label>IMAP 主机<input value={String(editing.imapHost ?? "")} onChange={e => setEditing({...editing, imapHost: e.target.value})}/></label>
+            <label>IMAP 端口<input type="number" value={Number(editing.imapPort ?? 993)} onChange={e => setEditing({...editing, imapPort: Number(e.target.value)})}/></label>
+          </div>
+          <div className="provider-form-grid">
+            <label>SMTP 主机<input value={String(editing.smtpHost ?? "")} onChange={e => setEditing({...editing, smtpHost: e.target.value})}/></label>
+            <label>SMTP 端口<input type="number" value={Number(editing.smtpPort ?? 465)} onChange={e => setEditing({...editing, smtpPort: Number(e.target.value)})}/></label>
+          </div>
+          <div className="provider-form-grid">
+            <label>IMAP 用户名<input value={String(editing.imapUsername ?? "")} onChange={e => setEditing({...editing, imapUsername: e.target.value})}/></label>
+            <SecretField label="IMAP 密码" value={String(editing.imapPassword ?? "")} onChange={value => setEditing({...editing, imapPassword: value})}/>
+          </div>
+          <div className="provider-form-grid">
+            <label>SMTP 用户名<input value={String(editing.smtpUsername ?? "")} onChange={e => setEditing({...editing, smtpUsername: e.target.value})}/></label>
+            <SecretField label="SMTP 密码" value={String(editing.smtpPassword ?? "")} onChange={value => setEditing({...editing, smtpPassword: value})}/>
+          </div>
+          <div className="mailbox-editor-options">
+            <label><input type="checkbox" checked={Boolean(editing.isPrimary)} onChange={e => setEditing({...editing, isPrimary: e.target.checked})}/>设为主发件邮箱</label>
+            <label><input type="checkbox" checked={editing.enabled !== false} onChange={e => setEditing({...editing, enabled: e.target.checked})}/>启用收发</label>
+          </div>
+          {error && <span className="login-error">{error}</span>}
+          <footer><button className="secondary-action" onClick={() => setEditing(null)}>取消</button><button className="primary-action" disabled={busy || !String(editing.address ?? "").trim()} onClick={() => void save()}>{busy ? "保存中…" : "保存邮箱配置"}</button></footer>
+        </div>
+      )}
+    </section>
+  );
 }
 
 function EmailSettingsPanel({token,onToken,onToast,accounts=[]}:{token:string;onToken:(token:string)=>void;onToast:(text:string)=>void;accounts?:Account[]}){
