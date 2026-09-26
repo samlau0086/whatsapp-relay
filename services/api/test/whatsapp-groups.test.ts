@@ -30,6 +30,13 @@ test("agent hub ingests authoritative group snapshots without enqueueing AI work
   assert.doesNotMatch(hub,/DO UPDATE SET contact_id=EXCLUDED\.contact_id/);
 });
 
+test("historical message replay does not reopen a closed conversation",async()=>{
+  const hub=await readFile(new URL("../src/agent-hub.ts",import.meta.url),"utf8");
+  assert.match(hub,/live:event\.live/);
+  assert.match(hub,/source\.live!==false/);
+  assert.match(hub,/closed_at=CASE WHEN \$3::boolean THEN NULL ELSE closed_at END/);
+});
+
 test("group API exposes members and blocks unsupported business automation",async()=>{
   const server=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
   const tasks=await readFile(new URL("../src/task-routes.ts",import.meta.url),"utf8");
