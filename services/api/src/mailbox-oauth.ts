@@ -17,8 +17,11 @@ export function microsoftAuthorizationUrl(state:string,verifier:string,address:s
 }
 async function tokenRequest(fields:Record<string,string>):Promise<{access_token:string;refresh_token?:string}>{
   const response=await fetch(`${base}/token`,{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:config.MICROSOFT_MAIL_CLIENT_ID,client_secret:config.MICROSOFT_MAIL_CLIENT_SECRET,scope,...fields}),signal:AbortSignal.timeout(30000)});
-  const body=await response.json() as {access_token?:string;refresh_token?:string};
-  if(!response.ok||!body.access_token)throw new Error("microsoft_authorization_failed: 请重新授权 Microsoft 邮箱");
+  const body=await response.json().catch(()=>({})) as {access_token?:string;refresh_token?:string;error?:string;error_description?:string};
+  if(!response.ok||!body.access_token){
+    const reason=body.error_description||body.error||`http_${response.status}`;
+    throw new Error(`microsoft_authorization_failed:${reason.slice(0,240)}`);
+  }
   return body as {access_token:string;refresh_token?:string};
 }
 export async function microsoftMailboxToken(id:string):Promise<string>{
@@ -70,8 +73,18 @@ export function registerMailboxOAuth(app:FastifyInstance):void{
         const secret=encryptAtRest(tokens.refresh_token!,config.DATA_ENCRYPTION_KEY);
         if(existing.rowCount)await client.query("UPDATE account_email_mailboxes SET auth_type='microsoft',oauth_refresh_encrypted=$2,is_primary=is_primary AND NOT EXISTS(SELECT 1 FROM account_email_mailboxes other WHERE other.account_id=$3 AND other.id<>$1 AND other.is_primary AND other.enabled),enabled=true,last_error=NULL,imap_host='outlook.office365.com',imap_port=993,imap_username=address,smtp_host='smtp-mail.outlook.com',smtp_port=587,smtp_tls='starttls',smtp_username=address,next_sync_at=now(),updated_at=now() WHERE id=$1",[existing.rows[0].id,secret,row.account_id]);
         else await client.query("INSERT INTO account_email_mailboxes(account_id,address,imap_host,imap_port,imap_username,imap_secret_encrypted,smtp_host,smtp_port,smtp_username,smtp_secret_encrypted,smtp_tls,auth_type,oauth_refresh_encrypted,uid_validity,last_uid) VALUES($1,$2,'outlook.office365.com',993,$2,'','smtp-mail.outlook.com',587,$2,'','starttls','microsoft',$3,$4,$5)",[row.account_id,row.address,secret,uidValidity,lastUid]);
+        await client.query("DELETE FROM mailbox_oauth_states WHERE state_hash=$1",[row.state_hash]);
       });
       return reply.send("Microsoft 邮箱授权成功，可以关闭此页面并刷新邮箱设置。");
-    }catch{return reply.code(400).send("Microsoft 邮箱授权失败，请确认邮箱地址一致、已开启 IMAP，并重新授权。");}
+    }catch(error){
+      const detail=error instanceof Error?error.message:"unknown_error";
+      request.log.error({err:detail,address:row.address,accountId:row.account_id},"Microsoft mailbox OAuth callback failed");
+      const message=detail.startsWith("microsoft_token_exchange_failed:")
+        ? "Microsoft 授权码交换失败，请检查 Client Secret、回调地址和应用账户类型配置。"
+        : detail.includes("AUTHENTICATIONFAILED")||detail.includes("Invalid credentials")
+          ? "Microsoft 授权成功但 IMAP 登录失败，请确认已开启 IMAP、邮箱地址与授权账号一致。"
+          : "Microsoft 邮箱授权失败，请确认邮箱地址一致、已开启 IMAP，并重新授权。";
+      return reply.code(400).send(message);
+    }
   });
 }

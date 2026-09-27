@@ -457,12 +457,22 @@ GitHub Actions 自动部署到 VPS 的准备步骤、Secrets 配置、HTTPS 反�
    RelayDesk 使用 OAuth，不需要把 Microsoft 账户密码填入邮箱配置。Outlook.com 的标准连接参数为：IMAP `outlook.office365.com:993`（SSL/TLS），SMTP `smtp-mail.outlook.com:587`（STARTTLS），认证方式为 OAuth2/Modern Auth。
 
 7. 如果使用本仓库的 GitHub Actions VPS 部署：
+   - 在 GitHub 仓库进入 **Settings → Environments → production → Environment variables**，新增 `PUBLIC_API_URL`，值为公网 API 地址，例如 `https://wsdesk.geekmt.com`。
+   - 同一位置配置 `CORS_ORIGIN`，通常填写 Web 工作台地址；如果 Web 和 API 使用同一域名，可填写 `https://wsdesk.geekmt.com`。
    - 添加生产环境变量 `MICROSOFT_MAIL_CLIENT_ID`，值为客户端 ID。
    - 添加生产 Secret `MICROSOFT_MAIL_CLIENT_SECRET`，值为客户端密码的“值”。
    - 重新运行部署流程。工作流会把配置写入 API 和邮件 Worker 的服务器环境，不会发送到浏览器。
 8. 部署完成后，在 **系统设置 → 邮件发送 → 会话邮箱配置 → 新增邮箱** 中选择 **Microsoft OAuth (Outlook / Live / Hotmail)**，填写邮箱地址和映射的 WhatsApp 账号，然后点击授权。
 
-生产环境必须使用公网 HTTPS 回调地址，且 Microsoft Entra 中登记的地址必须与 `PUBLIC_API_URL` 生成的回调地址完全一致。不要把 Client Secret 提交到代码仓库或前端环境变量中。
+如果是手动或本地 Docker 部署，在项目根目录 `.env` 中配置：
+
+```env
+PUBLIC_API_URL=https://wsdesk.geekmt.com
+CORS_ORIGIN=https://wsdesk.geekmt.com
+```
+
+生产环境必须使用公网 HTTPS 回调地址，且 Microsoft Entra 中登记的地址必须与 `PUBLIC_API_URL` 生成的回调地址完全一致：
+`https://你的域名/api/v1/mailboxes/microsoft/callback`。修改这些变量后需要重新部署或重启 API 和 Worker。不要把 Client Secret 提交到代码仓库或前端环境变量中。
 
 1. 更换 `.env` 的数据库、JWT、数据加密、管理员和对象存储密钥。
 2. 使用 HTTPS 反向代理暴露 Web/API，并限制 MinIO 与 PostgreSQL 只在内部网络访问。
