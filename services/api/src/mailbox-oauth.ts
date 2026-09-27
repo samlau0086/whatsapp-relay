@@ -10,6 +10,7 @@ const scope="offline_access https://outlook.office.com/IMAP.AccessAsUser.All htt
 const base="https://login.microsoftonline.com/consumers/oauth2/v2.0";
 const hash=(value:string)=>createHash("sha256").update(value).digest("hex");
 const callback=()=>new URL("/api/v1/mailboxes/microsoft/callback",config.PUBLIC_API_URL).toString();
+const successPage=()=>`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>Microsoft 邮箱授权成功</title><style>body{font-family:system-ui,sans-serif;padding:40px;color:#18372b}button{padding:10px 16px;border:0;border-radius:8px;background:#153f2f;color:#fff;cursor:pointer}</style></head><body><p>Microsoft 邮箱授权成功，可以关闭此页面并刷新邮箱设置。</p><button onclick="window.close()">关闭此页面</button><script>window.setTimeout(()=>window.close(),300);</script></body></html>`;
 export function microsoftAuthorizationUrl(state:string,verifier:string,address:string):string{
   const url=new URL(`${base}/authorize`);
   url.search=new URLSearchParams({client_id:config.MICROSOFT_MAIL_CLIENT_ID,response_type:"code",redirect_uri:callback(),scope,state,login_hint:address,prompt:"select_account",code_challenge:createHash("sha256").update(verifier).digest("base64url"),code_challenge_method:"S256"}).toString();
@@ -75,7 +76,7 @@ export function registerMailboxOAuth(app:FastifyInstance):void{
         else await client.query("INSERT INTO account_email_mailboxes(account_id,address,imap_host,imap_port,imap_username,imap_secret_encrypted,smtp_host,smtp_port,smtp_username,smtp_secret_encrypted,smtp_tls,auth_type,oauth_refresh_encrypted,uid_validity,last_uid) VALUES($1,$2,'outlook.office365.com',993,$2,'','smtp-mail.outlook.com',587,$2,'','starttls','microsoft',$3,$4,$5)",[row.account_id,row.address,secret,uidValidity,lastUid]);
         await client.query("DELETE FROM mailbox_oauth_states WHERE state_hash=$1",[row.state_hash]);
       });
-      return reply.send("Microsoft 邮箱授权成功，可以关闭此页面并刷新邮箱设置。");
+      return reply.type("text/html; charset=utf-8").send(successPage());
     }catch(error){
       const detail=error instanceof Error?error.message:"unknown_error";
       request.log.error({err:detail,address:row.address,accountId:row.account_id},"Microsoft mailbox OAuth callback failed");
