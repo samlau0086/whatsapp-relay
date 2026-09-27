@@ -2294,7 +2294,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                     <div className="messenger-window-closed"><Clock3 size={15}/><span>Facebook Messenger 24 小时回复窗口已关闭</span></div>
                   ) : (
                     <div
-                      className={`composer ${composerImageDragging ? "image-dragging" : ""} ${composerImageBusy ? "image-uploading" : ""}`}
+                      className={`composer ${emailMode?"email-composer":""} ${composerImageDragging ? "image-dragging" : ""} ${composerImageBusy ? "image-uploading" : ""}`}
                       onDragEnter={handleComposerDragEnter}
                       onDragOver={(event) => {
                         if (
