@@ -18,6 +18,11 @@ to WhatsApp accounts. Password mailboxes and the Resend sending provider are unc
 6. In email settings, add a mailbox, choose Microsoft OAuth, select its WhatsApp
    account and enter the same mailbox address as the Microsoft account you authorize.
 
+For the GitHub VPS deployment, add `MICROSOFT_MAIL_CLIENT_ID` as a production
+repository/environment variable and `MICROSOFT_MAIL_CLIENT_SECRET` as a production
+secret. The deployment workflow copies both values into the API and mail worker;
+no client secret is exposed to the browser.
+
 Refresh tokens are encrypted at rest. One-time OAuth state expires in ten minutes;
 the authorization-code exchange uses PKCE. IMAP authorization is verified before
 saving. New mailboxes start at the current INBOX UID, so historical mail is not imported.

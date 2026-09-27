@@ -433,6 +433,37 @@ Agent 收到的 WhatsApp 事件先写入本地 SQLite WAL，中心事务提交�
 
 GitHub Actions 自动部署到 VPS 的准备步骤、Secrets 配置、HTTPS 反向代理和回退说明见 [`docs/vps-deployment.md`](docs/vps-deployment.md)。
 
+### Outlook / Live / Hotmail 邮箱 OAuth 配置
+
+会话邮箱支持通过 Microsoft OAuth 连接 Outlook.com、Live 和 Hotmail 个人邮箱。Microsoft Entra 应用注册、OAuth 授权和邮件收发本身通常不需要购买付费版 Entra；只需注册应用并创建客户端密码。详细说明见 [`docs/microsoft-mailbox-oauth.md`](docs/microsoft-mailbox-oauth.md)。
+
+1. 打开 [Microsoft Entra 管理中心](https://entra.microsoft.com/)，进入 **Entra ID → 应用注册 → 新注册**。
+2. “支持的账户类型”选择 **任何组织目录中的账户和个人 Microsoft 账户**，以支持 Outlook.com、Live 和 Hotmail 个人账号。
+3. 在“重定向 URI”中选择 **Web**，填写部署后的完整地址：
+
+   ```text
+   https://你的域名/api/v1/mailboxes/microsoft/callback
+   ```
+
+4. 创建应用后，在“概览”复制 **应用程序（客户端）ID**；在 **证书和密码 → 新建客户端密码** 中创建密码，并只复制密码的“值”。
+5. 在应用的 API 权限中添加 Microsoft Graph/Exchange OAuth 所需的委托权限：`IMAP.AccessAsUser.All`、`SMTP.Send` 和 `offline_access`。邮箱本身还需要允许 IMAP。
+6. 在 Outlook.com 中允许 IMAP：
+   - 登录 [Outlook.com](https://outlook.live.com/) 并打开右上角 **设置**（齿轮）。
+   - 进入 **邮件 → 转发和 IMAP**。
+   - 在 **POP 和 IMAP** 区域，将 **允许设备和应用使用 IMAP** 切换为开启，然后点击 **保存**。
+   - 如果看不到“转发和 IMAP”，先完成 Microsoft 账户安全验证；个人邮箱默认可能关闭 POP/IMAP，必须先打开才会接受外部客户端连接。
+   - 如果首次连接被 Microsoft 标记为异常，打开 [Microsoft 账户近期活动](https://account.live.com/activity)，找到对应的 IMAP 登录记录并选择 **这是我**，然后重新授权。
+
+   RelayDesk 使用 OAuth，不需要把 Microsoft 账户密码填入邮箱配置。Outlook.com 的标准连接参数为：IMAP `outlook.office365.com:993`（SSL/TLS），SMTP `smtp-mail.outlook.com:587`（STARTTLS），认证方式为 OAuth2/Modern Auth。
+
+7. 如果使用本仓库的 GitHub Actions VPS 部署：
+   - 添加生产环境变量 `MICROSOFT_MAIL_CLIENT_ID`，值为客户端 ID。
+   - 添加生产 Secret `MICROSOFT_MAIL_CLIENT_SECRET`，值为客户端密码的“值”。
+   - 重新运行部署流程。工作流会把配置写入 API 和邮件 Worker 的服务器环境，不会发送到浏览器。
+8. 部署完成后，在 **系统设置 → 邮件发送 → 会话邮箱配置 → 新增邮箱** 中选择 **Microsoft OAuth (Outlook / Live / Hotmail)**，填写邮箱地址和映射的 WhatsApp 账号，然后点击授权。
+
+生产环境必须使用公网 HTTPS 回调地址，且 Microsoft Entra 中登记的地址必须与 `PUBLIC_API_URL` 生成的回调地址完全一致。不要把 Client Secret 提交到代码仓库或前端环境变量中。
+
 1. 更换 `.env` 的数据库、JWT、数据加密、管理员和对象存储密钥。
 2. 使用 HTTPS 反向代理暴露 Web/API，并限制 MinIO 与 PostgreSQL 只在内部网络访问。
 3. 运行数据库与对象存储备份，完成一次恢复演练。
