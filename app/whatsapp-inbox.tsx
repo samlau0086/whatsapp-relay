@@ -355,6 +355,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [loadError,setLoadError]=useState("");
   const [newConversationOpen,setNewConversationOpen]=useState(false);
   const [transferConversation,setTransferConversation]=useState<Conversation|null>(null);
+  const [mergeSameAccountConversation,setMergeSameAccountConversation]=useState<Conversation|null>(null);
   const [mediaOpen,setMediaOpen]=useState(false);
   const [imageViewerMessageId,setImageViewerMessageId]=useState("");
   const [composerImageBusy,setComposerImageBusy]=useState(false);
@@ -2610,6 +2611,13 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           }}
         />
       )}
+      {mergeSameAccountConversation && <SameAccountMergeDialog conversation={mergeSameAccountConversation} token={apiToken} onToken={setApiToken} onClose={()=>setMergeSameAccountConversation(null)} onMerged={async(targetId,accessToken)=>{
+        setMergeSameAccountConversation(null);
+        setActiveId(targetId);
+        setToast("会话已合并，后续消息将显示在保留的会话中");
+        await loadWorkspace(accessToken,true);
+        await loadMessages(accessToken,targetId);
+      }}/>}
       {replySuggestion&&active?.id===replySuggestion.conversationId&&(
         <ReplySuggestionDialog
           suggestion={replySuggestion}
@@ -2756,6 +2764,10 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             setContextTaskConversation(conversationMenu.conversation);
             setConversationMenu(null);
           }}
+          onMergeSameAccount={() => {
+            setMergeSameAccountConversation(conversationMenu.conversation);
+            setConversationMenu(null);
+          }}
         />
       )}
       {contextContactId && (
@@ -2807,7 +2819,7 @@ const CUSTOMER_STAGES=[
 
 function stageName(value:string){return CUSTOMER_STAGES.find(item=>item[0]===value)?.[1]??"新线索";}
 
-function ConversationContextMenu({state,tags,role,busy,onSection,onTags,onStage,onToggleTag,onNote,onStatus,onBlock,onDelete,onEdit,onTask}:{state:ConversationContextState;tags:TagItem[];role:string;busy:boolean;onSection:(section:ConversationContextState["section"])=>void;onTags:()=>void;onStage:(value:string)=>void;onToggleTag:(tag:TagItem)=>void;onNote:()=>void;onStatus:()=>void;onBlock:()=>void;onDelete:()=>void;onEdit:()=>void;onTask:()=>void}){
+function ConversationContextMenu({state,tags,role,busy,onSection,onTags,onStage,onToggleTag,onNote,onStatus,onBlock,onDelete,onEdit,onTask,onMergeSameAccount}:{state:ConversationContextState;tags:TagItem[];role:string;busy:boolean;onSection:(section:ConversationContextState["section"])=>void;onTags:()=>void;onStage:(value:string)=>void;onToggleTag:(tag:TagItem)=>void;onNote:()=>void;onStatus:()=>void;onBlock:()=>void;onDelete:()=>void;onEdit:()=>void;onTask:()=>void;onMergeSameAccount:()=>void}){
   const item=state.conversation;
   return <div className="conversation-context-menu" style={{left:state.x,top:state.y}} role="menu" aria-label={`${item.name} 的快捷操作`} onClick={event=>event.stopPropagation()}>
     <header><span className="avatar small" style={{background:item.color}}>{item.conversationType==="group"?<Users size={15}/>:item.initials}</span><span><b>{item.name}</b><small>{item.conversationType==="group"?`${item.groupParticipantCount} 位成员`:item.phone||item.account}</small></span></header>
@@ -2817,6 +2829,7 @@ function ConversationContextMenu({state,tags,role,busy,onSection,onTags,onStage,
       <button role="menuitem" onClick={onNote}><FileText size={15}/><span><b>添加备注</b><small>团队共享备注</small></span></button>
       {item.conversationType!=="group"&&<button role="menuitem" onClick={onEdit}><Pencil size={15}/><span><b>编辑资料</b><small>名称、邮箱及联系方式</small></span></button>}
       {item.conversationType!=="group"&&<button role="menuitem" onClick={onTask}><ClipboardList size={15}/><span><b>添加任务</b><small>关联当前客户和会话</small></span></button>}
+      {item.conversationType!=="group"&&item.platform==="whatsapp"&&item.transport==="web"&&<button role="menuitem" onClick={onMergeSameAccount}><ArrowRightLeft size={15}/><span><b>合并同账号会话</b><small>将此会话并入指定的主会话</small></span></button>}
       <i/>
       <button role="menuitem" className={item.conversationStatus==="closed"?"reopen":""} disabled={busy} onClick={onStatus}><CheckCheck size={15}/><span><b>{item.conversationStatus==="closed"?"重新打开会话":"关闭会话"}</b><small>{item.conversationStatus==="closed"?"恢复到全部会话":"移入已关闭会话"}</small></span></button>
       {item.conversationType!=="group"&&item.platform==="whatsapp"&&item.transport==="web"&&<button role="menuitem" className={item.blocked?"reopen":"danger"} disabled={busy} onClick={onBlock}><Ban size={15}/><span><b>{item.blocked?"解除拉黑":"拉黑联系人"}</b><small>{item.blocked?"允许对方再次发送消息":"阻止对方向此账号发送消息"}</small></span></button>}
@@ -2829,6 +2842,43 @@ function ConversationNoteDialog({conversation,token,onToken,onClose,onSaved}:{co
   const [body,setBody]=useState(""),[busy,setBusy]=useState(false),[error,setError]=useState("");
   async function save(){if(!body.trim()||busy)return;setBusy(true);setError("");const result=await authorizedFetch(`/api/v1/conversations/${conversation.id}/notes`,token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({body:body.trim()})});if(result.token!==token)onToken(result.token);if(!result.response.ok){setError(`备注保存失败（HTTP ${result.response.status}）`);setBusy(false);return;}await onSaved();}
   return <div className="modal-backdrop context-action-backdrop" role="presentation"><section className="login-dialog context-action-dialog" role="dialog" aria-modal="true" aria-labelledby="context-note-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><FileText size={19}/></span><h2 id="context-note-title">给 {conversation.name} 添加备注</h2><p>备注将对团队成员共享，并显示在联系人详情中。</p><label>备注内容<textarea autoFocus value={body} onChange={event=>setBody(event.target.value)} maxLength={5000} placeholder="记录客户需求、跟进情况或注意事项"/><small>{body.length}/5000</small></label>{error&&<span className="login-error">{error}</span>}<footer><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void save()} disabled={busy||!body.trim()}>{busy?"正在保存…":"添加备注"}</button></footer></section></div>;
+}
+
+type SameAccountCandidate={id:string;name:string;whatsapp_username:string|null;phone_e164:string|null;provider_user_id:string|null;last_message_at:string|null;message_count:number};
+
+function SameAccountMergeDialog({conversation,token,onToken,onClose,onMerged}:{conversation:Conversation;token:string;onToken:(token:string)=>void;onClose:()=>void;onMerged:(targetId:string,token:string)=>Promise<void>}){
+  const [query,setQuery]=useState(""),[candidates,setCandidates]=useState<SameAccountCandidate[]>([]),[targetId,setTargetId]=useState(""),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState("");
+  useEffect(()=>{
+    let cancelled=false;
+    const timeout=setTimeout(()=>{void (async()=>{
+      setLoading(true);
+      try{
+        const result=await authorizedFetch(`/api/v1/conversations/${conversation.id}/merge-same-account/candidates?q=${encodeURIComponent(query)}`,token);
+        if(cancelled)return;
+        if(result.token!==token)onToken(result.token);
+        const body=await result.response.json();
+        if(!result.response.ok)throw new Error(body.message??"候选会话读取失败");
+        setCandidates(body.data??[]);
+      }catch(cause){if(!cancelled)setError(cause instanceof Error?cause.message:"候选会话读取失败");}
+      finally{if(!cancelled)setLoading(false);}
+    })();},250);
+    return()=>{cancelled=true;clearTimeout(timeout);};
+  },[conversation.id,query,token,onToken]);
+  const target=candidates.find(item=>item.id===targetId);
+  async function merge(){
+    if(!target||busy)return;
+    const confirmed=await confirmAction(`将当前“${conversation.name}”的消息和关联资料并入“${target.name}”？保留后者作为主会话，当前会话不再单独显示；后续回复将进入主会话。请先核对两条会话确属同一客户。`,{title:"确认合并同账号会话？",confirmLabel:"确认合并",tone:"warning"});
+    if(!confirmed)return;
+    setBusy(true);setError("");
+    try{
+      const result=await authorizedFetch(`/api/v1/conversations/${conversation.id}/merge-same-account`,token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({targetConversationId:target.id})});
+      if(result.token!==token)onToken(result.token);
+      const body=await result.response.json();
+      if(!result.response.ok)throw new Error(body.message??"合并失败");
+      await onMerged(target.id,result.token);
+    }catch(cause){setError(cause instanceof Error?cause.message:"合并失败");setBusy(false);}
+  }
+  return <div className="modal-backdrop context-action-backdrop" role="presentation"><section className="login-dialog context-action-dialog conversation-transfer-dialog" role="dialog" aria-modal="true" aria-labelledby="same-account-merge-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><ArrowRightLeft size={19}/></span><h2 id="same-account-merge-title">合并同账号会话</h2><p>待并入：{conversation.name} · {conversation.providerUserId||conversation.phone||"无发送身份"}。请选择要保留的主会话。</p><label>查找主会话<input autoFocus value={query} onChange={event=>{setQuery(event.target.value);setTargetId("");setError("");}} placeholder="搜索姓名、用户名或号码" maxLength={100}/></label><div className="same-account-merge-results" role="radiogroup" aria-label="选择保留的主会话">{loading?<p>正在读取会话…</p>:candidates.length?candidates.map(item=><label key={item.id} className="same-account-merge-option"><input type="radio" name="merge-target" value={item.id} checked={targetId===item.id} onChange={()=>setTargetId(item.id)}/><span><b>{item.name}</b><small>{[item.whatsapp_username?`@${item.whatsapp_username}`:null,item.phone_e164,item.provider_user_id,`${item.message_count} 条消息`].filter(Boolean).join(" · ")}</small></span></label>):<p>没有找到其他会话</p>}</div>{error&&<span className="login-error">{error}</span>}<footer><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void merge()} disabled={!target||loading||busy}>{busy?"正在合并…":"选择并确认"}</button></footer></section></div>;
 }
 
 function ConversationTransferDialog({conversation,accounts,token,onToken,onClose,onTransferred,onMerged}:{conversation:Conversation;accounts:Account[];token:string;onToken:(token:string)=>void;onClose:()=>void;onTransferred:(account:Account,token:string)=>Promise<void>;onMerged:(targetConversationId:string,account:Account)=>void}){

@@ -43,6 +43,7 @@ import {registerMessengerRoutes} from "./messenger.js";
 import {isMessengerReplyWindowClosedError,isTemplateRequiredError,queueChannelCommand,queueGroupCreateCommand,queueWhatsAppBlockCommand} from "./whatsapp-outbound.js";
 import {registerBrowserEvents} from "./browser-events.js";
 import {isPostgresUuid} from "./conversation-cursor.js";
+import {mergeSameAccountConversations,validateSameAccountMerge,type MergeIdentity} from "./same-account-merge.js";
 import { paypalProfileSetting, registerPaymentMethodRoutes, resolvePaymentProfile, type PaymentProfileSnapshot } from "./payment-methods.js";
 import { calculatePayPalFee, PAYPAL_FEE_NAME } from "./paypal-fee.js";
 import { calculateShippingQuote, registerShippingRoutes } from "./shipping-routes.js";
@@ -894,6 +895,52 @@ app.post("/api/v1/conversations/:id/transfer", {preHandler:authenticate}, async(
   if(result.status==="outbound_pending")return reply.code(409).send({error:"outbound_pending",message:"该会话仍有待发送消息，请发送完成后再转移"});
   if(result.status==="task_rule_conflict")return reply.code(409).send({error:"task_rule_conflict",message:"目标账号已存在该联系人的相同任务规则，请先选择保留目标规则或以源规则覆盖"});
   return reply.send({id,...result});
+});
+
+app.get("/api/v1/conversations/:id/merge-same-account/candidates",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const {id}=request.params as {id:string},q=String((request.query as {q?:string}).q??"").trim();
+  if(!isPostgresUuid(id)||q.length>100)return reply.code(400).send({error:"invalid_request"});
+  const current=await pool.query("SELECT c.account_id,a.platform,a.transport,co.entity_type FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN channel_accounts a ON a.id=c.account_id WHERE c.id=$1",[id]);
+  if(!current.rowCount||!canAccessAccount(request.principal,current.rows[0].account_id))return reply.code(404).send({error:"not_found"});
+  if(current.rows[0].platform!=="whatsapp"||current.rows[0].transport!=="web"||current.rows[0].entity_type!=="person")return reply.code(409).send({error:"unsupported_conversation"});
+  const result=await pool.query(`SELECT c.id,COALESCE(NULLIF(co.alias,''),co.display_name,co.whatsapp_username,co.phone_e164,co.provider_user_id) name,
+      co.whatsapp_username,co.phone_e164,co.provider_user_id,c.last_message_at,(SELECT count(*)::int FROM messages m WHERE m.conversation_id=c.id) message_count
+    FROM conversations c JOIN contacts co ON co.id=c.contact_id
+    WHERE c.account_id=$1 AND c.id<>$2 AND co.entity_type='person'
+      AND ($3::text='' OR concat_ws(' ',co.alias,co.display_name,co.whatsapp_username,co.phone_e164,co.provider_user_id) ILIKE '%'||$3||'%')
+    ORDER BY c.last_message_at DESC NULLS LAST,c.id LIMIT 30`,[current.rows[0].account_id,id,q]);
+  return{data:result.rows};
+});
+
+app.post("/api/v1/conversations/:id/merge-same-account",{preHandler:authenticate},async(request,reply)=>{
+  if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+  const principal=request.principal;
+  const {id}=request.params as {id:string},targetId=(request.body as {targetConversationId?:unknown}|null)?.targetConversationId;
+  if(!isPostgresUuid(id)||typeof targetId!=="string"||!isPostgresUuid(targetId))return reply.code(400).send({error:"invalid_request"});
+  try{
+    const result=await transaction(async client=>{
+      // Stable ordering avoids opposite-direction merges deadlocking each other.
+      const pair=await client.query(`SELECT c.id,c.account_id,c.contact_id,co.provider_user_id,co.phone_e164,co.whatsapp_username,co.entity_type,a.platform,a.transport
+        FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN channel_accounts a ON a.id=c.account_id
+        WHERE c.id=ANY($1::uuid[]) ORDER BY c.id FOR UPDATE OF c,co`,[[id,targetId]]);
+      if(pair.rowCount!==2)return{status:"not_found" as const};
+      const source=pair.rows.find(row=>row.id===id) as MergeIdentity,target=pair.rows.find(row=>row.id===targetId) as MergeIdentity;
+      if(!source||!target||!canAccessAccount(principal,source.account_id)||!canAccessAccount(principal,target.account_id))return{status:"not_found" as const};
+      const conflict=validateSameAccountMerge(source,target);
+      if(conflict)return{status:"conflict" as const,message:conflict};
+      const message=await mergeSameAccountConversations(client,source,target,principal.id);
+      return message?{status:"conflict" as const,message}:{status:"merged" as const};
+    });
+    if(result.status==="not_found")return reply.code(404).send({error:"not_found"});
+    if(result.status==="conflict")return reply.code(409).send({error:"merge_conflict",message:result.message});
+    return reply.send({targetConversationId:targetId});
+  }catch(error){
+    if(error instanceof Error&&error.message.startsWith("merge_conflict:"))return reply.code(409).send({error:"merge_conflict",message:error.message.slice(15)});
+    if(error instanceof Error&&error.message.startsWith("unmoved_merge_reference:"))return reply.code(409).send({error:"merge_reference_conflict",message:"有关联记录无法安全迁移，合并已取消；请联系管理员"});
+    if(["23505","23503"].includes(String((error as {code?:string}).code)))return reply.code(409).send({error:"merge_data_conflict",message:"两条会话存在无法自动合并的重复资料或任务，合并已取消"});
+    throw error;
+  }
 });
 
 app.post("/api/v1/conversations/:id/merge", {preHandler:authenticate}, async(request,reply)=>{
