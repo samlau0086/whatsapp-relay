@@ -209,6 +209,11 @@ test("workspace includes the reliable-sync UI and responsive breakpoints", async
   assert.match(component, /function ContactManagement/);
   assert.match(component, /function ContactEditDialog/);
   assert.match(component, /function ContactCreateDialog/);
+  assert.match(component, /<label>邮箱<input type="email" value={email}/);
+  assert.match(component, /emails:email\.trim\(\)\?\[\{label:"",email:email\.trim\(\),isPrimary:true\}\]/);
+  assert.match(component, /function ContactFirstEmailDialog/);
+  assert.match(component, /\/api\/v1\/contacts\/\$\{contact\.id\}\/email-sends/);
+  assert.match(component, /!whatsappUsername\.trim\(\)&&!emails\.some\(item=>item\.email\.trim\(\)\)/);
   assert.match(component, /function ContactAvatar/);
   assert.match(component, /function ContactAddressDialog/);
   assert.match(component, /\/api\/v1\/contacts/);
