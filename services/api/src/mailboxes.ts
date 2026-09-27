@@ -8,6 +8,7 @@ import type { PoolClient } from "pg";
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { decryptAtRest } from "./security.js";
+import { microsoftMailboxToken } from "./mailbox-oauth.js";
 
 export type MailboxSettings={
   accountId:string;address:string;displayName:string;isPrimary:boolean;enabled:boolean;
@@ -34,16 +35,16 @@ export function latestEmailText(input:string):string{
   return kept.join("\n").trim().slice(0,65536);
 }
 
-function imapClient(settings:{imap_host:string;imap_port:number;imap_username:string;imap_secret_encrypted:string},password?:string):ImapFlow{
-  return new ImapFlow({host:settings.imap_host,port:Number(settings.imap_port),secure:true,auth:{user:settings.imap_username,pass:password??decryptAtRest(settings.imap_secret_encrypted,config.DATA_ENCRYPTION_KEY)},logger:false});
+function imapClient(settings:{imap_host:string;imap_port:number;imap_username:string;imap_secret_encrypted:string},password?:string,accessToken?:string):ImapFlow{
+  return new ImapFlow({host:settings.imap_host,port:Number(settings.imap_port),secure:true,auth:accessToken?{user:settings.imap_username,accessToken}:{user:settings.imap_username,pass:password??decryptAtRest(settings.imap_secret_encrypted,config.DATA_ENCRYPTION_KEY)},logger:false});
 }
 
-export async function verifyMailbox(settings:MailboxSettings):Promise<{uidValidity:string;lastUid:number}>{
-  const client=imapClient({imap_host:settings.imapHost,imap_port:settings.imapPort,imap_username:settings.imapUsername,imap_secret_encrypted:""},settings.imapPassword);
+export async function verifyMailbox(settings:MailboxSettings,accessToken?:string):Promise<{uidValidity:string;lastUid:number}>{
+  const client=imapClient({imap_host:settings.imapHost,imap_port:settings.imapPort,imap_username:settings.imapUsername,imap_secret_encrypted:""},settings.imapPassword,accessToken);
   try{
     await client.connect();
     const box=await client.mailboxOpen("INBOX",{readOnly:true});
-    const transport=nodemailer.createTransport({host:settings.smtpHost,port:settings.smtpPort,secure:settings.smtpTls==="tls",requireTLS:settings.smtpTls==="starttls",auth:{user:settings.smtpUsername,pass:settings.smtpPassword},connectionTimeout:15000,greetingTimeout:15000,disableFileAccess:true,disableUrlAccess:true});
+    const transport=nodemailer.createTransport({host:settings.smtpHost,port:settings.smtpPort,secure:settings.smtpTls==="tls",requireTLS:settings.smtpTls==="starttls",auth:accessToken?{type:"OAuth2",user:settings.smtpUsername,accessToken}:{user:settings.smtpUsername,pass:settings.smtpPassword},connectionTimeout:15000,greetingTimeout:15000,disableFileAccess:true,disableUrlAccess:true});
     await transport.verify();
     return {uidValidity:String(box.uidValidity),lastUid:Math.max(0,Number(box.uidNext)-1)};
   }finally{await client.logout().catch(()=>{});}
@@ -95,8 +96,10 @@ async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,sourc
 export async function syncOneMailbox():Promise<boolean>{
   const claimed=await pool.query(`UPDATE account_email_mailboxes SET claimed_until=now()+interval '2 minutes',next_sync_at=now()+interval '30 seconds' WHERE id=(SELECT id FROM account_email_mailboxes WHERE enabled AND next_sync_at<=now() AND (claimed_until IS NULL OR claimed_until<now()) ORDER BY next_sync_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`);
   if(!claimed.rowCount)return false;
-  const row=claimed.rows[0] as MailboxRow,client=imapClient(row);
+  const row=claimed.rows[0] as MailboxRow;let client:ImapFlow|undefined;
   try{
+    const accessToken=claimed.rows[0].auth_type==='microsoft'?await microsoftMailboxToken(row.id):undefined;
+    client=imapClient(row,undefined,accessToken);
     await client.connect();
     const box=await client.mailboxOpen("INBOX",{readOnly:true}),validity=String(box.uidValidity);
     if(row.uid_validity!==validity||row.last_uid===null){
@@ -123,7 +126,7 @@ export async function syncOneMailbox():Promise<boolean>{
   }catch(error){
     await pool.query("UPDATE account_email_mailboxes SET last_error=$2,next_sync_at=now()+interval '2 minutes' WHERE id=$1",[row.id,(error instanceof Error?error.message:String(error)).slice(0,1000)]);
   }finally{
-    await client.logout().catch(()=>{});
+    await client?.logout().catch(()=>{});
     await pool.query("UPDATE account_email_mailboxes SET claimed_until=NULL WHERE id=$1",[row.id]);
   }
   return true;

@@ -15,6 +15,8 @@ const schema = z.object({
   S3_SECRET_KEY: z.string().default("relay-secret-change-me"),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
   PUBLIC_API_URL: z.string().url().default("http://localhost:8080"),
+  MICROSOFT_MAIL_CLIENT_ID: z.string().default(""),
+  MICROSOFT_MAIL_CLIENT_SECRET: z.string().default(""),
   META_GRAPH_API_VERSION: z.string().regex(/^v\d+\.\d+$/).optional(),
   STATUS_MAX_RECIPIENTS: z.coerce.number().int().min(1).max(10000).default(1000),
 });

@@ -5692,12 +5692,34 @@ function TaskAgentSettingsPanel({
 
 function MailboxSettingsPanel({token,onToken,onToast,accounts}:{token:string;onToken:(token:string)=>void;onToast:(text:string)=>void;accounts:Account[]}){
   const [items,setItems]=useState<Array<Record<string,unknown>>>([]),[editing,setEditing]=useState<Record<string,unknown>|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState("");
-  const blank=()=>({accountId:accounts[0]?.id??"",address:"",displayName:"",isPrimary:false,enabled:true,imapHost:"",imapPort:993,imapUsername:"",imapPassword:"",smtpHost:"",smtpPort:465,smtpTls:"tls",smtpUsername:"",smtpPassword:""});
+  const blank=()=>({accountId:accounts.find(account=>account.platform==="whatsapp")?.id??"",address:"",displayName:"",isPrimary:false,enabled:true,authType:"password",imapHost:"",imapPort:993,imapUsername:"",imapPassword:"",smtpHost:"",smtpPort:465,smtpTls:"tls",smtpUsername:"",smtpPassword:""});
   const load=useCallback(async()=>{const result=await authorizedFetch("/api/v1/mailboxes",token);if(result.token!==token)onToken(result.token);const body=await result.response.json().catch(()=>({})) as {data?:Array<Record<string,unknown>>};if(result.response.ok)setItems(body.data??[]);},[token,onToken]);
   useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer);},[load]);
   async function save(){if(!editing)return;setBusy(true);setError("");const id=editing.id?String(editing.id):"";const result=await authorizedFetch(id?`/api/v1/admin/mailboxes/${id}`:"/api/v1/admin/mailboxes",token,{method:id?"PUT":"POST",headers:{"content-type":"application/json"},body:JSON.stringify(editing)});if(result.token!==token)onToken(result.token);if(!result.response.ok){const body=await result.response.json().catch(()=>({}));setError(String(body.message??body.error??"保存失败"));}else{setEditing(null);onToast("邮箱配置已保存");await load();}setBusy(false);}
   async function remove(id:string){if(!confirm("删除后将停止后续收发，历史邮件会保留。"))return;const result=await authorizedFetch(`/api/v1/admin/mailboxes/${id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);if(result.response.ok){onToast("邮箱配置已删除");await load();}}
   async function test(id:string){const result=await authorizedFetch(`/api/v1/admin/mailboxes/${id}/test`,token,{method:"POST"});if(result.token!==token)onToken(result.token);onToast(result.response.ok?"连接测试成功":"连接测试失败");}
+  async function authorizeMicrosoft(accountId:string,address:string){
+    setBusy(true);setError("");
+    const popup=window.open("about:blank","_blank");
+    if(popup)popup.opener=null;
+    try{
+      const result=await authorizedFetch("/api/v1/admin/mailboxes/microsoft/authorize",token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId,address})});
+      if(result.token!==token)onToken(result.token);
+      const body=await result.response.json() as {url?:string;message?:string};
+      if(!result.response.ok||!body.url)throw new Error(body.message??"无法发起 Microsoft 授权");
+      if(popup)popup.location.href=body.url;else window.location.assign(body.url);
+    }catch(error){popup?.close();const message=error instanceof Error?error.message:"授权失败";setError(message);onToast(message);}finally{setBusy(false);}
+  }
+  useEffect(()=>{const refresh=()=>void load();window.addEventListener("focus",refresh);return()=>window.removeEventListener("focus",refresh);},[load]);
+  async function saveMicrosoftPreferences(){
+    if(!editing)return;setBusy(true);setError("");
+    try{
+      const result=await authorizedFetch(`/api/v1/admin/mailboxes/${String(editing.id)}/preferences`,token,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({displayName:String(editing.displayName??""),isPrimary:Boolean(editing.isPrimary),enabled:editing.enabled!==false})});
+      if(result.token!==token)onToken(result.token);
+      if(!result.response.ok)throw new Error("保存邮箱设置失败");
+      setEditing(null);await load();onToast("邮箱配置已保存");
+    }catch(error){setError(error instanceof Error?error.message:"保存失败");}finally{setBusy(false);}
+  }
   return (
     <section className="provider-form agent-card mailbox-settings-panel">
       <header>
@@ -5716,7 +5738,8 @@ function MailboxSettingsPanel({token,onToken,onToast,accounts}:{token:string;onT
           </div>
           <span>
             <button className="secondary-action" onClick={() => void test(String(item.id))}>测试连接</button>
-            <button className="secondary-action" onClick={() => setEditing({...item, accountId: String(item.account_id), imapHost: String(item.imap_host ?? ""), imapPort: Number(item.imap_port ?? 993), imapUsername: String(item.imap_username ?? ""), smtpHost: String(item.smtp_host ?? ""), smtpPort: Number(item.smtp_port ?? 465), smtpTls: String(item.smtp_tls ?? "tls")})}>编辑</button>
+            {item.auth_type==="microsoft"&&<><span>Microsoft OAuth</span><button className="secondary-action" disabled={busy} onClick={()=>void authorizeMicrosoft(String(item.account_id),String(item.address))}>重新授权</button></>}
+            <button className="secondary-action" onClick={() => setEditing({...item, accountId: String(item.account_id),displayName:String(item.display_name??""),isPrimary:Boolean(item.is_primary),smtpUsername:String(item.smtp_username??""), authType:item.auth_type==="microsoft"?"microsoft":"password",imapHost: String(item.imap_host ?? ""), imapPort: Number(item.imap_port ?? 993), imapUsername: String(item.imap_username ?? ""), smtpHost: String(item.smtp_host ?? ""), smtpPort: Number(item.smtp_port ?? 465), smtpTls: String(item.smtp_tls ?? "tls")})}>编辑</button>
             <button className="danger-text" onClick={() => void remove(String(item.id))}><Trash2 size={13}/>删除</button>
           </span>
         </article>
@@ -5724,10 +5747,12 @@ function MailboxSettingsPanel({token,onToken,onToast,accounts}:{token:string;onT
       {!items.length && <p className="empty-note">尚未配置会话邮箱</p>}
       {editing && (
         <div className="provider-form mailbox-editor">
+          {!editing.id&&<label>验证方式<select value={String(editing.authType??"password")} onChange={event=>setEditing({...editing,authType:event.target.value})}><option value="password">邮箱密码 / 应用密码</option><option value="microsoft">Microsoft OAuth (Outlook / Live / Hotmail)</option></select></label>}
           <div className="provider-form-grid">
-            <label>映射 WhatsApp 账号<select value={String(editing.accountId ?? "")} onChange={e => setEditing({...editing, accountId: e.target.value})}>{accounts.filter(a => a.platform === "whatsapp").map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
-            <label>邮箱地址<input type="email" value={String(editing.address ?? "")} onChange={e => setEditing({...editing, address: e.target.value})}/></label>
+            <label>映射 WhatsApp 账号<select disabled={Boolean(editing.id)&&editing.authType==="microsoft"} value={String(editing.accountId ?? "")} onChange={e => setEditing({...editing, accountId: e.target.value})}>{accounts.filter(a => a.platform === "whatsapp").map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
+            <label>邮箱地址<input type="email" disabled={Boolean(editing.id)&&editing.authType==="microsoft"} value={String(editing.address ?? "")} onChange={e => setEditing({...editing, address: e.target.value})}/></label>
           </div>
+          {editing.authType!=="microsoft"&&<>
           <div className="provider-form-grid">
             <label>IMAP 主机<input value={String(editing.imapHost ?? "")} onChange={e => setEditing({...editing, imapHost: e.target.value})}/></label>
             <label>IMAP 端口<input type="number" value={Number(editing.imapPort ?? 993)} onChange={e => setEditing({...editing, imapPort: Number(e.target.value)})}/></label>
@@ -5744,12 +5769,14 @@ function MailboxSettingsPanel({token,onToken,onToast,accounts}:{token:string;onT
             <label>SMTP 用户名<input value={String(editing.smtpUsername ?? "")} onChange={e => setEditing({...editing, smtpUsername: e.target.value})}/></label>
             <SecretField label="SMTP 密码" value={String(editing.smtpPassword ?? "")} onChange={value => setEditing({...editing, smtpPassword: value})}/>
           </div>
-          <div className="mailbox-editor-options">
+          </>}
+          {editing.id&&editing.authType==="microsoft"&&<label>发件人名称<input value={String(editing.displayName??"")} onChange={event=>setEditing({...editing,displayName:event.target.value})}/></label>}
+          {(editing.authType!=="microsoft"||editing.id)&&<div className="mailbox-editor-options">
             <label><input type="checkbox" checked={Boolean(editing.isPrimary)} onChange={e => setEditing({...editing, isPrimary: e.target.checked})}/>设为主发件邮箱</label>
             <label><input type="checkbox" checked={editing.enabled !== false} onChange={e => setEditing({...editing, enabled: e.target.checked})}/>启用收发</label>
-          </div>
+          </div>}
           {error && <span className="login-error">{error}</span>}
-          <footer><button className="secondary-action" onClick={() => setEditing(null)}>取消</button><button className="primary-action" disabled={busy || !String(editing.address ?? "").trim()} onClick={() => void save()}>{busy ? "保存中…" : "保存邮箱配置"}</button></footer>
+          <footer><button className="secondary-action" onClick={() => setEditing(null)}>取消</button><button className="primary-action" disabled={busy || !String(editing.address ?? "").trim()||!editing.accountId} onClick={() => editing.authType==="microsoft"?(editing.id?void saveMicrosoftPreferences():void authorizeMicrosoft(String(editing.accountId),String(editing.address))):void save()}>{busy ? "处理中…" : editing.authType==="microsoft"&&!editing.id?"登录 Microsoft 并授权":"保存邮箱配置"}</button></footer>
         </div>
       )}
     </section>

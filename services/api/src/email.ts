@@ -4,9 +4,10 @@ import type { PoolClient } from "pg";
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { decryptAtRest } from "./security.js";
+import { microsoftMailboxToken } from "./mailbox-oauth.js";
 
 export type EmailProvider="smtp"|"resend";
-export type EmailProviderConfig={fromName:string;fromEmail:string;replyTo?:string;host?:string;port?:number;tls?:"tls"|"starttls";username?:string};
+export type EmailProviderConfig={fromName:string;fromEmail:string;replyTo?:string;host?:string;port?:number;tls?:"tls"|"starttls";username?:string;oauthMailboxId?:string};
 type EmailJob={id:string;provider:EmailProvider;provider_config:EmailProviderConfig;provider_secret_encrypted:string;recipients:Array<{email:string;label:string}>;subject:string;text_body:string;html_body:string;attempt:number;in_reply_to:string|null;references_header:string|null};
 
 const s3=new S3Client({region:config.S3_REGION,endpoint:config.S3_ENDPOINT,forcePathStyle:true,credentials:{accessKeyId:config.S3_ACCESS_KEY,secretAccessKey:config.S3_SECRET_KEY}});
@@ -50,8 +51,8 @@ async function loadAttachments(emailId:string){
 }
 
 async function sendSmtp(job:EmailJob,attachments:Awaited<ReturnType<typeof loadAttachments>>):Promise<string>{
-  const cfg=job.provider_config,secret=decryptAtRest(job.provider_secret_encrypted,config.DATA_ENCRYPTION_KEY);
-  const transport=nodemailer.createTransport({host:cfg.host,port:cfg.port,secure:cfg.tls==="tls",requireTLS:cfg.tls==="starttls",auth:cfg.username?{user:cfg.username,pass:secret}:undefined,connectionTimeout:15_000,greetingTimeout:15_000,socketTimeout:30_000,disableFileAccess:true,disableUrlAccess:true});
+  const cfg=job.provider_config,secret=cfg.oauthMailboxId?await microsoftMailboxToken(cfg.oauthMailboxId):decryptAtRest(job.provider_secret_encrypted,config.DATA_ENCRYPTION_KEY);
+  const transport=nodemailer.createTransport({host:cfg.host,port:cfg.port,secure:cfg.tls==="tls",requireTLS:cfg.tls==="starttls",auth:cfg.oauthMailboxId?{type:"OAuth2",user:cfg.username,accessToken:secret}:cfg.username?{user:cfg.username,pass:secret}:undefined,connectionTimeout:15_000,greetingTimeout:15_000,socketTimeout:30_000,disableFileAccess:true,disableUrlAccess:true});
   const info=await transport.sendMail({from:{name:cfg.fromName,address:cfg.fromEmail},replyTo:cfg.replyTo||undefined,to:job.recipients.map(item=>item.email),subject:job.subject,text:job.text_body,html:job.html_body,messageId:`<email-${job.id}@relaydesk.local>`,inReplyTo:job.in_reply_to||undefined,references:job.references_header||undefined,attachments:attachments.map(item=>({...item,contentDisposition:item.contentType==="application/pdf"?"attachment" as const:"inline" as const}))});
   return info.messageId;
 }
