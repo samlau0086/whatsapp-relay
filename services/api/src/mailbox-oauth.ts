@@ -20,7 +20,7 @@ async function tokenRequest(fields:Record<string,string>):Promise<{access_token:
   const body=await response.json().catch(()=>({})) as {access_token?:string;refresh_token?:string;error?:string;error_description?:string};
   if(!response.ok||!body.access_token){
     const reason=body.error_description||body.error||`http_${response.status}`;
-    throw new Error(`microsoft_authorization_failed:${reason.slice(0,240)}`);
+    throw new Error(`microsoft_authorization_failed:${body.error||"unknown"}:${reason.slice(0,240)}`);
   }
   return body as {access_token:string;refresh_token?:string};
 }
@@ -79,8 +79,15 @@ export function registerMailboxOAuth(app:FastifyInstance):void{
     }catch(error){
       const detail=error instanceof Error?error.message:"unknown_error";
       request.log.error({err:detail,address:row.address,accountId:row.account_id},"Microsoft mailbox OAuth callback failed");
-      const message=detail.startsWith("microsoft_authorization_failed:")
-        ? "Microsoft 授权码交换失败，请检查 Client Secret、回调地址和应用账户类型配置。"
+      const exchange=detail.match(/^microsoft_authorization_failed:([^:]+):/i)?.[1]?.toLowerCase();
+      const message=exchange==="invalid_client"
+        ? "Microsoft Client Secret 无效或已过期，请填写“客户端密码”的值（不是 Secret ID）并重新部署。"
+        : exchange==="invalid_grant"
+          ? "Microsoft 授权码无效，通常是回调地址不一致或授权链接已使用；请确认 PUBLIC_API_URL 与 Entra 重定向 URI 完全一致后重新授权。"
+          : exchange==="invalid_scope"
+            ? "Microsoft 邮件权限未配置，请在 Entra 应用中添加 IMAP.AccessAsUser.All、SMTP.Send 和 offline_access 后重新授权。"
+            : detail.startsWith("microsoft_authorization_failed:")
+              ? "Microsoft 授权码交换失败，请检查 Client Secret、回调地址和应用账户类型配置。"
         : /AUTHENTICATIONFAILED|Invalid credentials|LOGIN failed|imap|mailboxOpen|authentication/i.test(detail)
           ? "Microsoft 授权成功但 IMAP 登录失败，请确认已开启 IMAP、邮箱地址与授权账号一致。"
           : "Microsoft 邮箱授权失败，请确认邮箱地址一致、已开启 IMAP，并重新授权。";
