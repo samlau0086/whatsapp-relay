@@ -13,6 +13,19 @@ export function validateSameAccountMerge(source:MergeIdentity,target:MergeIdenti
   return null;
 }
 
+export async function resolveSameAccountRuleConflicts(client:PoolClient,sourceContactId:string,targetContactId:string){
+  const duplicateRules=`SELECT s.id FROM task_rules s JOIN task_rules t
+    ON t.account_id=s.account_id AND t.contact_id=$2 AND t.source=s.source AND t.source_key=s.source_key
+    WHERE s.contact_id=$1`;
+  const cancelled=await client.query(`UPDATE tasks SET status='cancelled',last_error='Cancelled because the source rule was superseded by the retained conversation',updated_at=now()
+    WHERE rule_id IN (${duplicateRules}) AND status IN ('planned','in_progress','waiting_approval','scheduled','overdue')`,[sourceContactId,targetContactId]);
+  // Keep the rule row for historical tasks, but detach and disable it so the
+  // retained contact has only one live rule per source/key.
+  const detached=await client.query(`UPDATE task_rules SET contact_id=NULL,enabled=false,updated_at=now()
+    WHERE id IN (${duplicateRules})`,[sourceContactId,targetContactId]);
+  return{cancelledTasks:cancelled.rowCount??0,detachedRules:detached.rowCount??0};
+}
+
 // Resolve foreign keys from the live schema so later migrations cannot silently
 // cascade-delete records which this merge has not accounted for.
 async function references(client:PoolClient,table:"contacts"|"conversations"){
@@ -92,11 +105,10 @@ export async function mergeSameAccountConversations(client:PoolClient,source:Mer
     last_seen_at=GREATEST(t.last_seen_at,s.last_seen_at),${profileMerge},updated_at=now() FROM contacts s WHERE t.id=$1 AND s.id=$3`,[target.contact_id,source.provider_user_id,source.contact_id]);
   const duplicateEmail=await client.query("SELECT 1 FROM contact_emails s JOIN contact_emails t ON lower(s.email)=lower(t.email) OR (s.is_primary AND t.is_primary) WHERE s.contact_id=$1 AND t.contact_id=$2 LIMIT 1",[source.contact_id,target.contact_id]);
   if(duplicateEmail.rowCount)throw new Error("merge_conflict:两个联系人有重复或多个主邮箱，请先整理联系人邮箱");
-  const duplicateRule=await client.query("SELECT 1 FROM task_rules s JOIN task_rules t ON s.source=t.source AND s.source_key=t.source_key WHERE s.contact_id=$1 AND t.contact_id=$2 LIMIT 1",[source.contact_id,target.contact_id]);
-  if(duplicateRule.rowCount)throw new Error("merge_conflict:两个联系人有重复任务规则，请先处理规则冲突");
+  const resolvedRules=await resolveSameAccountRuleConflicts(client,source.contact_id,target.contact_id);
   await moveReferences(client,"contacts",source.contact_id,target.contact_id,new Set(["conversations.contact_id"]));
   await assertNoReferences(client,"contacts",source.contact_id,new Set());
   await client.query("DELETE FROM contacts WHERE id=$1",[source.contact_id]);
-  await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'conversation.merge_same_account','conversation',$2,$3)",[actorId,target.id,JSON.stringify({sourceConversationId:source.id,sourceContactId:source.contact_id,targetContactId:target.contact_id,providerUserId:source.provider_user_id})]);
+  await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'conversation.merge_same_account','conversation',$2,$3)",[actorId,target.id,JSON.stringify({sourceConversationId:source.id,sourceContactId:source.contact_id,targetContactId:target.contact_id,providerUserId:source.provider_user_id,...resolvedRules})]);
   return null;
 }

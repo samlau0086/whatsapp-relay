@@ -2867,7 +2867,7 @@ function SameAccountMergeDialog({conversation,token,onToken,onClose,onMerged}:{c
   const target=candidates.find(item=>item.id===targetId);
   async function merge(){
     if(!target||busy)return;
-    const confirmed=await confirmAction(`将当前“${conversation.name}”的消息和关联资料并入“${target.name}”？保留后者作为主会话，当前会话不再单独显示；后续回复将进入主会话。请先核对两条会话确属同一客户。`,{title:"确认合并同账号会话？",confirmLabel:"确认合并",tone:"warning"});
+    const confirmed=await confirmAction(`将当前“${conversation.name}”的消息和关联资料并入“${target.name}”？保留后者作为主会话，当前会话不再单独显示；后续回复将进入主会话。重复任务规则以主会话为准，待并入会话的重复规则会停用，其未执行任务会取消，已完成记录保留。请先核对两条会话确属同一客户。`,{title:"确认合并同账号会话？",confirmLabel:"确认合并",tone:"warning"});
     if(!confirmed)return;
     setBusy(true);setError("");
     try{
