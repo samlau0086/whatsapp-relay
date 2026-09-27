@@ -79,9 +79,9 @@ export function registerMailboxOAuth(app:FastifyInstance):void{
     }catch(error){
       const detail=error instanceof Error?error.message:"unknown_error";
       request.log.error({err:detail,address:row.address,accountId:row.account_id},"Microsoft mailbox OAuth callback failed");
-      const message=detail.startsWith("microsoft_token_exchange_failed:")
+      const message=detail.startsWith("microsoft_authorization_failed:")
         ? "Microsoft 授权码交换失败，请检查 Client Secret、回调地址和应用账户类型配置。"
-        : detail.includes("AUTHENTICATIONFAILED")||detail.includes("Invalid credentials")
+        : /AUTHENTICATIONFAILED|Invalid credentials|LOGIN failed|imap|mailboxOpen|authentication/i.test(detail)
           ? "Microsoft 授权成功但 IMAP 登录失败，请确认已开启 IMAP、邮箱地址与授权账号一致。"
           : "Microsoft 邮箱授权失败，请确认邮箱地址一致、已开启 IMAP，并重新授权。";
       return reply.code(400).send(message);
