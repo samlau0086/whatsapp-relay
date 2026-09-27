@@ -51,6 +51,16 @@ export async function queueChannelCommand(
   if(!found.rowCount)throw Object.assign(new Error("conversation_not_found"),{statusCode:404});
   const row=found.rows[0],transport=String(row.transport??"web") as "web"|"cloud",platform=String(row.platform??"whatsapp") as "whatsapp"|"messenger";
   if(transport==="web"&&!row.agent_id)throw Object.assign(new Error("account_not_bound"),{statusCode:409});
+  const payload={...input.payload};
+  if(platform==="whatsapp"&&transport==="web"&&!payload.toJid){
+    // Profile edits in older versions could erase a hidden LID. Only reuse a confirmed target from this conversation.
+    const history=await client.query(`SELECT oc.payload->>'toJid' jid FROM outbound_commands oc
+      JOIN messages m ON m.id=oc.message_id AND m.account_id=oc.account_id
+      WHERE oc.account_id=$1 AND m.conversation_id=$2 AND m.status IN ('sent','delivered','read')
+        AND oc.payload->>'toJid' ~ '^[0-9]+@(s[.]whatsapp[.]net|lid)$'
+      ORDER BY oc.sequence DESC LIMIT 1`,[input.accountId,input.conversationId]);
+    if(history.rowCount){payload.toJid=String(history.rows[0].jid);payload.destinationId=payload.toJid;delete payload.toUsername;}
+  }
   if(platform==="messenger"){
     if(input.payload.type==="template")throw Object.assign(new Error("messenger_template_unsupported"),{statusCode:409});
     if(input.payload.type!=="text"&&input.payload.text?.trim())throw Object.assign(new Error("messenger_media_caption_unsupported"),{statusCode:409});
@@ -74,7 +84,7 @@ export async function queueChannelCommand(
   }
   const command=await client.query(
     "INSERT INTO outbound_commands(agent_id,account_id,message_id,command,payload) VALUES($1,$2,$3,'send_message',$4) RETURNING id,sequence",
-    [transport==="web"?row.agent_id:null,input.accountId,input.messageId,JSON.stringify(input.payload)],
+    [transport==="web"?row.agent_id:null,input.accountId,input.messageId,JSON.stringify(payload)],
   );
   return{commandId:String(command.rows[0].id),sequence:Number(command.rows[0].sequence),agentId:transport==="web"?String(row.agent_id):null,transport,platform};
 }

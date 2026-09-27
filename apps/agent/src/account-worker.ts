@@ -217,7 +217,7 @@ async function execute(command:Command):Promise<void>{
       emit({type:"command_result",sequence:command.sequence,commandId:command.commandId,outcome:"succeeded",whatsappMessageId:sent?.key.id,completedAt:new Date().toISOString()});
       return;
     }
-    const toUsername=String(command.payload.toUsername??"").trim().replace(/^@/,"").toLowerCase();let toJid=String(command.payload.toJid??"");if(toUsername){toJid=await resolveUsernameJid(socket,toUsername);emitContactUsername(init.accountId,{id:toJid,username:toUsername});}if(!toJid)throw new Error("Missing destination JID");
+    const toUsername=String(command.payload.toUsername??"").trim().replace(/^@/,"").toLowerCase();let toJid=String(command.payload.toJid??"").trim();if(!toJid&&toUsername){toJid=await resolveUsernameJid(socket,toUsername);emitContactUsername(init.accountId,{id:toJid,username:toUsername});}if(!toJid)throw new Error("Missing destination JID");
     const quotedId=String(command.payload.quotedWhatsappMessageId??"");
     const quotedMessage=quotedId?(await messageCache?.getMessage(quotedId))??{conversation:String(command.payload.quotedText??"[message]")}:undefined;
     const quotedParticipantJid=String(command.payload.quotedParticipantJid??"");
