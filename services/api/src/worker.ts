@@ -16,8 +16,8 @@ let lastRetention=0;
 process.on("SIGTERM",()=>{stopping=true;});
 process.on("SIGINT",()=>{stopping=true;});
 
+const emailLoop=runEmailLoop();
 while(!stopping){
-  const emailWork=await processOneEmail();
   const agentWork=await processOneAgentJob();
   const mailboxWork=await syncOneMailbox();
   const taskWork=await processOneTaskCycle();
@@ -29,12 +29,26 @@ while(!stopping){
   const messengerInbound=await processOneMessengerWebhook();
   const templateSync=await syncDueCloudTemplates();
   const delivery=await claimWebhook();
-  if(delivery)await deliverWebhook(delivery);else if(!agentWork&&!emailWork&&!mailboxWork&&!taskWork&&!proactiveWork&&!statusWork&&!cloudOutbound&&!cloudInbound&&!messengerOutbound&&!messengerInbound&&!templateSync)await sleep(750);
+  if(delivery)await deliverWebhook(delivery);else if(!agentWork&&!mailboxWork&&!taskWork&&!proactiveWork&&!statusWork&&!cloudOutbound&&!cloudInbound&&!messengerOutbound&&!messengerInbound&&!templateSync)await sleep(750);
   await requeueCommands();
   await recoverStaleStatusCommands();
   await enforceRetention();
 }
+stopping=true;
+await emailLoop;
 await pool.end();
+
+async function runEmailLoop():Promise<void>{
+  while(!stopping){
+    try{
+      const worked=await processOneEmail();
+      if(!worked)await sleep(250);
+    }catch(error){
+      console.error("email worker cycle failed",error);
+      await sleep(1000);
+    }
+  }
+}
 
 type Delivery={id:number;event_id:string;event_type:string;payload:unknown;occurred_at:string;url:string;secret_encrypted:string;attempt:number};
 

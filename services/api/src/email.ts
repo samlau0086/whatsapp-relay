@@ -11,7 +11,9 @@ export type EmailProviderConfig={fromName:string;fromEmail:string;replyTo?:strin
 type EmailJob={id:string;provider:EmailProvider;provider_config:EmailProviderConfig;provider_secret_encrypted:string;recipients:Array<{email:string;label:string}>;subject:string;text_body:string;html_body:string;attempt:number;in_reply_to:string|null;references_header:string|null};
 
 const s3=new S3Client({region:config.S3_REGION,endpoint:config.S3_ENDPOINT,forcePathStyle:true,credentials:{accessKeyId:config.S3_ACCESS_KEY,secretAccessKey:config.S3_SECRET_KEY}});
-const RETRY_MINUTES=[1,5,30,120];
+// A transient provider timeout should be retried quickly; longer backoff follows only
+// after repeated failures so a healthy mailbox is not left visibly queued for a minute.
+const RETRY_MINUTES=[0.1,1,5,30];
 
 export async function ensureEmailTables():Promise<void>{
   await pool.query(`CREATE TABLE IF NOT EXISTS email_provider_settings(provider text PRIMARY KEY CHECK(provider IN ('smtp','resend')),enabled boolean NOT NULL DEFAULT false,config jsonb NOT NULL DEFAULT '{}'::jsonb,secret_encrypted text,updated_by uuid REFERENCES users(id) ON DELETE SET NULL,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now())`);
