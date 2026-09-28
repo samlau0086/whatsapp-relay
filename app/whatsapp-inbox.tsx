@@ -476,7 +476,10 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const active=visible.find(item=>item.id===effectiveActiveId)??(selectedConversationRef.current?.id===effectiveActiveId?selectedConversationRef.current:null);
   const activePrimaryEmail=active?.primaryEmail??"";
   const emailOnlyConversation=Boolean(active&&!active.phone&&!active.providerUserId&&active.primaryEmail);
-  useEffect(()=>{if(emailOnlyConversation)setEmailMode(true);},[emailOnlyConversation,active?.id]);
+  // Email mode belongs to the active conversation. Do not carry it from an
+  // email reply into the next WhatsApp conversation, while keeping it enabled
+  // for contacts that have no WhatsApp identity.
+  useEffect(()=>{setEmailMode(emailOnlyConversation);},[emailOnlyConversation,active?.id]);
   const translationPreference=active?translationPreferences[active.id]??DEFAULT_TRANSLATION_PREFERENCE:DEFAULT_TRANSLATION_PREFERENCE;
   const translationReady=Boolean(active&&translationReadyConversationId===active.id);
   const currentMessages=useMemo(()=>active?messages[active.id]??[]:[],[active,messages]);
