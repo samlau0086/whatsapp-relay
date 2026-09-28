@@ -55,3 +55,12 @@ test("conversation email tables are included in startup migrations",async()=>{
   assert.match(migration,/CREATE TABLE IF NOT EXISTS message_email_details/);
   assert.match(migration,/CREATE TABLE IF NOT EXISTS message_email_attachments/);
 });
+
+test("email quote details migration is included in startup migrations",async()=>{
+  const [migration,migrator]=await Promise.all([
+    readFile(new URL("../../../infra/postgres/migrations/090_email_collapsed_quotes.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(migrator,/090_email_collapsed_quotes\.sql/);
+  assert.match(migration,/ALTER TABLE message_email_details ADD COLUMN IF NOT EXISTS quoted_body text/);
+});
