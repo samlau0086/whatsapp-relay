@@ -151,7 +151,7 @@ export function ProductCardSendDialog({
   onClose: () => void;
   onSent: (message: string) => void;
   insertMode?: boolean;
-  onInsert?: (result: { html?: string; attachments?: Array<{ id: string; fileName: string; mimeType: string; size: number; sha256: string; createdAt: string; usageCount: number }> }) => Promise<void>;
+  onInsert?: (result: { attachments: Array<{ id: string; fileName: string; mimeType: string; size: number; sha256: string; createdAt: string; usageCount: number }> }) => Promise<void>;
 }) {
   const [catalogProducts, setCatalogProducts] = useState<Product[]>([]),
     [categories, setCategories] = useState<string[]>([]),
@@ -551,10 +551,43 @@ export function ProductCardSendDialog({
     }
     const outgoingCaption = (translatedCaption ?? sourceCaption).trim();
     if (insertMode && onInsert) {
-      const attachments = chosen.flatMap((product) => product.imageMediaId ? [{ id: product.imageMediaId, fileName: `${product.sku || product.name}.png`, mimeType: "image/png", size: 0, sha256: "", createdAt: new Date().toISOString(), usageCount: 0 }] : []);
-      await onInsert({ attachments });
-      onSent(`${selected.length} 个产品已插入邮件正文`);
-      onClose();
+      setBusy(true);
+      setError("");
+      try {
+        const grid = mode === "grid" ? gridSize : undefined;
+        const result = await request(
+          `/api/v1/conversations/${conversationId}/product-cards/prepare`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              accountId,
+              clientBatchId: crypto.randomUUID(),
+              productIds: selected,
+              mode,
+              grid,
+              gridOutputFormat: mode === "grid" ? gridOutputFormat : undefined,
+              showPrice,
+              targetCurrency,
+              caption: outgoingCaption || undefined,
+              translationSourceText,
+              translationTargetLanguage: translationSourceText || translatedProductNames?.length || translatedTemplate ? targetLanguage : undefined,
+              translatedProductNames: translatedProductNames?.map((item) => ({ productId: item.productId, name: item.translated.trim() })),
+              translatedTemplate,
+            }),
+          },
+        );
+        onToken(result.token);
+        const body = (await result.response.json().catch(() => ({}))) as { attachments?: Array<{ mediaId: string; fileName: string; mimeType: string; byteSize: number; sha256?: string }>; message?: string; error?: string };
+        if (!result.response.ok || !Array.isArray(body.attachments)) throw new Error(body.message ?? body.error ?? `HTTP ${result.response.status}`);
+        await onInsert({ attachments: body.attachments.map((item) => ({ id: item.mediaId, fileName: item.fileName, mimeType: item.mimeType, size: Number(item.byteSize), sha256: item.sha256 ?? "", createdAt: new Date().toISOString(), usageCount: 0 })) });
+        onSent(`${selected.length} 个产品卡片已插入邮件正文`);
+        onClose();
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "产品卡片生成失败");
+      } finally {
+        setBusy(false);
+      }
       return;
     }
     setBusy(true);
