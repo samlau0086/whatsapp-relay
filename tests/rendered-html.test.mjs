@@ -18,6 +18,15 @@ test("email reply subjects increment and are prefilled from the selected message
   assert.match(inbox, /emailSubject\.trim\(\)\|\|\(selectedReply\?\.email\?replyEmailSubject\(selectedReply\.email\.subject\):"无主题"\)/);
 });
 
+test("email attachments render as media in the conversation and images join the viewer", async () => {
+  const inbox = await readFile(new URL("../app/whatsapp-inbox.tsx", import.meta.url), "utf8");
+  assert.match(inbox, /message\.email\?\.attachments\.length \? <div className="email-message-attachments"/);
+  assert.match(inbox, /message\.email\.attachments\.map\(\(attachment,index\)=><MessageMedia/);
+  assert.match(inbox, /setImageViewerMessageId\(`\$\{message\.id\}:email:\$\{index\}`\)/);
+  assert.match(inbox, /message\.email\?\.attachments\.flatMap\(\(attachment,index\)=>attachment\.mime\.startsWith\("image\/"\)/);
+  assert.doesNotMatch(inbox, /<small>附件：\{message\.email\.attachments\.map/);
+});
+
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
