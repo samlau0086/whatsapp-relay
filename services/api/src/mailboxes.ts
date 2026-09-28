@@ -35,6 +35,13 @@ export function latestEmailText(input:string):string{
   return kept.join("\n").trim().slice(0,65536);
 }
 
+function stripQuotedEmailHtml(input:string):string{
+  return input
+    .replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote>/gi,"")
+    .replace(/<div[^>]+class=["'][^"']*(?:gmail_quote|gmail_attr|yahoo_quoted|moz-cite-prefix)[^"']*["'][^>]*>[\s\S]*?<\/div>/gi,"")
+    .replace(/<div[^>]+id=["'](?:divRplyFwdMsg|yahoo_quoted)["'][^>]*>[\s\S]*?<\/div>/gi,"");
+}
+
 function imapClient(settings:{imap_host:string;imap_port:number;imap_username:string;imap_secret_encrypted:string},password?:string,accessToken?:string):ImapFlow{
   return new ImapFlow({host:settings.imap_host,port:Number(settings.imap_port),secure:true,auth:accessToken?{user:settings.imap_username,accessToken}:{user:settings.imap_username,pass:password??decryptAtRest(settings.imap_secret_encrypted,config.DATA_ENCRYPTION_KEY)},logger:false});
 }
@@ -62,7 +69,8 @@ async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,sourc
   const sender=parsed.from?.value[0]?.address?.trim().toLowerCase();
   if(!sender||sender===row.address.toLowerCase())return;
   const subject=(parsed.subject??"(无主题)").replace(/[\r\n]/g," ").slice(0,200);
-  const body=latestEmailText(parsed.text??convert(String(parsed.html||""),{wordwrap:false,selectors:[{selector:"a",options:{ignoreHref:true}},{selector:"img",format:"skip"}]}));
+  const htmlSource=stripQuotedEmailHtml(String(parsed.html||""));
+  const body=latestEmailText(parsed.text?.trim()||convert(htmlSource,{wordwrap:false,selectors:[{selector:"a",options:{ignoreHref:true}},{selector:"img",format:"skip"},{selector:"blockquote",format:"skip"},{selector:".gmail_quote",format:"skip"},{selector:".gmail_attr",format:"skip"},{selector:".yahoo_quoted",format:"skip"}]}));
   let total=0,warning="";
   const attachmentCandidates=parsed.attachments.filter(item=>{if(item.size>MAX_ATTACHMENT||total+item.size>MAX_TOTAL){warning="部分附件超过邮件归档大小限制，未保存";return false;}total+=item.size;return true;});
   await transaction(async(client:PoolClient)=>{
