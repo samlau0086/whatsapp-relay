@@ -25,7 +25,8 @@ export function latestEmailText(input:string):string{
   const kept:string[]=[];
   for(let i=0;i<lines.length;i++){
     const line=lines[i].trim();
-    if(/^>/.test(line)||/^On .{8,} wrote:\s*$/i.test(line)||/^在.{4,}写道[:：]\s*$/.test(line)
+    const splitEnglishReplyHeader=/^On .{8,}$/i.test(line)&&/^wrote:\s*$/i.test(lines[i+1]?.trim()||"");
+    if(/^>/.test(line)||/^On .{8,} wrote:\s*$/i.test(line)||splitEnglishReplyHeader||/^在.{4,}写道[:：]\s*$/.test(line)
       ||/^[- ]{2,}Original Message[- ]{2,}$/i.test(line)
       ||/^[- ]{2,}Forwarded message[- ]{2,}$/i.test(line)
       || /^_{8,}$/.test(line)
