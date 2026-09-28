@@ -1544,7 +1544,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   }
 
   async function sendQuickReplyMedia(asset:MediaAsset,captionOverride?:string){
-    let caption=asset.mimeType.startsWith("audio/")?"":(captionOverride??draft).trim();
+    let caption=asset.mimeType.startsWith("audio/")?"":(emailMode?(captionOverride??""):(captionOverride??draft)).trim();
     if(caption){const rendered=await resolveQuickReplyText(caption);if(rendered===null)return;caption=rendered.trim();}
     setQuickReplyOpen(false);
     if(emailMode){await insertEmailMedia(asset,caption);return;}
@@ -2777,7 +2777,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           accountId={active.accountId}
           conversationId={active.id}
           token={apiToken}
-          initialCaption={draft}
+          initialCaption={emailMode?"":draft}
           translationEnabled={translationPreference.enabled}
           onToken={setApiToken}
           onToast={setToast}
@@ -2802,7 +2802,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           accountId={active.accountId}
           conversationId={active.id}
           customerName={active.name}
-          initialCaption={draft}
+          initialCaption={emailMode?"":draft}
           translationEnabled={translationPreference.enabled}
           translationConfigured={translationConfigured}
           targetLanguage={translationPreference.customerLanguage}
