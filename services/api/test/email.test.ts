@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { emailShell, escapeHtml } from "../src/email.js";
+import { emailShell, escapeHtml, sanitizeEmailHtml } from "../src/email.js";
 import { emailProviderSettingsSchema, emailSendSchema } from "../src/schemas.js";
 
 test("email HTML escapes user-controlled content",()=>{
@@ -9,6 +9,11 @@ test("email HTML escapes user-controlled content",()=>{
   const html=emailShell("Hello <customer>","<strong>trusted generated content</strong>");
   assert.match(html,/Hello &lt;customer&gt;/);
   assert.match(html,/<strong>trusted generated content<\/strong>/);
+});
+
+test("email HTML only permits inline attachment CID images",()=>{
+  assert.match(sanitizeEmailHtml('<p><img src="cid:attachment-0" alt="Order" style="width:999px"></p>'),/<img src="cid:attachment-0" alt="" style="display:block;max-width:100%;height:auto">/);
+  assert.equal(sanitizeEmailHtml('<img src="https://example.com/tracker.png"><img src="javascript:alert(1)"><img data-src="cid:attachment-0">'),"");
 });
 
 test("email send input rejects header injection and cross-shape content",()=>{

@@ -65,7 +65,7 @@ function htmlToPlainText(value:string):string{
 function RichTextEditor({value,onChange,placeholder="输入邮件正文",className=""}:{value:string;onChange:(html:string)=>void;placeholder?:string;className?:string}){
   const editorRef=useRef<HTMLDivElement>(null);
   const initializedRef=useRef(false);
-  useEffect(()=>{if(!initializedRef.current&&editorRef.current){editorRef.current.innerHTML=value;initializedRef.current=true;}},[value]);
+  useEffect(()=>{if(editorRef.current&&(!initializedRef.current||editorRef.current.innerHTML!==value)){editorRef.current.innerHTML=value;initializedRef.current=true;}},[value]);
   function command(name:string,arg?:string){editorRef.current?.focus();document.execCommand(name,false,arg);onChange(editorRef.current?.innerHTML??"");}
   function addLink(){const url=window.prompt("输入链接地址");if(url)command("createLink",url);}
   return <div className={`rich-text-editor ${className}`}><div className="rich-text-toolbar" role="toolbar" aria-label="邮件格式工具"><button type="button" onMouseDown={event=>{event.preventDefault();command("bold");}} title="粗体" aria-label="粗体"><Bold size={15}/></button><button type="button" onMouseDown={event=>{event.preventDefault();command("italic");}} title="斜体" aria-label="斜体"><Italic size={15}/></button><button type="button" onMouseDown={event=>{event.preventDefault();command("insertUnorderedList");}} title="项目符号" aria-label="项目符号"><List size={15}/></button><button type="button" onMouseDown={event=>{event.preventDefault();command("insertOrderedList");}} title="编号列表" aria-label="编号列表"><ListOrdered size={15}/></button><button type="button" onMouseDown={event=>{event.preventDefault();addLink();}} title="插入链接" aria-label="插入链接"><Link2 size={15}/></button></div><div ref={editorRef} className="rich-text-content" contentEditable suppressContentEditableWarning data-placeholder={placeholder} role="textbox" aria-multiline="true" onInput={event=>onChange(event.currentTarget.innerHTML)} onPaste={event=>{event.preventDefault();const text=event.clipboardData.getData("text/plain");document.execCommand("insertText",false,text);onChange(editorRef.current?.innerHTML??"");}}/></div>;
@@ -266,6 +266,7 @@ const WORKSPACE_PATHS:Record<WorkspaceView,string>={
 type ManagedAgentAccount = {id:string;display_name:string;phone_e164?:string;status:string;status_reason?:string;last_event_at?:string};
 type ManagedAgent = {id:string;name:string;status:string;version?:string;protocol_version?:number;platform?:string;last_seen_at?:string;last_acked_cursor:number;created_at:string;accounts:ManagedAgentAccount[]};
 type MediaAsset = {id:string;fileName:string;mimeType:string;size:number;sha256:string;createdAt:string;usageCount:number};
+type EmailComposerAttachment = MediaAsset & { inline: boolean; previewUrl?: string };
 type SavedQuickReply={id:string;sourceMessageId:string;title:string;text:string;tags:string;kind:string;createdAt:string;attachment?:MediaAsset};
 type TtsProviderId="openai"|"elevenlabs"|"azure"|"openai_compatible";
 type TtsProviderConfig={provider:TtsProviderId;enabled:boolean;keyConfigured:boolean;apiKey:string;baseUrl:string;model:string;voice:string;updatedAt:string|null};
@@ -352,6 +353,13 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [emailBodyHtml,setEmailBodyHtml]=useState("");
   const [emailMode,setEmailMode]=useState(false);
   const [emailSubject,setEmailSubject]=useState("");
+  const [emailAttachments,setEmailAttachments]=useState<EmailComposerAttachment[]>([]);
+  const [emailDocumentBusy,setEmailDocumentBusy]=useState(false);
+  const emailAttachmentsRef=useRef<EmailComposerAttachment[]>([]);
+  const emailDocumentBusyRef=useRef(false);
+  const emailComposerConversationRef=useRef("");
+  useEffect(()=>{emailAttachmentsRef.current=emailAttachments;},[emailAttachments]);
+  useEffect(()=>()=>{emailAttachmentsRef.current.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl);});},[]);
   const [emailMailboxes,setEmailMailboxes]=useState<Array<{id:string;account_id:string;address:string;display_name:string;is_primary:boolean;enabled:boolean}>>([]);
   const [emailMailboxId,setEmailMailboxId]=useState("");
   const [replyTo,setReplyTo]=useState<{conversationId:string;message:ChatMessage}|null>(null);
@@ -448,6 +456,13 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const conversationImages=useMemo(()=>currentMessages.flatMap(message=>message.attachment?.mime.startsWith("image/")?[{messageId:message.id,attachment:message.attachment}]:[]),[currentMessages]);
   const failedMessageCount=active?Math.max(failedMessageCounts[active.id]??0,currentMessages.filter(message=>message.direction==="out"&&(message.status==="failed"||message.status==="uncertain")).length):0;
   const selectedReply=replyTo?.conversationId===effectiveActiveId?replyTo.message:null;
+  useEffect(()=>{
+    const previous=emailComposerConversationRef.current;
+    emailComposerConversationRef.current=effectiveActiveId;
+    if(!previous||previous===effectiveActiveId||!emailAttachmentsRef.current.length)return;
+    emailAttachmentsRef.current.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl);});
+    emailAttachmentsRef.current=[];setEmailAttachments([]);setEmailBodyHtml("");setEmailSubject("");
+  },[effectiveActiveId]);
   const currentEmailActivities=useMemo(()=>active?emailActivities[active.id]??[]:[],[active,emailActivities]);
   useEffect(()=>{if(!apiToken||!active?.accountId)return;let cancelled=false;void authorizedFetch("/api/v1/mailboxes",apiToken).then(async result=>{if(result.token!==apiToken)setApiToken(result.token);if(!result.response.ok)return;const body=await result.response.json().catch(()=>({})) as {data?:Array<Record<string,unknown>>};if(cancelled)return;const items=(body.data??[]).filter(item=>String(item.account_id)===active.accountId).map(item=>({id:String(item.id),account_id:String(item.account_id),address:String(item.address),display_name:String(item.display_name??""),is_primary:Boolean(item.is_primary),enabled:Boolean(item.enabled)}));setEmailMailboxes(items);setEmailMailboxId(current=>current&&items.some(item=>item.id===current)?current:(items.find(item=>item.is_primary&&item.enabled)?.id??items.find(item=>item.enabled)?.id??""));}).catch(()=>{});return()=>{cancelled=true};},[apiToken,active?.accountId]);
   const latestMessageId=currentMessages.at(-1)?.id??"";
@@ -1104,17 +1119,57 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   }
 
   async function sendEmailMessage(){
-    const body=htmlToPlainText(emailBodyHtml);
+    const body=htmlToPlainText(emailBodyHtml)||emailAttachments.filter(item=>item.inline).map(item=>item.fileName).join(", ");
     if(!active||!apiToken||!body)return;
+    if(emailDocumentBusyRef.current){setToast("请等待单据准备完成");return;}
     if(!activePrimaryEmail||!emailMailboxId){setToast("请先为联系人和当前账号配置邮箱");return;}
     if(pendingComposerImages.length){setToast("请先移除待发送的 WhatsApp 图片，再发送邮件");return;}
     const clientSendId=crypto.randomUUID(),subject=emailSubject.trim()||(selectedReply?.email?replyEmailSubject(selectedReply.email.subject):"无主题");
     const optimisticId=`email:${clientSendId}`;
     setMessages(all=>({...all,[active.id]:[...(all[active.id]??[]),{id:optimisticId,direction:"out",kind:"text",text:body,time:formatTime(new Date()),occurredAt:new Date().toISOString(),status:"queued",email:{subject,from:emailMailboxes.find(item=>item.id===emailMailboxId)?.address??"",to:[activePrimaryEmail],attachments:[]},comments:[]}] }));
-    const result=await authorizedFetch(`/api/v1/conversations/${active.id}/email-sends/text`,apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({clientSendId,mailboxId:emailMailboxId,recipientEmail:activePrimaryEmail,subject,body,bodyHtml:emailBodyHtml,attachmentIds:[],...(selectedReply?.email?{replyToMessageId:selectedReply.id}:{})})});
+    const bodyHtml=emailAttachments.reduce((html,item,index)=>item.previewUrl?html.replaceAll(item.previewUrl,`cid:attachment-${index}`):html,emailBodyHtml);
+    const result=await authorizedFetch(`/api/v1/conversations/${active.id}/email-sends/text`,apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({clientSendId,mailboxId:emailMailboxId,recipientEmail:activePrimaryEmail,subject,body,bodyHtml,attachmentIds:emailAttachments.map(item=>item.id),...(selectedReply?.email?{replyToMessageId:selectedReply.id}:{})})});
     if(result.token!==apiToken)setApiToken(result.token);
     if(!result.response.ok){setMessages(all=>({...all,[active.id]:(all[active.id]??[]).map(item=>item.id===optimisticId?{...item,status:"failed",failureMessage:"邮件发送失败"}:item)}));setToast("邮件发送失败，请检查邮箱配置");return;}
-    setDraft("");setEmailBodyHtml("");setEmailSubject("");setReplyTo(null);setToast("邮件已进入发送队列");void loadMessages(result.token,active.id);
+    emailAttachments.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl);});
+    setDraft("");setEmailBodyHtml("");setEmailSubject("");setEmailAttachments([]);setReplyTo(null);setToast("邮件已进入发送队列");void loadMessages(result.token,active.id);
+  }
+
+  const insertOrderDocumentIntoEmail=useCallback(async(orderId:string,orderNumber:string,documentType:"qt"|"sc"|"pi"|"ci",mode:"image"|"pdf")=>{
+    if(!active||!apiToken||!emailMode){setToast("请先切换到 Email 模式");return;}
+    if(emailDocumentBusyRef.current)return;
+    const conversationId=active.id;
+    emailDocumentBusyRef.current=true;setEmailDocumentBusy(true);
+    try{
+      const result=await authorizedFetch(`/api/v1/orders/${orderId}/documents/${documentType}?format=${mode}`,apiToken);
+      if(result.token!==apiToken)setApiToken(result.token);
+      if(!result.response.ok)throw new Error(`单据生成失败（HTTP ${result.response.status}）`);
+      if(emailComposerConversationRef.current!==conversationId)return;
+      const blob=await result.response.blob();
+      if(blob.size>20*1024*1024)throw new Error("附件超过 20 MB，无法加入邮件");
+      if(emailAttachmentsRef.current.length>=10||emailAttachmentsRef.current.reduce((sum,value)=>sum+value.size,0)+blob.size>25*1024*1024)throw new Error("邮件最多 10 个附件，总大小不能超过 25 MB");
+      const extension=mode==="image"?"png":"pdf",name=`${documentType.toUpperCase()}-${orderNumber.replace(/[^a-z0-9_-]/gi,"_")}.${extension}`;
+      const form=new FormData();form.append("file",new File([blob],name,{type:mode==="image"?"image/png":"application/pdf"}));
+      const upload=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(active.accountId)}`,apiToken,{method:"POST",body:form});
+      if(emailComposerConversationRef.current!==conversationId)return;
+      if(upload.token!==apiToken)setApiToken(upload.token);
+      const uploaded=await upload.response.json().catch(()=>({})) as {mediaId?:string;fileName?:string;mimeType?:string;size?:number;sha256?:string;message?:string};
+      if(!upload.response.ok||!uploaded.mediaId)throw new Error(uploaded.message??"附件上传失败");
+      const previewUrl=mode==="image"?URL.createObjectURL(blob):undefined;
+      const item:EmailComposerAttachment={id:uploaded.mediaId,fileName:uploaded.fileName??name,mimeType:uploaded.mimeType??blob.type,size:uploaded.size??blob.size,sha256:uploaded.sha256??"",createdAt:new Date().toISOString(),usageCount:0,inline:mode==="image",previewUrl};
+      emailAttachmentsRef.current=[...emailAttachmentsRef.current,item];
+      setEmailAttachments(emailAttachmentsRef.current);
+      if(previewUrl)setEmailBodyHtml(html=>`${html}<p><img src="${previewUrl}" alt="${documentType.toUpperCase()}" style="display:block;max-width:100%;height:auto"></p>`);
+      setToast(`${documentType.toUpperCase()} 已${mode==="image"?"插入邮件正文":"作为 PDF 附件加入"}`);
+    }catch(reason){setToast(reason instanceof Error?reason.message:"单据加入邮件失败");}
+    finally{emailDocumentBusyRef.current=false;setEmailDocumentBusy(false);}
+  },[active,apiToken,emailMode,setToast]);
+  function removeEmailAttachment(index:number){
+    const removed=emailAttachmentsRef.current[index];
+    if(!removed)return;
+    emailAttachmentsRef.current=emailAttachmentsRef.current.filter((_,i)=>i!==index);
+    setEmailAttachments(emailAttachmentsRef.current);
+    if(removed.previewUrl){setEmailBodyHtml(html=>{const container=document.createElement("div");container.innerHTML=html;container.querySelectorAll("img").forEach(image=>{if(image.getAttribute("src")===removed.previewUrl){const parent=image.parentElement;image.remove();if(parent?.tagName==="P"&&!parent.textContent?.trim())parent.remove();}});return container.innerHTML;});URL.revokeObjectURL(removed.previewUrl);}
   }
 
   async function sendPendingComposerImages(){
@@ -2334,7 +2389,19 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                         </div>
                       )}
                       {emailMode&&<div className="email-composer-fields"><label>收件邮箱<input value={activePrimaryEmail} readOnly placeholder="联系人尚未配置邮箱"/></label><label>发件邮箱<select value={emailMailboxId} onChange={event=>setEmailMailboxId(event.target.value)}>{emailMailboxes.filter(item=>item.enabled).map(item=><option key={item.id} value={item.id}>{item.address}{item.is_primary?"（主邮箱）":""}</option>)}</select></label><label>邮件主题<input value={emailSubject} onChange={event=>setEmailSubject(event.target.value)} placeholder="邮件主题"/></label></div>}
-                      {emailMode?<RichTextEditor value={emailBodyHtml} onChange={value=>{setEmailBodyHtml(value);setDraft(htmlToPlainText(value));}} placeholder="输入邮件正文"/>:<textarea
+                      {emailMode ? (
+                        <>
+                          <RichTextEditor value={emailBodyHtml} onChange={value=>{setEmailBodyHtml(value);setDraft(htmlToPlainText(value));}} placeholder="输入邮件正文"/>
+                          {emailAttachments.length > 0 && <div className="email-attachment-list" aria-label="邮件附件">
+                            {emailAttachments.map((item,index) => (
+                              <div className="email-attachment-chip" key={`${item.id}-${index}`}>
+                                {item.inline ? <Mail size={13}/> : <Paperclip size={13}/>}<span title={item.fileName}>{item.fileName}</span>
+                                <button type="button" onClick={()=>removeEmailAttachment(index)} aria-label={`移除 ${item.fileName}`}><X size={12}/></button>
+                              </div>
+                            ))}
+                          </div>}
+                        </>
+                      ) : <textarea
                         ref={textareaRef}
                         value={draft}
                         onChange={(event) => setDraft(event.target.value)}
@@ -2392,7 +2459,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                               ? "翻译并预览"
                               : "发送"
                           }
-                          disabled={translatingDraft || composerImageBusy || quickReplyResolving}
+                          disabled={translatingDraft || composerImageBusy || quickReplyResolving || emailDocumentBusy}
                         >
                           {translatingDraft || composerImageBusy || quickReplyResolving ? (
                             <RefreshCw className="spin" size={18} />
@@ -2447,6 +2514,9 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
               user={user}
               role={userRole}
               translationPreference={translationPreference}
+              emailMode={emailMode}
+              emailDocumentBusy={emailDocumentBusy}
+              onInsertEmailDocument={insertOrderDocumentIntoEmail}
               onToken={setApiToken}
               onClose={() => setDetailsOpen(false)}
               onToast={setToast}
@@ -3059,6 +3129,9 @@ function CrmDetailsPanel({
   user,
   role,
   translationPreference,
+  emailMode,
+  emailDocumentBusy,
+  onInsertEmailDocument,
   onToken,
   onClose,
   onToast,
@@ -3072,6 +3145,9 @@ function CrmDetailsPanel({
   user: User | null;
   role: string;
   translationPreference: TranslationPreference;
+  emailMode: boolean;
+  emailDocumentBusy: boolean;
+  onInsertEmailDocument: (orderId:string, orderNumber:string, documentType:"qt"|"sc"|"pi"|"ci", mode:"image"|"pdf") => Promise<void>;
   onToken: (token: string) => void;
   onClose: () => void;
   onToast: (text: string) => void;
@@ -3579,7 +3655,7 @@ function CrmDetailsPanel({
                           {order.paymentRequest?"付款详情":order.paymentProfile?"付款说明":"选择收款"}
                         </button>
                         {(()=>{const open=orderDocumentMenu?.orderId===order.id&&orderDocumentMenu.documentType==="inq";return <div className={`order-document-menu${open?" open":""}`}><button className="order-payment" disabled={busy} onClick={()=>setOrderDocumentMenu(open?null:{orderId:order.id,documentType:"inq"})} aria-expanded={open} aria-haspopup="menu" title="INQ 询盘操作"><FileDown size={12}/>INQ</button>{open&&<div role="menu"><button role="menuitem" disabled={busy} onClick={()=>void previewOrderDocument(order,"inq")}><Eye size={12}/>HTML 预览</button><button role="menuitem" disabled={busy} onClick={()=>void downloadOrderDocument(order,"inq","image")}><FileDown size={12}/>下载图片</button><button role="menuitem" disabled={busy} onClick={()=>void downloadOrderDocument(order,"inq","pdf")}><FileDown size={12}/>下载 PDF</button></div>}</div>})()}
-                        {(["qt","sc","pi","ci"] as const).map(documentType=>{const open=orderDocumentMenu?.orderId===order.id&&orderDocumentMenu.documentType===documentType;return <div className={`order-document-menu${open?" open":""}`} key={documentType}><button className="order-payment" disabled={busy} onClick={()=>setOrderDocumentMenu(open?null:{orderId:order.id,documentType})} aria-expanded={open} aria-haspopup="menu" title={`${documentType.toUpperCase()} 文档操作`}><FileDown size={12}/>{documentType.toUpperCase()}</button>{open&&<div role="menu"><button role="menuitem" disabled={busy} onClick={()=>void sendOrderDocument(order,documentType)}><Send size={12}/><span>发送</span></button><button role="menuitem" disabled={busy} onClick={()=>void previewOrderDocument(order,documentType)}><Eye size={12}/><span>HTML 预览</span></button><button role="menuitem" disabled={busy} onClick={()=>void downloadOrderDocument(order,documentType)}><FileDown size={12}/><span>下载</span></button></div>}</div>;})}
+                        {(["qt","sc","pi","ci"] as const).map(documentType=>{const open=orderDocumentMenu?.orderId===order.id&&orderDocumentMenu.documentType===documentType;return <div className={`order-document-menu${open?" open":""}`} key={documentType}><button className="order-payment" disabled={busy} onClick={()=>setOrderDocumentMenu(open?null:{orderId:order.id,documentType})} aria-expanded={open} aria-haspopup="menu" title={`${documentType.toUpperCase()} 文档操作`}><FileDown size={12}/>{documentType.toUpperCase()}</button>{open&&<div role="menu"><button role="menuitem" disabled={busy} onClick={()=>void sendOrderDocument(order,documentType)}><Send size={12}/><span>发送</span></button>{emailMode&&<><button role="menuitem" disabled={busy||emailDocumentBusy} onClick={()=>void onInsertEmailDocument(order.id,order.orderNumber,documentType,"image")}><Mail size={12}/><span>插入邮件图片</span></button><button role="menuitem" disabled={busy||emailDocumentBusy} onClick={()=>void onInsertEmailDocument(order.id,order.orderNumber,documentType,"pdf")}><Paperclip size={12}/><span>附加 PDF</span></button></>}<button role="menuitem" disabled={busy} onClick={()=>void previewOrderDocument(order,documentType)}><Eye size={12}/><span>HTML 预览</span></button><button role="menuitem" disabled={busy} onClick={()=>void downloadOrderDocument(order,documentType)}><FileDown size={12}/><span>下载</span></button></div>}</div>;})}
                         <button
                           className="order-edit"
                           disabled={busy}

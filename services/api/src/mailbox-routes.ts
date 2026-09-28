@@ -86,7 +86,7 @@ export function registerMailboxRoutes(app:FastifyInstance):void{
       pool.query("SELECT config,secret_encrypted FROM email_provider_settings WHERE provider='resend' AND enabled AND secret_encrypted IS NOT NULL LIMIT 1"),
     ]);
     if(!mailbox.rowCount||!recipient.rowCount)return reply.code(409).send({error:"email_address_unavailable"});
-    if(media.rowCount!==value.attachmentIds.length||media.rows.reduce((sum,row)=>sum+Number(row.byte_size),0)>25*1024*1024||media.rows.some(row=>Number(row.byte_size)>20*1024*1024))return reply.code(413).send({error:"email_attachments_invalid"});
+    if(media.rowCount!==new Set(value.attachmentIds).size||value.attachmentIds.reduce((sum,id)=>sum+Number(media.rows.find(row=>row.id===id)?.byte_size??0),0)>25*1024*1024||media.rows.some(row=>Number(row.byte_size)>20*1024*1024))return reply.code(413).send({error:"email_attachments_invalid"});
     const row=mailbox.rows[0],resend=resendProvider.rows[0],provider=resend?"resend":"smtp",providerConfig:EmailProviderConfig=resend?{...(resend.config as EmailProviderConfig),fromName:row.display_name||resend.config.fromName||row.address,fromEmail:resend.config.fromEmail||row.address}:{fromName:row.display_name||row.address,fromEmail:row.address,host:row.smtp_host,port:row.smtp_port,tls:row.smtp_tls,username:row.smtp_username},providerSecret=resend?resend.secret_encrypted:row.smtp_secret_encrypted;
     if(!resend&&row.auth_type==='microsoft')providerConfig.oauthMailboxId=String(row.id);
     if(resend)providerConfig.replyTo=row.address;

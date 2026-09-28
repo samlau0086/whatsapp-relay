@@ -88,5 +88,20 @@ export async function sendProviderTest(provider:EmailProvider,setting:EmailProvi
 }
 
 export function escapeHtml(value:string):string{return value.replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]!)).replace(/\n/g,"<br>");}
-export function sanitizeEmailHtml(value:string):string{return value.replace(/<\/?([a-z0-9]+)([^>]*)>/gi,(full,tag,attrs)=>{const name=String(tag).toLowerCase();if(!["p","br","div","span","strong","b","em","i","u","ul","ol","li","a","blockquote"].includes(name))return"";if(full.startsWith("</"))return`</${name}>`;if(name==="br")return"<br>";if(name!=="a")return`<${name}>`;const href=String(attrs).match(/href\s*=\s*[\"']([^\"']+)[\"']/i)?.[1]??"";if(!/^https?:\/\//i.test(href))return"<a>";return`<a href="${escapeHtml(href)}" rel="noopener noreferrer">`;});}
+export function sanitizeEmailHtml(value:string):string{
+  return value.replace(/<\/?([a-z0-9]+)([^>]*)>/gi,(full,tag,attrs)=>{
+    const name=String(tag).toLowerCase();
+    if(!["p","br","div","span","strong","b","em","i","u","ul","ol","li","a","blockquote","img"].includes(name))return"";
+    if(full.startsWith("</"))return name==="img"?"":`</${name}>`;
+    if(name==="br")return"<br>";
+    if(name==="img"){
+      const src=String(attrs).match(/(?:^|\s)src\s*=\s*[\"']([^\"']+)[\"']/i)?.[1]??"";
+      return /^cid:attachment-(?:0|[1-9]\d*)$/.test(src)?`<img src="${src}" alt="" style="display:block;max-width:100%;height:auto">`:"";
+    }
+    if(name!=="a")return`<${name}>`;
+    const href=String(attrs).match(/href\s*=\s*[\"']([^\"']+)[\"']/i)?.[1]??"";
+    if(!/^https?:\/\//i.test(href))return"<a>";
+    return`<a href="${escapeHtml(href)}" rel="noopener noreferrer">`;
+  });
+}
 export function emailShell(messageBody:string,contentHtml:string):string{const text=messageBody?`<p style="white-space:normal;line-height:1.6">${escapeHtml(messageBody)}</p>`:"";return`<!doctype html><html><body style="margin:0;padding:0;background:#fff;font-family:Arial,sans-serif;color:#203129;text-align:left;line-height:1.6"><div style="margin:0;padding:0;text-align:left">${text}${contentHtml}</div></body></html>`;}
