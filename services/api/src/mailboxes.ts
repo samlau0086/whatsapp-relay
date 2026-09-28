@@ -20,9 +20,8 @@ type MailboxRow={id:string;account_id:string;address:string;display_name:string;
 const s3=new S3Client({region:config.S3_REGION,endpoint:config.S3_ENDPOINT,forcePathStyle:true,credentials:{accessKeyId:config.S3_ACCESS_KEY,secretAccessKey:config.S3_SECRET_KEY}});
 const MAX_ATTACHMENT=20*1024*1024,MAX_TOTAL=25*1024*1024;
 
-export function latestEmailText(input:string):string{
+export function emailQuoteText(input:string):string{
   const lines=input.replace(/\r\n?/g,"\n").split("\n");
-  const kept:string[]=[];
   for(let i=0;i<lines.length;i++){
     const line=lines[i].trim();
     const splitEnglishReplyHeader=/^On .{8,}$/i.test(line)&&/^wrote:\s*$/i.test(lines[i+1]?.trim()||"");
@@ -30,10 +29,14 @@ export function latestEmailText(input:string):string{
       ||/^[- ]{2,}Original Message[- ]{2,}$/i.test(line)
       ||/^[- ]{2,}Forwarded message[- ]{2,}$/i.test(line)
       || /^_{8,}$/.test(line)
-      || (/^From:\s*.+/i.test(line)&&lines.slice(i+1,i+5).some(value=>/^\s*(Sent|Date|To|Subject):/i.test(value))))break;
-    kept.push(lines[i]);
+      || (/^From:\s*.+/i.test(line)&&lines.slice(i+1,i+5).some(value=>/^\s*(Sent|Date|To|Subject):/i.test(value))))return lines.slice(i).join("\n").trim().slice(0,65536);
   }
-  return kept.join("\n").trim().slice(0,65536);
+  return "";
+}
+
+export function latestEmailText(input:string):string{
+  const quote=emailQuoteText(input),source=input.replace(/\r\n?/g,"\n");
+  return (quote?source.slice(0,Math.max(0,source.lastIndexOf(quote))):source).trim().slice(0,65536);
 }
 
 function stripQuotedEmailHtml(input:string):string{
@@ -71,7 +74,9 @@ async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,sourc
   if(!sender||sender===row.address.toLowerCase())return;
   const subject=(parsed.subject??"(无主题)").replace(/[\r\n]/g," ").slice(0,200);
   const htmlSource=stripQuotedEmailHtml(String(parsed.html||""));
-  const body=latestEmailText(parsed.text?.trim()||convert(htmlSource,{wordwrap:false,selectors:[{selector:"a",options:{ignoreHref:true}},{selector:"img",format:"skip"},{selector:"blockquote",format:"skip"},{selector:".gmail_quote",format:"skip"},{selector:".gmail_attr",format:"skip"},{selector:".yahoo_quoted",format:"skip"}]}));
+  const rawText=parsed.text?.trim()||convert(String(parsed.html||""),{wordwrap:false,selectors:[{selector:"a",options:{ignoreHref:true}},{selector:"img",format:"skip"}]});
+  const body=latestEmailText(rawText||convert(htmlSource,{wordwrap:false,selectors:[{selector:"a",options:{ignoreHref:true}},{selector:"img",format:"skip"}]}));
+  const quotedBody=emailQuoteText(rawText);
   let total=0,warning="";
   const attachmentCandidates=parsed.attachments.filter(item=>{if(item.size>MAX_ATTACHMENT||total+item.size>MAX_TOTAL){warning="部分附件超过邮件归档大小限制，未保存";return false;}total+=item.size;return true;});
   await transaction(async(client:PoolClient)=>{
@@ -96,7 +101,7 @@ async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,sourc
     const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_contact_id,direction,kind,text_content,status,occurred_at) VALUES($1,$2,$3,'in','text',$4,'received',$5) RETURNING id",[conversationId,row.account_id,contactId,body|| (attachments.length?"[附件]":"[无新正文]"),occurredAt]);
     const messageId=String(message.rows[0].id);
     const toAddresses=(Array.isArray(parsed.to)?parsed.to:[parsed.to]).flatMap(value=>value?.value??[]).map(value=>value.address).filter(Boolean);
-    await client.query("INSERT INTO message_email_details(message_id,mailbox_id,subject,from_email,to_emails,rfc_message_id,in_reply_to,references_header,attachment_warning) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",[messageId,row.id,subject,sender,JSON.stringify(toAddresses.length?toAddresses:[row.address]),parsed.messageId??null,parsed.inReplyTo??null,Array.isArray(parsed.references)?parsed.references.join(" "):parsed.references??null,warning||null]);
+    await client.query("INSERT INTO message_email_details(message_id,mailbox_id,subject,from_email,to_emails,rfc_message_id,in_reply_to,references_header,attachment_warning,quoted_body) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",[messageId,row.id,subject,sender,JSON.stringify(toAddresses.length?toAddresses:[row.address]),parsed.messageId??null,parsed.inReplyTo??null,Array.isArray(parsed.references)?parsed.references.join(" "):parsed.references??null,warning||null,quotedBody||null]);
     for(const [position,item] of attachments.entries())await client.query("INSERT INTO message_email_attachments(message_id,media_id,position,file_name,mime_type,byte_size) VALUES($1,$2,$3,$4,$5,$6)",[messageId,item.id,position,item.name,item.mime,item.size]);
     await client.query("INSERT INTO email_inbound_receipts(mailbox_id,uid_validity,uid,message_id,error) VALUES($1,$2,$3,$4,NULL) ON CONFLICT(mailbox_id,uid_validity,uid) DO UPDATE SET message_id=$4,error=NULL",[row.id,uidValidity,uid,messageId]);
   });
