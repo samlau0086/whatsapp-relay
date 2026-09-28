@@ -1,6 +1,22 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import ts from "typescript";
+
+test("email reply subjects increment and are prefilled from the selected message", async () => {
+  const source = await readFile(new URL("../app/email-reply-subject.ts", import.meta.url), "utf8");
+  const javascript = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
+  const { replyEmailSubject } = await import(`data:text/javascript,${encodeURIComponent(javascript)}`);
+  assert.equal(replyEmailSubject("Hello"), "Re: Hello");
+  assert.equal(replyEmailSubject("Re: Hello"), "Re(2): Hello");
+  assert.equal(replyEmailSubject("RE(2): Hello"), "Re(3): Hello");
+  assert.equal(replyEmailSubject(" re ( 3 ) :  Hello "), "Re(4): Hello");
+  assert.equal(replyEmailSubject(""), "Re: 无主题");
+
+  const inbox = await readFile(new URL("../app/whatsapp-inbox.tsx", import.meta.url), "utf8");
+  assert.match(inbox, /if \(message\.email\) \{\s*setEmailMode\(true\);\s*setEmailSubject\(replyEmailSubject\(message\.email\.subject\)\)/);
+  assert.match(inbox, /emailSubject\.trim\(\)\|\|\(selectedReply\?\.email\?replyEmailSubject\(selectedReply\.email\.subject\):"无主题"\)/);
+});
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);

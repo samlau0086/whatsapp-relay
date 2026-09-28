@@ -42,6 +42,7 @@ import {ConversationPanel} from "./conversation-panel";
 import type {ContactMethod,ContactMethodType,Conversation,TagItem} from "./conversation-types";
 import { convertWeight, formatWeight, WEIGHT_UNITS, type WeightUnit } from "./weight";
 import { authorizedFetch, clearStoredSession, SESSION_EXPIRED_EVENT, setCurrentAccessToken, storeSession } from "./auth-session";
+import { replyEmailSubject } from "./email-reply-subject";
 
 const API_URL = (process.env.NEXT_PUBLIC_RELAY_API_URL ?? "").replace(/\/$/, "");
 const REMEMBER_LOGIN_KEY="relayRememberLogin";
@@ -1107,10 +1108,10 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     if(!active||!apiToken||!body)return;
     if(!activePrimaryEmail||!emailMailboxId){setToast("请先为联系人和当前账号配置邮箱");return;}
     if(pendingComposerImages.length){setToast("请先移除待发送的 WhatsApp 图片，再发送邮件");return;}
-    const clientSendId=crypto.randomUUID(),subject=emailSubject.trim()||((replyTo?.message.email?.subject??"").startsWith("Re:")?replyTo?.message.email?.subject??"":replyTo?.message.email?.subject?`Re: ${replyTo.message.email.subject}`:"无主题");
+    const clientSendId=crypto.randomUUID(),subject=emailSubject.trim()||(selectedReply?.email?replyEmailSubject(selectedReply.email.subject):"无主题");
     const optimisticId=`email:${clientSendId}`;
     setMessages(all=>({...all,[active.id]:[...(all[active.id]??[]),{id:optimisticId,direction:"out",kind:"text",text:body,time:formatTime(new Date()),occurredAt:new Date().toISOString(),status:"queued",email:{subject,from:emailMailboxes.find(item=>item.id===emailMailboxId)?.address??"",to:[activePrimaryEmail],attachments:[]},comments:[]}] }));
-    const result=await authorizedFetch(`/api/v1/conversations/${active.id}/email-sends/text`,apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({clientSendId,mailboxId:emailMailboxId,recipientEmail:activePrimaryEmail,subject,body,bodyHtml:emailBodyHtml,attachmentIds:[],...(replyTo?.message.email?{replyToMessageId:replyTo.message.id}:{})})});
+    const result=await authorizedFetch(`/api/v1/conversations/${active.id}/email-sends/text`,apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({clientSendId,mailboxId:emailMailboxId,recipientEmail:activePrimaryEmail,subject,body,bodyHtml:emailBodyHtml,attachmentIds:[],...(selectedReply?.email?{replyToMessageId:selectedReply.id}:{})})});
     if(result.token!==apiToken)setApiToken(result.token);
     if(!result.response.ok){setMessages(all=>({...all,[active.id]:(all[active.id]??[]).map(item=>item.id===optimisticId?{...item,status:"failed",failureMessage:"邮件发送失败"}:item)}));setToast("邮件发送失败，请检查邮箱配置");return;}
     setDraft("");setEmailBodyHtml("");setEmailSubject("");setReplyTo(null);setToast("邮件已进入发送队列");void loadMessages(result.token,active.id);
@@ -2002,6 +2003,10 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                               className="message-reply-action"
                               disabled={cloudWindowClosed}
                               onClick={() => {
+                                if (message.email) {
+                                  setEmailMode(true);
+                                  setEmailSubject(replyEmailSubject(message.email.subject));
+                                }
                                 setReplyTo({
                                   conversationId: active.id,
                                   message,
