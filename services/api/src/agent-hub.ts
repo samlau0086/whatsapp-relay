@@ -3,6 +3,7 @@ import type { WebSocket } from "ws";
 import { pool, transaction } from "./db.js";
 import { hashSecret } from "./security.js";
 import { enqueueInboundAgentWork } from "./agent-engine.js";
+import { recordProactiveOutreachDelivery } from "./proactive-outreach.js";
 import {processStatusCommandResult} from "./status-engine.js";
 
 const PROTOCOL_VERSION = 2;
@@ -271,7 +272,7 @@ export async function ingestNormalizedMessage(client: import("pg").PoolClient, p
     await createWebhookEvent(client,"message.received",message.rows[0].id,{ ...payload,platform:"whatsapp",providerMessageId:payload.whatsappMessageId,platformMessageId:message.rows[0].id,conversationId:conversation.rows[0].id });
     const capabilities=Array.isArray(account.rows[0].capabilities)?account.rows[0].capabilities.map(String):[];
     if(payload.direction==="in"&&!contact.rows[0].avatar_url&&source.agentId&&capabilities.includes("contact_avatar_sync_v1"))await client.query("INSERT INTO outbound_commands(agent_id,account_id,command,payload) SELECT $1,$2,'sync_contact_avatar',$3::jsonb WHERE NOT EXISTS(SELECT 1 FROM outbound_commands WHERE account_id=$2 AND command='sync_contact_avatar' AND payload->>'contactId'=$4 AND state IN ('pending','dispatched'))",[source.agentId,accountId,JSON.stringify({contactId:String(contact.rows[0].id),toJid:chatJid}),String(contact.rows[0].id)]);
-    if(payload.direction==="in"&&(payload.kind==="text"||payload.kind==="audio"))await enqueueInboundAgentWork(client,conversation.rows[0].id,message.rows[0].id);
+    if(payload.direction==="in")await enqueueInboundAgentWork(client,conversation.rows[0].id,message.rows[0].id,payload.kind==="text"||payload.kind==="audio",source.live!==false);
   }
 }
 
@@ -360,6 +361,7 @@ async function processCommandResult(agentId: string, frame: AgentFrame): Promise
     if (!commandRow.message_id) return;
     const status = frame.outcome === "succeeded" ? "sent" : frame.outcome === "uncertain" ? "uncertain" : "failed";
     await client.query("UPDATE messages SET status=$2::delivery_status,provider_message_id=COALESCE($3::text,provider_message_id),failure_code=CASE WHEN $2::delivery_status IN ('failed'::delivery_status,'uncertain'::delivery_status) THEN $4::text ELSE NULL END,failure_message=CASE WHEN $2::delivery_status IN ('failed'::delivery_status,'uncertain'::delivery_status) THEN $5::text ELSE NULL END WHERE id=$1", [commandRow.message_id,status,frame.whatsappMessageId ?? null,frame.errorCode ?? null,frame.errorMessage ?? null]);
+    if(status==="sent")await recordProactiveOutreachDelivery(client,String(commandRow.message_id));
     const updated = await client.query("SELECT id,conversation_id,account_id,status,provider_message_id FROM messages WHERE id=$1", [commandRow.message_id]);
     await createWebhookEvent(client,"message.status_changed",updated.rows[0].id,updated.rows[0]);
   });

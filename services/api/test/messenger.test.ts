@@ -99,8 +99,8 @@ test("Messenger processing covers echo, delivery, read watermarks, and Page-scop
 test("Messenger inbound messages enter the shared AI agent queue",async()=>{
   const messenger=await readFile(new URL("../src/messenger.ts",import.meta.url),"utf8");
   assert.match(messenger,/import \{enqueueInboundAgentWork\} from "\.\/agent-engine\.js"/);
-  assert.match(messenger,/input\.direction==="in"&&\(normalized\.kind==="text"\|\|normalized\.kind==="audio"\|\|Boolean\(normalized\.text\?\.trim\(\)\)\)/);
-  assert.match(messenger,/await enqueueInboundAgentWork\(client,conversation\.rows\[0\]\.id,inserted\.rows\[0\]\.id\)/);
+  assert.match(messenger,/if\(input\.direction==="in"\)await enqueueInboundAgentWork/);
+  assert.match(messenger,/await enqueueInboundAgentWork\(client,conversation\.rows\[0\]\.id,inserted\.rows\[0\]\.id,normalized\.kind==="text"\|\|normalized\.kind==="audio"\|\|Boolean\(normalized\.text\?\.trim\(\)\)\)/);
 });
 
 test("Messenger contact sync refreshes placeholder identities with profile fields",async()=>{

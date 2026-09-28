@@ -1724,11 +1724,49 @@ async function finishRun(id: string, decision: AgentDecision) {
   );
 }
 
+export async function applyProactiveReplyTransition(client:PoolClient,conversationId:string,messageId:string,live=true):Promise<void>{
+  await client.query("SELECT id FROM conversations WHERE id=$1 FOR UPDATE",[conversationId]);
+  const outreach=live?await client.query(
+    `SELECT j.id FROM proactive_outreach_jobs j
+     JOIN messages sent ON sent.id=j.message_id
+     JOIN messages incoming ON incoming.id=$2 AND incoming.conversation_id=j.conversation_id AND incoming.direction='in'
+     WHERE j.conversation_id=$1 AND j.state='sent' AND j.sent_agent_mode='full'
+       AND j.reply_processed_at IS NULL AND sent.status IN ('sent','delivered','read')
+       AND j.sent_at<incoming.occurred_at
+       AND NOT EXISTS (SELECT 1 FROM messages newer WHERE newer.conversation_id=$1
+         AND newer.id<>$2 AND newer.occurred_at>incoming.occurred_at)
+       AND NOT EXISTS (SELECT 1 FROM messages earlier WHERE earlier.conversation_id=$1
+         AND earlier.direction='in' AND earlier.id<>$2 AND earlier.occurred_at>j.sent_at)
+       AND NOT EXISTS (SELECT 1 FROM messages later_out WHERE later_out.conversation_id=$1
+         AND later_out.direction='out' AND later_out.id<>sent.id
+         AND later_out.status IN ('queued','dispatching','sent','delivered','read')
+         AND later_out.occurred_at>sent.occurred_at AND later_out.occurred_at<=incoming.occurred_at)
+     ORDER BY j.sent_at DESC,j.id DESC LIMIT 1`,
+    [conversationId,messageId],
+  ):null;
+  if(outreach?.rowCount){
+    await client.query("UPDATE proactive_outreach_jobs SET reply_processed_at=now(),updated_at=now() WHERE id=$1 AND reply_processed_at IS NULL",[outreach.rows[0].id]);
+    const choice=await client.query("SELECT mode,proactive_reply_mode FROM conversation_agent_state WHERE conversation_id=$1",[conversationId]);
+    if(choice.rows[0]?.mode==='full'&&choice.rows[0].proactive_reply_mode!=='full'){
+      const mode=choice.rows[0].proactive_reply_mode as ConversationAgentMode;
+      await client.query("UPDATE conversation_agent_state SET mode=$2,pause_reason=$3,updated_at=now() WHERE conversation_id=$1",[conversationId,mode,mode==='human_paused'?'proactive_customer_replied':null]);
+      if(mode==='human_paused'){
+        await client.query("UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error='proactive_customer_replied' WHERE conversation_id=$1 AND state='pending' AND kind IN ('reply','followup')",[conversationId]);
+        await client.query("UPDATE ai_drafts SET status='dismissed',resolved_at=now() WHERE conversation_id=$1 AND status='pending'",[conversationId]);
+      }
+    }
+  }
+}
+
 export async function enqueueInboundAgentWork(
   client: PoolClient,
   conversationId: string,
   messageId: string,
+  eligibleForReply = true,
+  live = true,
 ): Promise<void> {
+  await applyProactiveReplyTransition(client,conversationId,messageId,live);
+  if(!eligibleForReply)return;
   await client.query(
     "INSERT INTO conversation_agent_state(conversation_id,mode,last_customer_message_id) VALUES($1,'human_paused',$2) ON CONFLICT(conversation_id) DO UPDATE SET last_customer_message_id=EXCLUDED.last_customer_message_id,followup_count=0,updated_at=now()",
     [conversationId, messageId],

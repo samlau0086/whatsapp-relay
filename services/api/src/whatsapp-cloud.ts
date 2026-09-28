@@ -7,6 +7,7 @@ import {config} from "./config.js";
 import {pool,transaction} from "./db.js";
 import {decryptAtRest,encryptAtRest,hashSecret} from "./security.js";
 import {ingestNormalizedMessage,updateNormalizedMessageStatus} from "./agent-hub.js";
+import {recordProactiveOutreachDelivery} from "./proactive-outreach.js";
 
 const graphBase=`https://graph.facebook.com/${config.META_GRAPH_API_VERSION}`;
 const s3=new S3Client({region:config.S3_REGION,endpoint:config.S3_ENDPOINT,forcePathStyle:true,credentials:{accessKeyId:config.S3_ACCESS_KEY,secretAccessKey:config.S3_SECRET_KEY}});
@@ -288,6 +289,7 @@ export async function processOneCloudOutbound():Promise<boolean>{
       await client.query("UPDATE outbound_commands SET state='completed',completed_at=now(),last_error=NULL WHERE id=$1",[command.id]);
       if(command.message_id){
         await client.query("UPDATE messages SET status='sent',provider_message_id=$2,failure_code=NULL,failure_message=NULL WHERE id=$1",[command.message_id,wamid]);
+        await recordProactiveOutreachDelivery(client,String(command.message_id));
         await client.query("INSERT INTO message_receipts(message_id,status,occurred_at) VALUES($1,'sent',now()) ON CONFLICT DO NOTHING",[command.message_id]);
       }
     });

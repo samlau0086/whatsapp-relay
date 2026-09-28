@@ -7,6 +7,7 @@ import {config} from "./config.js";
 import {pool,transaction} from "./db.js";
 import {createWebhookEvent} from "./agent-hub.js";
 import {enqueueInboundAgentWork} from "./agent-engine.js";
+import {recordProactiveOutreachDelivery} from "./proactive-outreach.js";
 import {decryptAtRest,encryptAtRest,hashSecret} from "./security.js";
 import {registerMessengerOAuthRoutes} from "./messenger-oauth.js";
 
@@ -257,7 +258,7 @@ async function ingestMessengerMessage(input:{accountId:string;userId:string;mess
     ]);
     if(inserted.rowCount){
       await createWebhookEvent(client,input.direction==="in"?"message.received":"message.sent",inserted.rows[0].id,{platform:"messenger",accountId:input.accountId,providerMessageId:String(input.message.mid),conversationId:conversation.rows[0].id,direction:input.direction,kind:normalized.kind,text:normalized.text});
-      if(input.direction==="in"&&(normalized.kind==="text"||normalized.kind==="audio"||Boolean(normalized.text?.trim())))await enqueueInboundAgentWork(client,conversation.rows[0].id,inserted.rows[0].id);
+      if(input.direction==="in")await enqueueInboundAgentWork(client,conversation.rows[0].id,inserted.rows[0].id,normalized.kind==="text"||normalized.kind==="audio"||Boolean(normalized.text?.trim()));
     }
   });
 }
@@ -359,6 +360,7 @@ export async function processOneMessengerOutbound():Promise<boolean>{
       await client.query("UPDATE outbound_commands SET state='completed',completed_at=now(),last_error=NULL WHERE id=$1",[command.id]);
       if(command.message_id){
         await client.query("UPDATE messages SET status='sent',provider_message_id=$2,failure_code=NULL,failure_message=NULL WHERE id=$1",[command.message_id,response.message_id]);
+        await recordProactiveOutreachDelivery(client,String(command.message_id));
         await client.query("INSERT INTO message_receipts(message_id,status,occurred_at) VALUES($1,'sent',now()) ON CONFLICT DO NOTHING",[command.message_id]);
         await createWebhookEvent(client,"message.status_changed",String(command.message_id),{platform:"messenger",accountId:String(command.account_id),conversationId:String(payload.conversationId??""),providerMessageId:response.message_id,status:"sent"});
       }
