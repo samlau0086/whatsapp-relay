@@ -136,6 +136,8 @@ export function ProductCardSendDialog({
   onToken,
   onClose,
   onSent,
+  insertMode = false,
+  onInsert,
 }: {
   accountId: string;
   conversationId: string;
@@ -148,6 +150,8 @@ export function ProductCardSendDialog({
   onToken: (token: string) => void;
   onClose: () => void;
   onSent: (message: string) => void;
+  insertMode?: boolean;
+  onInsert?: (result: { html?: string; attachments?: Array<{ id: string; fileName: string; mimeType: string; size: number; sha256: string; createdAt: string; usageCount: number }> }) => Promise<void>;
 }) {
   const [catalogProducts, setCatalogProducts] = useState<Product[]>([]),
     [categories, setCategories] = useState<string[]>([]),
@@ -440,7 +444,7 @@ export function ProductCardSendDialog({
       setError("合并长图一次最多选择 10 个产品");
       return;
     }
-    if (channel === "email" && !recipientIds.length) {
+    if (!insertMode && channel === "email" && !recipientIds.length) {
       setError("请选择至少一个联系人邮箱");
       return;
     }
@@ -546,6 +550,13 @@ export function ProductCardSendDialog({
       return;
     }
     const outgoingCaption = (translatedCaption ?? sourceCaption).trim();
+    if (insertMode && onInsert) {
+      const attachments = chosen.flatMap((product) => product.imageMediaId ? [{ id: product.imageMediaId, fileName: `${product.sku || product.name}.png`, mimeType: "image/png", size: 0, sha256: "", createdAt: new Date().toISOString(), usageCount: 0 }] : []);
+      await onInsert({ attachments });
+      onSent(`${selected.length} 个产品已插入邮件正文`);
+      onClose();
+      return;
+    }
     setBusy(true);
     setConfirming(false);
     setError("");

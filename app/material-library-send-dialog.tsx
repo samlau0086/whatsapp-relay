@@ -11,7 +11,7 @@ type SelectedMaterialAsset=MaterialAsset&{batchId:string};
 type SendMode="stitched"|"individual";
 type StitchOrientation="vertical"|"horizontal";
 
-export function MaterialLibrarySendDialog({accountId,conversationId,customerName,initialCaption,translationEnabled,translationConfigured,targetLanguage,targetLanguageName,request,onToken,onClose,onSent}:{accountId:string;conversationId:string;customerName:string;initialCaption:string;translationEnabled:boolean;translationConfigured:boolean;targetLanguage:string;targetLanguageName:string;request:Request;onToken:(token:string)=>void;onClose:()=>void;onSent:(message:string)=>void}){
+export function MaterialLibrarySendDialog({accountId,conversationId,customerName,initialCaption,translationEnabled,translationConfigured,targetLanguage,targetLanguageName,request,onToken,onClose,onSent,insertMode=false,onInsert}:{accountId:string;conversationId:string;customerName:string;initialCaption:string;translationEnabled:boolean;translationConfigured:boolean;targetLanguage:string;targetLanguageName:string;request:Request;onToken:(token:string)=>void;onClose:()=>void;onSent:(message:string)=>void;insertMode?:boolean;onInsert?:(assets:Array<{id:string;fileName:string;mimeType:string;size:number;sha256:string;createdAt:string;usageCount:number}>,caption:string)=>Promise<void>}){
   const [items,setItems]=useState<MaterialSummary[]>([]);
   const [selectedBatchId,setSelectedBatchId]=useState("");
   const [assets,setAssets]=useState<MaterialAsset[]>([]);
@@ -152,6 +152,10 @@ export function MaterialLibrarySendDialog({accountId,conversationId,customerName
       return;
     }
     const outgoingCaption=(translatedCaption??sourceCaption).trim();
+    if(insertMode&&onInsert){
+      await onInsert(selectedAssets.map(asset=>({id:asset.mediaId,fileName:asset.fileName,mimeType:"image/png",size:asset.byteSize,sha256:"",createdAt:new Date().toISOString(),usageCount:0})),outgoingCaption);
+      onSent(`${selectedAssets.length} 张素材已插入邮件正文`);onClose();return;
+    }
     const translationTargetLanguage=translationSourceText?targetLanguage:undefined;
     const mediaIds=selectedAssets.map(item=>item.mediaId),materialBatchIds=[...new Set(selectedAssets.map(item=>item.batchId))],fingerprint=JSON.stringify({materialBatchIds,mediaIds,mode,orientation,caption:outgoingCaption,translationSourceText,translationTargetLanguage});
     const pending=pendingBatchRef.current?.fingerprint===fingerprint?pendingBatchRef.current:{id:`material-${crypto.randomUUID()}`,fingerprint};

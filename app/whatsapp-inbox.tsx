@@ -7,7 +7,7 @@ import {
   Users, Wifi, WifiOff, X, ClipboardList, ExternalLink, Bot, Brain, BookOpen, MapPin, Copy, CreditCard, LayoutGrid, List, Eye, EyeOff, ReceiptText, Reply, Zap, Tag,
   Facebook, Instagram, Linkedin, Building2, ArrowRightLeft, PanelLeftClose, PanelLeftOpen, ChevronLeft, ChevronRight, MessageSquare, ThumbsDown, ThumbsUp, Bold, Italic, ListOrdered, Link2,
 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { getCountry as getCountryTimezones } from "countries-and-timezones";
 import { countries as COUNTRIES } from "countries-list";
@@ -62,14 +62,23 @@ function htmlToPlainText(value:string):string{
   return value.replace(/<[^>]*>/g," ").replace(/\s+/g," ").trim();
 }
 
-function RichTextEditor({value,onChange,placeholder="输入邮件正文",className=""}:{value:string;onChange:(html:string)=>void;placeholder?:string;className?:string}){
+export type RichTextEditorHandle={saveSelection:()=>void;restoreSelection:()=>void;insertTextAtSelection:(text:string)=>void;insertHtmlAtSelection:(html:string)=>void;focus:()=>void};
+type RichTextEditorProps={value:string;onChange:(html:string)=>void;placeholder?:string;className?:string};
+const RichTextEditor=forwardRef<RichTextEditorHandle,RichTextEditorProps>(function RichTextEditor({value,onChange,placeholder="输入邮件正文",className=""},ref){
   const editorRef=useRef<HTMLDivElement>(null);
+  const selectionRef=useRef<Range|null>(null);
   const initializedRef=useRef(false);
   useEffect(()=>{if(editorRef.current&&(!initializedRef.current||editorRef.current.innerHTML!==value)){editorRef.current.innerHTML=value;initializedRef.current=true;}},[value]);
+  function saveSelection(){const selection=window.getSelection();if(!selection||!editorRef.current||!selection.rangeCount)return;const range=selection.getRangeAt(0);if(editorRef.current.contains(range.commonAncestorContainer))selectionRef.current=range.cloneRange();}
+  function restoreSelection(){const editor=editorRef.current;if(!editor)return;editor.focus();const selection=window.getSelection();if(!selection)return;selection.removeAllRanges();if(selectionRef.current&&editor.contains(selectionRef.current.commonAncestorContainer))selection.addRange(selectionRef.current);else{const range=document.createRange();range.selectNodeContents(editor);range.collapse(false);selection.addRange(range);selectionRef.current=range.cloneRange();}}
+  function insertHtmlAtSelection(html:string){restoreSelection();document.execCommand("insertHTML",false,html);onChange(editorRef.current?.innerHTML??"");saveSelection();}
+  function insertTextAtSelection(text:string){restoreSelection();document.execCommand("insertText",false,text);onChange(editorRef.current?.innerHTML??"");saveSelection();}
+  useImperativeHandle(ref,()=>({saveSelection,restoreSelection,insertTextAtSelection,insertHtmlAtSelection,focus:()=>editorRef.current?.focus()}),[]);
   function command(name:string,arg?:string){editorRef.current?.focus();document.execCommand(name,false,arg);onChange(editorRef.current?.innerHTML??"");}
   function addLink(){const url=window.prompt("输入链接地址");if(url)command("createLink",url);}
-  return <div className={`rich-text-editor ${className}`}><div className="rich-text-toolbar" role="toolbar" aria-label="邮件格式工具"><button type="button" onMouseDown={event=>{event.preventDefault();command("bold");}} title="粗体" aria-label="粗体"><Bold size={15}/></button><button type="button" onMouseDown={event=>{event.preventDefault();command("italic");}} title="斜体" aria-label="斜体"><Italic size={15}/></button><button type="button" onMouseDown={event=>{event.preventDefault();command("insertUnorderedList");}} title="项目符号" aria-label="项目符号"><List size={15}/></button><button type="button" onMouseDown={event=>{event.preventDefault();command("insertOrderedList");}} title="编号列表" aria-label="编号列表"><ListOrdered size={15}/></button><button type="button" onMouseDown={event=>{event.preventDefault();addLink();}} title="插入链接" aria-label="插入链接"><Link2 size={15}/></button></div><div ref={editorRef} className="rich-text-content" contentEditable suppressContentEditableWarning data-placeholder={placeholder} role="textbox" aria-multiline="true" onInput={event=>onChange(event.currentTarget.innerHTML)} onPaste={event=>{event.preventDefault();const text=event.clipboardData.getData("text/plain");document.execCommand("insertText",false,text);onChange(editorRef.current?.innerHTML??"");}}/></div>;
-}
+  return <div className={`rich-text-editor ${className}`}><div className="rich-text-toolbar" role="toolbar" aria-label="邮件格式工具"><button type="button" onMouseDown={event=>{event.preventDefault();command("bold");}} title="粗体" aria-label="粗体"><Bold size={15}/></button><button type="button" onMouseDown={event=>{event.preventDefault();command("italic");}} title="斜体" aria-label="斜体"><Italic size={15}/></button><button type="button" onMouseDown={event=>{event.preventDefault();command("insertUnorderedList");}} title="项目符号" aria-label="项目符号"><List size={15}/></button><button type="button" onMouseDown={event=>{event.preventDefault();command("insertOrderedList");}} title="编号列表" aria-label="编号列表"><ListOrdered size={15}/></button><button type="button" onMouseDown={event=>{event.preventDefault();addLink();}} title="插入链接" aria-label="插入链接"><Link2 size={15}/></button></div><div ref={editorRef} className="rich-text-content" contentEditable suppressContentEditableWarning data-placeholder={placeholder} role="textbox" aria-multiline="true" onInput={event=>{onChange(event.currentTarget.innerHTML);saveSelection();}} onKeyUp={saveSelection} onMouseUp={saveSelection} onFocus={saveSelection} onPaste={event=>{event.preventDefault();const text=event.clipboardData.getData("text/plain");insertTextAtSelection(text);}}/></div>;
+});
+RichTextEditor.displayName="RichTextEditor";
 
 type MediaCacheEntry={url:string;promise:Promise<string>;references:number;lastUsed:number};
 const mediaCache=new Map<string,MediaCacheEntry>();
@@ -355,10 +364,28 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [emailSubject,setEmailSubject]=useState("");
   const [emailAttachments,setEmailAttachments]=useState<EmailComposerAttachment[]>([]);
   const [emailDocumentBusy,setEmailDocumentBusy]=useState(false);
+  const emailEditorRef=useRef<RichTextEditorHandle>(null);
+  const emailSelectionSavedRef=useRef(false);
   const emailAttachmentsRef=useRef<EmailComposerAttachment[]>([]);
   const emailDocumentBusyRef=useRef(false);
   const emailComposerConversationRef=useRef("");
   useEffect(()=>{emailAttachmentsRef.current=emailAttachments;},[emailAttachments]);
+  function saveEmailSelection(){if(emailMode){emailEditorRef.current?.saveSelection();emailSelectionSavedRef.current=true;}}
+  function insertEmailText(text:string){if(!text)return;emailEditorRef.current?.restoreSelection();emailEditorRef.current?.insertTextAtSelection(text);setToast("内容已插入邮件正文");}
+  function insertEmailHtml(html:string){if(!html)return;emailEditorRef.current?.restoreSelection();emailEditorRef.current?.insertHtmlAtSelection(html);setToast("内容已插入邮件正文");}
+  async function insertEmailMedia(asset:MediaAsset,caption=""){
+    if(!emailMode||!active||!apiToken)return;
+    if(emailAttachmentsRef.current.some(item=>item.id===asset.id)){if(caption)insertEmailText(caption);return;}
+    if(emailAttachmentsRef.current.length>=10||emailAttachmentsRef.current.reduce((sum,item)=>sum+item.size,0)+asset.size>25*1024*1024){setToast("邮件最多 10 个附件，总大小不能超过 25 MB");return;}
+    const inline=asset.mimeType.startsWith("image/");
+    let previewUrl:string|undefined;
+    if(inline){try{const result=await authorizedFetch(`/api/v1/media/${asset.id}`,apiToken);if(result.token!==apiToken)setApiToken(result.token);if(!result.response.ok)throw new Error("图片读取失败");previewUrl=URL.createObjectURL(await result.response.blob());}catch(reason){setToast(reason instanceof Error?reason.message:"图片读取失败");return;}}
+    const item:EmailComposerAttachment={...asset,inline,previewUrl};
+    emailAttachmentsRef.current=[...emailAttachmentsRef.current,item];setEmailAttachments(emailAttachmentsRef.current);
+    if(inline)insertEmailHtml(`${caption?`<p>${caption.replace(/[&<>\"]/g,character=>({"&":"&amp;","<":"&lt;",">":"&gt;",'\"':"&quot;"}[character]??character))}</p>`:""}<p><img src="${previewUrl}" alt="${asset.fileName}" style="display:block;max-width:100%;height:auto"></p>`);
+    else if(caption)insertEmailText(caption);
+    setToast(inline?"图片已插入邮件正文并添加为内嵌附件":"文件已添加到邮件附件");
+  }
   useEffect(()=>()=>{emailAttachmentsRef.current.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl);});},[]);
   const [emailMailboxes,setEmailMailboxes]=useState<Array<{id:string;account_id:string;address:string;display_name:string;is_primary:boolean;enabled:boolean}>>([]);
   const [emailMailboxId,setEmailMailboxId]=useState("");
@@ -1098,6 +1125,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
 
   function confirmReplySuggestion(){
     if(!replySuggestion||replySuggestion.conversationId!==active?.id)return;
+    if(emailMode){insertEmailText(replySuggestion.reply);setReplySuggestion(null);return;}
     setDraft(replySuggestion.reply);
     setReplySuggestion(null);
     setToast("回复建议已放入输入框，可继续编辑后发送");
@@ -1162,7 +1190,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       const item:EmailComposerAttachment={id:uploaded.mediaId,fileName:uploaded.fileName??name,mimeType:uploaded.mimeType??blob.type,size:uploaded.size??blob.size,sha256:uploaded.sha256??"",createdAt:new Date().toISOString(),usageCount:0,inline:mode==="image",previewUrl};
       emailAttachmentsRef.current=[...emailAttachmentsRef.current,item];
       setEmailAttachments(emailAttachmentsRef.current);
-      if(previewUrl)setEmailBodyHtml(html=>`${html}<p><img src="${previewUrl}" alt="${documentType.toUpperCase()}" style="display:block;max-width:100%;height:auto"></p>`);
+      if(previewUrl)insertEmailHtml(`<p><img src="${previewUrl}" alt="${documentType.toUpperCase()}" style="display:block;max-width:100%;height:auto"></p>`);
       setToast(`${documentType.toUpperCase()} 已${mode==="image"?"插入邮件正文":"作为 PDF 附件加入"}`);
     }catch(reason){setToast(reason instanceof Error?reason.message:"单据加入邮件失败");}
     finally{emailDocumentBusyRef.current=false;setEmailDocumentBusy(false);}
@@ -1510,6 +1538,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   async function applyQuickReplyText(template:string){
     const text=await resolveQuickReplyText(template);
     if(text===null)return;
+    if(emailMode){insertEmailText(text);setQuickReplyOpen(false);return;}
     setDraft(text);setQuickReplyOpen(false);
     requestAnimationFrame(()=>textareaRef.current?.focus());
   }
@@ -1517,7 +1546,9 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   async function sendQuickReplyMedia(asset:MediaAsset,captionOverride?:string){
     let caption=asset.mimeType.startsWith("audio/")?"":(captionOverride??draft).trim();
     if(caption){const rendered=await resolveQuickReplyText(caption);if(rendered===null)return;caption=rendered.trim();}
-    setQuickReplyOpen(false);await previewAndSendMediaAsset(asset,caption);
+    setQuickReplyOpen(false);
+    if(emailMode){await insertEmailMedia(asset,caption);return;}
+    await previewAndSendMediaAsset(asset,caption);
   }
 
   function addMessageToQuickReplies(message:ChatMessage){
@@ -1550,8 +1581,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
 
   async function retryEmail(emailId:string){if(!active)return;const result=await authorizedFetch(`/api/v1/email-sends/${emailId}/retry`,apiToken,{method:"POST"});if(result.token!==apiToken)setApiToken(result.token);setToast(result.response.ok?"失败邮件已重新进入队列":`邮件重试失败（HTTP ${result.response.status}）`);if(result.response.ok)await loadMessages(result.token,active.id);}
 
-  function insertEmoji(emoji:string){const input=textareaRef.current,start=input?.selectionStart??draft.length,end=input?.selectionEnd??start;setDraft(`${draft.slice(0,start)}${emoji}${draft.slice(end)}`);requestAnimationFrame(()=>{input?.focus();input?.setSelectionRange(start+emoji.length,start+emoji.length);});}
-  const handleQuickReplyOpen=useCallback((value:boolean)=>{setQuickReplyOpen(value);if(value){setEmojiOpen(false);setTranslationMenuOpen(false);}},[]);
+  function insertEmoji(emoji:string){if(emailMode){insertEmailText(emoji);return;}const input=textareaRef.current,start=input?.selectionStart??draft.length,end=input?.selectionEnd??start;setDraft(`${draft.slice(0,start)}${emoji}${draft.slice(end)}`);requestAnimationFrame(()=>{input?.focus();input?.setSelectionRange(start+emoji.length,start+emoji.length);});}
+  const handleQuickReplyOpen=useCallback((value:boolean)=>{if(value)saveEmailSelection();setQuickReplyOpen(value);if(value){setEmojiOpen(false);setTranslationMenuOpen(false);}},[emailMode]);
 
   const onlineCount=accounts.filter(item=>item.status==="online").length;
   const cloudWindowClosed=Boolean(!emailMode&&!emailOnlyConversation&&active?.transport==="cloud"&&(!active.replyWindowExpiresAt||new Date(active.replyWindowExpiresAt).getTime()<=clock));
@@ -2266,7 +2297,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                       </button>
                       <button
                         className="composer-tool-icon"
-                        onClick={() => setMediaOpen(true)}
+                        onClick={() => {saveEmailSelection();setMediaOpen(true);}}
                         aria-label="打开媒体与附件"
                         title="媒体与附件"
                       >
@@ -2274,7 +2305,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                       </button>
                       <button
                         className="material-library-trigger"
-                        onClick={() => setMaterialLibraryOpen(true)}
+                        onClick={() => {saveEmailSelection();setMaterialLibraryOpen(true);}}
                         aria-label="打开素材库"
                         title="从素材库发送图片"
                       >
@@ -2283,7 +2314,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                       </button>
                       <button
                         className="composer-tool-icon"
-                        onClick={() => setProductCardsOpen(true)}
+                        onClick={() => {saveEmailSelection();setProductCardsOpen(true);}}
                         aria-label="发送产品卡片"
                         title="发送产品卡片"
                       >
@@ -2395,7 +2426,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                       {emailMode&&<div className="email-composer-fields"><label>收件邮箱<input value={activePrimaryEmail} readOnly placeholder="联系人尚未配置邮箱"/></label><label>发件邮箱<select value={emailMailboxId} onChange={event=>setEmailMailboxId(event.target.value)}>{emailMailboxes.filter(item=>item.enabled).map(item=><option key={item.id} value={item.id}>{item.address}{item.is_primary?"（主邮箱）":""}</option>)}</select></label><label>邮件主题<input value={emailSubject} onChange={event=>setEmailSubject(event.target.value)} placeholder="邮件主题"/></label></div>}
                       {emailMode ? (
                         <>
-                          <RichTextEditor value={emailBodyHtml} onChange={value=>{setEmailBodyHtml(value);setDraft(htmlToPlainText(value));}} placeholder="输入邮件正文"/>
+                          <RichTextEditor ref={emailEditorRef} value={emailBodyHtml} onChange={value=>{setEmailBodyHtml(value);setDraft(htmlToPlainText(value));}} placeholder="输入邮件正文"/>
                           {emailAttachments.length > 0 && <div className="email-attachment-list" aria-label="邮件附件">
                             {emailAttachments.map((item,index) => (
                               <div className="email-attachment-chip" key={`${item.id}-${index}`}>
@@ -2442,19 +2473,19 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                         <button type="button" className={emailMode?"active":""} onClick={()=>setEmailMode(value=>!value)} disabled={emailOnlyConversation} aria-label="Email 模式" title={emailOnlyConversation?"此联系人只能发送邮件":"Email 模式"}><Mail size={18}/></button>
                         <button
                           className={emojiOpen ? "active" : ""}
-                          onClick={() => setEmojiOpen((value) => !value)}
+                          onClick={() => {saveEmailSelection();setEmojiOpen((value) => !value);}}
                           aria-label="选择表情"
                           title="选择表情"
                         >
                           <Smile size={18} />
                         </button>
-                        <button
+                        {!emailMode&&<button
                           onClick={() => setTtsOpen(true)}
                           aria-label="AI 文字转语音"
                           title="AI 文字转语音"
                         >
                           <Mic size={18} />
-                        </button>
+                        </button>}
                         <button
                           onClick={() => void sendMessage()}
                           className="send-button"
@@ -2752,6 +2783,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           onToast={setToast}
           onClose={() => setMediaOpen(false)}
           onSend={previewAndSendMediaAsset}
+          insertMode={emailMode}
+          onInsert={insertEmailMedia}
         />
       )}
       {imageViewerMessageId && conversationImages.length > 0 && (
@@ -2779,6 +2812,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           request={taskRequest}
           onToken={setApiToken}
           onClose={() => setMaterialLibraryOpen(false)}
+          insertMode={emailMode}
+          onInsert={async (assets,caption) => {for(const asset of assets)await insertEmailMedia(asset,asset===assets[0]?caption:"");}}
           onSent={(message) => {
             setDraft("");
             setToast(message);
@@ -2800,6 +2835,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           request={(path, init) => authorizedFetch(path, apiToken, init)}
           onToken={setApiToken}
           onClose={() => setProductCardsOpen(false)}
+          insertMode={emailMode}
+          onInsert={async (result) => {if(result?.html)insertEmailHtml(result.html);if(Array.isArray(result?.attachments)){for(const item of result.attachments as MediaAsset[])await insertEmailMedia(item,"");}setToast("产品卡片已插入邮件正文");}}
           onSent={(text) => {
             setToast(text);
             void loadMessages(apiToken, active.id);
@@ -5038,7 +5075,7 @@ function TextToSpeechDialog({accountId,token,initialText,translationEnabled,tran
 
 const MEDIA_PAGE_SIZE=24;
 
-function MediaDialog({accountId,conversationId,token,initialCaption,translationEnabled,onToken,onToast,onClose,onSend}:{accountId:string;conversationId:string;token:string;initialCaption:string;translationEnabled:boolean;onToken:(token:string)=>void;onToast:(text:string)=>void;onClose:()=>void;onSend:(asset:MediaAsset,caption:string)=>Promise<void>}){
+function MediaDialog({accountId,conversationId,token,initialCaption,translationEnabled,onToken,onToast,onClose,onSend,insertMode=false,onInsert}:{accountId:string;conversationId:string;token:string;initialCaption:string;translationEnabled:boolean;onToken:(token:string)=>void;onToast:(text:string)=>void;onClose:()=>void;onSend:(asset:MediaAsset,caption:string)=>Promise<void>;insertMode?:boolean;onInsert?:(asset:MediaAsset,caption:string)=>Promise<void>}){
   const [assets,setAssets]=useState<MediaAsset[]>([]),[selectedId,setSelectedId]=useState(""),[query,setQuery]=useState(""),[debouncedQuery,setDebouncedQuery]=useState(""),[filter,setFilter]=useState("all"),[conversationOnly,setConversationOnly]=useState(false),[caption,setCaption]=useState(initialCaption),[busy,setBusy]=useState(false),[dragging,setDragging]=useState(false),[loading,setLoading]=useState(true),[loadingMore,setLoadingMore]=useState(false),[total,setTotal]=useState(0),[error,setError]=useState("");
   const inputRef=useRef<HTMLInputElement>(null),gridRef=useRef<HTMLDivElement>(null),sentinelRef=useRef<HTMLDivElement>(null),tokenRef=useRef(token),onTokenRef=useRef(onToken),loadVersionRef=useRef(0),loadingMoreRef=useRef(false);
   useEffect(()=>{tokenRef.current=token;onTokenRef.current=onToken;},[token,onToken]);
@@ -5070,8 +5107,8 @@ function MediaDialog({accountId,conversationId,token,initialCaption,translationE
   async function upload(files:FileList|File[]){const list=Array.from(files);if(!list.length)return;setBusy(true);setError("");try{let last:MediaAsset|null=null;for(const file of list){if(file.size>64*1024*1024)throw new Error(`${file.name} 超过 64 MB`);const form=new FormData();form.append("file",file);const currentToken=tokenRef.current,result=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(accountId)}`,currentToken,{method:"POST",body:form});if(result.token!==currentToken)onTokenRef.current(result.token);if(!result.response.ok)throw new Error(`${file.name} 上传失败（HTTP ${result.response.status}）`);const body=await result.response.json() as {mediaId:string;fileName:string;mimeType:string;size:number;sha256:string};last={id:body.mediaId,fileName:body.fileName,mimeType:body.mimeType,size:body.size,sha256:body.sha256,createdAt:new Date().toISOString(),usageCount:0};}await refresh();if(last)setSelectedId(last.id);onToast(list.length>1?`${list.length} 个文件已加入媒体库`:"文件已加入媒体库");}catch(reason){setError(reason instanceof Error?reason.message:"上传失败");}finally{setBusy(false);setDragging(false);}}
   async function remove(asset:MediaAsset){if(asset.usageCount>0){setError("该文件已被消息使用，不能删除");return;}if(!await confirmAction(`文件“${asset.fileName}”将从媒体库中永久删除。`,{title:"删除媒体文件？",confirmLabel:"删除"}))return;setBusy(true);const currentToken=tokenRef.current,result=await authorizedFetch(`/api/v1/media/${asset.id}`,currentToken,{method:"DELETE"});if(result.token!==currentToken)onTokenRef.current(result.token);setBusy(false);if(!result.response.ok){setError(result.response.status===409?"该文件已被消息使用，不能删除":`删除失败（HTTP ${result.response.status}）`);return;}if(selectedId===asset.id)setSelectedId("");setAssets(current=>current.filter(item=>item.id!==asset.id));setTotal(current=>Math.max(0,current-1));onToast("文件已从媒体库删除");}
   async function removeUnused(){if(busy)return;if(!await confirmAction("将永久删除当前 WhatsApp 账号中所有未关联的图片和文件。已被消息、订单、产品、邮件或素材引用的文件会保留。",{title:"删除所有未关联文件？",confirmLabel:"全部删除"}))return;setBusy(true);setError("");try{const currentToken=tokenRef.current,result=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(accountId)}`,currentToken,{method:"DELETE"});if(result.token!==currentToken)onTokenRef.current(result.token);const body=await result.response.json().catch(()=>({})) as {deleted?:number};if(!result.response.ok)throw new Error(`删除失败（HTTP ${result.response.status}）`);setSelectedId("");await refresh();const deleted=Number(body.deleted??0);onToast(deleted?`已删除 ${deleted} 个未关联文件`:"没有可删除的未关联文件");}catch(reason){setError(reason instanceof Error?reason.message:"批量删除失败");}finally{setBusy(false);}}
-  async function submit(){if(!selected||busy)return;setBusy(true);setError("");try{await onSend(selected,caption.trim());}catch(reason){setError(reason instanceof Error?reason.message:"附件发送失败");}finally{setBusy(false);}}
-  return <div className="modal-backdrop media-backdrop" role="presentation"><section className="media-dialog" role="dialog" aria-modal="true" aria-labelledby="media-dialog-title"><header><div><span className="login-logo"><Paperclip size={21}/></span><span><h2 id="media-dialog-title">媒体与附件</h2><p>上传一次，之后可在该 WhatsApp 账号的会话中复用。</p></span></div><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button></header><div className={`media-dropzone ${dragging?"dragging":""}`} onDragEnter={event=>{event.preventDefault();setDragging(true)}} onDragOver={event=>event.preventDefault()} onDragLeave={event=>{if(event.currentTarget===event.target)setDragging(false)}} onDrop={event=>{event.preventDefault();void upload(event.dataTransfer.files)}} onClick={()=>inputRef.current?.click()} role="button" tabIndex={0} onKeyDown={event=>{if(event.key==="Enter"||event.key===" ")inputRef.current?.click();}}><UploadCloud size={30}/><b>{busy?"正在处理…":"拖拽文件到这里、直接粘贴，或点击选择"}</b><span>图片、MP4、OGG、MP3、PDF、ZIP；单文件最大 64 MB</span><input ref={inputRef} type="file" multiple accept="image/jpeg,image/png,image/webp,video/mp4,audio/ogg,audio/mpeg,application/pdf,application/zip" onChange={event=>{if(event.target.files)void upload(event.target.files);event.currentTarget.value="";}}/></div><div className="media-library-head"><div><b>媒体库</b><span>{loading?"正在加载…":`已加载 ${assets.length} / 共 ${total} 个文件`}</span></div><div className="media-library-actions"><button type="button" className="media-cleanup-button" onClick={()=>void removeUnused()} disabled={busy} title="删除当前账号中所有未关联文件"><Trash2 size={14}/>{busy?"正在处理…":"删除未关联文件"}</button><label className="media-conversation-toggle"><input type="checkbox" checked={conversationOnly} onChange={event=>setConversationOnly(event.target.checked)}/><span>仅当前会话</span></label><label><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索全部文件名"/></label></div></div><div className="media-filters">{[["all","全部"],["image","图片"],["video","视频"],["audio","音频"],["document","文档"]].map(([value,label])=><button key={value} className={filter===value?"active":""} onClick={()=>setFilter(value)}>{label}</button>)}</div><div ref={gridRef} className="media-grid">{loading&&!assets.length?<div className="media-load-more"><RefreshCw className="spin" size={18}/>正在加载第一批文件…</div>:assets.length?assets.map(asset=>{const kind=mediaKind(asset.mimeType);return <div key={asset.id} role="button" tabIndex={0} className={`media-item ${kind==="image"?"with-image-preview":""} ${selectedId===asset.id?"selected":""}`} onClick={()=>setSelectedId(asset.id)} onKeyDown={event=>{if(event.key==="Enter"||event.key===" ")setSelectedId(asset.id);}}>{kind==="image"?<ProductImage mediaId={asset.id} token={token} onToken={onToken} alt={asset.fileName} className="media-library-preview" preview/>:<span className={`media-kind ${kind}`}><FileText size={22}/></span>}<span><b title={asset.fileName}>{asset.fileName}</b><small>{formatBytes(asset.size)} · {asset.usageCount?`已使用 ${asset.usageCount} 次`:"未使用"}</small></span><button type="button" className="media-delete-button" aria-label={`删除 ${asset.fileName}`} title={asset.usageCount?"该文件正在使用，不能删除":"删除此文件"} disabled={busy||asset.usageCount>0} onClick={event=>{event.stopPropagation();void remove(asset)}}><Trash2 size={14}/><span>删除</span></button></div>}):<div className="media-empty"><FileText size={28}/><b>媒体库中暂无匹配文件</b><span>{debouncedQuery?"搜索已覆盖全部媒体与附件":"可从上方拖拽或粘贴上传"}</span></div>}{assets.length>0&&hasMore&&<div ref={sentinelRef} className="media-load-more">{loadingMore?<><RefreshCw className="spin" size={16}/>正在加载更多…</>:<span>继续滚动加载更多</span>}</div>}</div>{error&&<span className="login-error media-error">{error}</span>}<footer><label>附件说明（可选）<input value={caption} onChange={event=>setCaption(event.target.value)} maxLength={65536} placeholder="随附件一起发送的文字"/></label><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" disabled={!selected||busy} onClick={()=>void submit()}>{busy?<><RefreshCw className="spin" size={14}/>正在处理…</>:translationEnabled&&caption.trim()?<><Languages size={14}/>预览翻译</>:"发送所选附件"}</button></footer></section></div>;
+  async function submit(){if(!selected||busy)return;setBusy(true);setError("");try{if(insertMode&&onInsert)await onInsert(selected,caption.trim());else await onSend(selected,caption.trim());onClose();}catch(reason){setError(reason instanceof Error?reason.message:"附件发送失败");}finally{setBusy(false);}}
+  return <div className="modal-backdrop media-backdrop" role="presentation"><section className="media-dialog" role="dialog" aria-modal="true" aria-labelledby="media-dialog-title"><header><div><span className="login-logo"><Paperclip size={21}/></span><span><h2 id="media-dialog-title">媒体与附件</h2><p>上传一次，之后可在该 WhatsApp 账号的会话中复用。</p></span></div><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button></header><div className={`media-dropzone ${dragging?"dragging":""}`} onDragEnter={event=>{event.preventDefault();setDragging(true)}} onDragOver={event=>event.preventDefault()} onDragLeave={event=>{if(event.currentTarget===event.target)setDragging(false)}} onDrop={event=>{event.preventDefault();void upload(event.dataTransfer.files)}} onClick={()=>inputRef.current?.click()} role="button" tabIndex={0} onKeyDown={event=>{if(event.key==="Enter"||event.key===" ")inputRef.current?.click();}}><UploadCloud size={30}/><b>{busy?"正在处理…":"拖拽文件到这里、直接粘贴，或点击选择"}</b><span>图片、MP4、OGG、MP3、PDF、ZIP；单文件最大 64 MB</span><input ref={inputRef} type="file" multiple accept="image/jpeg,image/png,image/webp,video/mp4,audio/ogg,audio/mpeg,application/pdf,application/zip" onChange={event=>{if(event.target.files)void upload(event.target.files);event.currentTarget.value="";}}/></div><div className="media-library-head"><div><b>媒体库</b><span>{loading?"正在加载…":`已加载 ${assets.length} / 共 ${total} 个文件`}</span></div><div className="media-library-actions"><button type="button" className="media-cleanup-button" onClick={()=>void removeUnused()} disabled={busy} title="删除当前账号中所有未关联文件"><Trash2 size={14}/>{busy?"正在处理…":"删除未关联文件"}</button><label className="media-conversation-toggle"><input type="checkbox" checked={conversationOnly} onChange={event=>setConversationOnly(event.target.checked)}/><span>仅当前会话</span></label><label><Search size={14}/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="搜索全部文件名"/></label></div></div><div className="media-filters">{[["all","全部"],["image","图片"],["video","视频"],["audio","音频"],["document","文档"]].map(([value,label])=><button key={value} className={filter===value?"active":""} onClick={()=>setFilter(value)}>{label}</button>)}</div><div ref={gridRef} className="media-grid">{loading&&!assets.length?<div className="media-load-more"><RefreshCw className="spin" size={18}/>正在加载第一批文件…</div>:assets.length?assets.map(asset=>{const kind=mediaKind(asset.mimeType);return <div key={asset.id} role="button" tabIndex={0} className={`media-item ${kind==="image"?"with-image-preview":""} ${selectedId===asset.id?"selected":""}`} onClick={()=>setSelectedId(asset.id)} onKeyDown={event=>{if(event.key==="Enter"||event.key===" ")setSelectedId(asset.id);}}>{kind==="image"?<ProductImage mediaId={asset.id} token={token} onToken={onToken} alt={asset.fileName} className="media-library-preview" preview/>:<span className={`media-kind ${kind}`}><FileText size={22}/></span>}<span><b title={asset.fileName}>{asset.fileName}</b><small>{formatBytes(asset.size)} · {asset.usageCount?`已使用 ${asset.usageCount} 次`:"未使用"}</small></span><button type="button" className="media-delete-button" aria-label={`删除 ${asset.fileName}`} title={asset.usageCount?"该文件正在使用，不能删除":"删除此文件"} disabled={busy||asset.usageCount>0} onClick={event=>{event.stopPropagation();void remove(asset)}}><Trash2 size={14}/><span>删除</span></button></div>}):<div className="media-empty"><FileText size={28}/><b>媒体库中暂无匹配文件</b><span>{debouncedQuery?"搜索已覆盖全部媒体与附件":"可从上方拖拽或粘贴上传"}</span></div>}{assets.length>0&&hasMore&&<div ref={sentinelRef} className="media-load-more">{loadingMore?<><RefreshCw className="spin" size={16}/>正在加载更多…</>:<span>继续滚动加载更多</span>}</div>}</div>{error&&<span className="login-error media-error">{error}</span>}<footer><label>附件说明（可选）<input value={caption} onChange={event=>setCaption(event.target.value)} maxLength={65536} placeholder="随附件一起发送的文字"/></label><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" disabled={!selected||busy} onClick={()=>void submit()}>{busy?<><RefreshCw className="spin" size={14}/>正在处理…</>:translationEnabled&&caption.trim()?<><Languages size={14}/>预览翻译</>:insertMode?"插入到邮件":"发送所选附件"}</button></footer></section></div>;
 }
 
 function mapMediaAsset(item:Record<string,unknown>):MediaAsset{return{id:String(item.id),fileName:String(item.file_name??"未命名文件"),mimeType:String(item.mime_type??"application/octet-stream"),size:Number(item.byte_size??0),sha256:String(item.sha256??""),createdAt:String(item.created_at??""),usageCount:Number(item.usage_count??0)};}
