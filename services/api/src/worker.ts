@@ -17,8 +17,8 @@ process.on("SIGTERM",()=>{stopping=true;});
 process.on("SIGINT",()=>{stopping=true;});
 
 while(!stopping){
-  const agentWork=await processOneAgentJob();
   const emailWork=await processOneEmail();
+  const agentWork=await processOneAgentJob();
   const mailboxWork=await syncOneMailbox();
   const taskWork=await processOneTaskCycle();
   const proactiveWork=await processOneProactiveOutreach();
