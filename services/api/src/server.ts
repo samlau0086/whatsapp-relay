@@ -2530,16 +2530,21 @@ app.post("/api/v1/ai-drafts/:id/dismiss",{preHandler:authenticate},async(request
   const {id}=request.params as {id:string};
   const draft=await pool.query("SELECT d.conversation_id,c.account_id,EXISTS(SELECT 1 FROM proactive_outreach_jobs pj WHERE pj.payload->>'draftId'=d.id::text AND pj.payload->>'channel'='email') is_email FROM ai_drafts d JOIN conversations c ON c.id=d.conversation_id WHERE d.id=$1",[id]);
   if(!draft.rowCount||!canAccessAccount(request.principal,draft.rows[0].account_id))return reply.code(404).send({error:"not_found"});
-  await transaction(async client=>{
-    const conversationId=draft.rows[0].conversation_id;
-    if(draft.rows[0].is_email){
-      await client.query("UPDATE ai_drafts SET status='dismissed',resolved_at=now(),resolved_by=$2 WHERE id=$1 AND status='pending'",[id,request.principal?.id]);
-    }else{
-      await client.query("UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error='draft_dismissed' WHERE conversation_id=$1 AND state IN ('pending','processing') AND kind IN ('reply','followup')",[conversationId]);
-      await client.query("UPDATE ai_drafts SET status='dismissed',resolved_at=now(),resolved_by=$2 WHERE conversation_id=$1 AND status='pending' AND NOT EXISTS (SELECT 1 FROM proactive_outreach_jobs pj WHERE pj.payload->>'draftId'=ai_drafts.id::text AND pj.payload->>'channel'='email')",[conversationId,request.principal?.id]);
-    }
-    await client.query("UPDATE proactive_outreach_jobs SET state='skipped',completed_at=now(),last_error='approval_dismissed',updated_at=now() WHERE payload->>'draftId'=$1",[id]);
-  });
+  try{
+    await transaction(async client=>{
+      const conversationId=draft.rows[0].conversation_id;
+      if(draft.rows[0].is_email){
+        await client.query("UPDATE ai_drafts SET status='dismissed',resolved_at=now(),resolved_by=$2 WHERE id=$1 AND status='pending'",[id,request.principal?.id]);
+      }else{
+        await client.query("UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error='draft_dismissed' WHERE conversation_id=$1 AND state IN ('pending','processing') AND kind IN ('reply','followup')",[conversationId]);
+        await client.query("UPDATE ai_drafts SET status='dismissed',resolved_at=now(),resolved_by=$2 WHERE conversation_id=$1 AND status='pending' AND NOT EXISTS (SELECT 1 FROM proactive_outreach_jobs pj WHERE pj.payload->>'draftId'=ai_drafts.id::text AND pj.payload->>'channel'='email')",[conversationId,request.principal?.id]);
+      }
+      await client.query("UPDATE proactive_outreach_jobs SET state='skipped',completed_at=now(),last_error='approval_dismissed',updated_at=now() WHERE payload->>'draftId'=$1",[id]);
+    });
+  }catch(error){
+    request.log.error({error,draftId:id},"extended draft dismissal cleanup failed");
+    await pool.query("UPDATE ai_drafts SET status='dismissed',resolved_at=now(),resolved_by=$2 WHERE id=$1 AND status='pending'",[id,request.principal?.id]);
+  }
   return reply.code(204).send();
 });
 
