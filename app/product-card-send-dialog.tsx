@@ -14,7 +14,6 @@ import {
   ShoppingBag,
   X,
 } from "lucide-react";
-import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 
 type RequestResult = { response: Response; token: string };
@@ -27,6 +26,7 @@ type Product = {
   currency: string;
   defaultUnitAmount: number;
   imageMediaId: string | null;
+  imageUrl: string | null;
   priceTiers: Array<{ minQuantity: number; unitAmount: number }>;
   variants: Array<{ attributes: Record<string, string>; sku: string; imageMediaId: string | null; priceTiers: Array<{ minQuantity: number; unitAmount: number }> }>;
   tags: Array<{ id: string; name: string; color: string }>;
@@ -55,6 +55,7 @@ function mapProduct(item: Record<string, unknown>): Product {
     currency: String(item.currency),
     defaultUnitAmount: Number(item.defaultUnitAmount),
     imageMediaId: item.imageMediaId ? String(item.imageMediaId) : null,
+    imageUrl: typeof item.imageUrl === "string" ? item.imageUrl : null,
     priceTiers: Array.isArray(item.priceTiers)
       ? (item.priceTiers as Array<Record<string, unknown>>).map((tier) => ({
           minQuantity: Number(tier.minQuantity),
@@ -77,11 +78,13 @@ function mapProduct(item: Record<string, unknown>): Product {
 
 function ProductThumbnail({
   mediaId,
+  imageUrl,
   name,
   request,
   onToken,
 }: {
   mediaId: string | null;
+  imageUrl: string | null;
   name: string;
   request: Request;
   onToken: (token: string) => void;
@@ -115,8 +118,8 @@ function ProductThumbnail({
   }, [mediaId]);
   return (
     <span className="product-card-thumbnail">
-      {url ? (
-        <Image src={url} alt={name} width={48} height={48} unoptimized />
+      {url || imageUrl ? (
+        <img src={url || imageUrl || ""} alt={name} width={48} height={48} />
       ) : (
         <ShoppingBag size={16} />
       )}
@@ -803,6 +806,7 @@ export function ProductCardSendDialog({
                   >
                     <ProductThumbnail
                       mediaId={product.imageMediaId}
+                      imageUrl={product.imageUrl}
                       name={product.name}
                       request={request}
                       onToken={onToken}
