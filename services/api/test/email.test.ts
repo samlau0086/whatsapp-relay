@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { emailShell, escapeHtml, sanitizeEmailHtml } from "../src/email.js";
-import { inboundEmailTimelineTime } from "../src/mailboxes.js";
+import { emailSubjectKey, inboundEmailTimelineTime } from "../src/mailboxes.js";
 import { emailProviderSettingsSchema, emailSendSchema } from "../src/schemas.js";
 
 test("email HTML escapes user-controlled content",()=>{
@@ -71,10 +71,16 @@ test("inbound replies stay after their parent despite inaccurate Date headers",(
   const parent=new Date("2026-09-29T06:23:00.000Z");
   const early=new Date("2026-09-29T06:22:00.000Z");
   const later=new Date("2026-09-29T06:23:30.000Z");
-  assert.equal(inboundEmailTimelineTime(early,parent,received).toISOString(),"2026-09-29T06:23:00.001Z");
-  assert.equal(inboundEmailTimelineTime(later,parent,received).toISOString(),later.toISOString());
-  assert.equal(inboundEmailTimelineTime(early,undefined,received).toISOString(),early.toISOString());
+  assert.equal(inboundEmailTimelineTime(early,parent,received).toISOString(),received.toISOString());
+  assert.equal(inboundEmailTimelineTime(later,parent,received).toISOString(),received.toISOString());
+  assert.equal(inboundEmailTimelineTime(early,undefined,received).toISOString(),received.toISOString());
   assert.equal(inboundEmailTimelineTime(new Date("invalid"),parent,received).toISOString(),received.toISOString());
+});
+
+test("email reply subject matching accepts localized and numbered reply prefixes",()=>{
+  assert.equal(emailSubjectKey("Re(3): Re: Test again"),"test again");
+  assert.equal(emailSubjectKey("AW: Test again"),"test again");
+  assert.equal(emailSubjectKey("Test again"),"test again");
 });
 
 test("archived email replies are corrected only for matching messages in the same conversation",async()=>{
@@ -86,6 +92,9 @@ test("archived email replies are corrected only for matching messages in the sam
   assert.match(migrator,/092_email_reply_timeline\.sql/);
   assert.match(migration,/parent\.conversation_id=reply\.conversation_id/);
   assert.match(migration,/detail\.in_reply_to=parent_detail\.rfc_message_id/);
-  assert.match(migration,/reply\.occurred_at<=reply_parents\.parent_time/);
+  assert.match(migration,/position\(lower\(parent\.text_content\) IN lower\(COALESCE\(detail\.quoted_body,''\)\)\)>0/);
+  assert.match(migration,/reply\.occurred_at<=all_reply_parents\.parent_time/);
   assert.match(mailboxes,/m\.conversation_id=\$1 AND d\.rfc_message_id=ANY/);
+  assert.match(mailboxes,/position\(lower\(m\.text_content\) IN lower\(\$3\)\)>0/);
+  assert.match(mailboxes,/internalDate:true/);
 });

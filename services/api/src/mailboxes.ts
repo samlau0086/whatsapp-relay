@@ -39,10 +39,19 @@ export function latestEmailText(input:string):string{
   return (quote?source.slice(0,Math.max(0,source.lastIndexOf(quote))):source).trim().slice(0,65536);
 }
 
-export function inboundEmailTimelineTime(headerDate:Date|undefined,parentDate:Date|undefined,receivedAt=new Date()):Date{
+export function inboundEmailTimelineTime(headerDate:Date|undefined,parentDate:Date|undefined,receivedAt?:Date):Date{
+  const receivedTime=receivedAt?.getTime();
   const headerTime=headerDate?.getTime();
-  const time=headerTime!==undefined&&Number.isFinite(headerTime)&&Math.abs(receivedAt.getTime()-headerTime)<365*86400000?headerTime:receivedAt.getTime();
+  const fallbackTime=Date.now();
+  const referenceTime=receivedTime!==undefined&&Number.isFinite(receivedTime)?receivedTime:fallbackTime;
+  const time=receivedTime!==undefined&&Number.isFinite(receivedTime)?receivedTime:headerTime!==undefined&&Number.isFinite(headerTime)&&Math.abs(referenceTime-headerTime)<365*86400000?headerTime:fallbackTime;
   return new Date(Math.max(time,parentDate?parentDate.getTime()+1:time));
+}
+
+export function emailSubjectKey(subject:string):string{
+  let value=subject.trim().toLowerCase();
+  while(/^(?:re(?:\(\d+\))?|fwd?|aw|sv)\s*:\s*/i.test(value))value=value.replace(/^(?:re(?:\(\d+\))?|fwd?|aw|sv)\s*:\s*/i,"");
+  return value.replace(/\s+/g," ").trim();
 }
 
 function stripQuotedEmailHtml(input:string):string{
@@ -74,7 +83,7 @@ async function storeAttachment(accountId:string,filename:string,mime:string,cont
   return String(result.rows[0].id);
 }
 
-async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,source:Buffer):Promise<void>{
+async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,source:Buffer,receivedAt?:Date):Promise<void>{
   const parsed=await simpleParser(source);
   const sender=parsed.from?.value[0]?.address?.trim().toLowerCase();
   if(!sender||sender===row.address.toLowerCase())return;
@@ -102,10 +111,17 @@ async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,sourc
     const conversation=await client.query("INSERT INTO conversations(account_id,contact_id) VALUES($1,$2) ON CONFLICT(account_id,contact_id) DO UPDATE SET status='open',closed_at=NULL RETURNING id",[row.account_id,contactId]);
     const conversationId=conversation.rows[0].id;
     const replyIds=[parsed.inReplyTo,...(Array.isArray(parsed.references)?[...parsed.references].reverse():[])].filter((id):id is string=>Boolean(id));
-    const parent=replyIds.length?await client.query("SELECT m.occurred_at FROM message_email_details d JOIN messages m ON m.id=d.message_id WHERE m.conversation_id=$1 AND d.rfc_message_id=ANY($2::text[]) ORDER BY array_position($2::text[],d.rfc_message_id) LIMIT 1",[conversationId,replyIds]):null;
+    let parent=replyIds.length?await client.query("SELECT m.occurred_at FROM message_email_details d JOIN messages m ON m.id=d.message_id WHERE m.conversation_id=$1 AND d.rfc_message_id=ANY($2::text[]) ORDER BY array_position($2::text[],d.rfc_message_id) LIMIT 1",[conversationId,replyIds]):null;
+    // Resend and some SMTP relays replace Message-ID. When that loses the RFC
+    // thread reference, use the quoted original only when it uniquely confirms
+    // an outbound email in this same conversation and subject thread.
+    if(!parent?.rowCount&&quotedBody){
+      const fallback=await client.query("SELECT m.occurred_at FROM message_email_details d JOIN messages m ON m.id=d.message_id WHERE m.conversation_id=$1 AND m.direction='out' AND lower(regexp_replace(d.subject,'^(?:(?:re(?:\\([0-9]+\\))?|fwd?|aw|sv)\\s*:\\s*)+','','i'))=$2 AND length(btrim(COALESCE(m.text_content,'')))>0 AND position(lower(m.text_content) IN lower($3))>0 ORDER BY m.occurred_at DESC LIMIT 2",[conversationId,emailSubjectKey(subject),quotedBody]);
+      if(fallback.rowCount===1)parent=fallback;
+    }
     const attachments:Array<{id:string;name:string;mime:string;size:number}>=[];
     for(const item of attachmentCandidates)try{attachments.push({id:await storeAttachment(row.account_id,item.filename||"附件",item.contentType||"application/octet-stream",item.content),name:item.filename||"附件",mime:item.contentType||"application/octet-stream",size:item.size});}catch{warning="部分附件归档失败，请检查媒体存储";}
-    const occurredAt=inboundEmailTimelineTime(parsed.date,parent?.rows[0]?.occurred_at?new Date(parent.rows[0].occurred_at):undefined);
+    const occurredAt=inboundEmailTimelineTime(parsed.date,parent?.rows[0]?.occurred_at?new Date(parent.rows[0].occurred_at):undefined,receivedAt);
     const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_contact_id,direction,kind,text_content,status,occurred_at) VALUES($1,$2,$3,'in','text',$4,'received',$5) RETURNING id",[conversationId,row.account_id,contactId,body|| (attachments.length?"[附件]":"[无新正文]"),occurredAt]);
     const messageId=String(message.rows[0].id);
     const toAddresses=(Array.isArray(parsed.to)?parsed.to:[parsed.to]).flatMap(value=>value?.value??[]).map(value=>value.address).filter(Boolean);
@@ -131,11 +147,12 @@ export async function syncOneMailbox():Promise<boolean>{
     let lastUid=Number(row.last_uid);const errors:string[]=[];
     if(Number(box.uidNext)>lastUid+1){
       let seen=0;
-      for await(const item of client.fetch(`${lastUid+1}:*`,{uid:true,source:true},{uid:true})){
+      for await(const item of client.fetch(`${lastUid+1}:*`,{uid:true,source:true,internalDate:true},{uid:true})){
         if(item.uid<=lastUid||!item.source)continue;
         if(++seen>20)break;
         try{
-          await archiveInbound(row,validity,item.uid,item.source);
+          const receivedAt=item.internalDate instanceof Date?item.internalDate:typeof item.internalDate==="string"?new Date(item.internalDate):undefined;
+          await archiveInbound(row,validity,item.uid,item.source,receivedAt);
           await pool.query("INSERT INTO email_inbound_receipts(mailbox_id,uid_validity,uid) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",[row.id,validity,item.uid]);
         }catch(error){
           const message=(error instanceof Error?error.message:String(error)).slice(0,1000);errors.push(message);
