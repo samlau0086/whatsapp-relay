@@ -2528,23 +2528,17 @@ app.post("/api/v1/conversations/:id/memory/rebuild",{preHandler:authenticate},as
 app.post("/api/v1/ai-drafts/:id/send",{preHandler:authenticate},async(request,reply)=>{if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const {id}=request.params as {id:string};const body=(request.body??{}) as {text?:string;translationSourceText?:string;translationTargetLanguage?:string};const result=await transaction(async client=>{const draft=await client.query(`SELECT d.id,d.conversation_id,d.text_content,c.account_id,a.agent_id,co.provider_user_id,co.whatsapp_username FROM ai_drafts d JOIN conversations c ON c.id=d.conversation_id JOIN channel_accounts a ON a.id=c.account_id JOIN contacts co ON co.id=c.contact_id WHERE d.id=$1 AND d.status='pending' AND ${currentDraftGuard} FOR UPDATE OF d`,[id]);if(!draft.rowCount||!canAccessAccount(request.principal,draft.rows[0].account_id))return null;const row=draft.rows[0],text=body.text?.trim()||row.text_content,translationSourceText=body.translationSourceText?.trim()||null,translationTargetLanguage=body.translationTargetLanguage?.trim()||null,clientMessageId=`draft-${id}`,toJid=String(row.provider_user_id??"").trim(),toUsername=String(row.whatsapp_username??"").trim().replace(/^@/,"").toLowerCase();if(!toJid&&!toUsername)throw Object.assign(new Error("missing_destination"),{statusCode:409});const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,translation_source_text,translation_target_language,status,occurred_at) VALUES($1,$2,$3,$4,'out','text',$5,$6,$7,'queued',now()) ON CONFLICT(account_id,client_message_id) DO UPDATE SET text_content=messages.text_content,translation_source_text=messages.translation_source_text,translation_target_language=messages.translation_target_language RETURNING id",[row.conversation_id,row.account_id,request.principal!.id,clientMessageId,text,translationSourceText,translationTargetLanguage]);const existing=await client.query("SELECT 1 FROM outbound_commands WHERE message_id=$1",[message.rows[0].id]);let agentId:string|null=row.agent_id;if(!existing.rowCount){const queued=await queueChannelCommand(client,{accountId:row.account_id,conversationId:row.conversation_id,messageId:message.rows[0].id,payload:{accountId:row.account_id,conversationId:row.conversation_id,clientMessageId,type:"text",text,messageId:message.rows[0].id,...(toJid?{toJid}:{toUsername})}});agentId=queued.agentId;}await client.query("UPDATE ai_drafts SET status='sent',resolved_at=now(),resolved_by=$2 WHERE id=$1",[id,request.principal!.id]);const outreach=await client.query("UPDATE proactive_outreach_jobs SET state='sent',message_id=$2,completed_at=now(),updated_at=now() WHERE payload->>'draftId'=$1 AND state='awaiting_approval' RETURNING id,account_id,contact_id,planned_at",[id,message.rows[0].id]);for(const job of outreach.rows)await client.query("INSERT INTO proactive_outreach_events(account_id,contact_id,job_id,event_type,reason,planned_at) VALUES($1,$2,$3,'sent','human_approved',$4)",[job.account_id,job.contact_id,job.id,job.planned_at]);return{messageId:message.rows[0].id,agentId};});if(!result)return reply.code(404).send({error:"not_found"});if(result.agentId)void dispatchPending(result.agentId);return reply.code(202).send(result);});
 app.post("/api/v1/ai-drafts/:id/dismiss",{preHandler:authenticate},async(request,reply)=>{
   const {id}=request.params as {id:string};
-  const draft=await pool.query("SELECT d.conversation_id,c.account_id,EXISTS(SELECT 1 FROM proactive_outreach_jobs pj WHERE pj.payload->>'draftId'=d.id::text AND pj.payload->>'channel'='email') is_email FROM ai_drafts d JOIN conversations c ON c.id=d.conversation_id WHERE d.id=$1",[id]);
+  const draft=await pool.query("SELECT d.conversation_id,c.account_id FROM ai_drafts d JOIN conversations c ON c.id=d.conversation_id WHERE d.id=$1",[id]);
   if(!draft.rowCount||!canAccessAccount(request.principal,draft.rows[0].account_id))return reply.code(404).send({error:"not_found"});
-  try{
-    await transaction(async client=>{
-      const conversationId=draft.rows[0].conversation_id;
-      if(draft.rows[0].is_email){
-        await client.query("UPDATE ai_drafts SET status='dismissed',resolved_at=now(),resolved_by=$2 WHERE id=$1 AND status='pending'",[id,request.principal?.id]);
-      }else{
-        await client.query("UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error='draft_dismissed' WHERE conversation_id=$1 AND state IN ('pending','processing') AND kind IN ('reply','followup')",[conversationId]);
-        await client.query("UPDATE ai_drafts SET status='dismissed',resolved_at=now(),resolved_by=$2 WHERE conversation_id=$1 AND status='pending' AND NOT EXISTS (SELECT 1 FROM proactive_outreach_jobs pj WHERE pj.payload->>'draftId'=ai_drafts.id::text AND pj.payload->>'channel'='email')",[conversationId,request.principal?.id]);
-      }
-      await client.query("UPDATE proactive_outreach_jobs SET state='skipped',completed_at=now(),last_error='approval_dismissed',updated_at=now() WHERE payload->>'draftId'=$1",[id]);
-    });
-  }catch(error){
-    request.log.error({error,draftId:id},"extended draft dismissal cleanup failed");
-    await pool.query("UPDATE ai_drafts SET status='dismissed',resolved_at=now(),resolved_by=$2 WHERE id=$1 AND status='pending'",[id,request.principal?.id]);
-  }
+  await pool.query("UPDATE ai_drafts SET status='dismissed',resolved_at=now(),resolved_by=$2 WHERE id=$1 AND status='pending'",[id,request.principal?.id]);
+  void (async()=>{
+    try{
+      await transaction(async client=>{
+        await client.query("UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error='draft_dismissed' WHERE conversation_id=$1 AND state='pending' AND kind IN ('reply','followup')",[draft.rows[0].conversation_id]);
+        await client.query("UPDATE proactive_outreach_jobs SET state='skipped',completed_at=now(),last_error='approval_dismissed',updated_at=now() WHERE payload->>'draftId'=$1",[id]);
+      });
+    }catch(error){request.log.warn({error,draftId:id},"optional draft cleanup failed");}
+  })();
   return reply.code(204).send();
 });
 
