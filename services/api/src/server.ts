@@ -2532,7 +2532,6 @@ app.post("/api/v1/ai-drafts/:id/dismiss",{preHandler:authenticate},async(request
   if(!draft.rowCount||!canAccessAccount(request.principal,draft.rows[0].account_id))return reply.code(404).send({error:"not_found"});
   await transaction(async client=>{
     const conversationId=draft.rows[0].conversation_id;
-    await client.query("SELECT id FROM conversations WHERE id=$1 FOR UPDATE",[conversationId]);
     if(draft.rows[0].is_email){
       await client.query("UPDATE ai_drafts SET status='dismissed',resolved_at=now(),resolved_by=$2 WHERE id=$1 AND status='pending'",[id,request.principal?.id]);
     }else{

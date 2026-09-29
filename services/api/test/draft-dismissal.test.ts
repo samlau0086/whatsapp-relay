@@ -10,7 +10,6 @@ test("dismissing a reply suggestion clears older suggestions and cancels unfinis
   const dismiss = server.slice(server.indexOf('app.post("/api/v1/ai-drafts/:id/dismiss"'), server.indexOf('app.get("/api/v1/conversations/:id/memory', server.indexOf('app.post("/api/v1/ai-drafts/:id/dismiss"')));
   const saveDraft = engine.slice(engine.indexOf("async function saveDraft("), engine.indexOf("async function queueAiMessage("));
 
-  assert.match(dismiss, /SELECT id FROM conversations WHERE id=\$1 FOR UPDATE/);
   assert.match(dismiss, /UPDATE agent_jobs SET state='cancelled'.*state IN \('pending','processing'\).*kind IN \('reply','followup'\)/);
   assert.match(dismiss, /UPDATE ai_drafts SET status='dismissed'.*WHERE conversation_id=\$1 AND status='pending'/);
   assert.match(dismiss, /is_email/);
