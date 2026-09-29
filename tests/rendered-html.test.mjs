@@ -20,8 +20,10 @@ test("email reply subjects increment and are prefilled from the selected message
 
 test("email attachments render as media in the conversation and images join the viewer", async () => {
   const inbox = await readFile(new URL("../app/whatsapp-inbox.tsx", import.meta.url), "utf8");
-  assert.match(inbox, /message\.email\?\.attachments\.length \? <div className="email-message-attachments"/);
-  assert.match(inbox, /message\.email\.attachments\.map\(\(attachment,index\)=><MessageMedia/);
+  assert.match(inbox, /message\.email\?\.attachments\.some\(attachment=>attachment\.inline\) \? <div className="email-message-attachments" aria-label="邮件内嵌图片"/);
+  assert.match(inbox, /message\.email\?\.attachments\.some\(attachment=>!attachment\.inline\) \? <div className="email-message-attachments" aria-label="邮件附件"/);
+  assert.match(inbox, /message\.email\.attachments\.map\(\(attachment,index\)=>attachment\.inline\?<MessageMedia/);
+  assert.match(inbox, /message\.email\.attachments\.map\(\(attachment,index\)=>!attachment\.inline\?<MessageMedia/);
   assert.match(inbox, /setImageViewerMessageId\(`\$\{message\.id\}:email:\$\{index\}`\)/);
   assert.match(inbox, /message\.email\?\.attachments\.flatMap\(\(attachment,index\)=>attachment\.mime\.startsWith\("image\/"\)/);
   assert.doesNotMatch(inbox, /<small>附件：\{message\.email\.attachments\.map/);
