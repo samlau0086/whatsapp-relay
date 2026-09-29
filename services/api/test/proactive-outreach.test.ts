@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {readFile} from "node:fs/promises";
 import test from "node:test";
-import {hasUnexpectedArabicReply,isHolidayBlocked,nextDailyProactiveRunAt,nextEligibleProactiveRunAt,normalizeProactiveMessageTemplates,proactiveReplyTranslation,proactiveTemplateScenario,renderProactiveMessageTemplate,resolveProactiveLanguage,selectProactiveMessageTemplate} from "../src/proactive-outreach.js";
+import {hasUnexpectedArabicReply,isHolidayBlocked,nextDailyProactiveRunAt,nextEligibleProactiveRunAt,normalizeProactiveEmailTemplates,normalizeProactiveMessageTemplates,proactiveReplyTranslation,proactiveTemplateScenario,renderProactiveMessageTemplate,resolveProactiveLanguage,selectProactiveEmailTemplate,selectProactiveMessageTemplate} from "../src/proactive-outreach.js";
 
 const holidays={global:[{id:"christmas",name:"圣诞节",month:12,day:25,regions:["global"]}]};
 
@@ -68,6 +68,18 @@ test("system templates match touch scenario and customer stage before language f
   assert.equal(selectProactiveMessageTemplate(templates,"auto","follow_up","new")?.id,"follow-default");
 });
 
+test("Email templates require subject and match stage, language and touch",()=>{
+  const templates=[
+    {id:"first",scenario:"first_touch",subject:"Hello {{contactName}}",body:"Welcome {{contactName}}"},
+    {id:"follow",scenario:"follow_up",customerStages:["qualified"],language:"zh_CN",subject:"继续沟通",body:"{{contactName}}，您好"},
+    {id:"invalid",scenario:"follow_up",subject:"",body:"No subject"},
+  ];
+  assert.equal(normalizeProactiveEmailTemplates(templates).length,2);
+  assert.equal(selectProactiveEmailTemplate(templates,"zh_CN","follow_up","qualified")?.id,"follow");
+  assert.equal(selectProactiveEmailTemplate(templates,"en","first_touch","new")?.id,"first");
+  assert.equal(selectProactiveEmailTemplate(templates,"en","follow_up","new"),null);
+});
+
 test("proactive outreach queries use the existing contact country field",async()=>{
   const source=await readFile(new URL("../src/proactive-outreach.ts",import.meta.url),"utf8");
   assert.doesNotMatch(source,/\bc(?:o)?\.country_code\b/);
@@ -129,12 +141,12 @@ test("outreach cadence counts confirmed messages including human-approved drafts
   const source=await readFile(new URL("../src/proactive-outreach.ts",import.meta.url),"utf8");
   assert.equal((source.match(/proactive_outreach_jobs sent_job JOIN messages sent_message/g)??[]).length,2);
   assert.match(source,/sent_job\.state='sent' AND sent_message\.status IN \('sent','delivered','read'\)/);
-  assert.match(source,/state IN \('pending','processing','awaiting_approval'\)/);
+  assert.match(source,/state IN \('pending','processing','awaiting_approval','queued'\)/);
   assert.match(source,/Number\(state\.touches\)>Number\(\(job\.payload/);
   assert.match(source,/state\.last_contact_at.*proactiveCadenceDays\(Number\(state\.touches\)\)\*DAY/);
   assert.match(source,/const duplicate=await client\.query\("SELECT 1 FROM messages WHERE conversation_id=\$1 AND direction='out'.*regexp_replace\(lower\(btrim\(text_content\)\).*LIMIT 1"/);
   assert.match(source,/if\(duplicate\.rowCount\).*last_error='already_sent'/);
-  assert.match(source,/SELECT d\.id FROM ai_drafts d JOIN proactive_outreach_jobs pj.*pj\.state='awaiting_approval'.*m\.occurred_at>=d\.created_at-interval '7 days'.*FOR UPDATE OF d/);
+  assert.match(source,/SELECT d\.id FROM ai_drafts d JOIN proactive_outreach_jobs pj.*pj\.state='awaiting_approval'.*m\.occurred_at>d\.created_at.*FOR UPDATE OF d/);
   assert.match(source,/UPDATE ai_drafts SET status='dismissed'.*id=ANY\(\$1::uuid\[\]\)/);
   assert.match(source,/UPDATE proactive_outreach_jobs SET state='skipped'.*last_error='draft_superseded'.*payload->>'draftId'=ANY\(\$1::text\[\]\)/);
 });

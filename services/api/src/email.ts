@@ -32,8 +32,14 @@ export async function processOneEmail():Promise<boolean>{
   try{
     const attachments=await loadAttachments(job.id);
     const messageId=job.provider==="smtp"?await sendSmtp(job,attachments):await sendResend(job,attachments);
-    await pool.query("UPDATE email_messages SET status='accepted',provider_message_id=$2,accepted_at=now(),completed_at=now(),updated_at=now(),last_error=NULL WHERE id=$1",[job.id,messageId]);
-    await pool.query("UPDATE messages SET status='sent' WHERE id=(SELECT message_id FROM message_email_details WHERE email_job_id=$1)",[job.id]);
+    await transaction(async client=>{
+      await client.query("UPDATE email_messages SET status='accepted',provider_message_id=$2,accepted_at=now(),completed_at=now(),updated_at=now(),last_error=NULL WHERE id=$1",[job.id,messageId]);
+      await client.query("UPDATE messages SET status='sent' WHERE id=(SELECT message_id FROM message_email_details WHERE email_job_id=$1)",[job.id]);
+      const sent=await client.query(`UPDATE proactive_outreach_jobs j SET state='sent',completed_at=now(),last_error=NULL,updated_at=now()
+        FROM message_email_details d WHERE d.email_job_id=$1 AND j.message_id=d.message_id AND j.state IN ('queued','cancelled')
+        RETURNING j.id,j.account_id,j.contact_id,j.planned_at`,[job.id]);
+      for(const row of sent.rows)await client.query("INSERT INTO proactive_outreach_events(account_id,contact_id,job_id,event_type,reason,planned_at,metadata) VALUES($1,$2,$3,'sent','email_provider_accepted',$4,$5)",[row.account_id,row.contact_id,row.id,row.planned_at,JSON.stringify({channel:"email"})]);
+    });
   }catch(error){await failOrRetry(job,error);}
   return true;
 }
@@ -43,6 +49,18 @@ async function claimEmail(client:PoolClient):Promise<EmailJob|null>{
   await client.query("UPDATE email_messages SET status='failed',last_error='Worker stopped before provider response; retry limit reached',completed_at=now(),updated_at=now() WHERE status='sending' AND updated_at<now()-interval '2 minutes' AND attempt>=5");
   const result=await client.query("SELECT id,provider,provider_config,provider_secret_encrypted,recipients,subject,text_body,html_body,attempt,in_reply_to,references_header FROM email_messages WHERE status IN ('queued','retrying') AND available_at<=now() ORDER BY available_at,created_at FOR UPDATE SKIP LOCKED LIMIT 1");
   if(!result.rowCount)return null;
+  const outreach=await client.query(`SELECT j.id,j.state,j.account_id,j.contact_id,co.proactive_email_allowed,co.proactive_suppressed_at,co.provider_user_id,co.phone_e164,co.whatsapp_username,s.enabled,s.email_enabled,e.mailbox_id,e.recipients,cv.status conversation_status,COALESCE(st.mode,'cautious') mode,
+    EXISTS(SELECT 1 FROM messages received WHERE received.conversation_id=e.conversation_id AND received.direction='in' AND received.created_at>e.created_at) customer_replied,
+    (SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) primary_email
+    FROM proactive_outreach_jobs j JOIN message_email_details d ON d.message_id=j.message_id
+    JOIN contacts co ON co.id=j.contact_id JOIN proactive_outreach_settings s ON s.account_id=j.account_id
+    JOIN email_messages e ON e.id=d.email_job_id JOIN conversations cv ON cv.id=e.conversation_id LEFT JOIN conversation_agent_state st ON st.conversation_id=cv.id WHERE e.id=$1 FOR UPDATE OF j,co`,[result.rows[0].id]);
+  if(outreach.rowCount){const row=outreach.rows[0],recipient=row.recipients?.[0]?.email,mailbox=await client.query("SELECT 1 FROM account_email_mailboxes WHERE id=$1 AND account_id=$2 AND enabled AND is_primary",[row.mailbox_id,row.account_id]);if(row.state!=="queued"||!row.proactive_email_allowed||row.proactive_suppressed_at||!row.enabled||!row.email_enabled||row.mode==="human_paused"||row.conversation_status!=="open"||row.customer_replied||row.provider_user_id||row.phone_e164||row.whatsapp_username||!mailbox.rowCount||String(row.primary_email??"").toLowerCase()!==String(recipient??"").toLowerCase()){
+    await client.query("UPDATE email_messages SET status='failed',last_error='email_outreach_no_longer_permitted',completed_at=now(),updated_at=now() WHERE id=$1",[result.rows[0].id]);
+    await client.query("UPDATE messages SET status='failed',failure_message='email_outreach_no_longer_permitted' WHERE id=(SELECT message_id FROM message_email_details WHERE email_job_id=$1)",[result.rows[0].id]);
+    await client.query("UPDATE proactive_outreach_jobs SET state='cancelled',completed_at=now(),last_error='email_outreach_no_longer_permitted',updated_at=now() WHERE id=$1 AND state='queued'",[row.id]);
+    return null;
+  }}
   await client.query("UPDATE email_messages SET status='sending',attempt=attempt+1,updated_at=now() WHERE id=$1",[result.rows[0].id]);
   return{...result.rows[0],attempt:Number(result.rows[0].attempt)+1} as EmailJob;
 }
@@ -71,7 +89,7 @@ async function failOrRetry(job:EmailJob,error:unknown):Promise<void>{
   const status=Number((error as {status?:number;responseCode?:number}).status??(error as {responseCode?:number}).responseCode??0),message=(error instanceof Error?error.message:String(error)).slice(0,2000);
   const temporary=job.provider==="smtp"?(!status||(status>=400&&status<500)):(!status||status===408||status===409||status===429||status>=500);
   if(temporary&&job.attempt<5){const minutes=RETRY_MINUTES[Math.min(job.attempt-1,RETRY_MINUTES.length-1)];await pool.query("UPDATE email_messages SET status='retrying',available_at=now()+($2||' minutes')::interval,last_error=$3,updated_at=now() WHERE id=$1",[job.id,String(minutes),message]);}
-  else {await pool.query("UPDATE email_messages SET status='failed',last_error=$2,completed_at=now(),updated_at=now() WHERE id=$1",[job.id,message]);await pool.query("UPDATE messages SET status='failed',failure_message=$2 WHERE id=(SELECT message_id FROM message_email_details WHERE email_job_id=$1)",[job.id,message]);}
+  else {await transaction(async client=>{await client.query("UPDATE email_messages SET status='failed',last_error=$2,completed_at=now(),updated_at=now() WHERE id=$1",[job.id,message]);await client.query("UPDATE messages SET status='failed',failure_message=$2 WHERE id=(SELECT message_id FROM message_email_details WHERE email_job_id=$1)",[job.id,message]);const failed=await client.query("UPDATE proactive_outreach_jobs j SET state='failed',completed_at=now(),last_error=$2,updated_at=now() FROM message_email_details d WHERE d.email_job_id=$1 AND j.message_id=d.message_id AND j.state='queued' RETURNING j.id,j.account_id,j.contact_id,j.planned_at",[job.id,message]);for(const row of failed.rows)await client.query("INSERT INTO proactive_outreach_events(account_id,contact_id,job_id,event_type,reason,planned_at,metadata) VALUES($1,$2,$3,'failed',$4,$5,$6)",[row.account_id,row.contact_id,row.id,message,row.planned_at,JSON.stringify({channel:"email"})]);});}
 }
 
 export async function verifySmtp(setting:EmailProviderConfig,secret:string):Promise<void>{

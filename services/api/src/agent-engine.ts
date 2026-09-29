@@ -494,12 +494,12 @@ export async function processOneAgentJob(): Promise<boolean> {
     ).slice(0, 1000);
     if (job.attempt >= 5)
       await pool.query(
-        "UPDATE agent_jobs SET state='failed',completed_at=now(),last_error=$2 WHERE id=$1",
+        "UPDATE agent_jobs SET state='failed',completed_at=now(),last_error=$2 WHERE id=$1 AND state='processing'",
         [job.id, detail],
       );
     else
       await pool.query(
-        "UPDATE agent_jobs SET state='pending',claimed_at=NULL,available_at=now()+($2||' seconds')::interval,last_error=$3 WHERE id=$1",
+        "UPDATE agent_jobs SET state='pending',claimed_at=NULL,available_at=now()+($2||' seconds')::interval,last_error=$3 WHERE id=$1 AND state='processing'",
         [job.id, String(Math.min(900, 2 ** job.attempt * 5)), detail],
       );
   }
@@ -1587,6 +1587,12 @@ async function saveDraft(
   reason: string,
 ): Promise<void> {
   await transaction(async (client) => {
+    await client.query("SELECT id FROM conversations WHERE id=$1 FOR UPDATE", [job.conversation_id]);
+    const active = await client.query(
+      "SELECT id FROM agent_jobs WHERE id=$1 AND state='processing'",
+      [job.id],
+    );
+    if (!active.rowCount) return;
     await client.query(
       "UPDATE ai_drafts SET status='dismissed',resolved_at=now() WHERE conversation_id=$1 AND status='pending'",
       [job.conversation_id],
