@@ -49,6 +49,12 @@ import { calculatePayPalFee, PAYPAL_FEE_NAME } from "./paypal-fee.js";
 import { calculateShippingQuote, registerShippingRoutes } from "./shipping-routes.js";
 
 const app = Fastify({ logger: { level: config.NODE_ENV === "production" ? "info" : "debug", redact:["req.headers.authorization","req.body.password","req.body.secret","req.body.apiKey","req.body.clientId","req.body.clientSecret","req.body.sandboxClientId","req.body.sandboxClientSecret","req.body.liveClientId","req.body.liveClientSecret","req.body.accessToken","req.body.pageAccessToken","req.body.appSecret"] }, bodyLimit: 2_000_000 });
+app.removeContentTypeParser("application/json");
+app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
+  if (!String(body).trim()) return done(null, {});
+  try { done(null, JSON.parse(String(body))); }
+  catch (error) { done(error as Error, undefined); }
+});
 const s3 = new S3Client({ region:config.S3_REGION, endpoint:config.S3_ENDPOINT, forcePathStyle:true, credentials:{ accessKeyId:config.S3_ACCESS_KEY, secretAccessKey:config.S3_SECRET_KEY } });
 const videoNormalizationJobs=new Map<string,Promise<{object_key:string;file_name:string;mime_type:string;sha256:string}>>();
 const mediaPreviewCache=new Map<string,Buffer>();
