@@ -39,6 +39,12 @@ export function latestEmailText(input:string):string{
   return (quote?source.slice(0,Math.max(0,source.lastIndexOf(quote))):source).trim().slice(0,65536);
 }
 
+export function inboundEmailTimelineTime(headerDate:Date|undefined,parentDate:Date|undefined,receivedAt=new Date()):Date{
+  const headerTime=headerDate?.getTime();
+  const time=headerTime!==undefined&&Number.isFinite(headerTime)&&Math.abs(receivedAt.getTime()-headerTime)<365*86400000?headerTime:receivedAt.getTime();
+  return new Date(Math.max(time,parentDate?parentDate.getTime()+1:time));
+}
+
 function stripQuotedEmailHtml(input:string):string{
   return input
     .replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote>/gi,"")
@@ -95,9 +101,11 @@ async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,sourc
     }
     const conversation=await client.query("INSERT INTO conversations(account_id,contact_id) VALUES($1,$2) ON CONFLICT(account_id,contact_id) DO UPDATE SET status='open',closed_at=NULL RETURNING id",[row.account_id,contactId]);
     const conversationId=conversation.rows[0].id;
+    const replyIds=[parsed.inReplyTo,...(Array.isArray(parsed.references)?[...parsed.references].reverse():[])].filter((id):id is string=>Boolean(id));
+    const parent=replyIds.length?await client.query("SELECT m.occurred_at FROM message_email_details d JOIN messages m ON m.id=d.message_id WHERE m.conversation_id=$1 AND d.rfc_message_id=ANY($2::text[]) ORDER BY array_position($2::text[],d.rfc_message_id) LIMIT 1",[conversationId,replyIds]):null;
     const attachments:Array<{id:string;name:string;mime:string;size:number}>=[];
     for(const item of attachmentCandidates)try{attachments.push({id:await storeAttachment(row.account_id,item.filename||"附件",item.contentType||"application/octet-stream",item.content),name:item.filename||"附件",mime:item.contentType||"application/octet-stream",size:item.size});}catch{warning="部分附件归档失败，请检查媒体存储";}
-    const occurredAt=parsed.date&&Math.abs(Date.now()-parsed.date.getTime())<365*86400000?parsed.date:new Date();
+    const occurredAt=inboundEmailTimelineTime(parsed.date,parent?.rows[0]?.occurred_at?new Date(parent.rows[0].occurred_at):undefined);
     const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_contact_id,direction,kind,text_content,status,occurred_at) VALUES($1,$2,$3,'in','text',$4,'received',$5) RETURNING id",[conversationId,row.account_id,contactId,body|| (attachments.length?"[附件]":"[无新正文]"),occurredAt]);
     const messageId=String(message.rows[0].id);
     const toAddresses=(Array.isArray(parsed.to)?parsed.to:[parsed.to]).flatMap(value=>value?.value??[]).map(value=>value.address).filter(Boolean);

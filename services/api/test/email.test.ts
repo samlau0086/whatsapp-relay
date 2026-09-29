@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { emailShell, escapeHtml, sanitizeEmailHtml } from "../src/email.js";
+import { inboundEmailTimelineTime } from "../src/mailboxes.js";
 import { emailProviderSettingsSchema, emailSendSchema } from "../src/schemas.js";
 
 test("email HTML escapes user-controlled content",()=>{
@@ -63,4 +64,28 @@ test("email quote details migration is included in startup migrations",async()=>
   ]);
   assert.match(migrator,/090_email_collapsed_quotes\.sql/);
   assert.match(migration,/ALTER TABLE message_email_details ADD COLUMN IF NOT EXISTS quoted_body text/);
+});
+
+test("inbound replies stay after their parent despite inaccurate Date headers",()=>{
+  const received=new Date("2026-09-29T06:24:00.000Z");
+  const parent=new Date("2026-09-29T06:23:00.000Z");
+  const early=new Date("2026-09-29T06:22:00.000Z");
+  const later=new Date("2026-09-29T06:23:30.000Z");
+  assert.equal(inboundEmailTimelineTime(early,parent,received).toISOString(),"2026-09-29T06:23:00.001Z");
+  assert.equal(inboundEmailTimelineTime(later,parent,received).toISOString(),later.toISOString());
+  assert.equal(inboundEmailTimelineTime(early,undefined,received).toISOString(),early.toISOString());
+  assert.equal(inboundEmailTimelineTime(new Date("invalid"),parent,received).toISOString(),received.toISOString());
+});
+
+test("archived email replies are corrected only for matching messages in the same conversation",async()=>{
+  const [migration,migrator,mailboxes]=await Promise.all([
+    readFile(new URL("../../../infra/postgres/migrations/092_email_reply_timeline.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/mailboxes.ts",import.meta.url),"utf8"),
+  ]);
+  assert.match(migrator,/092_email_reply_timeline\.sql/);
+  assert.match(migration,/parent\.conversation_id=reply\.conversation_id/);
+  assert.match(migration,/detail\.in_reply_to=parent_detail\.rfc_message_id/);
+  assert.match(migration,/reply\.occurred_at<=reply_parents\.parent_time/);
+  assert.match(mailboxes,/m\.conversation_id=\$1 AND d\.rfc_message_id=ANY/);
 });
