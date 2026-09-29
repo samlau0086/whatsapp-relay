@@ -66,6 +66,26 @@ test("email quote details migration is included in startup migrations",async()=>
   assert.match(migration,/ALTER TABLE message_email_details ADD COLUMN IF NOT EXISTS quoted_body text/);
 });
 
+test("inline email images appear before collapsed quotes while files remain attachments",async()=>{
+  const [migration,migrator,routes,server,inbox]=await Promise.all([
+    readFile(new URL("../../../infra/postgres/migrations/093_email_inline_attachments.sql",import.meta.url),"utf8"),
+    readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/mailbox-routes.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/server.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+  ]);
+  assert.match(migrator,/093_email_inline_attachments\.sql/);
+  assert.match(migration,/ADD COLUMN IF NOT EXISTS is_inline boolean/);
+  assert.match(migration,/queued_email\.html_body/);
+  assert.match(routes,/content_id,is_inline\) VALUES/);
+  assert.match(server,/'inline',a\.is_inline/);
+  const inline=inbox.indexOf('aria-label="邮件内嵌图片"');
+  const quote=inbox.indexOf("<CollapsedEmailQuote body={message.email.quotedBody}/>");
+  const files=inbox.indexOf('aria-label="邮件附件"',quote);
+  assert.ok(inline>0&&inline<quote&&quote<files);
+  assert.match(inbox,/inline:Boolean\(v\.inline\)/);
+});
+
 test("inbound replies stay after their parent despite inaccurate Date headers",()=>{
   const received=new Date("2026-09-29T06:24:00.000Z");
   const parent=new Date("2026-09-29T06:23:00.000Z");
