@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
 import {readFile} from "node:fs/promises";
 import test from "node:test";
-import {isHolidayBlocked,nextDailyProactiveRunAt,nextEligibleProactiveRunAt,normalizeProactiveMessageTemplates,proactiveReplyTranslation,proactiveTemplateScenario,renderProactiveMessageTemplate,resolveProactiveLanguage,selectProactiveMessageTemplate} from "../src/proactive-outreach.js";
+import {hasUnexpectedArabicReply,isHolidayBlocked,nextDailyProactiveRunAt,nextEligibleProactiveRunAt,normalizeProactiveMessageTemplates,proactiveReplyTranslation,proactiveTemplateScenario,renderProactiveMessageTemplate,resolveProactiveLanguage,selectProactiveMessageTemplate} from "../src/proactive-outreach.js";
 
 const holidays={global:[{id:"christmas",name:"圣诞节",month:12,day:25,regions:["global"]}]};
 
 test("proactive reply language prefers contact settings",()=>{
-  assert.equal(resolveProactiveLanguage("auto","en_US"),"en_US");
+  assert.equal(resolveProactiveLanguage("auto","en_US"),"auto");
+  assert.equal(resolveProactiveLanguage(null,"ar"),"auto");
   assert.equal(resolveProactiveLanguage("zh_TW","en_US"),"zh_TW");
+});
+
+test("proactive outreach rejects an unestablished Arabic reply",()=>{
+  assert.equal(hasUnexpectedArabicReply("Hello, how are you?",null,[{direction:"in",text_content:"Hello"}]),false);
+  assert.equal(hasUnexpectedArabicReply("مرحبا، كيف حالك؟",null,[{direction:"in",text_content:"Hello"}]),true);
+  assert.equal(hasUnexpectedArabicReply("مرحبا، كيف حالك؟","ar",[{direction:"in",text_content:"Hello"}]),false);
+  assert.equal(hasUnexpectedArabicReply("مرحبا، كيف حالك؟",null,[{direction:"in",text_content:"مرحبا"}]),false);
 });
 
 test("proactive translation accompanies only the matching generated message",async()=>{
@@ -57,6 +65,7 @@ test("system templates match touch scenario and customer stage before language f
   assert.equal(selectProactiveMessageTemplate(templates,"en","first_touch","qualified")?.id,"qualified-first");
   assert.equal(selectProactiveMessageTemplate(templates,"zh_CN","follow_up","new")?.id,"follow-zh");
   assert.equal(selectProactiveMessageTemplate(templates,"en","follow_up","new")?.id,"follow-default");
+  assert.equal(selectProactiveMessageTemplate(templates,"auto","follow_up","new")?.id,"follow-default");
 });
 
 test("proactive outreach queries use the existing contact country field",async()=>{
