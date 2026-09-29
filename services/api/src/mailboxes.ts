@@ -131,8 +131,8 @@ async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,sourc
   });
 }
 
-export async function syncOneMailbox():Promise<boolean>{
-  const claimed=await pool.query(`UPDATE account_email_mailboxes SET claimed_until=now()+interval '2 minutes',next_sync_at=now()+interval '30 seconds' WHERE id=(SELECT id FROM account_email_mailboxes WHERE enabled AND next_sync_at<=now() AND (claimed_until IS NULL OR claimed_until<now()) ORDER BY next_sync_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`);
+export async function syncOneMailbox(mailboxId?:string):Promise<boolean>{
+  const claimed=await pool.query(`UPDATE account_email_mailboxes SET claimed_until=now()+interval '2 minutes',next_sync_at=now()+interval '30 seconds' WHERE id=(SELECT id FROM account_email_mailboxes WHERE ($1::uuid IS NULL OR id=$1) AND enabled AND (next_sync_at<=now() OR $1::uuid IS NOT NULL) AND (claimed_until IS NULL OR claimed_until<now()) ORDER BY next_sync_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`,[mailboxId??null]);
   if(!claimed.rowCount)return false;
   const row=claimed.rows[0] as MailboxRow;let client:ImapFlow|undefined;
   try{

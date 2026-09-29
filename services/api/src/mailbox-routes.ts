@@ -4,7 +4,7 @@ import { authenticate, canAccessAccount } from "./auth.js";
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { emailShell, escapeHtml, sanitizeEmailHtml, type EmailProviderConfig } from "./email.js";
-import { verifyMailbox } from "./mailboxes.js";
+import { syncOneMailbox, verifyMailbox } from "./mailboxes.js";
 import { microsoftMailboxToken, registerMailboxOAuth } from "./mailbox-oauth.js";
 import { conversationEmailSchema, mailboxSettingsSchema } from "./schemas.js";
 import { decryptAtRest, encryptAtRest } from "./security.js";
@@ -71,6 +71,20 @@ export function registerMailboxRoutes(app:FastifyInstance):void{
   app.post("/api/v1/admin/mailboxes/:id/retry-errors",{preHandler:authenticate},async(request,reply)=>{
     if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
     const {id}=request.params as {id:string};const result=await pool.query("UPDATE account_email_mailboxes SET last_uid=LEAST(last_uid,COALESCE((SELECT MIN(uid)-1 FROM email_inbound_receipts WHERE mailbox_id=$1 AND message_id IS NULL AND error IS NOT NULL),last_uid)),next_sync_at=now(),last_error=NULL WHERE id=$1 RETURNING id",[id]);return result.rowCount?{id}:reply.code(404).send({error:"not_found"});
+  });
+  app.post("/api/v1/admin/mailboxes/:id/sync",{preHandler:authenticate},async(request,reply)=>{
+    if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
+    const params=z.object({id:z.string().uuid()}).safeParse(request.params);
+    if(!params.success)return reply.code(400).send({error:"invalid_request"});
+    const {id}=params.data;
+    const mailbox=await pool.query("SELECT id,enabled FROM account_email_mailboxes WHERE id=$1",[id]);
+    if(!mailbox.rowCount)return reply.code(404).send({error:"not_found"});
+    if(!mailbox.rows[0].enabled)return reply.code(409).send({error:"mailbox_disabled"});
+    const started=await syncOneMailbox(id);
+    if(!started)return {id,status:"busy"};
+    const result=await pool.query("SELECT last_error FROM account_email_mailboxes WHERE id=$1",[id]);
+    if(result.rows[0]?.last_error)return reply.code(502).send({error:"mailbox_sync_failed",message:result.rows[0].last_error});
+    return {id,status:"completed"};
   });
   const send=async(request:FastifyRequest,reply:FastifyReply)=>{
     if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});

@@ -57,6 +57,20 @@ test("conversation email tables are included in startup migrations",async()=>{
   assert.match(migration,/CREATE TABLE IF NOT EXISTS message_email_attachments/);
 });
 
+test("manual mailbox sync uses the same claimed worker path and is admin-only",async()=>{
+  const [routes,mailboxes,inbox]=await Promise.all([
+    readFile(new URL("../src/mailbox-routes.ts",import.meta.url),"utf8"),
+    readFile(new URL("../src/mailboxes.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../app/whatsapp-inbox.tsx",import.meta.url),"utf8"),
+  ]);
+  assert.match(routes,/admin\/mailboxes\/:id\/sync/);
+  assert.match(routes,/role!=="admin"/);
+  assert.match(routes,/syncOneMailbox\(id\)/);
+  assert.match(mailboxes,/syncOneMailbox\(mailboxId\?:string\)/);
+  assert.match(mailboxes,/FOR UPDATE SKIP LOCKED/);
+  assert.match(inbox,/立即同步/);
+});
+
 test("email quote details migration is included in startup migrations",async()=>{
   const [migration,migrator]=await Promise.all([
     readFile(new URL("../../../infra/postgres/migrations/090_email_collapsed_quotes.sql",import.meta.url),"utf8"),

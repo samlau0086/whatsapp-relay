@@ -5928,13 +5928,25 @@ function TaskAgentSettingsPanel({
 }
 
 function MailboxSettingsPanel({token,onToken,onToast,accounts}:{token:string;onToken:(token:string)=>void;onToast:(text:string)=>void;accounts:Account[]}){
-  const [items,setItems]=useState<Array<Record<string,unknown>>>([]),[editing,setEditing]=useState<Record<string,unknown>|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  const [items,setItems]=useState<Array<Record<string,unknown>>>([]),[editing,setEditing]=useState<Record<string,unknown>|null>(null),[busy,setBusy]=useState(false),[syncingId,setSyncingId]=useState(""),[error,setError]=useState("");
   const blank=()=>({accountId:accounts.find(account=>account.platform==="whatsapp")?.id??"",address:"",displayName:"",isPrimary:false,enabled:true,authType:"password",imapHost:"",imapPort:993,imapUsername:"",imapPassword:"",smtpHost:"",smtpPort:465,smtpTls:"tls",smtpUsername:"",smtpPassword:""});
   const load=useCallback(async()=>{const result=await authorizedFetch("/api/v1/mailboxes",token);if(result.token!==token)onToken(result.token);const body=await result.response.json().catch(()=>({})) as {data?:Array<Record<string,unknown>>};if(result.response.ok)setItems(body.data??[]);},[token,onToken]);
   useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer);},[load]);
   async function save(){if(!editing)return;setBusy(true);setError("");const id=editing.id?String(editing.id):"";const result=await authorizedFetch(id?`/api/v1/admin/mailboxes/${id}`:"/api/v1/admin/mailboxes",token,{method:id?"PUT":"POST",headers:{"content-type":"application/json"},body:JSON.stringify(editing)});if(result.token!==token)onToken(result.token);if(!result.response.ok){const body=await result.response.json().catch(()=>({}));setError(String(body.message??body.error??"保存失败"));}else{setEditing(null);onToast("邮箱配置已保存");await load();}setBusy(false);}
   async function remove(id:string){if(!confirm("删除后将停止后续收发，历史邮件会保留。"))return;const result=await authorizedFetch(`/api/v1/admin/mailboxes/${id}`,token,{method:"DELETE"});if(result.token!==token)onToken(result.token);if(result.response.ok){onToast("邮箱配置已删除");await load();}}
   async function test(id:string){const result=await authorizedFetch(`/api/v1/admin/mailboxes/${id}/test`,token,{method:"POST"});if(result.token!==token)onToken(result.token);onToast(result.response.ok?"连接测试成功":"连接测试失败");}
+  async function syncNow(id:string){
+    setSyncingId(id);
+    try{
+      const result=await authorizedFetch(`/api/v1/admin/mailboxes/${id}/sync`,token,{method:"POST"});
+      if(result.token!==token)onToken(result.token);
+      const body=await result.response.json().catch(()=>({})) as {status?:string;error?:string;message?:string};
+      if(result.response.ok)onToast(body.status==="busy"?"该邮箱正在同步，请稍后查看":"邮箱同步已完成");
+      else onToast(body.error==="mailbox_disabled"?"请先启用该邮箱":body.message??"邮箱同步失败");
+      await load();
+    }catch{onToast("邮箱同步失败，请稍后重试");}
+    finally{setSyncingId("");}
+  }
   async function authorizeMicrosoft(accountId:string,address:string){
     setBusy(true);setError("");
     const popup=window.open("about:blank","_blank");
@@ -5974,7 +5986,7 @@ function MailboxSettingsPanel({token,onToken,onToast,accounts}:{token:string;onT
             {item.last_error && <small className="login-error">{String(item.last_error)}</small>}
           </div>
           <span>
-            <button className="secondary-action" onClick={() => void test(String(item.id))}>测试连接</button>
+            <button className="secondary-action" onClick={() => void syncNow(String(item.id))} disabled={Boolean(syncingId)||!item.enabled}>{syncingId===String(item.id)?"正在同步…":"立即同步"}</button><button className="secondary-action" onClick={() => void test(String(item.id))}>测试连接</button>
             {item.auth_type==="microsoft"&&<><span>Microsoft OAuth</span><button className="secondary-action" disabled={busy} onClick={()=>void authorizeMicrosoft(String(item.account_id),String(item.address))}>重新授权</button></>}
             <button className="secondary-action" onClick={() => setEditing({...item, accountId: String(item.account_id),displayName:String(item.display_name??""),isPrimary:Boolean(item.is_primary),smtpUsername:String(item.smtp_username??""), authType:item.auth_type==="microsoft"?"microsoft":"password",imapHost: String(item.imap_host ?? ""), imapPort: Number(item.imap_port ?? 993), imapUsername: String(item.imap_username ?? ""), smtpHost: String(item.smtp_host ?? ""), smtpPort: Number(item.smtp_port ?? 465), smtpTls: String(item.smtp_tls ?? "tls")})}>编辑</button>
             <button className="danger-text" onClick={() => void remove(String(item.id))}><Trash2 size={13}/>删除</button>
