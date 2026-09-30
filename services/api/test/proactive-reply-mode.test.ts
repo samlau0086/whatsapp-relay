@@ -3,11 +3,12 @@ import {readFile} from "node:fs/promises";
 import test from "node:test";
 import {applyProactiveReplyTransition} from "../src/agent-engine.js";
 
-function inbound(options:{outreach?:boolean;mode?:string;choice?:string;live?:boolean}={}){
+function inbound(options:{outreach?:boolean;agentMessage?:boolean;mode?:string;choice?:string;live?:boolean}={}){
   const queries:Array<{sql:string;params:unknown[]|undefined}>=[];
   const client={query:async(sql:string,params?:unknown[])=>{
     queries.push({sql,params});
     if(sql.includes("SELECT j.id FROM proactive_outreach_jobs"))return{rows:options.outreach?[{id:"outreach-1"}]:[],rowCount:options.outreach?1:0};
+    if(sql.includes("JOIN messages sent ON sent.id=st.last_agent_message_id"))return{rows:options.agentMessage?[{proactive_reply_mode:options.choice??"cautious"}]:[],rowCount:options.agentMessage?1:0};
     if(sql.includes("SELECT mode,proactive_reply_mode"))return{rows:[{mode:options.mode??"full",proactive_reply_mode:options.choice??"cautious"}],rowCount:1};
     return{rows:[],rowCount:0};
   }};
@@ -54,6 +55,11 @@ test("ordinary and historical replies do not transition",async()=>{
   assert.ok(!ordinary.queries.some(query=>query.sql.includes("reply_processed_at=now()")));
   const historical=inbound({outreach:true,live:false});await historical.run();
   assert.ok(!historical.queries.some(query=>query.sql.includes("SELECT j.id FROM proactive_outreach_jobs")));
+});
+
+test("customer replies after a full takeover agent message switch to the configured mode",async()=>{
+  const scenario=inbound({agentMessage:true,choice:"cautious"});await scenario.run();
+  assert.deepEqual(scenario.queries.find(query=>query.sql.includes("SET mode=$2"))?.params,["conversation-1","cautious",null]);
 });
 
 test("migration, API, and inbox expose a per-conversation default without changing old mode requests",async()=>{

@@ -1750,16 +1750,44 @@ export async function applyProactiveReplyTransition(client:PoolClient,conversati
      ORDER BY j.sent_at DESC,j.id DESC LIMIT 1`,
     [conversationId,messageId],
   ):null;
+  let transitionMode:ConversationAgentMode|null=null;
   if(outreach?.rowCount){
     await client.query("UPDATE proactive_outreach_jobs SET reply_processed_at=now(),updated_at=now() WHERE id=$1 AND reply_processed_at IS NULL",[outreach.rows[0].id]);
     const choice=await client.query("SELECT mode,proactive_reply_mode FROM conversation_agent_state WHERE conversation_id=$1",[conversationId]);
     if(choice.rows[0]?.mode==='full'&&choice.rows[0].proactive_reply_mode!=='full'){
-      const mode=choice.rows[0].proactive_reply_mode as ConversationAgentMode;
-      await client.query("UPDATE conversation_agent_state SET mode=$2,pause_reason=$3,updated_at=now() WHERE conversation_id=$1",[conversationId,mode,mode==='human_paused'?'proactive_customer_replied':null]);
-      if(mode==='human_paused'){
-        await client.query("UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error='proactive_customer_replied' WHERE conversation_id=$1 AND state='pending' AND kind IN ('reply','followup')",[conversationId]);
-        await client.query("UPDATE ai_drafts SET status='dismissed',resolved_at=now() WHERE conversation_id=$1 AND status='pending'",[conversationId]);
-      }
+      transitionMode=choice.rows[0].proactive_reply_mode as ConversationAgentMode;
+    }
+  }
+  // Agent replies in full takeover are also temporary when the conversation's
+  // configured response mode is cautious or human takeover. These replies do
+  // not have a proactive_outreach_jobs row, so use the tracked last agent
+  // message as the fallback signal.
+  if(!transitionMode&&live){
+    const sent=await client.query(
+      `SELECT st.proactive_reply_mode
+       FROM conversation_agent_state st
+       JOIN messages sent ON sent.id=st.last_agent_message_id
+       JOIN messages incoming ON incoming.id=$2 AND incoming.conversation_id=st.conversation_id
+       WHERE st.conversation_id=$1 AND st.mode='full'
+         AND st.proactive_reply_mode<>'full' AND sent.direction='out'
+         AND sent.status IN ('queued','dispatching','sent','delivered','read')
+         AND sent.occurred_at<incoming.occurred_at
+         AND NOT EXISTS (
+           SELECT 1 FROM messages newer
+           WHERE newer.conversation_id=$1 AND newer.direction='out'
+             AND newer.id<>sent.id AND newer.occurred_at>sent.occurred_at
+             AND newer.occurred_at<=incoming.occurred_at
+             AND newer.status IN ('queued','dispatching','sent','delivered','read')
+         )`,
+      [conversationId,messageId],
+    );
+    if(sent.rowCount)transitionMode=sent.rows[0].proactive_reply_mode as ConversationAgentMode;
+  }
+  if(transitionMode){
+    await client.query("UPDATE conversation_agent_state SET mode=$2,pause_reason=$3,updated_at=now() WHERE conversation_id=$1",[conversationId,transitionMode,transitionMode==='human_paused'?'proactive_customer_replied':null]);
+    if(transitionMode==='human_paused'){
+      await client.query("UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error='proactive_customer_replied' WHERE conversation_id=$1 AND state='pending' AND kind IN ('reply','followup')",[conversationId]);
+      await client.query("UPDATE ai_drafts SET status='dismissed',resolved_at=now() WHERE conversation_id=$1 AND status='pending'",[conversationId]);
     }
   }
 }
