@@ -69,6 +69,8 @@ docker compose down
 
 若 WhatsApp 或 GitHub 访问需经代理，可配置 `RELAY_PROXY_URL=http://proxy-host:port`。容器中的 `localhost` 指向容器自身；访问宿主机代理时请使用宿主机可达地址。
 
+Compose 默认给 Agent 容器配置 `1.1.1.1` 和 `8.8.8.8` 作为 DNS。该设置会随容器重建和镜像更新保留，无需每次手动修改；若 VPS 网络无法访问这些 DNS，请改为服务商提供且容器可达的 DNS 地址。更新时保留服务器上的 `compose.yaml`，不要用示例文件覆盖本地配置。
+
 ## 发布镜像
 
 `.github/workflows/docker-agent-release.yml` 会在 `main` 的 Agent 代码变更后发布 `ghcr.io/samlau0086/relaydesk-agent:latest`。创建 `agent-docker-v<version>` 标签会额外发布同名不可变标签：

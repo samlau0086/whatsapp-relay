@@ -2,6 +2,9 @@ services:
   agent:
     image: ghcr.io/samlau0086/relaydesk-agent:latest
     restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     ports:
       - "${RELAY_UI_BIND:-127.0.0.1}:${RELAY_UI_PORT:-8788}:8788"
     environment:
