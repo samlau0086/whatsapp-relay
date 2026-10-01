@@ -161,6 +161,17 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.match(summaryRoute,/filter==="reminders"&&row\.status!=="closed"/);
 });
 
+test("account metrics count delivered outbound messages and later customer replies",async()=>{
+  const server=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
+  const route=server.slice(server.indexOf('app.get("/api/v1/accounts"'),server.indexOf('type ConversationFilter='));
+  assert.match(route,/WHERE outbound\.account_id=a\.id AND outbound\.direction='out'/);
+  assert.match(route,/outbound\.status IN \('sent','delivered','read'\)/);
+  assert.match(route,/COUNT\(\*\) FILTER \(WHERE outbound\.occurred_at >= CURRENT_DATE\) AS today_sent/);
+  assert.match(route,/COUNT\(\*\) AS total_sent/);
+  assert.match(route,/\(reply\.occurred_at,reply\.id\) > \(outbound\.occurred_at,outbound\.id\)/);
+  assert.doesNotMatch(route,/first_message\.direction='out'/);
+});
+
 test("follow-up count parameters are explicitly typed in every comparison",async()=>{
   const server=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
   const condition=server.slice(server.indexOf("function followupCondition("),server.indexOf("function parseConversationRange("));
