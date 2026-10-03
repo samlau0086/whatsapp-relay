@@ -43,6 +43,7 @@ import {registerMessengerRoutes} from "./messenger.js";
 import {isMessengerReplyWindowClosedError,isTemplateRequiredError,queueChannelCommand,queueGroupCreateCommand,queueWhatsAppBlockCommand} from "./whatsapp-outbound.js";
 import {registerBrowserEvents} from "./browser-events.js";
 import {isPostgresUuid} from "./conversation-cursor.js";
+import {parseConversationTagFilter,matchesConversationTags} from "./conversation-tag-filter.js";
 import {mergeSameAccountConversations,validateSameAccountMerge,type MergeIdentity} from "./same-account-merge.js";
 import { paypalProfileSetting, registerPaymentMethodRoutes, resolvePaymentProfile, type PaymentProfileSnapshot } from "./payment-methods.js";
 import { calculatePayPalFee, PAYPAL_FEE_NAME } from "./paypal-fee.js";
@@ -448,7 +449,7 @@ app.get("/api/v1/accounts", { preHandler:authenticate }, async (request) => {
 });
 
 type ConversationFilter="all"|"groups"|"mine"|"unassigned"|"favorite"|"closed"|"archived"|"reminders"|"blocked";
-type ConversationQuery={accountId?:string;status?:string;q?:string;tagId?:string;customerStage?:string;latestOrderStatus?:string;followup?:string;agentMode?:string;country?:string;filter?:string;limit?:string;before?:string;cursor?:string;lastMessageFrom?:string;lastMessageBefore?:string;unreplied?:string;sendFailed?:string};
+type ConversationQuery={accountId?:string;status?:string;q?:string;tagId?:string;tagIds?:string;customerStage?:string;latestOrderStatus?:string;followup?:string;agentMode?:string;country?:string;filter?:string;limit?:string;before?:string;cursor?:string;lastMessageFrom?:string;lastMessageBefore?:string;unreplied?:string;sendFailed?:string};
 const CONVERSATION_FILTERS=new Set<ConversationFilter>(["all","groups","mine","unassigned","favorite","closed","archived","reminders","blocked"]);
 const CONVERSATION_CUSTOMER_STAGES=new Set(["new","considering","qualified","won","lost"]);
 const CONVERSATION_ORDER_STATUSES=new Set(["none","any","quotation","pending_confirmation","pending_payment","paid","processing","shipped","completed","cancelled"]);
@@ -507,7 +508,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
   if(query.agentMode&&!CONVERSATION_AGENT_MODES.has(query.agentMode))return reply.code(400).send({error:"invalid_agent_mode_filter"});
   const range=parseConversationRange(query);if(!range)return reply.code(400).send({error:"invalid_conversation_date_range"});
   const cursor=parseConversationCursor(query.cursor);if(cursor==="invalid")return reply.code(400).send({error:"invalid_cursor"});
-  if(query.tagId&&!isPostgresUuid(query.tagId))return reply.code(400).send({error:"invalid_tag_filter"});
+  const tagIds=parseConversationTagFilter(query);if(!tagIds)return reply.code(400).send({error:"invalid_tag_filter"});
   const keyword=query.q?.trim()||null;if(keyword&&keyword.length>100)return reply.code(400).send({error:"conversation_query_too_long"});
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null,accountIds=request.principal?.accountIds??null,filter=query.filter??null;
   const reminderMode=filter==="reminders";
@@ -534,7 +535,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
   const countryFilter=query.country?.trim()?"AND UPPER(COALESCE((SELECT country FROM contacts WHERE id=c.contact_id),''))=$18::text":"";
   const candidateCursor=!cursor?"":reminderMode?"AND (reminder_task.due_at>$11 OR (reminder_task.due_at=$11 AND c.id<$12::uuid))":`AND (${latestSort}<$11 OR (${latestSort}=$11 AND c.id<$12::uuid))`;
   const result=await pool.query(`WITH parameter_types AS NOT MATERIALIZED (
-    SELECT $4::text keyword_value,$9::uuid principal_user_id,$10::text filter_value,$11::timestamptz cursor_at,$12::uuid cursor_id,$14::uuid tag_id,$15::text customer_stage,$16::text latest_order_status,$17::boolean send_failed,$18::text country,$20::text agent_mode
+    SELECT $4::text keyword_value,$9::uuid principal_user_id,$10::text filter_value,$11::timestamptz cursor_at,$12::uuid cursor_id,$14::uuid[] tag_ids,$15::text customer_stage,$16::text latest_order_status,$17::boolean send_failed,$18::text country,$20::text agent_mode
   ), ${searchCte} candidates AS MATERIALIZED (
     SELECT c.id,${reminderMode?"reminder_task.due_at":latestSort} sort_at
     FROM ${candidateSource} JOIN channel_accounts a ON a.id=c.account_id
@@ -552,7 +553,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
       AND (a.platform IS DISTINCT FROM 'messenger' OR EXISTS(SELECT 1 FROM messenger_page_accounts active_page WHERE active_page.account_id=a.id))
       AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::text IS NULL OR c.status::text=$3)
-      AND ($14::uuid IS NULL OR EXISTS(SELECT 1 FROM conversation_tags selected_tag WHERE selected_tag.conversation_id=c.id AND selected_tag.tag_id=$14))
+      AND ($14::uuid[] IS NULL OR EXISTS(SELECT 1 FROM conversation_tags selected_tag WHERE selected_tag.conversation_id=c.id AND selected_tag.tag_id=ANY($14::uuid[])))
       AND ($15::text IS NULL OR c.customer_stage=$15::text)
       AND ($20::text IS NULL OR COALESCE(cas.mode,'human_paused')=$20::text)
       ${countryFilter}
@@ -577,7 +578,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
     LEFT JOIN LATERAL (SELECT text_content,kind,direction,status,occurred_at FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true
     ORDER BY candidates.sort_at ${reminderMode?"ASC":"DESC"},c.id DESC`,
-    [query.accountId??null,accountIds,query.status??null,keyword,query.before??null,range.from,range.before,query.unreplied==="true",principalUserId,filter,cursor?.sortAt??null,cursor?.id??null,limit+1,query.tagId??null,query.customerStage??null,query.latestOrderStatus??null,query.sendFailed==="true",query.country?.trim().toUpperCase()??null,query.followup??null,query.agentMode??null]);
+    [query.accountId??null,accountIds,query.status??null,keyword,query.before??null,range.from,range.before,query.unreplied==="true",principalUserId,filter,cursor?.sortAt??null,cursor?.id??null,limit+1,tagIds.length?tagIds:null,query.customerStage??null,query.latestOrderStatus??null,query.sendFailed==="true",query.country?.trim().toUpperCase()??null,query.followup??null,query.agentMode??null]);
   const hasMore=result.rows.length>limit,data=result.rows.slice(0,limit),last=data[data.length-1];
   return{data,nextCursor:hasMore&&last?Buffer.from(JSON.stringify({sortAt:last.sort_at,id:last.id}),"utf8").toString("base64url"):null,total:null};
 });
@@ -666,7 +667,7 @@ app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(requ
   if(query.sendFailed!==undefined&&query.sendFailed!=="true"&&query.sendFailed!=="false")return reply.code(400).send({error:"invalid_send_failed_filter"});
   if(query.followup&&!CONVERSATION_FOLLOWUP_STATUSES.has(query.followup))return reply.code(400).send({error:"invalid_followup_filter"});
   if(query.filter&&!CONVERSATION_FILTERS.has(query.filter as ConversationFilter))return reply.code(400).send({error:"invalid_conversation_filter"});
-  if(query.tagId&&!isPostgresUuid(query.tagId))return reply.code(400).send({error:"invalid_tag_filter"});
+  const tagIds=parseConversationTagFilter(query);if(!tagIds)return reply.code(400).send({error:"invalid_tag_filter"});
   if(query.customerStage&&!CONVERSATION_CUSTOMER_STAGES.has(query.customerStage))return reply.code(400).send({error:"invalid_customer_stage_filter"});
   if(query.latestOrderStatus&&!CONVERSATION_ORDER_STATUSES.has(query.latestOrderStatus))return reply.code(400).send({error:"invalid_latest_order_status_filter"});
   if(query.agentMode&&!CONVERSATION_AGENT_MODES.has(query.agentMode))return reply.code(400).send({error:"invalid_agent_mode_filter"});
@@ -699,7 +700,7 @@ app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(requ
   const filter=query.filter as ConversationFilter|undefined;
   const matches=(!query.accountId||row.account_id===query.accountId)
     &&(!query.status||row.status===query.status)
-    &&(!query.tagId||Array.isArray(row.tags)&&row.tags.some((tag:{id?:unknown})=>String(tag.id)===query.tagId))
+    &&matchesConversationTags(row.tags,tagIds)
     &&(!query.customerStage||row.customer_stage===query.customerStage)
     &&(!query.agentMode||row.agent_mode===query.agentMode)
     &&(!query.latestOrderStatus||(query.latestOrderStatus==="none"&&!row.latest_order_status)||(query.latestOrderStatus==="any"&&Boolean(row.latest_order_status))||row.latest_order_status===query.latestOrderStatus)

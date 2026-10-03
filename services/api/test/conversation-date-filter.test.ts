@@ -80,7 +80,7 @@ test("conversation API applies a closed-open last-message range",async()=>{
   assert.match(server,/invalid_latest_order_status_filter/);
   assert.match(server,/invalid_agent_mode_filter/);
   assert.match(server,/COALESCE\(cas\.mode,'human_paused'\)=\$20::text/);
-  assert.match(server,/selected_tag\.tag_id=\$14/);
+  assert.match(server,/selected_tag\.tag_id=ANY\(\$14::uuid\[\]\)/);
   assert.match(server,/c\.customer_stage=\$15::text/);
   assert.match(server,/ORDER BY created_at DESC,id DESC LIMIT 1/);
   assert.match(server,/latest_order\.business_status IS NULL/);
@@ -246,7 +246,7 @@ test("inbox uses debounced search, cursor loading, realtime reconciliation, and 
   assert.match(ui,/useVirtualizer/);
   assert.match(ui,/conversationCursorRef/);
   assert.match(ui,/useConversationFeed/);
-  assert.match(ui,/tagId:selectedTag/);
+  assert.match(ui,/tagIds:selectedTags/);
   assert.match(ui,/customerStage:selectedCustomerStage\|\|undefined/);
   assert.match(ui,/latestOrderStatus:selectedLatestOrderStatus\|\|undefined/);
   assert.match(ui,/{ label: "群会话", icon: Users, count: counts\.groups }/);
@@ -254,6 +254,8 @@ test("inbox uses debounced search, cursor loading, realtime reconciliation, and 
   assert.match(ui,/onTagCatalogChange=\{syncConversationTags\}/);
   assert.match(panel,/aria-label="搜索并筛选会话标签"/);
   assert.match(panel,/conversation-tag-chip/);
+  assert.match(panel,/aria-multiselectable="true"/);
+  assert.match(panel,/value\.includes\(tag\.id\)/);
   assert.match(panel,/aria-label="按客户阶段筛选会话"/);
   assert.match(panel,/aria-label="按最新订单状态筛选会话"/);
   assert.match(panel,/aria-label="按主动跟进状态筛选会话"/);

@@ -8,11 +8,11 @@ import {ConversationVirtualList} from "./conversation-virtual-list";
 import {CountryPicker} from "./country-picker";
 
 export function ConversationPanel({
-  filter,subtitle,query,onQuery,tags,tagId,onTagId,onTagOpen,customerStage,onCustomerStage,latestOrderStatus,onLatestOrderStatus,followup,onFollowup,agentMode,onAgentMode,country,onCountry,onOpenSidebar,collapsed,onToggleCollapsed,onRefresh,dateFilter,onDateFilter,onDateKeyDown,
+  filter,subtitle,query,onQuery,tags,tagIds,onTagIds,onTagOpen,customerStage,onCustomerStage,latestOrderStatus,onLatestOrderStatus,followup,onFollowup,agentMode,onAgentMode,country,onCountry,onOpenSidebar,collapsed,onToggleCollapsed,onRefresh,dateFilter,onDateFilter,onDateKeyDown,
   mobileOpen,onCloseMobile,listRef,sentinelRef,items,rows,totalSize,measure,effectiveActiveId,clock,markingUnreadId,onSelect,onMenu,onMarkUnread,
   loading,loadError,hasAccounts,loadingMore,loadMoreError,hasMore,onLoadMore,
 }:{
-  filter:string;subtitle:string;query:string;onQuery:(value:string)=>void;tags:Array<{id:string;name:string;color:string}>;tagId:string;onTagId:(value:string)=>void;onTagOpen:()=>void;onOpenSidebar:()=>void;collapsed:boolean;onToggleCollapsed:()=>void;onRefresh:()=>void;mobileOpen:boolean;onCloseMobile:()=>void;
+  filter:string;subtitle:string;query:string;onQuery:(value:string)=>void;tags:Array<{id:string;name:string;color:string}>;tagIds:string[];onTagIds:(value:string[])=>void;onTagOpen:()=>void;onOpenSidebar:()=>void;collapsed:boolean;onToggleCollapsed:()=>void;onRefresh:()=>void;mobileOpen:boolean;onCloseMobile:()=>void;
   customerStage:""|ConversationCustomerStage;onCustomerStage:(value:""|ConversationCustomerStage)=>void;latestOrderStatus:""|ConversationLatestOrderStatus;onLatestOrderStatus:(value:""|ConversationLatestOrderStatus)=>void;agentMode:""|ConversationAgentMode;onAgentMode:(value:""|ConversationAgentMode)=>void;country:string;onCountry:(value:string)=>void;
   followup:""|ConversationFollowupFilter;onFollowup:(value:""|ConversationFollowupFilter)=>void;
   dateFilter:ConversationDateFilter;onDateFilter:(value:ConversationDateFilter)=>void;onDateKeyDown:(event:KeyboardEvent<HTMLButtonElement>)=>void;
@@ -65,7 +65,7 @@ export function ConversationPanel({
       <button className="icon-button" onClick={onRefresh} aria-label="刷新"><RefreshCw size={17}/></button>
     </header>
     <label className="search-box"><Search size={15}/><input value={query} onChange={event=>onQuery(event.target.value)} maxLength={100} placeholder="搜索会话、联系人或号码"/></label>
-    <ConversationTagFilter tags={tags} value={tagId} onChange={onTagId} onOpen={onTagOpen}/>
+    <ConversationTagFilter tags={tags} value={tagIds} onChange={onTagIds} onOpen={onTagOpen}/>
     <div className="conversation-attribute-filters">
       <label className="conversation-country-filter"><Globe2 size={14}/><CountryPicker value={country} onChange={onCountry} label="搜索并筛选国家或地区"/></label>
       <label><UserRound size={14}/><select aria-label="按客户阶段筛选会话" value={customerStage} onChange={event=>onCustomerStage(event.target.value as ""|ConversationCustomerStage)}>
@@ -99,10 +99,10 @@ export function ConversationPanel({
   </section>;
 }
 
-function ConversationTagFilter({tags,value,onChange,onOpen}:{tags:Array<{id:string;name:string;color:string}>;value:string;onChange:(value:string)=>void;onOpen:()=>void}){
+export function ConversationTagFilter({tags,value,onChange,onOpen}:{tags:Array<{id:string;name:string;color:string}>;value:string[];onChange:(value:string[])=>void;onOpen:()=>void}){
   const rootRef=useRef<HTMLDivElement>(null),inputRef=useRef<HTMLInputElement>(null),openingRef=useRef(false);
   const [open,setOpen]=useState(false),[query,setQuery]=useState(""),[activeIndex,setActiveIndex]=useState(0);
-  const selected=tags.find(tag=>tag.id===value);
+  const selected=tags.filter(tag=>value.includes(tag.id));
   const visible=useMemo(()=>{
     const keyword=query.trim().toLocaleLowerCase();
     return keyword?tags.filter(tag=>tag.name.toLocaleLowerCase().includes(keyword)):tags;
@@ -114,8 +114,8 @@ function ConversationTagFilter({tags,value,onChange,onOpen}:{tags:Array<{id:stri
     return()=>document.removeEventListener("pointerdown",close);
   },[open]);
   const show=()=>{setActiveIndex(0);setOpen(true);if(!openingRef.current){openingRef.current=true;onOpen();}};
-  const select=(id:string)=>{openingRef.current=false;onChange(id);setQuery("");setActiveIndex(0);setOpen(false);};
-  const remove=()=>{openingRef.current=false;onChange("");setQuery("");setActiveIndex(0);setOpen(false);window.requestAnimationFrame(()=>inputRef.current?.focus());};
+  const select=(id:string)=>{onChange(id?(value.includes(id)?value.filter(item=>item!==id):[...value,id]):[]);inputRef.current?.focus();};
+  const remove=(id:string)=>{onChange(value.filter(item=>item!==id));inputRef.current?.focus();};
   const onKeyDown=(event:KeyboardEvent<HTMLInputElement>)=>{
     if(event.key==="Escape"){openingRef.current=false;setOpen(false);return;}
     if(event.key==="ArrowDown"||event.key==="ArrowUp"){
@@ -125,13 +125,16 @@ function ConversationTagFilter({tags,value,onChange,onOpen}:{tags:Array<{id:stri
     }
     if(event.key==="Enter"&&open&&visible[activeIndex]){event.preventDefault();select(visible[activeIndex].id);}
   };
-  return <div ref={rootRef} className={`conversation-tag-filter ${open?"open":""} ${selected?"has-value":""}`}>
+  return <div ref={rootRef} className={`conversation-tag-filter ${open?"open":""} ${value.length?"has-value":""}`}>
     <Tag size={15} className="conversation-tag-filter-icon"/>
-    {selected?<span className="conversation-tag-chip"><i style={{background:selected.color}}/><b>{selected.name}</b><button type="button" onClick={remove} aria-label={`移除标签 ${selected.name}`}><X size={13}/></button></span>:<input ref={inputRef} value={query} onFocus={show} onClick={show} onChange={event=>{setQuery(event.target.value);setActiveIndex(0);setOpen(true);}} onKeyDown={onKeyDown} role="combobox" aria-label="搜索并筛选会话标签" aria-expanded={open} aria-controls="conversation-tag-options" aria-autocomplete="list" placeholder="搜索标签"/>}
-    {!selected&&<ChevronDown size={14} className="conversation-tag-chevron" aria-hidden="true"/>}
-    {open&&!selected&&<div id="conversation-tag-options" className="conversation-tag-options" role="listbox">
-      <button type="button" role="option" aria-selected={!value} className={!value?"active":""} onMouseDown={event=>event.preventDefault()} onClick={()=>select("")}><span className="conversation-tag-all"><Tag size={14}/></span><b>全部标签</b>{!value&&<Check size={14}/>}</button>
-      {visible.map((tag,index)=><button type="button" role="option" aria-selected={value===tag.id} className={index===activeIndex?"focused":""} key={tag.id} onMouseEnter={()=>setActiveIndex(index)} onMouseDown={event=>event.preventDefault()} onClick={()=>select(tag.id)}><i style={{background:tag.color}}/><b>{tag.name}</b>{value===tag.id&&<Check size={14}/>}</button>)}
+    <div className="conversation-tag-values">
+      {selected.map(tag=><span key={tag.id} className="conversation-tag-chip"><i style={{background:tag.color}}/><b title={tag.name}>{tag.name}</b><button type="button" onClick={()=>remove(tag.id)} aria-label={`移除标签 ${tag.name}`} title={`移除标签 ${tag.name}`}><X size={13}/></button></span>)}
+      <input ref={inputRef} value={query} onFocus={show} onClick={show} onChange={event=>{setQuery(event.target.value);setActiveIndex(0);setOpen(true);}} onKeyDown={onKeyDown} role="combobox" aria-label="搜索并筛选会话标签" aria-expanded={open} aria-controls="conversation-tag-options" aria-autocomplete="list" placeholder="搜索标签"/>
+    </div>
+    <button type="button" className="conversation-tag-toggle" aria-label={open?"收起标签筛选":"展开标签筛选"} title={open?"收起标签筛选":"展开标签筛选"} onClick={()=>{if(open){openingRef.current=false;setOpen(false);}else{inputRef.current?.focus();show();}}}><ChevronDown size={14}/></button>
+    {open&&<div id="conversation-tag-options" className="conversation-tag-options" role="listbox" aria-label="会话标签" aria-multiselectable="true">
+      <button type="button" role="option" aria-selected={!value.length} className={!value.length?"active":""} onMouseDown={event=>event.preventDefault()} onClick={()=>select("")}><span className="conversation-tag-all"><Tag size={14}/></span><b>全部标签</b>{!value.length&&<Check size={14}/>}</button>
+      {visible.map((tag,index)=><button type="button" role="option" aria-selected={value.includes(tag.id)} className={`${index===activeIndex?"focused":""} ${value.includes(tag.id)?"active":""}`} key={tag.id} onMouseEnter={()=>setActiveIndex(index)} onMouseDown={event=>event.preventDefault()} onClick={()=>select(tag.id)}><i style={{background:tag.color}}/><b>{tag.name}</b>{value.includes(tag.id)&&<Check size={14}/>}</button>)}
       {!visible.length&&<p>没有匹配的标签</p>}
     </div>}
   </div>;
