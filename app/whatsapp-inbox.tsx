@@ -254,7 +254,7 @@ type ChatMessage = {
   cachedTranslationText?:string;cachedTranslationLanguage?:string;cachedTranslationSourceLanguage?:string;cachedTranscriptionText?:string;
   status?:"received"|"queued"|"dispatching"|"sent"|"delivered"|"read"|"failed"|"uncertain";
   attachment?:{id:string;name:string;size:string;mime:string};
-  email?:{subject:string;from:string;to:string[];attachments:Array<{id:string;name:string;mime:string;size?:string;inline?:boolean}>;warning?:string;jobId?:string;quotedBody?:string};
+  email?:{subject:string;from:string;to:string[];htmlBody?:string;attachments:Array<{id:string;name:string;mime:string;size?:string;inline?:boolean}>;warning?:string;jobId?:string;quotedBody?:string};
   comments:MessageComment[];
 };
 type MessageComment={id:string;body:string;userId:string;authorName:string;createdAt:string;updatedAt:string;score:number;viewerVote:number};
@@ -2146,7 +2146,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                           )}{" "}
                           {message.email&&<div className="email-message-meta"><span><Mail size={13}/>邮件</span><b>{message.email.subject}</b><small>{message.direction==="out"?`发件：${message.email.from}`:`收件：${message.email.from}`} · {message.direction==="out"?`收件：${message.email.to.join(", ")}`:`发给：${message.email.to.join(", ")}`}</small>{message.email.warning&&<small className="message-failure">{message.email.warning}</small>}</div>}
                           {message.adReferral&&<AdReferralCard referral={message.adReferral}/>}
-                          {message.text && <p>{message.text}</p>}
+                          {message.email?.htmlBody ? <div className="email-html-body" dangerouslySetInnerHTML={{__html:message.email.htmlBody}}/> : message.text && <p>{message.text}</p>}
                           {message.email?.attachments.some(attachment=>attachment.inline) ? <div className="email-message-attachments" aria-label="邮件内嵌图片">{message.email.attachments.map((attachment,index)=>attachment.inline?<MessageMedia key={`${attachment.id}:${index}`} attachment={{...attachment,size:attachment.size??""}} token={apiToken} onToken={setApiToken} onReady={keepMessagesAtEnd} onPreview={()=>setImageViewerMessageId(`${message.id}:email:${index}`)}/>:null)}</div> : null}
                           {message.email?.quotedBody&&<CollapsedEmailQuote body={message.email.quotedBody}/>}
                           {message.email?.attachments.some(attachment=>!attachment.inline) ? <div className="email-message-attachments" aria-label="邮件附件">{message.email.attachments.map((attachment,index)=>!attachment.inline?<MessageMedia key={`${attachment.id}:${index}`} attachment={{...attachment,size:attachment.size??""}} token={apiToken} onToken={setApiToken} onReady={keepMessagesAtEnd} onPreview={()=>setImageViewerMessageId(`${message.id}:email:${index}`)}/>:null)}</div> : null}

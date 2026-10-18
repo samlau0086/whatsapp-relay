@@ -10,6 +10,7 @@ import { pool, transaction } from "./db.js";
 import { decryptAtRest } from "./security.js";
 import { microsoftMailboxToken } from "./mailbox-oauth.js";
 import {cancelProactiveForConversation,isProactiveOptOut,suppressProactiveForContact} from "./proactive-outreach.js";
+import { sanitizeEmailHtml } from "./email.js";
 
 export type MailboxSettings={
   accountId:string;address:string;displayName:string;isPrimary:boolean;enabled:boolean;
@@ -126,8 +127,10 @@ async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,sourc
     const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_contact_id,direction,kind,text_content,status,occurred_at) VALUES($1,$2,$3,'in','text',$4,'received',$5) RETURNING id",[conversationId,row.account_id,contactId,body|| (attachments.length?"[附件]":"[无新正文]"),occurredAt]);
     const messageId=String(message.rows[0].id);
     const toAddresses=(Array.isArray(parsed.to)?parsed.to:[parsed.to]).flatMap(value=>value?.value??[]).map(value=>value.address).filter(Boolean);
-    await client.query("INSERT INTO message_email_details(message_id,mailbox_id,subject,from_email,to_emails,rfc_message_id,in_reply_to,references_header,attachment_warning,quoted_body) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",[messageId,row.id,subject,sender,JSON.stringify(toAddresses.length?toAddresses:[row.address]),parsed.messageId??null,parsed.inReplyTo??null,Array.isArray(parsed.references)?parsed.references.join(" "):parsed.references??null,warning||null,quotedBody||null]);
-    for(const [position,item] of attachments.entries())await client.query("INSERT INTO message_email_attachments(message_id,media_id,position,file_name,mime_type,byte_size,content_id,is_inline) VALUES($1,$2,$3,$4,$5,$6,NULL,false)",[messageId,item.id,position,item.name,item.mime,item.size]);
+    const normalizedHtml=htmlSource.replace(/cid:([^\"'\\s>]+)/gi,(full,cid)=>{const index=attachmentCandidates.findIndex(item=>String(item.contentId||"").replace(/^<|>$/g,"").toLowerCase()===String(cid).replace(/^<|>$/g,"").toLowerCase());return index>=0?`cid:attachment-${index}`:full;});
+    const safeHtml=normalizedHtml?sanitizeEmailHtml(normalizedHtml):"";
+    await client.query("INSERT INTO message_email_details(message_id,mailbox_id,subject,from_email,to_emails,rfc_message_id,in_reply_to,references_header,attachment_warning,quoted_body,html_body) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",[messageId,row.id,subject,sender,JSON.stringify(toAddresses.length?toAddresses:[row.address]),parsed.messageId??null,parsed.inReplyTo??null,Array.isArray(parsed.references)?parsed.references.join(" "):parsed.references??null,warning||null,quotedBody||null,safeHtml||null]);
+    for(const [position,item] of attachments.entries()){const contentId=`attachment-${position}`,isInline=safeHtml.toLowerCase().includes(`cid:${contentId}`);await client.query("INSERT INTO message_email_attachments(message_id,media_id,position,file_name,mime_type,byte_size,content_id,is_inline) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",[messageId,item.id,position,item.name,item.mime,item.size,contentId,isInline]);}
     await client.query("INSERT INTO email_inbound_receipts(mailbox_id,uid_validity,uid,message_id,error) VALUES($1,$2,$3,$4,NULL) ON CONFLICT(mailbox_id,uid_validity,uid) DO UPDATE SET message_id=$4,error=NULL",[row.id,uidValidity,uid,messageId]);
     if(isProactiveOptOut(body))await suppressProactiveForContact(client,contactId,"email_unsubscribe");
     else await cancelProactiveForConversation(client,conversationId,"email_customer_replied");
