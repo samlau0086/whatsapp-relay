@@ -5,13 +5,16 @@ import {authorizedFetch} from "./auth-session";
 import {emailHtmlDocument,type EmailInlineImage} from "./email-html-document";
 
 type Attachment={id:string;contentId?:string;mime:string;inline?:boolean};
+const emptyImages:EmailInlineImage[]=[];
 export function EmailHtmlBody({html,attachments,token,onToken,onReady}:{html:string;attachments:Attachment[];token:string;onToken:(token:string)=>void;onReady:()=>void}) {
   const frame=useRef<HTMLIFrameElement>(null),tokenRef=useRef(token),onTokenRef=useRef(onToken),onReadyRef=useRef(onReady);
-  const [images,setImages]=useState<EmailInlineImage[]>([]),[height,setHeight]=useState(160),[imageError,setImageError]=useState(false);
-  tokenRef.current=token;onTokenRef.current=onToken;onReadyRef.current=onReady;
+  const [loaded,setLoaded]=useState<{html:string;attachments:Attachment[];images:EmailInlineImage[];imageError:boolean}|null>(null),[height,setHeight]=useState(160);
+  const current=loaded?.html===html&&loaded.attachments===attachments?loaded:null;
+  const images=current?.images??emptyImages,imageError=current?.imageError??false;
+  useEffect(()=>{tokenRef.current=token;onTokenRef.current=onToken;onReadyRef.current=onReady;},[token,onToken,onReady]);
   useEffect(()=>{
     let cancelled=false;const urls:string[]=[];const controller=new AbortController();
-    setImages([]);setImageError(false);
+    let failed=false;
     void Promise.all(attachments.filter(item=>item.inline&&item.contentId&&item.mime.startsWith("image/")).map(async item=>{
       try{
         const result=await authorizedFetch(`/api/v1/media/${item.id}`,tokenRef.current,{signal:controller.signal});
@@ -19,8 +22,8 @@ export function EmailHtmlBody({html,attachments,token,onToken,onReady}:{html:str
         if(!result.response.ok)throw new Error("inline_image_unavailable");
         const url=URL.createObjectURL(await result.response.blob());urls.push(url);
         return {contentId:item.contentId,url};
-      }catch{if(!cancelled)setImageError(true);return null;}
-    })).then(values=>{if(!cancelled)setImages(values.filter(value=>value!==null));else urls.forEach(URL.revokeObjectURL);});
+      }catch{failed=true;return null;}
+    })).then(values=>{if(!cancelled)setLoaded({html,attachments,images:values.filter(value=>value!==null),imageError:failed});else urls.forEach(URL.revokeObjectURL);});
     return()=>{cancelled=true;controller.abort();urls.forEach(URL.revokeObjectURL);};
   },[html,attachments]);
   useEffect(()=>{
