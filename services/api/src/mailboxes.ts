@@ -10,7 +10,7 @@ import { pool, transaction } from "./db.js";
 import { decryptAtRest } from "./security.js";
 import { microsoftMailboxToken } from "./mailbox-oauth.js";
 import {cancelProactiveForConversation,isProactiveOptOut,suppressProactiveForContact} from "./proactive-outreach.js";
-import { sanitizeEmailHtml } from "./email.js";
+import { sanitizeEmailDisplayHtml, normalizeEmailCid } from "./email-display.js";
 
 export type MailboxSettings={
   accountId:string;address:string;displayName:string;isPrimary:boolean;enabled:boolean;
@@ -56,13 +56,6 @@ export function emailSubjectKey(subject:string):string{
   return value.replace(/\s+/g," ").trim();
 }
 
-function stripQuotedEmailHtml(input:string):string{
-  return input
-    .replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote>/gi,"")
-    .replace(/<div[^>]+class=["'][^"']*(?:gmail_quote|gmail_attr|yahoo_quoted|moz-cite-prefix)[^"']*["'][^>]*>[\s\S]*?<\/div>/gi,"")
-    .replace(/<div[^>]+id=["'](?:divRplyFwdMsg|yahoo_quoted)["'][^>]*>[\s\S]*?<\/div>/gi,"");
-}
-
 function imapClient(settings:{imap_host:string;imap_port:number;imap_username:string;imap_secret_encrypted:string},password?:string,accessToken?:string):ImapFlow{
   return new ImapFlow({host:settings.imap_host,port:Number(settings.imap_port),secure:true,auth:accessToken?{user:settings.imap_username,accessToken}:{user:settings.imap_username,pass:password??decryptAtRest(settings.imap_secret_encrypted,config.DATA_ENCRYPTION_KEY)},logger:false});
 }
@@ -86,11 +79,11 @@ async function storeAttachment(accountId:string,filename:string,mime:string,cont
 }
 
 async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,source:Buffer,receivedAt?:Date):Promise<void>{
-  const parsed=await simpleParser(source);
+  const parsed=await simpleParser(source,{skipImageLinks:true});
   const sender=parsed.from?.value[0]?.address?.trim().toLowerCase();
   if(!sender||sender===row.address.toLowerCase())return;
   const subject=(parsed.subject??"(无主题)").replace(/[\r\n]/g," ").slice(0,200);
-  const htmlSource=stripQuotedEmailHtml(String(parsed.html||""));
+  const htmlSource=String(parsed.html||"");
   const rawText=parsed.text?.trim()||convert(String(parsed.html||""),{wordwrap:false,selectors:[{selector:"a",options:{ignoreHref:true}},{selector:"img",format:"skip"}]});
   const body=latestEmailText(rawText||convert(htmlSource,{wordwrap:false,selectors:[{selector:"a",options:{ignoreHref:true}},{selector:"img",format:"skip"}]}));
   const quotedBody=emailQuoteText(rawText);
@@ -121,20 +114,47 @@ async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,sourc
       const fallback=await client.query("SELECT m.occurred_at FROM message_email_details d JOIN messages m ON m.id=d.message_id WHERE m.conversation_id=$1 AND m.direction='out' AND lower(regexp_replace(d.subject,'^(?:(?:re(?:\\([0-9]+\\))?|fwd?|aw|sv)\\s*:\\s*)+','','i'))=$2 AND length(btrim(COALESCE(m.text_content,'')))>0 AND position(lower(m.text_content) IN lower($3))>0 ORDER BY m.occurred_at DESC LIMIT 2",[conversationId,emailSubjectKey(subject),quotedBody]);
       if(fallback.rowCount===1)parent=fallback;
     }
-    const attachments:Array<{id:string;name:string;mime:string;size:number}>=[];
-    for(const item of attachmentCandidates)try{attachments.push({id:await storeAttachment(row.account_id,item.filename||"附件",item.contentType||"application/octet-stream",item.content),name:item.filename||"附件",mime:item.contentType||"application/octet-stream",size:item.size});}catch{warning="部分附件归档失败，请检查媒体存储";}
+    const attachments:Array<{id:string;name:string;mime:string;size:number;contentId:string}>=[];
+    for(const item of attachmentCandidates)try{attachments.push({id:await storeAttachment(row.account_id,item.filename||"附件",item.contentType||"application/octet-stream",item.content),name:item.filename||"附件",mime:item.contentType||"application/octet-stream",size:item.size,contentId:normalizeEmailCid(item.contentId||"")});}catch{warning="部分附件归档失败，请检查媒体存储";}
     const occurredAt=inboundEmailTimelineTime(parsed.date,parent?.rows[0]?.occurred_at?new Date(parent.rows[0].occurred_at):undefined,receivedAt);
     const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_contact_id,direction,kind,text_content,status,occurred_at) VALUES($1,$2,$3,'in','text',$4,'received',$5) RETURNING id",[conversationId,row.account_id,contactId,body|| (attachments.length?"[附件]":"[无新正文]"),occurredAt]);
     const messageId=String(message.rows[0].id);
     const toAddresses=(Array.isArray(parsed.to)?parsed.to:[parsed.to]).flatMap(value=>value?.value??[]).map(value=>value.address).filter(Boolean);
-    const normalizedHtml=htmlSource.replace(/cid:([^\"'\\s>]+)/gi,(full,cid)=>{const index=attachmentCandidates.findIndex(item=>String(item.contentId||"").replace(/^<|>$/g,"").toLowerCase()===String(cid).replace(/^<|>$/g,"").toLowerCase());return index>=0?`cid:attachment-${index}`:full;});
-    const safeHtml=normalizedHtml?sanitizeEmailHtml(normalizedHtml):"";
-    await client.query("INSERT INTO message_email_details(message_id,mailbox_id,subject,from_email,to_emails,rfc_message_id,in_reply_to,references_header,attachment_warning,quoted_body,html_body) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",[messageId,row.id,subject,sender,JSON.stringify(toAddresses.length?toAddresses:[row.address]),parsed.messageId??null,parsed.inReplyTo??null,Array.isArray(parsed.references)?parsed.references.join(" "):parsed.references??null,warning||null,quotedBody||null,safeHtml||null]);
-    for(const [position,item] of attachments.entries()){const contentId=`attachment-${position}`,isInline=safeHtml.toLowerCase().includes(`cid:${contentId}`);await client.query("INSERT INTO message_email_attachments(message_id,media_id,position,file_name,mime_type,byte_size,content_id,is_inline) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",[messageId,item.id,position,item.name,item.mime,item.size,contentId,isInline]);}
+    const safeHtml=htmlSource?sanitizeEmailDisplayHtml(htmlSource):"";
+    await client.query("INSERT INTO message_email_details(message_id,mailbox_id,subject,from_email,to_emails,rfc_message_id,in_reply_to,references_header,attachment_warning,quoted_body,html_body,html_render_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,1)",[messageId,row.id,subject,sender,JSON.stringify(toAddresses.length?toAddresses:[row.address]),parsed.messageId??null,parsed.inReplyTo??null,Array.isArray(parsed.references)?parsed.references.join(" "):parsed.references??null,warning||null,quotedBody||null,safeHtml||null]);
+    for(const [position,item] of attachments.entries()){const contentId=item.contentId||`attachment-${position}`,isInline=Boolean(item.contentId)&&safeHtml.toLowerCase().includes(`cid:${contentId}`);await client.query("INSERT INTO message_email_attachments(message_id,media_id,position,file_name,mime_type,byte_size,content_id,is_inline) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",[messageId,item.id,position,item.name,item.mime,item.size,contentId,isInline]);}
     await client.query("INSERT INTO email_inbound_receipts(mailbox_id,uid_validity,uid,message_id,error) VALUES($1,$2,$3,$4,NULL) ON CONFLICT(mailbox_id,uid_validity,uid) DO UPDATE SET message_id=$4,error=NULL",[row.id,uidValidity,uid,messageId]);
     if(isProactiveOptOut(body))await suppressProactiveForContact(client,contactId,"email_unsubscribe");
     else await cancelProactiveForConversation(client,conversationId,"email_customer_replied");
   });
+}
+
+// Re-read only known receipts from the same UIDVALIDITY. This repairs existing
+// messages in place without moving the new-mail cursor or reopening conversations.
+export async function restoreArchivedEmailHtml(client:ImapFlow,row:Pick<MailboxRow,"id">,validity:string):Promise<void>{
+  const pending=await pool.query("SELECT d.message_id,r.uid,d.rfc_message_id FROM message_email_details d JOIN email_inbound_receipts r ON r.message_id=d.message_id AND r.mailbox_id=d.mailbox_id WHERE d.mailbox_id=$1 AND r.uid_validity=$2 AND d.html_render_version=0 ORDER BY r.uid DESC LIMIT 5",[row.id,validity]);
+  for(const record of pending.rows){
+    const item=await client.fetchOne(String(record.uid),{source:true},{uid:true});
+    if(!item||!item.source){
+      // The source has been deleted/moved; retain the existing text fallback.
+      await pool.query("UPDATE message_email_details SET html_render_version=-1 WHERE message_id=$1 AND html_render_version=0",[record.message_id]);
+      continue;
+    }
+    const parsed=await simpleParser(item.source,{skipImageLinks:true});
+    if(record.rfc_message_id&&parsed.messageId!==record.rfc_message_id)continue;
+    const html=sanitizeEmailDisplayHtml(String(parsed.html||""));
+    await transaction(async db=>{
+      const existing=await db.query("SELECT a.media_id,m.sha256 FROM message_email_attachments a JOIN media m ON m.id=a.media_id WHERE a.message_id=$1",[record.message_id]);
+      for(const attachment of parsed.attachments){
+        const contentId=normalizeEmailCid(attachment.contentId||"");
+        if(!contentId)continue;
+        const digest=createHash("sha256").update(attachment.content).digest("hex");
+        const saved=existing.rows.find(value=>value.sha256===digest);
+        if(saved)await db.query("UPDATE message_email_attachments SET content_id=$3,is_inline=$4 WHERE message_id=$1 AND media_id=$2",[record.message_id,saved.media_id,contentId,html.toLowerCase().includes(`cid:${contentId}`)]);
+      }
+      await db.query("UPDATE message_email_details SET html_body=$2,html_render_version=1 WHERE message_id=$1 AND html_render_version=0",[record.message_id,html||null]);
+    });
+  }
 }
 
 export async function syncOneMailbox(mailboxId?:string):Promise<boolean>{
@@ -168,6 +188,7 @@ export async function syncOneMailbox(mailboxId?:string):Promise<boolean>{
       }
     }
     await pool.query("UPDATE account_email_mailboxes SET last_uid=$2,last_error=$3,last_synced_at=now() WHERE id=$1",[row.id,lastUid,errors[0]??null]);
+    await restoreArchivedEmailHtml(client,row,validity);
   }catch(error){
     await pool.query("UPDATE account_email_mailboxes SET last_error=$2,next_sync_at=now()+interval '2 minutes' WHERE id=$1",[row.id,(error instanceof Error?error.message:String(error)).slice(0,1000)]);
   }finally{

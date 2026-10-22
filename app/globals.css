@@ -1205,3 +1205,7 @@ button { color:inherit; }
 .conversation-tag-values input{flex:1 1 90px;width:90px;height:28px}
 .conversation-tag-toggle{width:22px;height:28px;padding:0;flex:0 0 auto;display:grid;place-items:center;border:0;background:transparent;color:#7e8d85;cursor:pointer}
 .conversation-tag-toggle:focus-visible{outline:2px solid #28aa6d;outline-offset:1px}
+/* Email documents have their own styles inside an isolated frame. */
+.message-bubble:has(.email-html-frame){width:760px;max-width:96%;min-width:0}
+.email-html-body{width:100%;min-width:0;background:#fff;border-radius:6px;overflow:hidden}
+.email-html-frame{display:block;width:100%;border:0;background:#fff;min-height:120px}
