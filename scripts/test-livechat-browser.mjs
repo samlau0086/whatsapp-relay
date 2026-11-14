@@ -10,7 +10,7 @@ import {livechatLoader,livechatWidget} from "../services/api/dist/livechat-widge
 const channel="11111111-1111-4111-8111-111111111111";
 const secondChannel="22222222-2222-4222-8222-222222222222";
 const sessions=new Map(),uploads=new Map(),origins=new Set(),errors=[],profiles=[];
-let failNext=false,ordinal=0,widgetLanguage;
+let failNext=false,ordinal=0,widgetLanguage,widgetName='网站客服',widgetIcon='';
 const timestamp=()=>new Date().toISOString().replace(/\.(\d{3})Z$/,(_match,millis)=>`.${millis}${String(++ordinal%1000).padStart(3,'0')}Z`);
 const listen=async handler=>{
   const server=createServer(handler);await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
@@ -22,9 +22,9 @@ const api=await listen(async(req,res)=>{
   const json=(status,data)=>{res.writeHead(status,{...cors,"content-type":"application/json"});res.end(JSON.stringify(data))};
   if(req.method==="OPTIONS"){res.writeHead(204,cors);res.end();return}
   if(url.pathname==="/livechat/embed.js"){res.writeHead(200,{"content-type":"application/javascript"});res.end(livechatLoader);return}
-  if(url.pathname.endsWith("/widget")){res.writeHead(200,{"content-type":"text/html","content-security-policy":`default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src blob:; frame-ancestors ${[...origins].join(" ")}`});res.end(livechatWidget);return}
+  if(url.pathname.endsWith("/widget")){res.writeHead(200,{"content-type":"text/html","content-security-policy":`default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src blob: https:; frame-ancestors ${[...origins].join(" ")}`});res.end(livechatWidget);return}
   if(!origins.has(req.headers.origin)){json(403,{error:"livechat_origin_denied"});return}
-  if(url.pathname.endsWith("/config")){json(200,{name:"网站客服",welcome:widgetLanguage!==undefined?"":"您好，欢迎联系我们。",color:"#146d73",position:url.pathname.includes(secondChannel)?"left":"right",language:widgetLanguage===null?undefined:widgetLanguage||(url.pathname.includes(secondChannel)?"en":"zh-CN")});return}
+  if(url.pathname.endsWith("/config")){json(200,{name:widgetName,iconUrl:widgetIcon,welcome:widgetLanguage!==undefined?"":"您好，欢迎联系我们。",color:"#146d73",position:url.pathname.includes(secondChannel)?"left":"right",language:widgetLanguage===null?undefined:widgetLanguage||(url.pathname.includes(secondChannel)?"en":"zh-CN")});return}
   const secret=req.headers.authorization,sessionKey=`${url.pathname.split('/')[2]}:${req.headers.origin}:${secret}`;
   if(!/^Bearer [a-f0-9]{64}$/.test(secret||"")){json(401,{error:"invalid_visitor_credential"});return}
   if(url.pathname.endsWith("/messages")&&req.method==="POST"){
@@ -153,6 +153,22 @@ try{
   failNext=true;await englishFrame.locator('#draft').fill('Retry in English');await englishFrame.locator('#send').click();await englishFrame.getByText('Failed. Click to retry',{exact:true}).waitFor();
   assert.equal(await englishFrame.locator('#notice').textContent(),'Could not send. Please retry');
   await page.screenshot({path:`${screenshots}/desktop-english.png`});
+  // 校验渠道首字母、自定义图标、失败回退和清除后的行为。
+  widgetName='  BelaroPrecision';await page.reload();let brandFrame=await frameFor(page);await brandFrame.locator('#launcher').click();
+  assert.equal(await brandFrame.locator('#avatar').textContent(),'B');
+  await page.route('https://icons.example.test/**',route=>route.request().url().endsWith('brand.png')?route.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDAAAAAAASUVORK5CYII=','base64')}):route.fulfill({status:404,body:''}));
+  widgetIcon='https://icons.example.test/brand.png';await page.reload();brandFrame=await frameFor(page);await brandFrame.locator('#launcher').click();
+  await brandFrame.waitForFunction(()=>document.querySelector('#avatar img')?.naturalWidth>0);
+  assert.equal(await brandFrame.locator('#avatar img').getAttribute('referrerpolicy'),'no-referrer');
+  const avatarBounds=await brandFrame.locator('#avatar').boundingBox();assert.equal(avatarBounds.width,38);assert.equal(avatarBounds.height,38);
+  await page.screenshot({path:`${screenshots}/desktop-custom-icon.png`});
+  await page.setViewportSize({width:320,height:460});await page.screenshot({path:`${screenshots}/mobile-custom-icon.png`});
+  assert.equal(await brandFrame.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  widgetIcon='https://icons.example.test/missing.png';await page.reload();brandFrame=await frameFor(page);await brandFrame.locator('#launcher').click();await page.waitForLoadState('networkidle');
+  assert.equal(await brandFrame.locator('#avatar').textContent(),'B');assert.equal(await brandFrame.locator('#avatar img').count(),0);
+  widgetIcon='';widgetName='<Brand>';await page.reload();brandFrame=await frameFor(page);
+  assert.equal(await brandFrame.locator('#avatar').textContent(),'<');assert.equal(await brandFrame.locator('#avatar').locator('*').count(),0);
+  widgetName='';await page.reload();brandFrame=await frameFor(page);assert.equal(await brandFrame.locator('#avatar').textContent(),'?');
   assert.deepEqual(errors,[]);console.log(`已通过：双站点及多渠道隔离、重复嵌入、样式隔离、匿名消息、坐席回复、刷新恢复、失败重试、确认丢失恢复、未读、多页历史与断线补齐、附件上传下载、六种界面语言及桌面/移动布局。截图：${screenshots}`);
 }catch(error){console.error({errors,sessions:[...sessions.values()]});if(debugPage){const frame=debugPage.frames().find(f=>f.url().endsWith("/widget"));console.error(await frame?.locator("body").innerText());await debugPage.screenshot({path:`${screenshots}/failure.png`})}throw error}
 finally{await browser.close();await Promise.all([api,...hosts].map(({server})=>new Promise(resolve=>server.close(resolve))))}

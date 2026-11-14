@@ -80,11 +80,11 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
     const found=await pool.query("SELECT allowed_origins FROM livechat_channels WHERE public_id=$1 AND enabled AND archived_at IS NULL",[publicId]);
     if(!found.rowCount)return reply.code(404).send();
     // 白名单只允许规范化的 origin，不能注入 CSP 指令。
-    return reply.header("content-security-policy",`default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src blob:; frame-ancestors ${found.rows[0].allowed_origins.join(" ")}; base-uri 'none'; form-action 'none'`).header("cache-control","no-store").header("referrer-policy","no-referrer").type("text/html; charset=utf-8").send(livechatWidget);
+    return reply.header("content-security-policy",`default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src blob: https:; frame-ancestors ${found.rows[0].allowed_origins.join(" ")}; base-uri 'none'; form-action 'none'`).header("cache-control","no-store").header("referrer-policy","no-referrer").type("text/html; charset=utf-8").send(livechatWidget);
   });
   app.get("/livechat/:publicId/config",async(request,reply)=>{
     const c=await channel(request);reply.header("cache-control","no-store");
-    return {name:c.display_name,welcome:c.welcome_message,color:c.theme_color,position:c.position,language:c.language??"en"};
+    return {name:c.display_name,iconUrl:c.icon_url??"",welcome:c.welcome_message,color:c.theme_color,position:c.position,language:c.language??"en"};
   });
   app.post("/livechat/:publicId/messages",async(request,reply)=>{
     const c=await channel(request),hash=livechatCredential(request.headers.authorization),parsed=messageSchema.safeParse(request.body);

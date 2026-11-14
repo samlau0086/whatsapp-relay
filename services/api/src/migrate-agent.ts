@@ -19,7 +19,7 @@ async function migrateAgentSchemaOnce():Promise<void>{
   // production databases can serve the message timeline before the query
   // references message_email_details.quoted_body.
   channelMigrations.push("090_email_collapsed_quotes.sql","090_mailbox_oauth.sql","091_proactive_reply_mode.sql","092_email_reply_timeline.sql","093_email_inline_attachments.sql","094_proactive_email.sql","095_email_html_body.sql","096_email_html_render_version.sql");
-  channelMigrations.push("097_livechat_schema.sql","098_livechat_language.sql","099_livechat_visitor_profile.sql");
+  channelMigrations.push("097_livechat_schema.sql","098_livechat_language.sql","099_livechat_visitor_profile.sql","100_livechat_icon.sql");
   const migrations=Boolean(schema.rows[0]?.channel_schema)?channelMigrations:[...legacyMigrations,...channelMigrations];
   for(const migration of migrations){
     const candidates=[join(process.cwd(),"migrations",migration),join(process.cwd(),"..","..","infra","postgres","migrations",migration),join(process.cwd(),"infra","postgres","migrations",migration)];

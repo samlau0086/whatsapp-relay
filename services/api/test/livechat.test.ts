@@ -30,14 +30,14 @@ test("LiveChat 附件限制验证文件签名而非只信任 MIME",()=>{
 
 test("LiveChat 公开接口安全边界",async t=>{
   let enabled=true,hits=1,visitorFound=true;
-  let language:string|undefined=row.language;
+  let language:string|undefined=row.language,iconUrl="";
   const attachment=false;
   const calls:Array<{sql:string;values:unknown[]}>=[];
   t.mock.method(pool,"query",async(sql:string,values:unknown[]=[])=>{
     calls.push({sql,values});
     if(sql.includes("INSERT INTO livechat_rate_limits"))return result([{hits}]);
     if(sql.startsWith("SELECT 1 FROM livechat_channels"))return result(enabled&&values[1]===origin?[{}]:[]);
-    if(sql.includes("FROM livechat_channels"))return result(enabled?[{...row,language}]:[]);
+    if(sql.includes("FROM livechat_channels"))return result(enabled?[{...row,language,icon_url:iconUrl}]:[]);
     if(sql.includes("FROM livechat_visitors"))return result(visitorFound?[{id:contactId,contact_id:contactId}]:[]);
     if(sql.startsWith("WITH visible"))return result([]);
     if(sql.startsWith("SELECT md.*"))return result(attachment?[{}]:[]);
@@ -48,6 +48,10 @@ test("LiveChat 公开接口安全边界",async t=>{
   await t.test("配置和 iframe 仅暴露公开信息",async()=>{
     const response=await get("config");assert.equal(response.statusCode,200);assert.equal(response.json().name,"客服");assert.equal(response.json().language,"en");assert.equal(response.json().account_id,undefined);
     const frame=await get("widget");assert.match(String(frame.headers["content-security-policy"]),/frame-ancestors https:\/\/shop.example.com;/);assert.equal(frame.headers["x-frame-options"],undefined);
+    assert.equal(response.json().iconUrl,"");
+    iconUrl="https://cdn.example.com/brand.png";
+    assert.equal((await get("config")).json().iconUrl,iconUrl);
+    assert.match(String(frame.headers["content-security-policy"]),/img-src blob: https:;/);
   });
   await t.test("未配置语言默认英语，明确选择中文时保持中文",async()=>{
     try{
@@ -239,9 +243,30 @@ test("LiveChat 编辑渠道保存语言并拒绝不支持的语言",async t=>{
   assert.equal((await app.inject({method:"PUT",url,headers,payload})).statusCode,200);
   const update=calls.find(call=>call.sql.startsWith("UPDATE livechat_channels"))!;
   assert.equal(update.values[6],"ja");assert.match(update.sql,/language=\$7/);
+  assert.equal(update.values[7],null);
   const count=calls.length;
   assert.equal((await app.inject({method:"PUT",url,headers,payload:{...payload,language:"invalid"}})).statusCode,400);
   assert.equal(calls.length,count);
+});
+
+test("LiveChat 图标创建、更新、清除和 URL 校验",async t=>{
+  const calls:Array<{sql:string;values:unknown[]}>=[];
+  const query=async(sql:string,values:unknown[]=[])=>{calls.push({sql,values});return result([{id:accountId,account_id:accountId,public_id:channelId}]);};
+  t.mock.method(pool,"connect",async()=>({query,release(){}}));
+  const app=Fastify();await registerLivechatRoutes(app);t.after(()=>app.close());
+  const headers={authorization:`Bearer ${signToken({sub:contactId,role:"admin"},config.JWT_SECRET,60)}`};
+  const base="/api/v1/admin/livechat/channels",payload={displayName:"BelaroPrecision",allowedOrigins:[origin]},iconUrl="https://cdn.example.com/brand.png";
+  assert.equal((await app.inject({method:"POST",url:base,headers,payload:{...payload,iconUrl}})).statusCode,201);
+  assert.equal(calls.find(c=>c.sql.startsWith("INSERT INTO livechat_channels"))!.values[7],iconUrl);
+  for(const value of [iconUrl,""]){
+    assert.equal((await app.inject({method:"PUT",url:`${base}/${accountId}`,headers,payload:{...payload,iconUrl:value}})).statusCode,200);
+    assert.equal(calls.filter(c=>c.sql.startsWith("UPDATE livechat_channels")).at(-1)!.values[7],value);
+  }
+  for(const value of ["javascript:alert(1)","data:image/png;base64,AA==","http://example.com/a.png","https://user:password@example.com/a.png","/logo.png","not a url"]){
+    const count=calls.length;
+    for(const method of ["POST","PUT"] as const)assert.equal((await app.inject({method,url:method==="POST"?base:`${base}/${accountId}`,headers,payload:{...payload,iconUrl:value}})).statusCode,400);
+    assert.equal(calls.length,count);
+  }
 });
 
 test("LiveChat Worker 发布出站消息并记录发送回执",async t=>{
