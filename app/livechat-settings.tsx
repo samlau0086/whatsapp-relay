@@ -9,10 +9,17 @@ type Form={id?:string;displayName:string;welcomeMessage:string;themeColor:string
 const blank=():Form=>({displayName:"",welcomeMessage:"您好，有什么可以帮助您？",themeColor:"#146d73",position:"right",origins:"",enabled:true});
 export function LivechatSettingsPanel({token,onToken,onToast,onAccountsChanged}:{token:string;onToken:(value:string)=>void;onToast:(value:string)=>void;onAccountsChanged:()=>void}){
   const [channels,setChannels]=useState<Channel[]>([]),[editing,setEditing]=useState<Form|null>(null),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState("");
-  const load=useCallback(async()=>{
-    try{const result=await authorizedFetch("/api/v1/admin/livechat/channels",token);if(result.token!==token)onToken(result.token);const body=await result.response.json();if(!result.response.ok)throw Error(body.error||"读取渠道失败");setChannels(body.data);setError("");}catch(reason){setError(reason instanceof Error?reason.message:"读取渠道失败");}finally{setLoading(false);}
+  const fetchChannels=useCallback(async():Promise<Channel[]>=>{
+    const result=await authorizedFetch("/api/v1/admin/livechat/channels",token);if(result.token!==token)onToken(result.token);const body=await result.response.json();if(!result.response.ok)throw Error(body.error||"读取渠道失败");return body.data;
   },[token,onToken]);
-  useEffect(()=>{void load();},[load]);
+  const load=useCallback(async()=>{
+    try{setChannels(await fetchChannels());setError("");}catch(reason){setError(reason instanceof Error?reason.message:"读取渠道失败");}finally{setLoading(false);}
+  },[fetchChannels]);
+  useEffect(()=>{
+    let active=true;
+    void fetchChannels().then(data=>{if(active){setChannels(data);setError("");}},reason=>{if(active)setError(reason instanceof Error?reason.message:"读取渠道失败");}).finally(()=>{if(active)setLoading(false);});
+    return ()=>{active=false;};
+  },[fetchChannels]);
   const formFor=(c:Channel):Form=>({id:c.id,displayName:c.display_name,welcomeMessage:c.welcome_message,themeColor:c.theme_color,position:c.position,origins:c.allowed_origins.join("\n"),enabled:c.enabled});
   async function save(form:Form){
     if(busy)return;setBusy(true);setError("");

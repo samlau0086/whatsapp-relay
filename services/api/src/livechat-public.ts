@@ -52,7 +52,7 @@ async function channel(request:FastifyRequest){
   livechatOrigin(embedOrigin(request),row.allowed_origins);
   return row;
 }
-async function visitor(request:FastifyRequest,c:Record<string,any>,client:PoolClient|typeof pool=pool){
+async function visitor(request:FastifyRequest,c:{account_id:string},client:PoolClient|typeof pool=pool){
   const hash=livechatCredential(request.headers.authorization);
   const found=await client.query(`SELECT * FROM livechat_visitors WHERE account_id=$1 AND credential_hash=$2 AND embed_origin=$3 AND expires_at>now()`,[c.account_id,hash,embedOrigin(request)]);
   if(!found.rowCount)throw fail(401,"visitor_not_found_or_expired");

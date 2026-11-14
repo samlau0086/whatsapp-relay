@@ -29,7 +29,8 @@ test("LiveChat 附件限制验证文件签名而非只信任 MIME",()=>{
 });
 
 test("LiveChat 公开接口安全边界",async t=>{
-  let enabled=true,hits=1,visitorFound=true,attachment=false;
+  let enabled=true,hits=1,visitorFound=true;
+  const attachment=false;
   const calls:Array<{sql:string;values:unknown[]}>=[];
   t.mock.method(pool,"query",async(sql:string,values:unknown[]=[])=>{
     calls.push({sql,values});
