@@ -39,7 +39,7 @@ export type OutboundPayload={
 export async function queueChannelCommand(
   client:PoolClient,
   input:{accountId:string;conversationId:string;messageId:string;payload:OutboundPayload},
-):Promise<{commandId:string;sequence:number;agentId:string|null;transport:"web"|"cloud";platform:"whatsapp"|"messenger"}>{
+):Promise<{commandId:string;sequence:number;agentId:string|null;transport:"web"|"cloud";platform:"whatsapp"|"messenger"|"livechat"}>{
   const found=await client.query(
     `SELECT a.platform,a.transport,a.agent_id,c.service_window_expires_at
        FROM channel_accounts a
@@ -49,9 +49,20 @@ export async function queueChannelCommand(
     [input.accountId,input.conversationId],
   );
   if(!found.rowCount)throw Object.assign(new Error("conversation_not_found"),{statusCode:404});
-  const row=found.rows[0],transport=String(row.transport??"web") as "web"|"cloud",platform=String(row.platform??"whatsapp") as "whatsapp"|"messenger";
+  const row=found.rows[0],transport=String(row.transport??"web") as "web"|"cloud",platform=String(row.platform??"whatsapp") as "whatsapp"|"messenger"|"livechat";
   if(transport==="web"&&!row.agent_id)throw Object.assign(new Error("account_not_bound"),{statusCode:409});
   const payload={...input.payload};
+  if(platform==="livechat"){
+    if(!["text","image","document"].includes(input.payload.type))throw Object.assign(new Error("livechat_message_type_unsupported"),{statusCode:409});
+    if((payload.text?.length??0)>10000)throw Object.assign(new Error("livechat_text_too_long"),{statusCode:400});
+    if(payload.type!=="text"){
+      const media=await client.query("SELECT mime_type,byte_size FROM media WHERE id=$1 AND (account_id=$2 OR account_id IS NULL) AND status='ready'",[payload.mediaId,input.accountId]);
+      const file=media.rows[0],allowed=["image/png","image/jpeg","image/webp","application/pdf","text/plain"];
+      if(!file||!allowed.includes(file.mime_type)||Number(file.byte_size)>10*1024*1024||((payload.type==="image")!==String(file.mime_type).startsWith("image/")))throw Object.assign(new Error("livechat_attachment_unsupported"),{statusCode:415});
+    }
+    const active=await client.query("SELECT 1 FROM livechat_channels WHERE account_id=$1 AND enabled AND archived_at IS NULL",[input.accountId]);
+    if(!active.rowCount)throw Object.assign(new Error("livechat_channel_disabled"),{statusCode:409});
+  }
   if(platform==="whatsapp"&&transport==="web"&&!payload.toJid){
     // Profile edits in older versions could erase a hidden LID. Only reuse a confirmed target from this conversation.
     const history=await client.query(`SELECT oc.payload->>'toJid' jid FROM outbound_commands oc

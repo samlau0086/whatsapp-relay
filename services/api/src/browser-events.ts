@@ -13,7 +13,7 @@ const TICKET_TTL_SECONDS = 30;
 const HEARTBEAT_MS = 25_000;
 
 type LiveClient = { socket: WebSocket; accountIds?: Set<string>; alive: boolean };
-type ChangeEvent = { conversationId: string; accountId: string; platform?:"whatsapp"|"messenger";pageId?:string|null };
+type ChangeEvent = { conversationId: string; accountId: string; platform?:"whatsapp"|"messenger"|"livechat";pageId?:string|null };
 
 export async function registerBrowserEvents(app: FastifyInstance): Promise<void> {
   const clients = new Set<LiveClient>();

@@ -1209,3 +1209,16 @@ button { color:inherit; }
 .message-bubble:has(.email-html-frame){width:760px;max-width:96%;min-width:0}
 .email-html-body{width:100%;min-width:0;background:#fff;border-radius:6px;overflow:hidden}
 .email-html-frame{display:block;width:100%;border:0;background:#fff;min-height:120px}
+.channel-badge.livechat{color:#176c76;background:#e0f2f1;border-color:#a7d8d4}
+.livechat-settings{min-width:0}
+.livechat-settings .management-head{gap:12px;flex-wrap:wrap}
+.livechat-settings .management-head>div{display:flex;gap:8px}
+.livechat-settings td{overflow-wrap:anywhere}
+.livechat-settings .contact-row-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.livechat-settings .contact-row-actions label{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.livechat-settings .login-dialog{max-height:calc(100dvh - 32px);overflow:auto;width:min(480px,calc(100vw - 24px));border-radius:8px}
+.livechat-settings .login-dialog label:has(input[type=checkbox]){display:flex;align-items:center;gap:8px}
+.livechat-settings input[type=checkbox]{width:16px;height:16px;flex:0 0 16px}
+.livechat-settings input[type=color]{width:52px;height:32px;padding:2px}
+.livechat-settings textarea{resize:vertical;min-height:70px}
+@media(max-width:640px){.livechat-settings .order-table{min-width:560px}.livechat-settings .management-head h2{font-size:18px}.livechat-settings .order-table-wrap{max-width:100%;overflow:auto}}

@@ -3,6 +3,7 @@ import { z } from "zod";
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(8080),
+  TRUSTED_PROXY_CIDRS: z.string().default(""),
   DATABASE_URL: z.string().default("postgres://relay:relay@localhost:5432/relay"),
   JWT_SECRET: z.string().min(32).default("development-only-change-this-secret-32"),
   DATA_ENCRYPTION_KEY: z.string().min(32).default("development-data-key-change-this-32"),

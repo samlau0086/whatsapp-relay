@@ -1,5 +1,44 @@
 # RelayDesk
 
+## LiveChat 网站渠道
+
+LiveChat 与 WhatsApp、Messenger 共用账号权限、统一收件箱、客户资料、认领与关闭、翻译、订单、AI Agent 和知识库配置，但使用独立的网站访客收发通道。每个 LiveChat 渠道都对应一个独立账号，可分别分配坐席、Agent 和知识库。首版支持匿名文字、图片和文件，不支持音视频、WhatsApp 模板、黑名单、跨账号转移或匿名身份合并。
+
+### 创建与嵌入
+
+1. 管理员进入 **系统设置 → LiveChat → 新增渠道**，填写名称、欢迎语、主题色、左下角或右下角入口位置，以及允许嵌入的域名。
+2. 白名单按完整 origin 精确匹配，例如 `https://example.com`、`https://shop.example.com`；不同协议、子域名或端口需要分别配置。不能填写路径、通配符或普通公网 HTTP 地址；仅本机 `localhost`、`127.0.0.1` 和 `[::1]` 允许 HTTP 开发测试。
+3. 点击渠道的“嵌入代码”，将生成的脚本加入网站公共模板或自定义 HTML 区域。WordPress、Shopify 或自建网站均可使用同一段 JavaScript，不需要安装专用插件。框架客户端动态注入脚本时，应在页面挂载完成后执行；同一页面重复加载同一渠道脚本只创建一个窗口，不同渠道仍可独立加载。
+4. 在现有账号权限中给坐席分配该 LiveChat 账号；在 **AI Agent** 中选择该账号并分别指定知识库、自动回复权限和新会话的默认接管模式。仅启用 Agent 并不等于允许自动回复，仍遵循现有人工接管与审批规则。
+
+```html
+<script async src="https://客服域名/livechat/embed.js" data-channel="复制得到的公开渠道UUID"></script>
+```
+
+脚本地址默认使用工作台当前 origin；前后端分开部署时，前端构建应设置 `NEXT_PUBLIC_RELAY_API_URL` 为公网 API origin。公开渠道 UUID 不是密钥。脚本使用 Shadow DOM 和独立 iframe 隔离样式；网络请求由宿主页面发起，访客凭证不会放入 iframe URL。若宿主网站有 CSP，需要在 `script-src`、`connect-src`、`frame-src` 中允许客服服务的 HTTPS origin。禁止反向代理为 `/livechat/` 增加 `X-Frame-Options: DENY/SAMEORIGIN` 或覆盖 API 返回的 `frame-ancestors` 白名单。
+
+### 访客会话与消息
+
+- 访客无需注册，首次发送文字时才创建客户及会话；姓名和邮箱为选填，附件需要先发送一条文字。消息会进入统一收件箱和现有 Agent 流程。
+- 随机访客凭证保存在宿主网站的 `localStorage`，服务端只保存 SHA-256 摘要；按渠道、宿主 origin 和访客隔离，不依赖第三方 Cookie。凭证有效期为创建后 180 天，过期后可在窗口开始新匿名会话；原记录仍由客服保留。
+- 同一浏览器刷新可恢复历史，清理站点数据、隐私模式、换浏览器、换网站 origin 或换设备会产生独立身份，不自动合并。不要把访客凭证作为公开配置或加入日志。
+- 窗口支持展开、收起、未读数量、历史分页、发送失败重试和附件下载。每 4 秒增量同步，恢复网络后补齐消息；未确认消息在宿主网站本地保存，刷新后可用原消息 ID 重试并在服务端去重。本地存储被浏览器禁用时，刷新恢复不可用。
+- 坐席和 AI 回复都进入持久出站队列，由 API Worker 发布到访客消息流；“已发送”表示已发布，不代表访客已读。访客发新消息会重新打开已关闭会话；LiveChat 没有 WhatsApp/Messenger 的 24 小时回复窗口限制。
+- 双向附件限定 PNG、JPEG、WebP、PDF 和纯文本，单文件不超过 10 MB。访客上传还检查文件签名；文件读取要求有效访客凭证及当前会话中的消息引用，不提供公开对象存储地址。未发送附件仍占对象存储空间，运维需监控并安排孤立对象清理；`delete_after` 标记本身不会删除对象。
+- 停用渠道立即阻止公开接入和新消息，重新启用后原凭证仍受有效期约束。归档需要二次确认，归档后不能通过设置界面恢复；保留原账号、历史客户、会话和审计记录，但停止嵌入访问及发送，已有待发消息由 Worker 标为失败。
+
+### 安全与部署
+
+API 和 Worker 启动时执行 `097_livechat_schema.sql`，使用数据库会话锁串行化启动迁移；迁移新增渠道枚举及渠道、访客、限流表，不删除原渠道数据。新部署仍需执行现有完整数据库初始化流程。生产环境需要可供宿主网站访问的 HTTPS 地址、PostgreSQL、私有 S3/MinIO 存储，以及持续运行的 API 和 Worker。仓库 Nginx 已代理 `/livechat/`，允许 11 MB 请求体以容纳 multipart 开销。
+
+公开 API 同时校验 origin、渠道状态及独立访客凭证。来源白名单防止浏览器从未授权网站嵌入，但不等同于用户认证，不能防止脚本客户端伪造 Origin，因此还需边缘防滥用和容量监控。默认按每渠道 IP 每分钟 600 次、每访客历史/附件读取每分钟 120 次、每访客发送每分钟 30 次、每渠道 IP 发消息每分钟 120 次、每访客上传每分钟 10 次且每天 100 次限流；文字最多 10,000 字符。
+
+反向代理后应配置 `TRUSTED_PROXY_CIDRS` 为实际代理的 IP/CIDR（逗号分隔），保证按真实客户端 IP 限流；默认留空不信任转发头。不要设为任意地址或无条件信任全部代理，也不要仅凭请求头判断客户端 IP。Docker 网络部署应固定或限制代理所在网段并限制 API 直连访问，再填写对应 CIDR；如有 CDN，应由入口代理校验 CDN 来源并规范化转发头。`CORS_ORIGIN` 继续用于工作台，LiveChat 的跨域来源单独从各渠道白名单读取。
+
+### 验证
+
+后端测试：在 `services/api` 运行 `npm test` 和 `npm run build`。前端构建：在根目录运行 `npm run build`。可选浏览器验收脚本为 `node scripts/test-livechat-browser.mjs`，需要先构建 API，并在本机提供 Playwright 和 Chromium；脚本使用两个临时网站及模拟 API 验证真实嵌入资源，截图写入 `outputs/livechat/`。模拟测试不能替代真实数据库、对象存储、权限分配和 AI Provider 的端到端验收，上线前应另行验证这些连接以及原 WhatsApp/Messenger 收发。
+
 ## 系统特色与核心能力
 
 RelayDesk 是一套面向跨境销售、外贸客服和私域客户运营团队的自托管消息与成交工作台。系统把 WhatsApp、Facebook Messenger、客户资料、产品目录、报价订单、AI 翻译、素材、支付与跟进任务放在同一个界面中，帮助坐席从“收到咨询”一路完成“理解客户、推荐产品、发送目录、创建订单、发起收款和持续跟进”，减少在翻译工具、表格、图片编辑器和多个聊天窗口之间反复切换。
@@ -429,6 +468,310 @@ Agent 收到的 WhatsApp 事件先写入本地 SQLite WAL，中心事务提交�
 - `infra/postgres/`：数据库迁移。
 - `compose.yaml`：单节点生产部署。
 
+## 备份、恢复与更换宿主机
+
+以下命令用于 Linux 服务器的 Bash，请使用具有目录访问权限和 Docker 权限的账号。默认中心部署目录为 `/opt/relaydesk/current`，Compose 项目名为 `relaydesk`；Docker Agent 部署目录为 `/opt/relaydesk-agent`，项目名为 `relaydesk-agent`。实际路径、项目名、数据卷名或端口不同，必须先替换。命令需按顺序执行，任一步失败后先排查，不要继续恢复或启动。
+
+### 备份范围与容量规划
+
+| 内容 | 默认位置或名称 | 用途 |
+| --- | --- | --- |
+| 中心部署文件 | `/opt/relaydesk` | 当前及历史代码、Compose、`shared/.env`、版本软链接 |
+| PostgreSQL | `relaydesk_postgres-data` | 用户、联系人、消息、订单、任务及系统配置 |
+| MinIO | `relaydesk_minio-data` | 图片、语音、附件、产品及知识库素材 |
+| Redis | `relaydesk_redis-data` | Redis 持久化状态 |
+| Docker Agent 配置 | `/opt/relaydesk-agent` | `.env`、`compose.yaml`、代理等本地配置 |
+| Docker Agent 数据 | `relaydesk-agent_relay-agent-data` | 设备凭据、WhatsApp 会话、SQLite 与待同步事件 |
+
+- 保留原来的 `DATA_ENCRYPTION_KEY` 和 Agent 的 `RELAY_MASTER_KEY`，否则对应加密数据可能无法解密。迁移时同时保留数据库、JWT、MinIO/S3 凭据，稳定后再单独安排密钥轮换。
+- 外部 S3、其他位置的绑定挂载、额外 Agent、宿主机反向代理、HTTPS 证书、Cloudflare Tunnel、1Panel 配置、防火墙和其他应用数据需另行备份；此处不是整机备份。
+- 按未压缩数据大小规划备份空间，图片、视频和压缩附件不要预期明显缩小。备份不会释放原数据占用；同盘备份还会额外占空间。新机还需预留数据解压、镜像拉取和构建空间。
+- 备份含密钥和客户数据，目录权限应为 `0700`，传输使用 SSH，并在受控或加密存储中另留离机副本，不得提交到 Git。
+- `docker export` 不能替代业务数据卷备份；无需复制整个 `/var/lib/docker` 或 `/var/lib/containerd`。
+
+先检查空间、卷名和实际挂载；命令均为只读：
+
+```bash
+df -h /opt /var/lib/docker
+sudo du -sh /opt/relaydesk /opt/relaydesk/current/ /opt/relaydesk/shared/ /opt/relaydesk-agent
+docker volume ls
+docker ps -a --format 'table {{.Names}}\t{{.Status}}'
+docker inspect relaydesk-postgres-1 relaydesk-minio-1 relaydesk-redis-1 relaydesk-agent-agent-1 \
+  --format '{{.Name}} {{json .Mounts}}'
+
+docker volume ls -q | while IFS= read -r volume; do
+  path="$(docker volume inspect --format '{{.Mountpoint}}' "$volume")"
+  printf '\n数据卷：%s\n' "$volume"
+  sudo du -sh "$path"
+done
+```
+
+### 旧服务器停机冷备
+
+适用于同 CPU 架构、兼容系统环境、相同 PostgreSQL 主版本的迁移。优先保持原应用版本及数据库、MinIO、Redis、Agent 镜像版本，不要同时升级。迁移前记录实际镜像 ID/digest；尤其不要默认新机拉到的 Agent `latest` 与旧机相同。需要完全保留本地镜像时可另外用 `docker image save` 导出、在新机 `docker image load` 导入，并计入容量。
+
+先暂停自动部署和业务写入，确认 Agent 待同步事件已同步，等待正在发送的消息结束。停止 Agent 后再停止中心，禁止直接打包正在写入的 PostgreSQL 或 SQLite 数据目录。中心停机后也不应有外部程序继续写入数据库或对象存储。
+
+下列代码默认中心和 Docker Agent 都在旧机。没有本机 Docker Agent 时，删去 Agent 的检查、停止、目录打包及卷名；多个 Agent 需逐一处理。在同一个 Bash 会话中执行，记下打印的备份目录。
+
+```bash
+set -euo pipefail
+umask 077
+BACKUP_DIR="$(mktemp -d /var/tmp/relaydesk-backup-XXXXXXXX)"
+echo "备份目录：$BACKUP_DIR"
+
+docker pull alpine:3.22
+test -f /opt/relaydesk/current/compose.yaml
+test -f /opt/relaydesk-agent/compose.yaml
+for volume in relaydesk_postgres-data relaydesk_redis-data relaydesk_minio-data relaydesk-agent_relay-agent-data; do
+  docker volume inspect "$volume" >/dev/null
+done
+
+# 仅记录镜像引用与 ID，不导出包含环境密钥的完整 inspect
+docker ps -a --format '{{.Names}} {{.Image}}' > "$BACKUP_DIR/container-images.txt"
+docker image ls --digests --no-trunc > "$BACKUP_DIR/image-manifest.txt"
+readlink -f /opt/relaydesk/current > "$BACKUP_DIR/current-release.txt"
+
+(cd /opt/relaydesk-agent && docker compose -p relaydesk-agent stop)
+(cd /opt/relaydesk/current && docker compose -p relaydesk stop)
+
+# 将自定义 WEB_PORT 等启动参数另外记入私有运维记录
+# 完整备份保留 current 和各版本的软链接；不要给 tar 添加 -h
+tar -czpf "$BACKUP_DIR/deployment.tar.gz" -C /opt relaydesk
+tar -czpf "$BACKUP_DIR/agent-deployment.tar.gz" -C /opt relaydesk-agent
+
+for volume in relaydesk_postgres-data relaydesk_redis-data relaydesk_minio-data relaydesk-agent_relay-agent-data; do
+  docker run --rm \
+    --mount "type=volume,src=$volume,dst=/source,readonly" \
+    --mount "type=bind,src=$BACKUP_DIR,dst=/backup" \
+    alpine:3.22 \
+    sh -ec "cd /source && tar -czpf /backup/$volume.tar.gz ."
+done
+
+(
+  cd "$BACKUP_DIR"
+  sha256sum ./*.tar.gz container-images.txt image-manifest.txt current-release.txt > SHA256SUMS
+  sha256sum -c SHA256SUMS
+)
+du -sh "$BACKUP_DIR"
+```
+
+复制整个备份目录到新机，再单独留存离机副本。以下目标账号和 IP 需替换，目标目录应为专用私有目录：
+
+```bash
+scp -r "$BACKUP_DIR" 用户名@新服务器IP:/var/tmp/
+```
+
+正式迁移时旧机保持停止，防止快照之后再产生写入。仅做日常备份而不换机时，校验成功后先启动中心、健康检查通过后再启动 Agent：
+
+```bash
+cd /opt/relaydesk/current
+# 按原部署值设置；默认是 3200
+export WEB_PORT=3200
+docker compose -p relaydesk up -d --wait --wait-timeout 180
+curl -fsS "http://127.0.0.1:$WEB_PORT/health"
+(cd /opt/relaydesk-agent && docker compose -p relaydesk-agent up -d)
+```
+
+### 旧机空间不足时通过 SSH 流式导出
+
+可以用下面方式替代上述落盘导出：先完成版本记录与停机步骤，将部署归档、Agent 配置和四个数据卷直接输出到新机。下面示例在旧机 Bash 执行，目标使用具有写权限的真实 SSH 账号；确认 SSH 主机指纹及身份认证正常后再开始。
+
+```bash
+set -euo pipefail
+REMOTE=用户名@新服务器IP
+REMOTE_BACKUP="/var/tmp/relaydesk-backup-$(date -u +%Y%m%dT%H%M%SZ)"
+ssh "$REMOTE" "umask 077; mkdir '$REMOTE_BACKUP'"
+tar -czpf - -C /opt relaydesk | ssh "$REMOTE" "umask 077; cat > '$REMOTE_BACKUP/deployment.tar.gz'"
+tar -czpf - -C /opt relaydesk-agent | ssh "$REMOTE" "umask 077; cat > '$REMOTE_BACKUP/agent-deployment.tar.gz'"
+
+for volume in relaydesk_postgres-data relaydesk_redis-data relaydesk_minio-data relaydesk-agent_relay-agent-data; do
+  docker volume inspect "$volume" >/dev/null
+  docker run --rm \
+    --mount "type=volume,src=$volume,dst=/source,readonly" \
+    alpine:3.22 sh -ec 'cd /source && tar -czpf - .' \
+    | ssh "$REMOTE" "umask 077; cat > '$REMOTE_BACKUP/$volume.tar.gz'"
+done
+
+scp "$BACKUP_DIR/container-images.txt" "$BACKUP_DIR/image-manifest.txt" \
+  "$BACKUP_DIR/current-release.txt" "$REMOTE:$REMOTE_BACKUP/"
+ssh "$REMOTE" "cd '$REMOTE_BACKUP' && sha256sum ./*.tar.gz container-images.txt image-manifest.txt current-release.txt > SHA256SUMS && sha256sum -c SHA256SUMS"
+echo "新机备份目录：$REMOTE_BACKUP"
+```
+
+该方式沿用前面停机准备阶段创建的 `BACKUP_DIR`；只保存很小的版本记录，不在旧机落地大归档。所有管道必须成功；中断后产生的文件不能视为完整备份，需要重新导出。新机生成的校验和用于后续完整性核验，不等于独立比对了旧机源文件；恢复前还应对每个归档执行 `tar -tzf 归档文件 >/dev/null` 检查可读性。
+
+### 新服务器恢复
+
+先安装 Docker Engine、Compose、`tar` 和 `curl`，核对版本兼容性。暂停自动部署，不要先启动一个空的生产系统。下面命令要求 `/opt/relaydesk`、`/opt/relaydesk-agent` 和四个目标卷均不存在；若存在则停止核对，不能覆盖已有数据。只恢复可信的自有备份。
+
+```bash
+set -euo pipefail
+BACKUP_DIR=/var/tmp/relaydesk-backup-实际编号
+cd "$BACKUP_DIR"
+sha256sum -c SHA256SUMS
+for archive in ./*.tar.gz; do
+  tar -tzf "$archive" >/dev/null
+done
+
+test ! -e /opt/relaydesk && test ! -L /opt/relaydesk
+test ! -e /opt/relaydesk-agent && test ! -L /opt/relaydesk-agent
+for volume in relaydesk_postgres-data relaydesk_redis-data relaydesk_minio-data relaydesk-agent_relay-agent-data; do
+  if docker volume inspect "$volume" >/dev/null 2>&1; then
+    echo "目标数据卷已存在，请停止并检查：$volume" >&2
+    exit 1
+  fi
+done
+
+docker pull alpine:3.22
+tar -xzpf "$BACKUP_DIR/deployment.tar.gz" -C /opt
+tar -xzpf "$BACKUP_DIR/agent-deployment.tar.gz" -C /opt
+test -f /opt/relaydesk/current/.env
+test -f /opt/relaydesk-agent/.env
+
+for volume in relaydesk_postgres-data relaydesk_redis-data relaydesk_minio-data relaydesk-agent_relay-agent-data; do
+  if [ "$volume" = relaydesk-agent_relay-agent-data ]; then
+    project=relaydesk-agent
+    logical_volume=relay-agent-data
+  else
+    project=relaydesk
+    logical_volume="${volume#relaydesk_}"
+  fi
+  docker volume create \
+    --label "com.docker.compose.project=$project" \
+    --label "com.docker.compose.volume=$logical_volume" "$volume"
+  docker run --rm \
+    --mount "type=volume,src=$volume,dst=/target" \
+    --mount "type=bind,src=$BACKUP_DIR,dst=/backup,readonly" \
+    alpine:3.22 \
+    sh -ec "cd /target && tar -xzpf /backup/$volume.tar.gz"
+done
+
+cd /opt/relaydesk/current
+# 使用原部署端口，不能直接假设一定是 3200
+export WEB_PORT=3200
+docker compose -p relaydesk config --quiet
+docker compose -p relaydesk up -d --build --wait --wait-timeout 180
+docker compose -p relaydesk ps
+curl -fsS "http://127.0.0.1:$WEB_PORT/health"
+```
+
+中心验证通过并确认旧 Agent 已停止后，在 Agent 的 `compose.yaml` 中使用之前记录的兼容镜像版本或 digest（必要时先导入镜像），再启动：
+
+```bash
+cd /opt/relaydesk-agent
+docker compose -p relaydesk-agent config --quiet
+docker compose -p relaydesk-agent up -d
+docker compose -p relaydesk-agent ps
+docker compose -p relaydesk-agent logs --tail=100 agent
+```
+
+恢复失败时保留备份和报错日志，不要盲目删除数据卷重试。若新机已产生业务写入，不能直接启动旧机当作无损回退，应先停写并核对数据差异。
+
+### 数据库逻辑备份及现有脚本
+
+跨 CPU 架构迁移或计划升级 PostgreSQL 时，不使用上述 PostgreSQL 原始卷恢复，应另用 `pg_dump` / `pg_restore`，并验证扩展和版本兼容。数据库逻辑备份不包含媒体、Agent 数据及配置密钥，它们仍需单独备份。
+
+以下示例在旧中心目录执行，可在 PostgreSQL 在线时导出；迁移最终快照仍需停止 API、Worker、Agent 和其他写入方，保持数据库与媒体的业务一致性。自定义格式可用 `pg_restore` 恢复：
+
+```bash
+umask 077
+cd /opt/relaydesk/current
+docker compose -p relaydesk exec -T postgres sh -ec \
+  'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --no-owner' \
+  > /var/tmp/relaydesk-postgres.dump
+
+# 先检查归档目录可读取，不能替代实际恢复演练
+docker compose -p relaydesk exec -T postgres pg_restore --list \
+  < /var/tmp/relaydesk-postgres.dump
+```
+
+逻辑恢复必须使用单独准备的空数据库，目标已安装兼容的 pgvector，且 API/Worker 未启动。默认 Compose 的首次初始化会执行迁移，不能把它已建表的业务数据库当成空库。确认目标库为空后，在目标中心目录执行：
+
+```bash
+docker compose -p relaydesk exec -T postgres sh -ec \
+  'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --no-privileges --exit-on-error --single-transaction' \
+  < /var/tmp/relaydesk-postgres.dump
+```
+
+仓库已有 [`infra/backup/backup.sh`](infra/backup/backup.sh)：使用 `pg_dump` 生成数据库自定义格式备份，通过 `mc mirror` 复制当前 Bucket，并删除超过 30 天的脚本备份。它需要运行环境预装 `pg_dump`、`mc`，正确配置数据库/S3 环境变量及持久化 `/backup`。该脚本尚未接入默认 Compose 调度，不包含 `.env`、Redis 和 Agent 数据，也不是跨数据库和媒体的原子快照；不能单独作为完整换机备份。不要在唯一备份副本上未经核对就执行带保留期删除的脚本。
+
+### 切换与恢复验收
+
+1. 配置新机 HTTPS 代理、证书、Tunnel 和防火墙，优先保留原域名；切换 DNS/Tunnel 前先验证新机。若更换域名，更新 `PUBLIC_API_URL`、`CORS_ORIGIN`、OAuth 回调及外部 Webhook 配置，并单独安排 Agent 重新接入。当前 Docker Agent 会校验中心地址与注册时保存的地址一致，仅修改 `RELAY_CENTRAL_URL` 会拒绝启动，不能视为已完成地址迁移。
+2. 更新 GitHub production 的 VPS 地址、SSH 用户/密钥、端口及部署路径；核对 Secrets 与恢复的 `.env` 一致，尤其是 `DATA_ENCRYPTION_KEY`，避免下次部署覆盖正确配置。
+3. 验证登录、客户/消息/订单数据、历史媒体、加密 Provider 配置、Agent 在线状态和测试账号收发。检查积压消息、定时任务、自动回复和 Webhook；Worker 启动后可能处理积压任务。
+4. 确认稳定前保留旧机停机状态和离机备份，禁止新旧两套生产实例及同一 Agent 身份同时运行。健康检查成功不等于完整业务恢复成功。
+5. Windows Agent 需退出应用后备份 `%APPDATA%\@relaydesk\windows-agent`。其密钥受 Windows DPAPI 保护，复制到其他电脑或用户不能保证解密；换机前同步待发送事件，准备重新注册和扫码，不能把中心备份当成 Windows 会话备份。
+
+## 磁盘占用排查与清理
+
+部署目录大小不等于项目总占用。镜像、构建缓存、容器日志、业务卷、宿主机绑定目录及系统日志可能位于不同位置；同一服务器上的其他应用也需按归属检查。
+
+### 只读定位大目录和 Docker 占用
+
+```bash
+df -h /
+sudo du -xhd1 / 2>/dev/null | sort -h
+sudo du -xhd1 /var /var/lib /opt /root /home /usr /tmp 2>/dev/null | sort -h
+sudo du -xhd1 /opt/relaydesk /opt/1panel /var/log 2>/dev/null | sort -h
+sudo journalctl --disk-usage
+
+docker system df
+# 详细列表可能很长，需要时再执行
+docker system df -v
+docker ps -a --size --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Size}}'
+docker_root="$(docker info --format '{{.DockerRootDir}}')"
+printf '\nDocker 数据目录：%s\n' "$docker_root"
+sudo du -xhd1 "$docker_root" 2>/dev/null | sort -h
+sudo du -xhd1 /var/lib/containerd 2>/dev/null | sort -h
+```
+
+使用 containerd image store 的安装可能将镜像内容和快照存放在 `/var/lib/containerd`，只检查 `/var/lib/docker` 会漏掉大头。Docker 镜像共享层及构建缓存可能重叠，不能简单相加各镜像 SIZE、缓存和可回收量；实际释放量以清理前后的 `df` 为准。`docker ps --size` 不包含数据卷和容器日志全部占用。若 `df` 与目录统计仍有较大差异，可在安装了 `lsof` 的环境用 `sudo lsof +L1` 检查已删除但仍被进程打开的文件，再按对应服务处理。
+
+### 按类别清理
+
+先确保没有自动部署、镜像拉取或构建任务运行，再按需执行以下命令。保留交互确认，逐项查看结果，不需要为了清缓存停止业务容器。
+
+```bash
+# 优先清理超过七天未使用的构建缓存
+docker builder prune -a --filter 'until=168h'
+
+# 若仍需释放空间，可改为清理全部未使用构建缓存
+# 与上一条是按需选择的范围，不必固定重复执行
+docker builder prune -a
+```
+
+构建缓存可以重新生成，但后续构建可能变慢、重新下载依赖，需要保证构建依赖仍可取得。如果有其他独立 Buildx builder，需要分别核对其缓存和清理范围。
+
+```bash
+# 删除创建超过七天、没有任何运行或停止容器引用的镜像
+docker image prune -a --filter 'until=168h'
+```
+
+镜像的七天按创建时间计算，不是最后使用时间。该命令保留被容器引用的镜像，不删除业务卷，但会删除符合条件的旧版本本地回退镜像；无法重新拉取或构建的镜像应先导出留存。不要把清理范围扩大成删除运行中的其他项目。
+
+若旧系统 journal 日志无需保留，可先另存需要的排障记录，然后执行以下命令。它会不可逆地删除较旧的归档日志；活动日志和元数据会使最终占用与设定容量存在差异：
+
+```bash
+sudo journalctl --rotate --vacuum-size=500M
+sudo journalctl --disk-usage
+```
+
+容器日志应通过 Docker 日志轮转限制容量，配置变更需要安排容器重建后生效；不要直接删除或手动修改 Docker 管理中的日志文件。历史发布目录应先核对 `readlink -f /opt/relaydesk/current`，保留当前和必要的回退版本；1Panel 网站、备份、数据库和绑定挂载必须确认归属后单独处理，不提供按目录大小直接删除的命令。
+
+不要手动删除 `/var/lib/docker`、`/var/lib/containerd`，不要将 `docker compose down -v`、`docker volume prune` 或 `docker system prune -a --volumes` 作为日常清理步骤。停止容器、未挂载的数据卷仍可能保存唯一的业务数据；`minio-init` 成功退出属于正常初始化行为。
+
+清理后检查空间和服务状态，再进行实际业务验证：
+
+```bash
+df -h /
+docker system df
+docker ps --format 'table {{.Names}}\t{{.Status}}'
+```
+
+定期检查磁盘容量、构建缓存、镜像保留策略和日志轮转；清理频率按实际增长速度安排，不应以固定可释放容量作为保证。
+
 ## 上线检查
 
 GitHub Actions 自动部署到 VPS 的准备步骤、Secrets 配置、HTTPS 反向代理和回退说明见 [`docs/vps-deployment.md`](docs/vps-deployment.md)。
@@ -474,8 +817,8 @@ CORS_ORIGIN=https://wsdesk.geekmt.com
 生产环境必须使用公网 HTTPS 回调地址，且 Microsoft Entra 中登记的地址必须与 `PUBLIC_API_URL` 生成的回调地址完全一致：
 `https://你的域名/api/v1/mailboxes/microsoft/callback`。修改这些变量后需要重新部署或重启 API 和 Worker。不要把 Client Secret 提交到代码仓库或前端环境变量中。
 
-1. 更换 `.env` 的数据库、JWT、数据加密、管理员和对象存储密钥。
+1. 首次部署时替换 `.env` 的示例数据库、JWT、数据加密、管理员和对象存储密钥；恢复或迁移时保留备份对应的原密钥。
 2. 使用 HTTPS 反向代理暴露 Web/API，并限制 MinIO 与 PostgreSQL 只在内部网络访问。
-3. 运行数据库与对象存储备份，完成一次恢复演练。
+3. 按“备份、恢复与更换宿主机”备份数据库、媒体、Agent 数据及配置，完成一次恢复演练，并按“磁盘占用排查与清理”检查容量。
 4. 先用测试 WhatsApp 账号灰度验证固定 Baileys 版本，再接入正式账号。
 5. 配置 Agent 离线、账号掉线、发送失败、Webhook 积压、磁盘容量和备份失败告警。

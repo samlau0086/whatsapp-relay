@@ -42,6 +42,8 @@ import {registerProactiveRoutes} from "./proactive-routes.js";
 import {registerStatusRoutes} from "./status-routes.js";
 import {registerWhatsAppCloudRoutes} from "./whatsapp-cloud.js";
 import {registerMessengerRoutes} from "./messenger.js";
+import {registerLivechatRoutes} from "./livechat.js";
+import {livechatCorsOrigin,registerLivechatPublicRoutes} from "./livechat-public.js";
 import {isMessengerReplyWindowClosedError,isTemplateRequiredError,queueChannelCommand,queueGroupCreateCommand,queueWhatsAppBlockCommand} from "./whatsapp-outbound.js";
 import {registerBrowserEvents} from "./browser-events.js";
 import {isPostgresUuid} from "./conversation-cursor.js";
@@ -51,7 +53,7 @@ import { paypalProfileSetting, registerPaymentMethodRoutes, resolvePaymentProfil
 import { calculatePayPalFee, PAYPAL_FEE_NAME } from "./paypal-fee.js";
 import { calculateShippingQuote, registerShippingRoutes } from "./shipping-routes.js";
 
-const app = Fastify({ logger: { level: config.NODE_ENV === "production" ? "info" : "debug", redact:["req.headers.authorization","req.body.password","req.body.secret","req.body.apiKey","req.body.clientId","req.body.clientSecret","req.body.sandboxClientId","req.body.sandboxClientSecret","req.body.liveClientId","req.body.liveClientSecret","req.body.accessToken","req.body.pageAccessToken","req.body.appSecret"] }, bodyLimit: 2_000_000 });
+const app = Fastify({ trustProxy: config.TRUSTED_PROXY_CIDRS.split(",").map(value=>value.trim()).filter(Boolean), logger: { level: config.NODE_ENV === "production" ? "info" : "debug", redact:["req.headers.authorization","req.body.password","req.body.secret","req.body.apiKey","req.body.clientId","req.body.clientSecret","req.body.sandboxClientId","req.body.sandboxClientSecret","req.body.liveClientId","req.body.liveClientSecret","req.body.accessToken","req.body.pageAccessToken","req.body.appSecret"] }, bodyLimit: 2_000_000 });
 app.removeContentTypeParser("application/json");
 app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
   if (!String(body).trim()) return done(null, {});
@@ -77,7 +79,10 @@ function orderFeesWithPayPalFee(fees:OrderSummaryFee[],items:OrderSummaryItem[],
   return amount>0?[...manual,{name:paymentProfile.paypalFeeLabel||PAYPAL_FEE_NAME,amount,source:"paypal"}]:manual;
 }
 
-await app.register(cors, { origin:config.CORS_ORIGIN, credentials:true });
+await app.register(cors, {delegator:async(request:FastifyRequest)=>{
+  if(request.url.startsWith("/livechat/"))return {origin:await livechatCorsOrigin(request.url,request.headers.origin)?request.headers.origin:false,credentials:false,allowedHeaders:["authorization","content-type"],methods:["GET","POST","OPTIONS"]};
+  return {origin:config.CORS_ORIGIN,credentials:true};
+}});
 await app.register(multipart, { limits:{ fileSize:64 * 1024 * 1024, files:1 } });
 await app.register(websocket, { options:{ maxPayload:2_000_000 } });
 
@@ -93,6 +98,8 @@ await registerProactiveRoutes(app);
 await registerStatusRoutes(app);
 await registerWhatsAppCloudRoutes(app);
 await registerMessengerRoutes(app);
+await registerLivechatRoutes(app);
+await registerLivechatPublicRoutes(app);
 await registerBrowserEvents(app);
 await registerPaymentMethodRoutes(app);
 await registerShippingRoutes(app);
@@ -817,7 +824,7 @@ app.post("/api/v1/conversations/:id/transfer", {preHandler:authenticate}, async(
     if(!current.rowCount||!canAccessAccount(principal,current.rows[0].account_id))return{status:"not_found" as const};
     const source=current.rows[0];
     if(source.account_id===targetAccountId)return{status:"same_account" as const};
-    if(source.entity_type==="group")return{status:"group_unsupported" as const};
+    if(source.entity_type==="group"||source.platform==="livechat")return{status:"group_unsupported" as const};
     const target=await client.query("SELECT id,display_name,platform FROM channel_accounts WHERE id=$1",[targetAccountId]);
     if(!target.rowCount||!canAccessAccount(principal,targetAccountId))return{status:"target_forbidden" as const};
     if(target.rows[0].platform!==source.platform)return{status:"platform_mismatch" as const};
@@ -959,7 +966,7 @@ app.post("/api/v1/conversations/:id/merge", {preHandler:authenticate}, async(req
     if(!sourceResult.rowCount||!canAccessAccount(principal,sourceResult.rows[0].account_id))return{status:"not_found" as const};
     const source=sourceResult.rows[0];
     if(source.account_id===targetAccountId)return{status:"same_account" as const};
-    if(source.entity_type==="group")return{status:"group_unsupported" as const};
+    if(source.entity_type==="group"||source.platform==="livechat")return{status:"group_unsupported" as const};
     const targetResult=await client.query(`SELECT a.id account_id,a.display_name account_name,co.id contact_id,c.id conversation_id
       FROM channel_accounts a JOIN contacts co ON co.account_id=a.id JOIN conversations c ON c.contact_id=co.id
       WHERE a.id=$1 AND a.platform=$2 AND c.account_id=a.id
@@ -2566,7 +2573,7 @@ app.post("/api/v1/media", { preHandler:authenticate }, async (request,reply) => 
   const media=await transaction(async client=>{const created=await client.query("INSERT INTO media(account_id,object_key,file_name,mime_type,byte_size,sha256) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",[query.accountId,objectKey,normalized.fileName,normalized.mimeType,normalized.bytes.length,sha256]);await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'media.upload','media',$3,$4)",[request.principal?.kind,request.principal?.id,created.rows[0].id,JSON.stringify({accountId:query.accountId,fileName:normalized.fileName,mimeType:normalized.mimeType,byteSize:normalized.bytes.length,sha256})]);return created;}); return reply.code(201).send({mediaId:media.rows[0].id,fileName:normalized.fileName,mimeType:normalized.mimeType,size:normalized.bytes.length,sha256});
 });
 
-app.setErrorHandler((error,request,reply)=>{app.log.error(error);const code=typeof error==="object"&&error!==null&&"code" in error?String((error as {code?:unknown}).code):"",constraint=typeof error==="object"&&error!==null&&"constraint" in error?String((error as {constraint?:unknown}).constraint):"";if(request.url.match(/^\/api\/v1\/conversations\/[^/]+\/transfer(?:\?|$)/)&&code==="23505"){if(/task_rules.*(source|key)|tasks.*occurrence/i.test(constraint))return void reply.code(409).send({error:"task_rule_conflict",message:`目标账号已有该联系人的重复任务规则或任务实例（${constraint||"数据库唯一约束"}）。请重新部署 API 后重试；若仍失败，请提供此约束名称`});if(/contacts.*(provider|key)|conversations.*(contact|key)/i.test(constraint))return void reply.code(409).send({error:"contact_conflict",message:"目标账号已存在该联系人的会话，请使用合并会话完成转移"});return void reply.code(409).send({error:"transfer_conflict",message:"转移时发现目标账号已有冲突数据，请刷新页面后重试；如仍失败，请先处理重复联系人或任务规则"});}if(request.url.match(/^\/api\/v1\/conversations\/[^/]+\/transfer(?:\?|$)/)&&code==="23503")return void reply.code(409).send({error:"transfer_reference_conflict",message:"转移涉及的关联数据不完整，请刷新页面后重试"});void reply.code((error as {statusCode?:number}).statusCode??500).send({error:"internal_error",message:config.NODE_ENV==="production"?"服务暂时不可用":error instanceof Error?error.message:String(error)});});
+app.setErrorHandler((error,request,reply)=>{app.log.error(error);if(request.url.startsWith("/livechat/")){const status=(error as {statusCode?:number}).statusCode??500;if(status>=400&&status<500){if(status===429)reply.header("retry-after","60");return void reply.code(status).send({error:error instanceof Error&&/^[a-z_]+$/.test(error.message)?error.message:"invalid_request"});}if((error as {code?:string}).code==="23505")return void reply.code(409).send({error:"client_message_id_conflict"});}const code=typeof error==="object"&&error!==null&&"code" in error?String((error as {code?:unknown}).code):"",constraint=typeof error==="object"&&error!==null&&"constraint" in error?String((error as {constraint?:unknown}).constraint):"";if(request.url.match(/^\/api\/v1\/conversations\/[^/]+\/transfer(?:\?|$)/)&&code==="23505"){if(/task_rules.*(source|key)|tasks.*occurrence/i.test(constraint))return void reply.code(409).send({error:"task_rule_conflict",message:`目标账号已有该联系人的重复任务规则或任务实例（${constraint||"数据库唯一约束"}）。请重新部署 API 后重试；若仍失败，请提供此约束名称`});if(/contacts.*(provider|key)|conversations.*(contact|key)/i.test(constraint))return void reply.code(409).send({error:"contact_conflict",message:"目标账号已存在该联系人的会话，请使用合并会话完成转移"});return void reply.code(409).send({error:"transfer_conflict",message:"转移时发现目标账号已有冲突数据，请刷新页面后重试；如仍失败，请先处理重复联系人或任务规则"});}if(request.url.match(/^\/api\/v1\/conversations\/[^/]+\/transfer(?:\?|$)/)&&code==="23503")return void reply.code(409).send({error:"transfer_reference_conflict",message:"转移涉及的关联数据不完整，请刷新页面后重试"});void reply.code((error as {statusCode?:number}).statusCode??500).send({error:"internal_error",message:config.NODE_ENV==="production"?"服务暂时不可用":error instanceof Error?error.message:String(error)});});
 
 await registerAgentHub(app);
 

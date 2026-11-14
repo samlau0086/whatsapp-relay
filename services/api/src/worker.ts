@@ -8,6 +8,8 @@ import { syncOneMailbox } from "./mailboxes.js";
 import { processOneTaskCycle } from "./task-engine.js";
 import {processOneCloudOutbound,processOneCloudWebhook,syncDueCloudTemplates} from "./whatsapp-cloud.js";
 import {processOneMessengerOutbound,processOneMessengerWebhook} from "./messenger.js";
+import {processOneLivechatOutbound} from "./livechat.js";
+import {migrateAgentSchema} from "./migrate-agent.js";
 import {processOneStatusCycle,recoverStaleStatusCommands} from "./status-engine.js";
 import {processOneProactiveOutreach} from "./proactive-outreach.js";
 
@@ -16,6 +18,7 @@ let lastRetention=0;
 process.on("SIGTERM",()=>{stopping=true;});
 process.on("SIGINT",()=>{stopping=true;});
 
+await migrateAgentSchema();
 const emailLoop=runEmailLoop();
 while(!stopping){
   const agentWork=await processOneAgentJob();
@@ -27,9 +30,10 @@ while(!stopping){
   const cloudInbound=await processOneCloudWebhook();
   const messengerOutbound=await processOneMessengerOutbound();
   const messengerInbound=await processOneMessengerWebhook();
+  const livechatOutbound=await processOneLivechatOutbound();
   const templateSync=await syncDueCloudTemplates();
   const delivery=await claimWebhook();
-  if(delivery)await deliverWebhook(delivery);else if(!agentWork&&!mailboxWork&&!taskWork&&!proactiveWork&&!statusWork&&!cloudOutbound&&!cloudInbound&&!messengerOutbound&&!messengerInbound&&!templateSync)await sleep(750);
+  if(delivery)await deliverWebhook(delivery);else if(!agentWork&&!mailboxWork&&!taskWork&&!proactiveWork&&!statusWork&&!cloudOutbound&&!cloudInbound&&!messengerOutbound&&!messengerInbound&&!livechatOutbound&&!templateSync)await sleep(750);
   await requeueCommands();
   await recoverStaleStatusCommands();
   await enforceRetention();
@@ -100,5 +104,6 @@ async function requeueCommands():Promise<void>{
 
 async function enforceRetention():Promise<void>{
   if(Date.now()-lastRetention<60*60_000)return;lastRetention=Date.now();
+  await pool.query("DELETE FROM livechat_rate_limits WHERE window_start<now()-interval '2 days'");
   await pool.query("UPDATE media m SET delete_after=COALESCE(delete_after,m.created_at+(a.retention_days||' days')::interval) FROM channel_accounts a WHERE m.account_id=a.id AND a.retention_days IS NOT NULL AND m.delete_after IS NULL");
 }
