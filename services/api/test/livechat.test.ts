@@ -10,7 +10,7 @@ import {queueChannelCommand} from "../src/whatsapp-outbound.js";
 
 const channelId="11111111-1111-4111-8111-111111111111",accountId="22222222-2222-4222-8222-222222222222",contactId="33333333-3333-4333-8333-333333333333",messageId="44444444-4444-4444-8444-444444444444";
 const origin="https://shop.example.com",authorization=`Bearer ${"a".repeat(64)}`;
-const row={account_id:accountId,allowed_origins:[origin],display_name:"客服",enabled:true};
+const row={account_id:accountId,allowed_origins:[origin],display_name:"客服",enabled:true,language:"en"};
 const result=(rows:unknown[]=[])=>({rows,rowCount:rows.length});
 
 test("LiveChat 凭证与来源必须精确匹配",()=>{
@@ -30,13 +30,14 @@ test("LiveChat 附件限制验证文件签名而非只信任 MIME",()=>{
 
 test("LiveChat 公开接口安全边界",async t=>{
   let enabled=true,hits=1,visitorFound=true;
+  let language:string|undefined=row.language;
   const attachment=false;
   const calls:Array<{sql:string;values:unknown[]}>=[];
   t.mock.method(pool,"query",async(sql:string,values:unknown[]=[])=>{
     calls.push({sql,values});
     if(sql.includes("INSERT INTO livechat_rate_limits"))return result([{hits}]);
     if(sql.startsWith("SELECT 1 FROM livechat_channels"))return result(enabled&&values[1]===origin?[{}]:[]);
-    if(sql.includes("FROM livechat_channels"))return result(enabled?[row]:[]);
+    if(sql.includes("FROM livechat_channels"))return result(enabled?[{...row,language}]:[]);
     if(sql.includes("FROM livechat_visitors"))return result(visitorFound?[{id:contactId,contact_id:contactId}]:[]);
     if(sql.startsWith("WITH visible"))return result([]);
     if(sql.startsWith("SELECT md.*"))return result(attachment?[{}]:[]);
@@ -45,8 +46,14 @@ test("LiveChat 公开接口安全边界",async t=>{
   const app=Fastify();await registerLivechatPublicRoutes(app);t.after(()=>app.close());
   const get=(suffix:string,headers:Record<string,string>={origin,authorization})=>app.inject({url:`/livechat/${channelId}/${suffix}`,headers});
   await t.test("配置和 iframe 仅暴露公开信息",async()=>{
-    const response=await get("config");assert.equal(response.statusCode,200);assert.equal(response.json().name,"客服");assert.equal(response.json().account_id,undefined);
+    const response=await get("config");assert.equal(response.statusCode,200);assert.equal(response.json().name,"客服");assert.equal(response.json().language,"en");assert.equal(response.json().account_id,undefined);
     const frame=await get("widget");assert.match(String(frame.headers["content-security-policy"]),/frame-ancestors https:\/\/shop.example.com;/);assert.equal(frame.headers["x-frame-options"],undefined);
+  });
+  await t.test("未配置语言默认英语，明确选择中文时保持中文",async()=>{
+    try{
+      language=undefined;assert.equal((await get("config")).json().language,"en");
+      language="zh-CN";assert.equal((await get("config")).json().language,"zh-CN");
+    }finally{language=row.language;}
   });
   await t.test("拒绝非法来源与缺失凭证",async()=>{
     assert.equal((await get("messages",{origin:"https://evil.test",authorization})).statusCode,403);
@@ -185,13 +192,30 @@ test("LiveChat 多渠道创建分别保存账号与嵌入配置",async t=>{
   const app=Fastify();await registerLivechatRoutes(app);t.after(()=>app.close());
   const headers={authorization:`Bearer ${signToken({sub:contactId,role:"admin"},config.JWT_SECRET,60)}`};
   for(let i=0;i<2;i++){
-    const response=await app.inject({method:"POST",url:"/api/v1/admin/livechat/channels",headers,payload:{displayName:`客服 ${i}`,welcomeMessage:`欢迎 ${i}`,themeColor:i?"#aa3344":"#146d73",position:i?"left":"right",allowedOrigins:[i?"https://other.example.com":origin]}});
+    const response=await app.inject({method:"POST",url:"/api/v1/admin/livechat/channels",headers,payload:{displayName:`客服 ${i}`,welcomeMessage:`欢迎 ${i}`,themeColor:i?"#aa3344":"#146d73",position:i?"left":"right",...(i?{language:"zh-CN"}:{}),allowedOrigins:[i?"https://other.example.com":origin]}});
     assert.equal(response.statusCode,201,response.body);assert.equal(response.json().id,ids[i]);assert.equal(response.json().publicId,publicIds[i]);
   }
   const inserts=calls.filter(call=>call.sql.startsWith("INSERT INTO livechat_channels"));
   assert.equal(inserts[0].values[0],accountId);assert.equal(inserts[1].values[0],contactId);
   assert.deepEqual(inserts[0].values[4],[origin]);assert.deepEqual(inserts[1].values[4],["https://other.example.com"]);
+  assert.equal(inserts[0].values[6],"en");assert.equal(inserts[1].values[6],"zh-CN");
   assert.equal(calls.filter(call=>call.sql.includes("livechat.create")).length,2);
+});
+
+test("LiveChat 编辑渠道保存语言并拒绝不支持的语言",async t=>{
+  const calls:Array<{sql:string;values:unknown[]}>=[];
+  const query=async(sql:string,values:unknown[]=[])=>{calls.push({sql,values});return result(sql.startsWith("UPDATE livechat_channels")?[{account_id:accountId}]:[]);};
+  t.mock.method(pool,"connect",async()=>({query,release(){}}));
+  const app=Fastify();await registerLivechatRoutes(app);t.after(()=>app.close());
+  const headers={authorization:`Bearer ${signToken({sub:contactId,role:"admin"},config.JWT_SECRET,60)}`};
+  const url=`/api/v1/admin/livechat/channels/${accountId}`;
+  const payload={displayName:"客服",allowedOrigins:[origin],language:"ja"};
+  assert.equal((await app.inject({method:"PUT",url,headers,payload})).statusCode,200);
+  const update=calls.find(call=>call.sql.startsWith("UPDATE livechat_channels"))!;
+  assert.equal(update.values[6],"ja");assert.match(update.sql,/language=\$7/);
+  const count=calls.length;
+  assert.equal((await app.inject({method:"PUT",url,headers,payload:{...payload,language:"invalid"}})).statusCode,400);
+  assert.equal(calls.length,count);
 });
 
 test("LiveChat Worker 发布出站消息并记录发送回执",async t=>{

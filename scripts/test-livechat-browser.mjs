@@ -10,7 +10,7 @@ import {livechatLoader,livechatWidget} from "../services/api/dist/livechat-widge
 const channel="11111111-1111-4111-8111-111111111111";
 const secondChannel="22222222-2222-4222-8222-222222222222";
 const sessions=new Map(),uploads=new Map(),origins=new Set(),errors=[];
-let failNext=false,ordinal=0;
+let failNext=false,ordinal=0,widgetLanguage;
 const timestamp=()=>new Date().toISOString().replace(/\.(\d{3})Z$/,(_match,millis)=>`.${millis}${String(++ordinal%1000).padStart(3,'0')}Z`);
 const listen=async handler=>{
   const server=createServer(handler);await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
@@ -24,7 +24,7 @@ const api=await listen(async(req,res)=>{
   if(url.pathname==="/livechat/embed.js"){res.writeHead(200,{"content-type":"application/javascript"});res.end(livechatLoader);return}
   if(url.pathname.endsWith("/widget")){res.writeHead(200,{"content-type":"text/html","content-security-policy":`default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src blob:; frame-ancestors ${[...origins].join(" ")}`});res.end(livechatWidget);return}
   if(!origins.has(req.headers.origin)){json(403,{error:"livechat_origin_denied"});return}
-  if(url.pathname.endsWith("/config")){json(200,{name:"网站客服",welcome:"您好，欢迎联系我们。",color:"#146d73",position:url.pathname.includes(secondChannel)?"left":"right"});return}
+  if(url.pathname.endsWith("/config")){json(200,{name:"网站客服",welcome:widgetLanguage!==undefined?"":"您好，欢迎联系我们。",color:"#146d73",position:url.pathname.includes(secondChannel)?"left":"right",language:widgetLanguage===null?undefined:widgetLanguage||(url.pathname.includes(secondChannel)?"en":"zh-CN")});return}
   const secret=req.headers.authorization,sessionKey=`${url.pathname.split('/')[2]}:${req.headers.origin}:${secret}`;
   if(!/^Bearer [a-f0-9]{64}$/.test(secret||"")){json(401,{error:"invalid_visitor_credential"});return}
   if(url.pathname.endsWith("/messages")&&req.method==="POST"){
@@ -97,6 +97,7 @@ try{
   await page.waitForFunction(id=>Boolean(document.querySelector(`script[data-channel="${id}"]`)),secondChannel);
   await page.waitForLoadState('networkidle');
   const secondFrame=page.frames().find(f=>f.url().includes(secondChannel)&&f.url().endsWith('/widget'));assert.ok(secondFrame);
+  assert.equal(await secondFrame.locator('#draft').getAttribute('placeholder'),'Type a message...');
   await secondFrame.locator('#launcher').click();assert.equal(await secondFrame.getByText('第一条匿名消息',{exact:true}).count(),0);
   await secondFrame.locator('#draft').fill('独立渠道的访客');await secondFrame.locator('#send').click();
   await page.waitForFunction(()=>Object.keys(localStorage).filter(k=>k.endsWith(':started')).length===2);assert.equal(sessions.size,3);
@@ -107,6 +108,28 @@ try{
   assert.equal(await mobileFrame.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   await mobile.screenshot({path:`${screenshots}/mobile.png`});await mobile.setViewportSize({width:320,height:460});
   assert.equal(await mobileFrame.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);await mobile.screenshot({path:`${screenshots}/mobile-compact.png`});
-  assert.deepEqual(errors,[]);console.log(`已通过：双站点及多渠道隔离、重复嵌入、样式隔离、匿名消息、坐席回复、刷新恢复、失败重试、确认丢失恢复、未读、多页历史与断线补齐、附件上传下载及桌面/移动布局。截图：${screenshots}`);
+  const localized=[['zh-CN','请输入消息...','发送','您好，有什么可以帮助您？','附件不能超过 10 MB'],['zh-TW','請輸入訊息...','傳送','您好，有什麼可以幫助您？','附件不能超過 10 MB'],['en','Type a message...','Send','Hi! How can we help you?','Attachments must be 10 MB or smaller'],['ja','メッセージを入力...','送信','こんにちは。どのようなご用件でしょうか？','添付は10 MB以下にしてください'],['es','Escribe un mensaje...','Enviar','¡Hola! ¿Cómo podemos ayudarte?','El archivo no puede superar 10 MB'],['pt','Digite uma mensagem...','Enviar','Olá! Como podemos ajudar?','O anexo não pode exceder 10 MB']];
+  for(const [language,placeholder,send,welcome,tooLarge] of localized){
+    widgetLanguage=language;await mobile.reload();const localizedFrame=await frameFor(mobile);await localizedFrame.locator('#launcher').click();
+    assert.equal(await localizedFrame.locator('html').getAttribute('lang'),language);
+    assert.equal(await localizedFrame.locator('#draft').getAttribute('placeholder'),placeholder);
+    assert.equal(await localizedFrame.locator('#send').getAttribute('aria-label'),send);
+    assert.equal(await localizedFrame.locator('#welcome').textContent(),welcome);
+    await localizedFrame.locator('#file').setInputFiles({name:'large.txt',mimeType:'text/plain',buffer:Buffer.alloc(10485761)});
+    await localizedFrame.getByText(tooLarge,{exact:true}).waitFor();
+    assert.equal(await localizedFrame.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    if(language==='en')await mobile.screenshot({path:`${screenshots}/mobile-english.png`});
+  }
+  for(const language of [null,'invalid']){
+    widgetLanguage=language;await mobile.reload();const defaultFrame=await frameFor(mobile);await defaultFrame.locator('#launcher').click();
+    assert.equal(await defaultFrame.locator('html').getAttribute('lang'),'en');
+    assert.equal(await defaultFrame.locator('#draft').getAttribute('placeholder'),'Type a message...');
+    assert.equal(await defaultFrame.locator('#welcome').textContent(),'Hi! How can we help you?');
+  }
+  widgetLanguage='en';await page.reload();const englishFrame=await frameFor(page);await englishFrame.locator('#launcher').click();
+  failNext=true;await englishFrame.locator('#draft').fill('Retry in English');await englishFrame.locator('#send').click();await englishFrame.getByText('Failed. Click to retry',{exact:true}).waitFor();
+  assert.equal(await englishFrame.locator('#notice').textContent(),'Could not send. Please retry');
+  await page.screenshot({path:`${screenshots}/desktop-english.png`});
+  assert.deepEqual(errors,[]);console.log(`已通过：双站点及多渠道隔离、重复嵌入、样式隔离、匿名消息、坐席回复、刷新恢复、失败重试、确认丢失恢复、未读、多页历史与断线补齐、附件上传下载、六种界面语言及桌面/移动布局。截图：${screenshots}`);
 }catch(error){console.error({errors,sessions:[...sessions.values()]});if(debugPage){const frame=debugPage.frames().find(f=>f.url().endsWith("/widget"));console.error(await frame?.locator("body").innerText());await debugPage.screenshot({path:`${screenshots}/failure.png`})}throw error}
 finally{await browser.close();await Promise.all([api,...hosts].map(({server})=>new Promise(resolve=>server.close(resolve))))}

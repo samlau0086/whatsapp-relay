@@ -78,7 +78,7 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
   });
   app.get("/livechat/:publicId/config",async(request,reply)=>{
     const c=await channel(request);reply.header("cache-control","no-store");
-    return {name:c.display_name,welcome:c.welcome_message,color:c.theme_color,position:c.position};
+    return {name:c.display_name,welcome:c.welcome_message,color:c.theme_color,position:c.position,language:c.language??"en"};
   });
   app.post("/livechat/:publicId/messages",async(request,reply)=>{
     const c=await channel(request),hash=livechatCredential(request.headers.authorization),parsed=messageSchema.safeParse(request.body);

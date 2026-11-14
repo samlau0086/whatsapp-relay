@@ -19,6 +19,7 @@ const channelSchema=z.object({
   welcomeMessage:z.string().trim().max(1000).default(""),
   themeColor:z.string().regex(/^#[0-9a-fA-F]{6}$/).default("#2563eb"),
   position:z.enum(["left","right"]).default("right"),
+  language:z.enum(["zh-CN","zh-TW","en","ja","es","pt"]).default("en"),
   allowedOrigins:z.array(z.string().max(2048)).min(1).max(50),
   enabled:z.boolean().default(true),
 });
@@ -53,7 +54,7 @@ export async function processOneLivechatOutbound():Promise<boolean>{
 export async function registerLivechatRoutes(app:FastifyInstance):Promise<void>{
   app.get("/api/v1/admin/livechat/channels",{preHandler:authenticate},async(request,reply)=>{
     if(request.principal?.kind!=="user"||request.principal.role!=="admin")return reply.code(403).send({error:"admin_required"});
-    const result=await pool.query(`SELECT a.id,a.display_name,c.public_id,c.welcome_message,c.theme_color,c.position,c.allowed_origins,c.enabled,c.created_at,c.updated_at
+    const result=await pool.query(`SELECT a.id,a.display_name,c.public_id,c.welcome_message,c.theme_color,c.position,c.language,c.allowed_origins,c.enabled,c.created_at,c.updated_at
       FROM livechat_channels c JOIN channel_accounts a ON a.id=c.account_id WHERE c.archived_at IS NULL ORDER BY a.display_name,a.id`);
     return {data:result.rows};
   });
@@ -65,7 +66,7 @@ export async function registerLivechatRoutes(app:FastifyInstance):Promise<void>{
     const data=parsed.data;
     const result=await transaction(async client=>{
       const account=await client.query("INSERT INTO channel_accounts(display_name,status,transport,platform) VALUES($1,$2,'cloud','livechat') RETURNING id",[data.displayName,data.enabled?"online":"offline"]);
-      const channel=await client.query("INSERT INTO livechat_channels(account_id,welcome_message,theme_color,position,allowed_origins,enabled) VALUES($1,$2,$3,$4,$5,$6) RETURNING public_id",[account.rows[0].id,data.welcomeMessage,data.themeColor,data.position,origins,data.enabled]);
+      const channel=await client.query("INSERT INTO livechat_channels(account_id,welcome_message,theme_color,position,allowed_origins,enabled,language) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING public_id",[account.rows[0].id,data.welcomeMessage,data.themeColor,data.position,origins,data.enabled,data.language]);
       await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'livechat.create','channel_account',$2,$3)",[request.principal!.id,account.rows[0].id,JSON.stringify({allowedOrigins:origins})]);
       return {id:account.rows[0].id,publicId:channel.rows[0].public_id};
     });
@@ -78,7 +79,7 @@ export async function registerLivechatRoutes(app:FastifyInstance):Promise<void>{
     const {id}=request.params as {id:string},data=parsed.data;
     if(!z.string().uuid().safeParse(id).success)return reply.code(400).send({error:"invalid_channel_id"});
     const updated=await transaction(async client=>{
-      const channel=await client.query("UPDATE livechat_channels SET welcome_message=$2,theme_color=$3,position=$4,allowed_origins=$5,enabled=$6,updated_at=now() WHERE account_id=$1 AND archived_at IS NULL RETURNING account_id",[id,data.welcomeMessage,data.themeColor,data.position,origins,data.enabled]);
+      const channel=await client.query("UPDATE livechat_channels SET welcome_message=$2,theme_color=$3,position=$4,allowed_origins=$5,enabled=$6,language=$7,updated_at=now() WHERE account_id=$1 AND archived_at IS NULL RETURNING account_id",[id,data.welcomeMessage,data.themeColor,data.position,origins,data.enabled,data.language]);
       if(!channel.rowCount)return false;
       await client.query("UPDATE channel_accounts SET display_name=$2,status=$3,status_reason=$4 WHERE id=$1",[id,data.displayName,data.enabled?"online":"offline",data.enabled?null:"livechat_disabled"]);
       await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'livechat.update','channel_account',$2,$3)",[request.principal!.id,id,JSON.stringify({enabled:data.enabled,allowedOrigins:origins})]);

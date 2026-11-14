@@ -812,6 +812,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   },[loadAccounts,loadConversationCounts]);
 
   const applyConversationEvents=useCallback(async(ids:string[])=>{
+    // 当前会话消息不必等待列表摘要和筛选查询完成。
+    const messageRefresh=ids.includes(effectiveActiveId)?loadMessages(apiToken,effectiveActiveId):Promise.resolve();
     const updates=new Map<string,{data?:Record<string,unknown>;matches:boolean}>();
     for(let offset=0;offset<ids.length;offset+=6){
       const chunk=ids.slice(offset,offset+6);
@@ -842,7 +844,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
         ? new Date(a.remindAt??8640000000000000).getTime()-new Date(b.remindAt??8640000000000000).getTime()
         : (new Date(b.lastMessageAt??0).getTime()-new Date(a.lastMessageAt??0).getTime())||b.id.localeCompare(a.id));
     });
-    if(ids.includes(effectiveActiveId))await loadMessages(apiToken,effectiveActiveId);
+    await messageRefresh;
     await refreshRealtimeCounts(apiToken);
   },[apiToken,dateFilter,filter,selectedAccount,debouncedQuery,selectedTags,selectedCustomerStage,selectedLatestOrderStatus,followupFilter,selectedAgentMode,effectiveActiveId,loadMessages,logout,notifyIncomingConversation,refreshRealtimeCounts]);
 

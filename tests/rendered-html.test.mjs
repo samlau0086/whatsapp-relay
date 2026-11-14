@@ -555,7 +555,10 @@ test("failed and uncertain messages expose a manual resend action", async () => 
   assert.match(component,/api\/v1\/messages\/\$\{message\.id\}\/retry/);
   assert.match(css,/\.message-retry-action\{/);
   assert.match(css,/\.message-queue-diagnostic\{/);
-  assert.match(component,/if\(ids\.includes\(effectiveActiveId\)\)await loadMessages\(apiToken,effectiveActiveId\)/);
+  const eventHandler=component.slice(component.indexOf("const applyConversationEvents=useCallback"),component.indexOf("await refreshRealtimeCounts(apiToken);",component.indexOf("const applyConversationEvents=useCallback")));
+  assert.match(eventHandler,/const messageRefresh=ids\.includes\(effectiveActiveId\)\?loadMessages\(apiToken,effectiveActiveId\):Promise\.resolve\(\)/);
+  assert.ok(eventHandler.indexOf("const messageRefresh=")<eventHandler.indexOf("for(let offset="));
+  assert.match(eventHandler,/await messageRefresh;/);
   assert.match(component,/function QueueDiagnostic/);
   assert.match(server,/LEFT JOIN LATERAL \(SELECT oc\.id,oc\.state,oc\.attempt,oc\.last_error/);
   assert.match(server,/app\.post\("\/api\/v1\/messages\/:id\/retry"/);
