@@ -153,11 +153,13 @@ test("LiveChat Worker 将停用渠道待发消息标为失败",async t=>{
 
 test("LiveChat 首次匿名消息创建独立客户并进入统一 Agent 流程",async t=>{
   const calls:Array<{sql:string;values:unknown[]}>=[];
+  let existingVisitor=false;
   const query=async(sql:string,values:unknown[]=[])=>{
     calls.push({sql,values});
     if(sql.includes("INSERT INTO livechat_rate_limits"))return result([{hits:1}]);
     if(sql.includes("JOIN channel_accounts"))return result([row]);
     if(sql.includes("FROM livechat_channels")&&sql.includes("FOR SHARE"))return result([{}]);
+    if(sql.startsWith("SELECT * FROM livechat_visitors"))return result(existingVisitor?[{id:channelId,account_id:accountId,contact_id:contactId,embed_origin:origin,expires_at:new Date(Date.now()+86400000)}]:[]);
     if(sql.startsWith("INSERT INTO contacts"))return result([{id:contactId}]);
     if(sql.startsWith("INSERT INTO livechat_visitors"))return result([{id:channelId,contact_id:contactId}]);
     if(sql.startsWith("INSERT INTO conversations"))return result([{id:contactId}]);
@@ -167,16 +169,40 @@ test("LiveChat 首次匿名消息创建独立客户并进入统一 Agent 流程"
   };
   t.mock.method(pool,"query",query);t.mock.method(pool,"connect",async()=>({query,release(){}}));
   const app=Fastify();await registerLivechatPublicRoutes(app);t.after(()=>app.close());
-  const response=await app.inject({method:"POST",url:`/livechat/${channelId}/messages`,headers:{origin,authorization},payload:{clientMessageId:messageId,text:"我想咨询产品"}});
+  const payload={clientMessageId:messageId,text:"我想咨询产品",name:"Sam",email:"sam@example.com",company:"Example Ltd",whatsapp:"+12025550123",context:{browserLanguage:"en-US",timeZone:"Asia/Shanghai",pageUrl:`${origin}/products?secret=123#private`},ip:"203.0.113.99"};
+  for(const invalid of [
+    {...payload,name:undefined},{...payload,name:"   "},{...payload,email:undefined},
+    {...payload,email:"invalid"},{...payload,text:" "},{...payload,context:{timeZone:"Invalid/Zone"}},
+    {...payload,context:{browserLanguage:"x".repeat(81)}},{...payload,mediaId:messageId},
+  ]){
+    const rejected=await app.inject({method:"POST",url:`/livechat/${channelId}/messages`,headers:{origin,authorization},payload:invalid});
+    assert.equal(rejected.statusCode,400,rejected.body);
+  }
+  assert.equal(calls.some(call=>call.sql.startsWith("INSERT INTO contacts")),false);
+  const response=await app.inject({method:"POST",url:`/livechat/${channelId}/messages`,headers:{origin,authorization,"user-agent":"Test Browser","x-forwarded-for":"203.0.113.88"},payload});
   assert.equal(response.statusCode,201,response.body);
   assert.equal(response.json().id,messageId);
   const contact=calls.find(call=>call.sql.startsWith("INSERT INTO contacts"))!;
-  assert.equal(contact.values[0],accountId);assert.equal(contact.values[2],"网站访客");
+  assert.equal(contact.values[0],accountId);assert.equal(contact.values[2],"Sam");assert.equal(contact.values[3],"Example Ltd");
   const visitor=calls.find(call=>call.sql.startsWith("INSERT INTO livechat_visitors"))!;
   assert.equal(visitor.values[3],origin);assert.equal(visitor.values[2],livechatCredential(authorization));
+  assert.equal(visitor.values[4],"127.0.0.1");
+  const context=calls.find(call=>call.sql.startsWith("UPDATE livechat_visitors"))!;
+  assert.equal(context.values[1],"127.0.0.1");
+  assert.deepEqual(JSON.parse(String(context.values[2])),{userAgent:"Test Browser",browserLanguage:"en-US",timeZone:"Asia/Shanghai",pageUrl:`${origin}/products`});
+  assert.deepEqual(calls.find(call=>call.sql.startsWith("INSERT INTO contact_emails"))?.values,[contactId,"sam@example.com"]);
+  assert.deepEqual(calls.find(call=>call.sql.startsWith("INSERT INTO contact_methods"))?.values,[contactId,"+12025550123"]);
   assert.ok(calls.some(call=>call.sql.includes("status='open',closed_at=NULL")));
   assert.ok(calls.some(call=>call.sql.startsWith("INSERT INTO agent_jobs")&&call.sql.includes("account_agent_settings")));
   assert.equal(calls.at(-1)?.sql,"COMMIT");
+  existingVisitor=true;
+  const followup=await app.inject({method:"POST",url:`/livechat/${channelId}/messages`,headers:{origin,authorization},payload:{clientMessageId:channelId,text:"继续咨询",name:"Do not overwrite",email:"different@example.com",whatsapp:"other",context:{pageUrl:"https://evil.test/path?secret=1"}}});
+  assert.equal(followup.statusCode,201,followup.body);
+  assert.equal(calls.filter(call=>call.sql.startsWith("INSERT INTO contacts")).length,1);
+  assert.equal(calls.filter(call=>call.sql.startsWith("INSERT INTO contact_emails")).length,1);
+  assert.equal(calls.filter(call=>call.sql.startsWith("INSERT INTO contact_methods")).length,1);
+  assert.ok(!calls.some(call=>call.sql.startsWith("UPDATE contacts")));
+  assert.equal(JSON.parse(String(calls.filter(call=>call.sql.startsWith("UPDATE livechat_visitors")).at(-1)!.values[2])).pageUrl,undefined);
 });
 
 test("LiveChat 多渠道创建分别保存账号与嵌入配置",async t=>{

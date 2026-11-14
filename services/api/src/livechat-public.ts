@@ -8,10 +8,16 @@ import {config} from "./config.js";
 import {enqueueInboundAgentWork} from "./agent-engine.js";
 import {createWebhookEvent} from "./agent-hub.js";
 import {livechatLoader,livechatWidget} from "./livechat-widget.js";
+import {isValidTimeZone} from "./order-number.js";
 
 const s3=new S3Client({region:config.S3_REGION,endpoint:config.S3_ENDPOINT,forcePathStyle:true,credentials:{accessKeyId:config.S3_ACCESS_KEY,secretAccessKey:config.S3_SECRET_KEY}});
 const uuid=z.string().uuid();
-const messageSchema=z.object({clientMessageId:uuid,text:z.string().trim().max(10000).default(""),mediaId:uuid.optional(),name:z.string().trim().max(80).optional(),email:z.string().email().max(254).optional()}).refine(v=>Boolean(v.text||v.mediaId));
+const messageSchema=z.object({
+  clientMessageId:uuid,text:z.string().trim().max(10000).default(""),mediaId:uuid.optional(),
+  name:z.string().trim().max(80).optional(),email:z.string().trim().email().max(254).optional(),
+  company:z.string().trim().max(160).optional(),whatsapp:z.string().trim().max(80).optional(),
+  context:z.object({browserLanguage:z.string().trim().max(80).optional(),timeZone:z.string().max(100).refine(isValidTimeZone).optional(),pageUrl:z.string().url().max(2048).optional()}).optional(),
+}).refine(v=>Boolean(v.text||v.mediaId));
 const fail=(statusCode:number,message:string)=>Object.assign(new Error(message),{statusCode});
 export const credentialHash=(value:string)=>createHash("sha256").update(value).digest("hex");
 export function livechatCredential(header:unknown):string{
@@ -95,8 +101,11 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
       if(v&&(v.account_id!==c.account_id||v.embed_origin!==embedOrigin(request)||new Date(v.expires_at).getTime()<=Date.now()))throw fail(401,"invalid_visitor_credential");
       if(!v){
         if(data.mediaId)throw fail(400,"first_message_must_be_text");
-        const contact=await client.query("INSERT INTO contacts(account_id,provider_user_id,display_name,last_seen_at) VALUES($1,$2,$3,now()) RETURNING id",[c.account_id,`livechat:${randomUUID()}`,data.name||"网站访客"]);
-        v=(await client.query("INSERT INTO livechat_visitors(account_id,contact_id,credential_hash,embed_origin) VALUES($1,$2,$3,$4) RETURNING *",[c.account_id,contact.rows[0].id,hash,embedOrigin(request)])).rows[0];
+        if(!data.name||!data.email||!data.text)throw fail(400,"prechat_details_required");
+        const contact=await client.query("INSERT INTO contacts(account_id,provider_user_id,display_name,company_name,last_seen_at) VALUES($1,$2,$3,$4,now()) RETURNING id",[c.account_id,`livechat:${randomUUID()}`,data.name,data.company||null]);
+        v=(await client.query("INSERT INTO livechat_visitors(account_id,contact_id,credential_hash,embed_origin,first_ip,last_ip) VALUES($1,$2,$3,$4,$5,$5) RETURNING *",[c.account_id,contact.rows[0].id,hash,embedOrigin(request),request.ip])).rows[0];
+        await client.query("INSERT INTO contact_emails(contact_id,email,label,is_primary) VALUES($1,$2,'LiveChat',true)",[v.contact_id,data.email]);
+        if(data.whatsapp)await client.query("INSERT INTO contact_methods(contact_id,type,label,value) VALUES($1,'phone','WhatsApp',$2)",[v.contact_id,data.whatsapp]);
       }
       const duplicate=await client.query("SELECT id,sender_contact_id,text_content,media_id,direction FROM messages WHERE account_id=$1 AND client_message_id=$2",[c.account_id,data.clientMessageId]);
       if(duplicate.rowCount){
@@ -114,9 +123,12 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
       const msg=await client.query(`INSERT INTO messages(conversation_id,account_id,sender_contact_id,provider_message_id,client_message_id,direction,kind,text_content,media_id,status,occurred_at)
         VALUES($1,$2,$3,$4,$4,'in',$5,$6,$7,'received',now()) RETURNING id`,[conv.rows[0].id,c.account_id,v.contact_id,data.clientMessageId,kind,data.text||null,data.mediaId??null]);
       if(data.mediaId)await client.query("UPDATE media SET delete_after=NULL WHERE id=$1",[data.mediaId]);
-      await client.query("UPDATE livechat_visitors SET last_seen_at=now() WHERE id=$1",[v.id]);
-      if(data.name)await client.query("UPDATE contacts SET display_name=$2,last_seen_at=now() WHERE id=$1",[v.contact_id,data.name]);
-      if(data.email)await client.query("INSERT INTO contact_emails(contact_id,email,label,is_primary) VALUES($1,$2,'LiveChat',NOT EXISTS(SELECT 1 FROM contact_emails WHERE contact_id=$1)) ON CONFLICT DO NOTHING",[v.contact_id,data.email]);
+      // 页面地址只保留同源路径，避免查询参数、片段或 URL 账号泄露。
+      const context:Record<string,string>={userAgent:(request.headers["user-agent"]||"").slice(0,512)};
+      if(data.context?.browserLanguage)context.browserLanguage=data.context.browserLanguage;
+      if(data.context?.timeZone)context.timeZone=data.context.timeZone;
+      if(data.context?.pageUrl){const url=new URL(data.context.pageUrl);if(url.origin===embedOrigin(request))context.pageUrl=url.origin+url.pathname;}
+      await client.query("UPDATE livechat_visitors SET last_seen_at=now(),first_ip=COALESCE(first_ip,$2),last_ip=$2,visitor_context=visitor_context||$3::jsonb WHERE id=$1",[v.id,request.ip,JSON.stringify(context)]);
       await createWebhookEvent(client,"message.received",msg.rows[0].id,{platform:"livechat",accountId:c.account_id,conversationId:conv.rows[0].id,direction:"in",kind,text:data.text});
       await enqueueInboundAgentWork(client,conv.rows[0].id,msg.rows[0].id,Boolean(data.text));
       return {id:msg.rows[0].id};

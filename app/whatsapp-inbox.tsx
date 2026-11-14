@@ -1,5 +1,6 @@
 "use client";
 import { EmailHtmlBody } from "./email-html-body";
+import { LivechatVisitorDetails, type LivechatVisitorInfo } from "./livechat-visitor-details";
 
 import {
   Archive, Ban, Bell, Bookmark, CalendarDays, Check, CheckCheck, ChevronDown, CircleHelp, Clock3, FileText, FileDown,
@@ -202,7 +203,7 @@ type NoteItem={id:string;body:string;noteType:"order"|"normal";userId:string|nul
 type ContactEmail={id?:string;label:string;email:string;isPrimary:boolean};
 type ContactDate={month:number;day:number;year:number|null};
 type ContactSpecialDate=ContactDate&{id?:string;kind:"anniversary"|"birthday"|"custom";label:string;leadDays:number|null};
-type ContactProfile={id:string;accountId:string;accountName:string;platform:"whatsapp"|"messenger"|"livechat";transport:"web"|"cloud";alias:string;contactName:string;firstName:string;middleName:string;lastName:string;companyName:string;jobTitle:string;country:string;province:string;city:string;name:string;phone:string;whatsappUsername:string|null;avatarUrl:string|null;note:string;timezone:string|null;preferredLanguage:string|null;effectiveTimezone:string;timezoneSource:"custom"|"country"|"fallback";inferredCountry:string|null;birthday:ContactDate|null;specialDates:ContactSpecialDate[];emails:ContactEmail[];primaryEmail:string|null;methods:ContactMethod[];addresses:CustomerAddress[];conversationId:string|null;hasConversation:boolean;lastMessageAt:string|null;blockedAt:string|null;updatedAt:string};
+type ContactProfile={livechatVisitor?:LivechatVisitorInfo|null;id:string;accountId:string;accountName:string;platform:"whatsapp"|"messenger"|"livechat";transport:"web"|"cloud";alias:string;contactName:string;firstName:string;middleName:string;lastName:string;companyName:string;jobTitle:string;country:string;province:string;city:string;name:string;phone:string;whatsappUsername:string|null;avatarUrl:string|null;note:string;timezone:string|null;preferredLanguage:string|null;effectiveTimezone:string;timezoneSource:"custom"|"country"|"fallback";inferredCountry:string|null;birthday:ContactDate|null;specialDates:ContactSpecialDate[];emails:ContactEmail[];primaryEmail:string|null;methods:ContactMethod[];addresses:CustomerAddress[];conversationId:string|null;hasConversation:boolean;lastMessageAt:string|null;blockedAt:string|null;updatedAt:string};
 type OrderProductItem={id:string;name:string;sku:string;quantity:number;unitAmount:number;isOutOfStock:boolean;costAmount:number|null;costCurrency:string|null;weightAmount:number|null;weightUnit:WeightUnit|null;shippingClassId:string|null;shippingClassName:string|null;imageMediaId:string|null;imageUrl:string|null;imageName:string;productId:string|null;variantId:string|null;internalNote:string};
 type OrderFeeItem={id:string;name:string;amount:number;source:"manual"|"paypal"};
 type CustomerAddress={id:string;label:string;recipientName:string;phone:string;address:string;countryCode:string;province:string;city:string;street1:string;street2:string;postalCode:string;isDefault:boolean};
@@ -3642,7 +3643,7 @@ function CrmDetailsPanel({
             <button type="submit" disabled={aliasBusy} aria-label="保存别名"><Check size={14}/></button>
             <button type="button" disabled={aliasBusy} onClick={()=>{setAliasDraft(active.alias);setAliasEditing(false);}} aria-label="取消编辑"><X size={14}/></button>
           </form>:<div className="contact-name"><h2>{active.name}</h2><button className="contact-alias-edit" onClick={beginAliasEdit} aria-label="编辑联系人别名" title="编辑别名"><Pencil size={13}/></button></div>}
-          <p>{active.platform==="livechat"?"网站匿名访客":active.platform==="messenger"?`Messenger 用户 · ${active.providerUserId}`:(active.phone || "号码待同步")}</p>
+          <p>{active.platform==="livechat"?"网站访客":active.platform==="messenger"?`Messenger 用户 · ${active.providerUserId}`:(active.phone || "号码待同步")}</p>
           <span className="contact-online">
             <i
               className={`status-dot ${active.accountStatus === "online" ? "online" : ""}`}
@@ -3656,6 +3657,7 @@ function CrmDetailsPanel({
           {details?.contact&&<ContactSocialLinks methods={details.contact.methods}/>}
           <div className="contact-profile-actions"><button className="contact-profile-edit" onClick={()=>setContactEditing(true)}><Pencil size={13}/>编辑资料</button><button className="contact-profile-edit" onClick={()=>setAddressEditing(true)}><MapPin size={13}/>收货地址{details?.contact?.addresses.length?` (${details.contact.addresses.length})`:""}</button>{active.platform==="whatsapp"&&active.transport==="web"&&<button className={`contact-profile-edit contact-block-button ${(blockOverride??Boolean(details?.contact?.blockedAt??active.blocked))?"blocked":""}`} disabled={busy} onClick={()=>void toggleContactBlock()}><Ban size={13}/>{(blockOverride??Boolean(details?.contact?.blockedAt??active.blocked))?"解除拉黑":"拉黑"}</button>}</div>
         </div>
+        {active.platform==="livechat"&&<LivechatVisitorDetails visitor={details?.contact?.livechatVisitor} companyName={details?.contact?.companyName}/>}
         <AgentMemoryPanel conversationId={active.id} token={token} onToken={onToken} onToast={onToast}/>
         {loading ? (
           <div className="crm-loading">

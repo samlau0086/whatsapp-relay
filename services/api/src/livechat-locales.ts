@@ -1,6 +1,13 @@
 // 顺序与语言列表一致；简体中文直接使用原文。
 export const livechatLanguages=["zh-CN","zh-TW","en","ja","es","pt"] as const;
 export const livechatTranslations:Record<string,string[]>={
+  "姓名（必填）":["姓名（必填）","Name (required)","お名前（必須）","Nombre (obligatorio)","Nome (obrigatório)"],
+  "邮箱（必填）":["電子郵件（必填）","Email (required)","メール（必須）","Correo (obligatorio)","E-mail (obrigatório)"],
+  "公司名（选填）":["公司名稱（選填）","Company (optional)","会社名（任意）","Empresa (opcional)","Empresa (opcional)"],
+  "WhatsApp（选填）":["WhatsApp（選填）","WhatsApp (optional)","WhatsApp（任意）","WhatsApp (opcional)","WhatsApp (opcional)"],
+  "消息（必填）":["訊息（必填）","Message (required)","メッセージ（必須）","Mensaje (obligatorio)","Mensagem (obrigatória)"],
+  "开始对话":["開始對話","Start chat","チャットを開始","Iniciar chat","Iniciar conversa"],
+  "请填写姓名、有效邮箱和消息":["請填寫姓名、有效電子郵件和訊息","Enter your name, a valid email and a message","お名前、有効なメール、メッセージを入力してください","Introduce nombre, correo válido y mensaje","Informe nome, e-mail válido e mensagem"],
   "在线客服":["線上客服","Live chat","チャットサポート","Chat en vivo","Atendimento online"],
   "打开在线客服":["開啟線上客服","Open live chat","チャットを開く","Abrir chat","Abrir chat"],
   "欢迎与我们联系":["歡迎與我們聯絡","Welcome! Get in touch","お気軽にお問い合わせください","¡Hola! Contáctanos","Olá! Fale conosco"],

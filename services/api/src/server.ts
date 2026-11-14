@@ -2613,7 +2613,11 @@ async function contactProfileById(db:typeof pool|PoolClient,id:string){
     db.query("SELECT id,label,recipient_name \"recipientName\",phone,address,country_code \"countryCode\",province,city,COALESCE(street_line_1,address) \"street1\",street_line_2 \"street2\",postal_code \"postalCode\",is_default \"isDefault\" FROM contact_addresses WHERE contact_id=$1 ORDER BY is_default DESC,created_at,id",[id]),
     db.query("SELECT id,kind,label,month,day,year,lead_days \"leadDays\" FROM contact_special_dates WHERE contact_id=$1 ORDER BY month,day,id",[id]),
   ]);
-  return contact.rowCount?mapContactRow({...contact.rows[0],emails:emails.rows,methods:methods.rows,addresses:addresses.rows,special_dates:specialDates.rows}):null;
+  if(!contact.rowCount)return null;
+  const profile=mapContactRow({...contact.rows[0],emails:emails.rows,methods:methods.rows,addresses:addresses.rows,special_dates:specialDates.rows});
+  if(profile.platform!=="livechat")return profile;
+  const visitor=await db.query(`SELECT first_ip "firstIp",last_ip "lastIp",embed_origin "embedOrigin",visitor_context "context",created_at "createdAt",last_seen_at "lastSeenAt" FROM livechat_visitors WHERE contact_id=$1 AND account_id=$2`,[id,profile.accountId]);
+  return {...profile,livechatVisitor:visitor.rows[0]??null};
 }
 
 async function resolveOrderAddress(client:{query:(text:string,values?:unknown[])=>Promise<{rowCount:number|null;rows:Array<Record<string,unknown>>}>},contactId:string,actorId:string,addressId?:string|null,newAddress?:CustomerAddressInput){

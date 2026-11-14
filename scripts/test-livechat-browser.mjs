@@ -9,7 +9,7 @@ import {livechatLoader,livechatWidget} from "../services/api/dist/livechat-widge
 
 const channel="11111111-1111-4111-8111-111111111111";
 const secondChannel="22222222-2222-4222-8222-222222222222";
-const sessions=new Map(),uploads=new Map(),origins=new Set(),errors=[];
+const sessions=new Map(),uploads=new Map(),origins=new Set(),errors=[],profiles=[];
 let failNext=false,ordinal=0,widgetLanguage;
 const timestamp=()=>new Date().toISOString().replace(/\.(\d{3})Z$/,(_match,millis)=>`.${millis}${String(++ordinal%1000).padStart(3,'0')}Z`);
 const listen=async handler=>{
@@ -30,6 +30,10 @@ const api=await listen(async(req,res)=>{
   if(url.pathname.endsWith("/messages")&&req.method==="POST"){
     const data=JSON.parse((await body(req)).toString());
     if(failNext){failNext=false;json(503,{error:"测试网络中断"});return}
+    if(!sessions.has(sessionKey)){
+      if(!data.name?.trim()||!data.email?.includes('@')||!data.text?.trim()){json(400,{error:"prechat_details_required"});return}
+      profiles.push(data);
+    }
     const messages=sessions.get(sessionKey)||[];sessions.set(sessionKey,messages);
     let message=messages.find(m=>m.client_message_id===data.clientMessageId);
     if(!message){const upload=uploads.get(data.mediaId);message={id:randomUUID(),client_message_id:data.clientMessageId,direction:"in",text_content:data.text,media_id:data.mediaId,file_name:upload?.name,mime_type:upload?.mime,created_at:timestamp()};messages.push(message)}
@@ -61,16 +65,30 @@ const browser=await chromium.launch({headless:true});
 const screenshots=fileURLToPath(new URL("../outputs/livechat/",import.meta.url));await mkdir(screenshots,{recursive:true});
 const frameFor=async page=>{await page.waitForFunction(()=>document.querySelector('div')?.shadowRoot===null);for(let i=0;i<50;i++){const frame=page.frames().find(f=>f.url().endsWith("/widget"));if(frame){await frame.locator("#launcher").waitFor({state:"visible"});return frame}await page.waitForTimeout(100)}throw Error("窗口未加载")};
 const incoming=(messages,text)=>messages.push({id:randomUUID(),direction:"out",text_content:text,created_at:timestamp()});
+const startChat=async(frame,text)=>{
+  await frame.locator('#visitorName').fill('Sam');await frame.locator('#email').fill('sam@example.com');
+  await frame.locator('#company').fill('Example Ltd');await frame.locator('#whatsapp').fill('+12025550123');
+  await frame.locator('#initialMessage').fill(text);await frame.locator('#start').click();
+  await frame.locator('#form').waitFor({state:'visible'});
+};
 let debugPage;
 try{
   const context=await browser.newContext({viewport:{width:1280,height:850}}),page=await context.newPage();
   debugPage=page;
   page.on("pageerror",error=>errors.push(error.message));
   await page.goto(hosts[0].url);let frame=await frameFor(page);
-  await frame.locator("#launcher").click();await frame.locator("#draft").fill("第一条匿名消息");await frame.locator("#send").click();
+  await frame.locator("#launcher").click();
+  await frame.locator('#start').click();assert.equal(sessions.size,0);
+  assert.equal(await frame.locator('#visitorName').getAttribute('required'),'');
+  await page.screenshot({path:`${screenshots}/desktop-prechat.png`});
+  failNext=true;
+  await frame.locator('#visitorName').fill('Sam');await frame.locator('#email').fill('sam@example.com');await frame.locator('#company').fill('Example Ltd');await frame.locator('#whatsapp').fill('+12025550123');await frame.locator('#initialMessage').fill('第一条匿名消息');await frame.locator('#start').click();
+  await frame.getByText('发送失败，点击重试').waitFor();await page.reload();frame=await frameFor(page);await frame.locator('#launcher').click();await frame.getByText('发送失败，点击重试').click();
   await frame.getByText("第一条匿名消息",{exact:true}).waitFor();await frame.locator("#send").waitFor({state:"visible"});
   await page.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(":started")));
   const firstSession=[...sessions.values()][0];assert.equal(firstSession.length,1);
+  assert.equal(profiles[0].name,'Sam');assert.equal(profiles[0].email,'sam@example.com');assert.equal(profiles[0].company,'Example Ltd');assert.equal(profiles[0].whatsapp,'+12025550123');
+  assert.ok(profiles[0].context.browserLanguage);assert.ok(profiles[0].context.timeZone);assert.equal(profiles[0].context.pageUrl,hosts[0].url+'/');
   incoming(firstSession,"坐席回复已送达");await frame.getByText("坐席回复已送达",{exact:true}).waitFor({timeout:10000});
   await page.screenshot({path:`${screenshots}/desktop.png`});
   await page.evaluate(()=>{const original=document.querySelector('script[data-channel]'),copy=document.createElement('script');copy.src=original.src;copy.dataset.channel=original.dataset.channel;document.body.append(copy)});
@@ -92,18 +110,23 @@ try{
   await page.reload();frame=await frameFor(page);await frame.locator('#launcher').click();await frame.getByText('分页回复 204',{exact:true}).waitFor();
   await frame.locator('#older').click();await frame.getByText('分页回复 5',{exact:true}).waitFor();await frame.locator('#older').click();await frame.getByText('第一条匿名消息',{exact:true}).waitFor();
   const other=await context.newPage();await other.goto(hosts[1].url);const otherFrame=await frameFor(other);await otherFrame.locator("#launcher").click();assert.equal(await otherFrame.getByText("第一条匿名消息",{exact:true}).count(),0);
-  await otherFrame.locator("#draft").fill("第二个网站的访客");await otherFrame.locator("#send").click();await other.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(":started")));assert.equal(sessions.size,2);
+  await startChat(otherFrame,"第二个网站的访客");await other.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(":started")));assert.equal(sessions.size,2);
   await page.evaluate(({apiUrl,id})=>{const script=document.createElement('script');script.src=apiUrl+'/livechat/embed.js';script.dataset.channel=id;document.body.append(script)},{apiUrl:api.url,id:secondChannel});
   await page.waitForFunction(id=>Boolean(document.querySelector(`script[data-channel="${id}"]`)),secondChannel);
   await page.waitForLoadState('networkidle');
-  const secondFrame=page.frames().find(f=>f.url().includes(secondChannel)&&f.url().endsWith('/widget'));assert.ok(secondFrame);
+  let secondFrame;for(let i=0;i<50;i++){secondFrame=page.frames().find(f=>f.url().includes(secondChannel)&&f.url().endsWith('/widget'));if(secondFrame)break;await page.waitForTimeout(100)}assert.ok(secondFrame);
+  await secondFrame.locator('#launcher').waitFor({state:'visible'});
   assert.equal(await secondFrame.locator('#draft').getAttribute('placeholder'),'Type a message...');
   await secondFrame.locator('#launcher').click();assert.equal(await secondFrame.getByText('第一条匿名消息',{exact:true}).count(),0);
-  await secondFrame.locator('#draft').fill('独立渠道的访客');await secondFrame.locator('#send').click();
+  assert.equal(await secondFrame.locator('#start').textContent(),'Start chat');
+  await startChat(secondFrame,'独立渠道的访客');
   await page.waitForFunction(()=>Object.keys(localStorage).filter(k=>k.endsWith(':started')).length===2);assert.equal(sessions.size,3);
   const mobileContext=await browser.newContext({viewport:{width:375,height:740},isMobile:true,hasTouch:true}),mobile=await mobileContext.newPage();mobile.on("pageerror",error=>errors.push(error.message));
   await mobile.goto(hosts[0].url);const mobileFrame=await frameFor(mobile);await mobileFrame.locator("#launcher").click();
-  await mobileFrame.locator("#draft").fill("手机端消息");await mobileFrame.locator("#send").click();await mobile.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(":started")));
+  await mobile.screenshot({path:`${screenshots}/mobile-prechat.png`});
+  await mobile.setViewportSize({width:320,height:460});await mobileFrame.locator('#start').scrollIntoViewIfNeeded();await mobile.screenshot({path:`${screenshots}/mobile-compact-prechat.png`});
+  assert.equal(await mobileFrame.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  await startChat(mobileFrame,"手机端消息");await mobile.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(":started")));await mobile.setViewportSize({width:375,height:740});
   const bounds=await mobileFrame.locator("#panel").boundingBox();assert.ok(bounds&&bounds.x>=0&&bounds.y>=0&&bounds.x+bounds.width<=375&&bounds.y+bounds.height<=740);
   assert.equal(await mobileFrame.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   await mobile.screenshot({path:`${screenshots}/mobile.png`});await mobile.setViewportSize({width:320,height:460});
