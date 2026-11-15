@@ -34,6 +34,8 @@ export const livechatTranslations:Record<string,string[]>={
   "下载附件":["下載附件","Download attachment","添付をダウンロード","Descargar archivo","Baixar anexo"],
   "图片":["圖片","Image","画像","Imagen","Imagem"],
   "附件":["附件","Attachment","添付ファイル","Archivo","Anexo"],
+  "引用消息":["引用消息","Quoted message","引用メッセージ","Mensaje citado","Mensagem citada"],
+  "查看引用消息":["查看引用消息","View quoted message","引用メッセージを表示","Ver mensaje citado","Ver mensagem citada"],
   "发送失败，点击重试":["傳送失敗，點擊重試","Failed. Click to retry","送信失敗。クリックして再試行","Error. Haz clic para reintentar","Falha. Clique para tentar novamente"],
   "发送中...":["傳送中...","Sending...","送信中...","Enviando...","Enviando..."],
   "请求频繁，请稍后重试":["請求頻繁，請稍後重試","Too many requests. Please try later","しばらくしてから再試行してください","Demasiadas solicitudes. Intenta más tarde","Muitas solicitações. Tente mais tarde"],

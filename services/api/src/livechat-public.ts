@@ -202,9 +202,16 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
     // 出站消息按实际送入访客队列的时间排序，避免长时间排队的旧消息被增量游标漏掉。
     const after=Boolean(query.data.after);
     const result=await pool.query(`WITH visible AS (
-      SELECT m.id,m.client_message_id,m.direction,m.kind,m.text_content,m.media_id,m.status,m.created_at,media.file_name,media.mime_type,
+      SELECT m.id,m.client_message_id,m.direction,m.kind,m.text_content,m.media_id,m.status,m.created_at,m.quoted_message_id,media.file_name,media.mime_type,
+        quoted.direction quoted_direction,quoted.kind quoted_kind,quoted.text_content quoted_text_content,
+        quoted_media.file_name quoted_file_name,quoted_media.mime_type quoted_mime_type,
         COALESCE(receipt.occurred_at,m.created_at) visible_at
-      FROM messages m LEFT JOIN media ON media.id=m.media_id JOIN conversations cv ON cv.id=m.conversation_id
+      FROM messages m LEFT JOIN media ON media.id=m.media_id
+      LEFT JOIN messages quoted ON quoted.id=m.quoted_message_id
+        AND quoted.account_id=m.account_id AND quoted.conversation_id=m.conversation_id
+        AND (quoted.direction='in' OR quoted.status IN ('sent','delivered','read'))
+      LEFT JOIN media quoted_media ON quoted_media.id=quoted.media_id
+      JOIN conversations cv ON cv.id=m.conversation_id
       LEFT JOIN message_receipts receipt ON receipt.message_id=m.id AND receipt.status='sent'
       WHERE cv.account_id=$1 AND cv.contact_id=$2 AND NOT EXISTS(SELECT 1 FROM message_email_details d WHERE d.message_id=m.id) AND (m.direction='in' OR m.status IN ('sent','delivered','read'))
     ) SELECT *,to_char(visible_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') sort_at
