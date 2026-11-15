@@ -9,7 +9,7 @@ import {livechatLoader,livechatWidget} from "../services/api/dist/livechat-widge
 
 const channel="11111111-1111-4111-8111-111111111111";
 const secondChannel="22222222-2222-4222-8222-222222222222";
-const sessions=new Map(),uploads=new Map(),origins=new Set(),errors=[],profiles=[];
+const sessions=new Map(),uploads=new Map(),origins=new Set(),errors=[],profiles=[],expiredSessions=new Set();
 const transcripts=new Map(),closedChats=new Map(),endRequests=[];
 let endError='',dropEndResponse=false;
 let failNext=false,ordinal=0,widgetLanguage,widgetName='网站客服',widgetIcon='';
@@ -29,6 +29,7 @@ const api=await listen(async(req,res)=>{
   if(url.pathname.endsWith("/config")){json(200,{name:widgetName,iconUrl:widgetIcon,welcome:widgetLanguage!==undefined?"":"您好，欢迎联系我们。",color:"#146d73",position:url.pathname.includes(secondChannel)?"left":"right",language:widgetLanguage===null?undefined:widgetLanguage||(url.pathname.includes(secondChannel)?"en":"zh-CN")});return}
   const secret=req.headers.authorization,sessionKey=`${url.pathname.split('/')[2]}:${req.headers.origin}:${secret}`;
   if(!/^Bearer [a-f0-9]{64}$/.test(secret||"")){json(401,{error:"invalid_visitor_credential"});return}
+  if(expiredSessions.has(sessionKey)){json(401,{error:"visitor_not_found_or_expired"});return}
   if(url.pathname.endsWith("/messages")&&req.method==="POST"){
     const data=JSON.parse((await body(req)).toString());
     if(failNext){failNext=false;json(503,{error:"测试网络中断"});return}
@@ -221,10 +222,60 @@ try{
   await endFrame.getByText('Still able to send',{exact:true}).waitFor();
   assert.equal(await endFrame.locator('#form').isVisible(),false);assert.equal(await endFrame.locator('#prechat').isVisible(),false);
   await other.screenshot({path:`${screenshots}/ended-english.png`});
-  await endFrame.locator('#restart').click();await endFrame.locator('#confirmAction').click();await endFrame.locator('#prechat').waitFor({state:'visible'});
-  await startChat(endFrame,'New chat after transcript');assert.equal(transcripts.size,1);
+  const originalSession=transcripts.values().next().value,originalMessages=sessions.get(originalSession),profileCount=profiles.length,sessionCount=sessions.size;
+  const credentialKey=`relaydesk.livechat:${api.url}:${channel}`;
+  const originalCredential=await other.evaluate(key=>localStorage.getItem(key),credentialKey);
+  await endFrame.locator('#restart').click();
+  const unavailableHistory=route=>route.request().method()==='GET'?route.fulfill({status:503,contentType:'application/json',headers:{'access-control-allow-origin':hosts[1].url},body:JSON.stringify({error:'temporary_history_failure'})}):route.continue();
+  await other.route('**/messages*',unavailableHistory);
+  await endFrame.locator('#confirmAction').click();
+  await endFrame.getByText('Could not send. Please retry',{exact:true}).waitFor();
+  await endFrame.waitForFunction(()=>!document.querySelector('#restart').disabled);
+  assert.equal(await other.evaluate(key=>localStorage.getItem(key),credentialKey),originalCredential,'临时网络错误不能更换访客身份');
+  assert.equal(await endFrame.locator('#form').isVisible(),false,'重启失败时维持原结束状态');
+  await other.unroute('**/messages*',unavailableHistory);
+  await endFrame.locator('#restart').click();await endFrame.locator('#confirmAction').click();await endFrame.locator('#form').waitFor({state:'visible'});
+  assert.equal(await endFrame.locator('#prechat').isVisible(),false,'已有身份重启时无需填写资料');
+  assert.equal(await endFrame.locator('.message').count(),0,'新聊天不显示旧消息');
+  assert.equal(await other.evaluate(key=>localStorage.getItem(key),credentialKey),originalCredential,'继续使用原访客凭证');
+  await other.reload();endFrame=await frameFor(other);await openChat(endFrame);
+  await endFrame.locator('#form').waitFor({state:'visible'});
+  await other.waitForLoadState('networkidle');
+  assert.equal(await endFrame.locator('.message').count(),0,'尚未发新消息时刷新也不恢复旧历史');
+  assert.equal(await endFrame.locator('#prechat').isVisible(),false);
+  await other.goto(hosts[1].url+'/another-page');endFrame=await frameFor(other);await openChat(endFrame);
+  await endFrame.locator('#form').waitFor({state:'visible'});await other.waitForLoadState('networkidle');
+  assert.equal(await endFrame.locator('.message').count(),0,'跨页面保持新聊天的展示分界');
+  await endFrame.locator('#draft').fill('New chat after transcript');await endFrame.locator('#send').click();
+  await endFrame.getByText('New chat after transcript',{exact:true}).waitFor();
+  await endFrame.waitForFunction(()=>!document.querySelector('#end').disabled);
+  assert.equal(profiles.length,profileCount,'不重复创建客户或提交资料');assert.equal(sessions.size,sessionCount);
+  assert.ok(originalMessages.some(m=>m.text_content==='Still able to send'),'后台保留旧消息');
+  assert.ok(originalMessages.some(m=>m.text_content==='New chat after transcript'),'新消息仍归属原客户');
+  assert.equal(transcripts.size,1);
+  // 新周期超过一页时，向前分页不能穿透到上一段聊天。
+  for(let index=0;index<105;index++)incoming(originalMessages,`New cycle reply ${index}`);
+  await other.reload();endFrame=await frameFor(other);await openChat(endFrame);
+  await endFrame.getByText('New cycle reply 104',{exact:true}).waitFor();
+  await endFrame.locator('#older').click();await endFrame.getByText('New chat after transcript',{exact:true}).waitFor();
+  assert.equal(await endFrame.getByText('Still able to send',{exact:true}).count(),0);
+  assert.equal(await endFrame.locator('#older').isVisible(),false,'到达展示分界后停止历史分页');
+  await other.screenshot({path:`${screenshots}/restarted-existing-visitor.png`});
   await endFrame.locator('#endOnly').click();await endFrame.locator('#confirmAction').click();await endFrame.getByText('Chat ended.',{exact:true}).waitFor();
   assert.equal(endRequests.at(-1).sendTranscript,false);assert.equal(closedChats.size,1);assert.equal(transcripts.size,1);
+  await endFrame.locator('#restart').click();await endFrame.locator('#confirmAction').click();await endFrame.locator('#form').waitFor({state:'visible'});
+  assert.equal(await endFrame.locator('.message').count(),0,'普通 End chat 后同样开始空白新聊天');
+  incoming(originalMessages,'Support in latest chat');
+  await endFrame.getByText('Support in latest chat',{exact:true}).waitFor();
+  assert.equal(await endFrame.getByText('New chat after transcript',{exact:true}).count(),0);
+  assert.equal(profiles.length,profileCount);
+  expiredSessions.add(originalSession);
+  await endFrame.getByText('Chat expired. Support retains the history. You can start a new chat',{exact:true}).waitFor();
+  await endFrame.locator('#restart').click();await endFrame.locator('#confirmAction').click();await endFrame.locator('#prechat').waitFor({state:'visible'});
+  await endFrame.locator('#restart').waitFor({state:'hidden'});
+  assert.notEqual(await other.evaluate(key=>localStorage.getItem(key),credentialKey),originalCredential,'只有失效凭证才生成新身份');
+  await startChat(endFrame,'Fresh identity after expiry');
+  assert.equal(profiles.length,profileCount+1);assert.ok(originalMessages.some(m=>m.text_content==='Still able to send'));
   widgetLanguage=undefined;
   const mobileContext=await browser.newContext({viewport:{width:375,height:740},isMobile:true,hasTouch:true}),mobile=await mobileContext.newPage();mobile.on("pageerror",error=>errors.push(error.message));
   await mobile.goto(hosts[0].url);const mobileFrame=await frameFor(mobile);await openChat(mobileFrame);
