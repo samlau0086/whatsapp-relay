@@ -1,6 +1,7 @@
 // 顺序与语言列表一致；简体中文直接使用原文。
 export const livechatLanguages=["zh-CN","zh-TW","en","ja","es","pt"] as const;
 export const livechatTranslations:Record<string,string[]>={
+  "图片加载失败，点击重试":["圖片載入失敗，點擊重試","Image unavailable. Click to retry","画像を読み込めません。クリックして再試行","No se pudo cargar la imagen. Haz clic para reintentar","Falha ao carregar imagem. Clique para tentar novamente"],
   "姓名（必填）":["姓名（必填）","Name (required)","お名前（必須）","Nombre (obligatorio)","Nome (obrigatório)"],
   "邮箱（必填）":["電子郵件（必填）","Email (required)","メール（必須）","Correo (obligatorio)","E-mail (obrigatório)"],
   "公司名（选填）":["公司名稱（選填）","Company (optional)","会社名（任意）","Empresa (opcional)","Empresa (opcional)"],

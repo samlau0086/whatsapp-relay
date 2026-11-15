@@ -60,8 +60,8 @@ const api=await listen(async(req,res)=>{
     json(200,{data:page.map(message=>({...message,sort_at:message.created_at,created_at:new Date(message.created_at).toISOString()})),hasMore:data.length>100});return;
   }
   if(url.pathname.endsWith("/media")&&req.method==="POST"){
-    const bytes=await body(req),text=bytes.toString("latin1"),id=randomUUID(),start=bytes.indexOf(Buffer.from("\r\n\r\n"))+4,end=bytes.lastIndexOf(Buffer.from("\r\n--"));
-    uploads.set(id,{name:/filename="([^"]+)"/.exec(text)?.[1]||"attachment",mime:/Content-Type: ([^\r\n]+)/i.exec(text)?.[1]||"application/octet-stream",bytes:bytes.subarray(start,end)});json(201,{id});return;
+    const form=await new Request(url,{method:'POST',headers:{'content-type':req.headers['content-type']},body:await body(req)}).formData(),file=form.get('file'),id=randomUUID();
+    uploads.set(id,{name:file.name,mime:file.type,bytes:Buffer.from(await file.arrayBuffer())});json(201,{id});return;
   }
   const upload=uploads.get(url.pathname.split("/").at(-1));
   if(upload){res.writeHead(200,{...cors,"content-type":upload.mime});res.end(upload.bytes);return}
@@ -123,6 +123,7 @@ try{
   await page.goto(hosts[0].url+'/products');frame=await frameFor(page);await frame.locator('#panel').waitFor({state:'visible'});
   await frame.locator('#close').click();
   await page.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(':expanded')&&localStorage.getItem(k)==='0'));
+  await page.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(':expanded')&&localStorage.getItem(k)==='0'));
   await page.goto(hosts[0].url+'/contact');frame=await frameFor(page);await frame.locator('#launcher').waitFor({state:'visible'});
   assert.equal(await frame.locator('#panel').isVisible(),false,'跨页面保持收起');
   await openChat(frame);
@@ -165,9 +166,60 @@ try{
   await frame.locator('#draft').fill('附件说明');await frame.locator('#send').click();await frame.locator('#composerPreview').waitFor({state:'hidden'});await frame.getByRole('button',{name:'sample.txt',exact:true}).waitFor();
   const download=page.waitForEvent("download");await frame.getByRole("button",{name:"sample.txt",exact:true}).click();assert.equal((await download).suggestedFilename(),"sample.txt");
   const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDAAAAAAASUVORK5CYII=','base64');
-  await frame.locator('#image').click();await frame.locator('#file').setInputFiles({name:'preview.png',mimeType:'image/png',buffer:png});await frame.locator('#composerPreview img').waitFor();
+  const imageFileName='BelaroPrecision_工程卓越徽标.png';
+  await frame.locator('#image').click();await frame.locator('#file').setInputFiles({name:imageFileName,mimeType:'image/png',buffer:png});await frame.locator('#composerPreview img').waitFor();
+  // 上传连接中断不能阻塞独立收信；文件和说明必须保留以便重试。
+  const abortUpload=route=>route.request().method()==='POST'?route.abort('failed'):route.continue();
+  await page.route('**/media',abortUpload);
+  await frame.locator('#draft').fill('图片上传断线重试');await frame.locator('#send').click();
+  await frame.getByText('连接中断，正在重试...',{exact:true}).waitFor();
+  await frame.waitForFunction(()=>!document.querySelector('#send').disabled);
+  assert.equal(await frame.locator('#composerPreview img').count(),1);
+  assert.equal(await frame.locator('#draft').inputValue(),'图片上传断线重试');
+  incoming(firstSession,'上传失败后仍能收信');
+  await frame.getByText('上传失败后仍能收信',{exact:true}).waitFor({timeout:12000});
+  await page.unroute('**/media',abortUpload);
   await frame.locator('#emoji').click();await frame.locator('#emojiPanel button').first().click();assert.ok((await frame.locator('#draft').inputValue()).length>0);
-  await frame.locator('#send').click();const sentImage=frame.locator('.attachment-image img[alt="preview.png"]');await sentImage.waitFor();await sentImage.click();await frame.locator('dialog.image-preview').waitFor();await page.screenshot({path:`${screenshots}/desktop-media-preview.png`});await frame.locator('dialog.image-preview').getByText('取消',{exact:true}).click();
+  await frame.locator('#send').click();const sentImage=frame.locator('.attachment-image img').filter({visible:true});await sentImage.waitFor();assert.equal(await sentImage.getAttribute('alt'),imageFileName);await sentImage.click();await frame.locator('dialog.image-preview').waitFor();await page.screenshot({path:`${screenshots}/desktop-media-preview.png`});await frame.locator('dialog.image-preview').getByText('取消',{exact:true}).click();
+  // 不可用图片只自动尝试一次，重绘与后续收信不得反复消耗下载额度。
+  const failedMedia=new Map();
+  const failImages=route=>{const id=route.request().url().split('/').at(-1);if(!failedMedia.has(id)||uploads.has(id))return route.continue();failedMedia.set(id,failedMedia.get(id)+1);return route.fulfill({status:503,headers:{'access-control-allow-origin':hosts[0].url},contentType:'application/json',body:JSON.stringify({error:'storage_unavailable'})})};
+  await page.route('**/media/*',failImages);
+  for(let index=0;index<8;index++){const mediaId=randomUUID();failedMedia.set(mediaId,0);firstSession.push({id:randomUUID(),direction:'out',text_content:`失败图片 ${index}`,media_id:mediaId,file_name:`failed-${index}.png`,mime_type:'image/png',created_at:timestamp()})}
+  await frame.locator('.message').filter({hasText:'失败图片 7'}).waitFor({timeout:12000});
+  await frame.waitForFunction(()=>[...document.querySelectorAll('.attachment-image')].filter(button=>!button.querySelector('img')).every(button=>!button.disabled));
+  for(let index=0;index<3;index++){
+    incoming(firstSession,`图片失败后回复 ${index}`);
+    await frame.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+    await frame.getByText(`图片失败后回复 ${index}`,{exact:true}).waitFor({timeout:12000});
+  }
+  assert.deepEqual([...failedMedia.values()],Array(8).fill(1),'失败图片不能在每次收信刷新时自动重试');
+  for(const viewport of [{width:320,height:460},{width:1280,height:850}]){
+    await page.setViewportSize(viewport);
+    assert.equal(await frame.evaluate(()=>[...document.querySelectorAll('.attachment-loading')].every(placeholder=>{const p=placeholder.getBoundingClientRect(),b=placeholder.closest('.bubble').getBoundingClientRect();return p.left>=b.left&&p.right<=b.right&&p.top>=b.top&&p.bottom<=b.bottom})),true,'失败占位内容不能溢出消息气泡');
+    if(viewport.width===320)await page.screenshot({path:`${screenshots}/mobile-media-failure.png`});
+  }
+  const retryId=[...failedMedia.keys()][0];
+  await frame.locator('.message').filter({hasText:'失败图片 0'}).locator('.attachment-image').click();
+  await frame.waitForFunction(()=>!document.querySelector('.attachment-image:not(:has(img))')?.disabled);
+  assert.equal(failedMedia.get(retryId),2,'失败图片仍可手动重试');
+  uploads.set(retryId,{name:'failed-0.png',mime:'image/png',bytes:png});
+  await frame.locator('.message').filter({hasText:'失败图片 0'}).locator('.attachment-image').click();
+  await frame.locator('.attachment-image img[alt="failed-0.png"]').waitFor();
+  await page.screenshot({path:`${screenshots}/media-failure-recovery.png`});
+  // 收信被临时限流后自动恢复，发送不受收信失败影响。
+  let limited=true;
+  const limitHistory=route=>route.request().method()==='GET'&&limited?route.fulfill({status:429,headers:{'access-control-allow-origin':hosts[0].url},contentType:'application/json',body:JSON.stringify({error:'livechat_rate_limited'})}):route.continue();
+  await page.route('**/messages*',limitHistory);
+  await frame.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+  await frame.locator('#connection').getByText('正在重新连接',{exact:true}).waitFor();
+  await frame.locator('#draft').fill('限流期间仍可发送');await frame.locator('#send').click();
+  await frame.getByText('限流期间仍可发送',{exact:true}).waitFor();
+  limited=false;incoming(firstSession,'限流解除后恢复收信');
+  await frame.getByText('限流解除后恢复收信',{exact:true}).waitFor({timeout:12000});
+  await frame.locator('#connection').getByText('在线客服',{exact:true}).waitFor();
+  assert.equal(await frame.locator('#notice').textContent(),'');
+  await page.unroute('**/messages*',limitHistory);await page.unroute('**/media/*',failImages);
   await assertMessageLayout(frame);
   for(let i=0;i<205;i++)incoming(firstSession,`分页回复 ${i}`);
   await frame.getByText('分页回复 204',{exact:true}).waitFor({timeout:15000});

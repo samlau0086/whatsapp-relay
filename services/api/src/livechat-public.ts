@@ -1,6 +1,5 @@
 import {createHash,randomUUID} from "node:crypto";
 import type {FastifyInstance,FastifyRequest} from "fastify";
-import type {PoolClient} from "pg";
 import {GetObjectCommand,PutObjectCommand,S3Client} from "@aws-sdk/client-s3";
 import {z} from "zod";
 import {pool,transaction} from "./db.js";
@@ -61,11 +60,12 @@ async function channel(request:FastifyRequest){
   livechatOrigin(embedOrigin(request),row.allowed_origins);
   return row;
 }
-async function visitor(request:FastifyRequest,c:{account_id:string},client:PoolClient|typeof pool=pool){
+async function visitor(request:FastifyRequest,c:{account_id:string},scope:"visitor"|"history"="visitor"){
   const hash=livechatCredential(request.headers.authorization);
-  const found=await client.query(`SELECT * FROM livechat_visitors WHERE account_id=$1 AND credential_hash=$2 AND embed_origin=$3 AND expires_at>now()`,[c.account_id,hash,embedOrigin(request)]);
+  const found=await pool.query(`SELECT * FROM livechat_visitors WHERE account_id=$1 AND credential_hash=$2 AND embed_origin=$3 AND expires_at>now()`,[c.account_id,hash,embedOrigin(request)]);
   if(!found.rowCount)throw fail(401,"visitor_not_found_or_expired");
-  await rate(`visitor:${hash}`,120);
+  // 附件失败不能耗尽收信额度；渠道 IP 总额度仍统一限制。
+  await rate(`${scope}:${hash}`,120);
   return found.rows[0];
 }
 export async function livechatCorsOrigin(url:string,origin:string|undefined):Promise<boolean>{
@@ -201,7 +201,7 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
     return reply.code(202).send({ok:true,queued:result.sendTranscript,closed:true,...result});
   });
   app.get("/livechat/:publicId/messages",async(request,reply)=>{
-    const c=await channel(request),v=await visitor(request,c);
+    const c=await channel(request),v=await visitor(request,c,"history");
     const query=z.object({before:uuid.optional(),after:uuid.optional()}).refine(v=>!(v.before&&v.after)).safeParse(request.query);
     if(!query.success)throw fail(400,"invalid_cursor");
     // 出站消息按实际送入访客队列的时间排序，避免长时间排队的旧消息被增量游标漏掉。

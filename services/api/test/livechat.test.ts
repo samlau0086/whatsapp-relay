@@ -30,13 +30,13 @@ test("LiveChat 附件限制验证文件签名而非只信任 MIME",()=>{
 });
 
 test("LiveChat 公开接口安全边界",async t=>{
-  let enabled=true,hits=1,visitorFound=true;
+  let enabled=true,hits=1,visitorFound=true,attachmentLimited=false,historyLimited=false;
   let language:string|undefined=row.language,iconUrl="";
   const attachment=false;
   const calls:Array<{sql:string;values:unknown[]}>=[];
   t.mock.method(pool,"query",async(sql:string,values:unknown[]=[])=>{
     calls.push({sql,values});
-    if(sql.includes("INSERT INTO livechat_rate_limits"))return result([{hits}]);
+    if(sql.includes("INSERT INTO livechat_rate_limits"))return result([{hits:(attachmentLimited&&String(values[0]).startsWith('visitor:'))||(historyLimited&&String(values[0]).startsWith('history:'))?121:hits}]);
     if(sql.startsWith("SELECT 1 FROM livechat_channels"))return result(enabled&&values[1]===origin?[{}]:[]);
     if(sql.includes("FROM livechat_channels"))return result(enabled?[{...row,language,icon_url:iconUrl}]:[]);
     if(sql.includes("FROM livechat_visitors"))return result(visitorFound?[{id:contactId,contact_id:contactId}]:[]);
@@ -87,6 +87,19 @@ test("LiveChat 公开接口安全边界",async t=>{
     assert.equal((await get(`media/${messageId}`)).statusCode,404);
     const query=calls.find(c=>c.sql.startsWith("SELECT md.*"))!;
     assert.deepEqual(query.values,[messageId,accountId,contactId]);assert.match(query.sql,/cv.account_id=\$2 AND cv.contact_id=\$3/);
+  });
+  await t.test("附件额度耗尽不阻塞收信，各自保留限流和身份校验",async()=>{
+    try{
+      attachmentLimited=true;
+      assert.equal((await get(`media/${messageId}`)).statusCode,429);
+      assert.equal((await get('messages')).statusCode,200);
+      historyLimited=true;
+      assert.equal((await get('messages')).statusCode,429);
+      historyLimited=false;
+      assert.equal((await get('messages')).statusCode,200);
+      visitorFound=false;
+      assert.equal((await get('messages')).statusCode,401);
+    }finally{attachmentLimited=false;historyLimited=false;visitorFound=true;}
   });
   await t.test("停用渠道、限流和 CORS 白名单",async()=>{
     assert.equal(await livechatCorsOrigin(`/livechat/${channelId}/messages`,origin),true);
