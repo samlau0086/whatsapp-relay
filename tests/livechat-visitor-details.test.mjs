@@ -26,6 +26,14 @@ test("旧客户无访客资料时不显示空白环境面板",()=>{
   assert.equal(renderToStaticMarkup(LivechatVisitorDetails({})),"");
 });
 
+test("联系人详情映射不会丢失 LiveChat 访客环境资料",async()=>{
+  const source=await readFile(new URL("../app/whatsapp-inbox.tsx",import.meta.url),"utf8");
+  assert.match(source,/item\.livechatVisitor/);
+  assert.match(source,/visitorValue\?\{firstIp:/);
+  assert.match(source,/visitorContext=visitorValue\?\.context/);
+  assert.match(source,/livechatVisitor,hasConversation/);
+});
+
 test("访客环境迁移幂等且只由现有私有客户详情返回",async()=>{
   const migration=await readFile(new URL("../infra/postgres/migrations/099_livechat_visitor_profile.sql",import.meta.url),"utf8");
   assert.equal((migration.match(/ADD COLUMN IF NOT EXISTS/g)||[]).length,3);
