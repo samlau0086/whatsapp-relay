@@ -43,8 +43,12 @@ export const livechatTranslations:Record<string,string[]>={
   "附件不能超过 10 MB":["附件不能超過 10 MB","Attachments must be 10 MB or smaller","添付は10 MB以下にしてください","El archivo no puede superar 10 MB","O anexo não pode exceder 10 MB"],
   "待重试消息过多，请先处理已有消息":["待重試訊息過多，請先處理現有訊息","Too many pending messages. Retry existing messages first","保留中のメッセージを先に再送してください","Demasiados mensajes pendientes. Reintenta los existentes","Muitas mensagens pendentes. Reenvie as existentes primeiro"],
   "结束会话并发送记录":["結束對話並傳送紀錄","End chat & Send transcript","チャットを終了して履歴を送信","Finalizar chat y enviar transcripción","Encerrar chat e enviar transcrição"],
+  "取消":["取消","Cancel","キャンセル","Cancelar","Cancelar"],
+  "确认":["確認","Confirm","確認","Confirmar","Confirmar"],
   "确认结束会话并发送记录到您的邮箱？":["確認結束對話並將紀錄傳送到您的電子郵件？","End the chat and send the transcript to your email?","チャットを終了して履歴をメールで送信しますか？","¿Finalizar el chat y enviar la transcripción a tu correo?","Encerrar o chat e enviar a transcrição para seu e-mail?"],
-  "会话已结束，记录已发送到您的邮箱。":["對話已結束，紀錄已傳送到您的電子郵件。","Chat ended. The transcript was sent to your email.","チャットを終了し、履歴をメールで送信しました。","Chat finalizado. La transcripción se envió a tu correo.","Chat encerrado. A transcrição foi enviada para seu e-mail."],
+  "会话已结束，记录已加入邮件发送队列。":["對話已結束，紀錄已加入郵件傳送佇列。","Chat ended. Your transcript is queued for email delivery.","チャットが終了しました。履歴メールは送信待ちです。","Chat finalizado. La transcripción está en cola para enviarse por correo.","Chat encerrado. A transcrição está na fila de envio por e-mail."],
+  "邮件服务尚未配置，会话未结束，请联系客服":["郵件服務尚未設定，對話未結束，請聯絡客服","Email delivery is not configured. Your chat is still open. Please contact support.","メール送信が未設定です。チャットは継続中です。サポートにお問い合わせください。","El correo no está configurado. El chat sigue abierto. Contacta con soporte.","O envio de e-mail não está configurado. O chat continua aberto. Contate o suporte."],
+  "缺少收件邮箱，会话未结束，请联系客服":["缺少收件電子郵件，對話未結束，請聯絡客服","Your email address is missing. Your chat is still open. Please contact support.","メールアドレスがありません。チャットは継続中です。サポートにお問い合わせください。","Falta tu correo. El chat sigue abierto. Contacta con soporte.","Seu e-mail está ausente. O chat continua aberto. Contate o suporte."],
   "会话已结束":["對話已結束","Chat ended","チャット終了","Chat finalizado","Chat encerrado"],
   "发送失败，请重试":["傳送失敗，請重試","Could not send. Please retry","送信できませんでした。再試行してください","No se pudo enviar. Reintenta","Não foi possível enviar. Tente novamente"],
 };

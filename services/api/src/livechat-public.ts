@@ -141,10 +141,18 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
     const c=await channel(request),v=await visitor(request,c),parsed=endChatSchema.safeParse(request.body);
     if(!parsed.success)throw fail(400,"invalid_request");
     await rate(`end:${v.id}`,10);
-    const existing=await pool.query("SELECT e.id,e.status FROM email_messages e WHERE e.client_send_id=$1 AND e.content_type='livechat_transcript'",[parsed.data.clientRequestId]);
-    if(existing.rowCount)return {ok:true,queued:true,closed:true,emailId:existing.rows[0].id,status:existing.rows[0].status,deduplicated:true};
     const result=await transaction(async client=>{
-      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[`end:${v.id}`]);
+      // 与消息发送共用访客锁，保证记录快照与结束操作按顺序执行。
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[`transcript:${parsed.data.clientRequestId}`]);
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[livechatCredential(request.headers.authorization)]);
+      const active=await client.query("SELECT 1 FROM livechat_channels WHERE account_id=$1 AND enabled AND archived_at IS NULL FOR SHARE",[c.account_id]);
+      if(!active.rowCount)throw fail(404,"livechat_unavailable");
+      const existing=await client.query("SELECT e.id,e.status,e.contact_id,cv.account_id,e.content_type FROM email_messages e JOIN conversations cv ON cv.id=e.conversation_id WHERE e.client_send_id=$1",[parsed.data.clientRequestId]);
+      if(existing.rowCount){
+        const old=existing.rows[0];
+        if(old.account_id!==c.account_id||old.contact_id!==v.contact_id||old.content_type!=="livechat_transcript")throw fail(409,"client_request_id_conflict");
+        return {emailId:old.id,status:old.status,deduplicated:true};
+      }
       const context=await client.query(`SELECT cv.id conversation_id,cv.status,cv.account_id,cv.contact_id,
         (SELECT email FROM contact_emails WHERE contact_id=cv.contact_id AND is_primary LIMIT 1) recipient_email
         FROM conversations cv WHERE cv.account_id=$1 AND cv.contact_id=$2 FOR UPDATE`,[c.account_id,v.contact_id]);
@@ -154,13 +162,15 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
       const provider=await client.query("SELECT provider,config,secret_encrypted FROM email_provider_settings WHERE enabled AND secret_encrypted IS NOT NULL LIMIT 1");
       if(!provider.rowCount)throw fail(409,"email_provider_not_configured");
       const messages=await client.query(`SELECT m.direction,m.kind,m.text_content,m.occurred_at,media.file_name
-        FROM messages m LEFT JOIN media ON media.id=m.media_id WHERE m.conversation_id=$1 AND m.kind<>'email' ORDER BY m.occurred_at,m.id`,[row.conversation_id]);
-      const lines=messages.rows.map(item=>`[${new Date(item.occurred_at).toISOString()}] ${item.direction==='in'?'Visitor':'Support'}: ${String(item.text_content??(item.file_name?`[Attachment: ${item.file_name}]`:'[Message]'))}`).join("\n");
-      const text=`LiveChat transcript\n\n${lines}`.slice(0,5000);
-      const html=`<h2>LiveChat transcript</h2><p>${messages.rows.map(item=>`<strong>${item.direction==='in'?'Visitor':'Support'}</strong> <small>${escapeHtml(new Date(item.occurred_at).toISOString())}</small><br>${escapeHtml(String(item.text_content??(item.file_name?`[Attachment: ${item.file_name}]`:'[Message]')))}`).join("<br><br>")}</p>`;
+        FROM messages m LEFT JOIN media ON media.id=m.media_id WHERE m.conversation_id=$1
+        AND NOT EXISTS(SELECT 1 FROM message_email_details d WHERE d.message_id=m.id)
+        AND (m.direction='in' OR m.status IN ('sent','delivered','read')) ORDER BY m.occurred_at,m.id`,[row.conversation_id]);
+      const lines=messages.rows.map(item=>`[${new Date(item.occurred_at).toISOString()}] ${item.direction==='in'?'Visitor':'Support'}: ${[item.text_content,item.file_name?`[Attachment: ${item.file_name}]`:null].filter(Boolean).join("\n")||'[Message]'}`).join("\n\n");
+      const text=`LiveChat transcript\n\n${lines}`;
       const job=await client.query(`INSERT INTO email_messages(client_send_id,conversation_id,contact_id,sender_user_id,provider,provider_config,provider_secret_encrypted,recipients,subject,message_body,text_body,html_body,content_type)
-        VALUES($1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$9,$10,'livechat_transcript') RETURNING id,status`,[parsed.data.clientRequestId,row.conversation_id,row.contact_id,provider.rows[0].provider,JSON.stringify(provider.rows[0].config),provider.rows[0].secret_encrypted,JSON.stringify([{email:recipient,label:"LiveChat visitor"}]),"Your LiveChat transcript",text,emailShell(text,html)]);
-      await client.query(`INSERT INTO messages(conversation_id,account_id,direction,kind,text_content,status,occurred_at) VALUES($1,$2,'out','email',$3,'queued',now())`,[row.conversation_id,row.account_id,"LiveChat transcript sent to "+recipient]);
+        VALUES($1,$2,$3,NULL,$4,$5,$6,$7,$8,'',$9,$10,'livechat_transcript') RETURNING id,status`,[parsed.data.clientRequestId,row.conversation_id,row.contact_id,provider.rows[0].provider,JSON.stringify(provider.rows[0].config),provider.rows[0].secret_encrypted,JSON.stringify([{email:recipient,label:"LiveChat visitor"}]),"Your LiveChat transcript",text,emailShell("",`<h2>LiveChat transcript</h2><p>${escapeHtml(lines)}</p>`)]);
+      const bubble=await client.query(`INSERT INTO messages(conversation_id,account_id,client_message_id,direction,kind,text_content,status,occurred_at) VALUES($1,$2,$3,'out','text',$4,'queued',now()) RETURNING id`,[row.conversation_id,row.account_id,`email:${job.rows[0].id}`,text]);
+      await client.query("INSERT INTO message_email_details(message_id,subject,from_email,to_emails,rfc_message_id,email_job_id) VALUES($1,$2,$3,$4,$5,$6)",[bubble.rows[0].id,"Your LiveChat transcript",provider.rows[0].config.fromEmail,JSON.stringify([recipient]),`<email-${job.rows[0].id}@relaydesk.local>`,job.rows[0].id]);
       await client.query("UPDATE conversations SET status='closed',closed_at=now() WHERE id=$1",[row.conversation_id]);
       await client.query("INSERT INTO audit_log(actor_type,action,target_type,target_id,metadata) VALUES('visitor','livechat.end_chat','conversation',$1,$2)",[row.conversation_id,JSON.stringify({emailId:job.rows[0].id,recipient})]);
       return {emailId:job.rows[0].id,status:job.rows[0].status};
@@ -178,7 +188,7 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
         COALESCE(receipt.occurred_at,m.created_at) visible_at
       FROM messages m LEFT JOIN media ON media.id=m.media_id JOIN conversations cv ON cv.id=m.conversation_id
       LEFT JOIN message_receipts receipt ON receipt.message_id=m.id AND receipt.status='sent'
-      WHERE cv.account_id=$1 AND cv.contact_id=$2 AND m.kind<>'email' AND (m.direction='in' OR m.status IN ('sent','delivered','read'))
+      WHERE cv.account_id=$1 AND cv.contact_id=$2 AND NOT EXISTS(SELECT 1 FROM message_email_details d WHERE d.message_id=m.id) AND (m.direction='in' OR m.status IN ('sent','delivered','read'))
     ) SELECT *,to_char(visible_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') sort_at
       FROM visible WHERE ($3::uuid IS NULL OR (visible_at,id) ${after?">":"<"} (SELECT visible_at,id FROM visible WHERE id=$3))
       ORDER BY visible_at ${after?"ASC":"DESC"},id ${after?"ASC":"DESC"} LIMIT 101`,[c.account_id,v.contact_id,query.data.after??query.data.before??null]);

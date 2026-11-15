@@ -10,6 +10,8 @@ import {livechatLoader,livechatWidget} from "../services/api/dist/livechat-widge
 const channel="11111111-1111-4111-8111-111111111111";
 const secondChannel="22222222-2222-4222-8222-222222222222";
 const sessions=new Map(),uploads=new Map(),origins=new Set(),errors=[],profiles=[];
+const transcripts=new Map(),endRequests=[];
+let endError='',dropEndResponse=false;
 let failNext=false,ordinal=0,widgetLanguage,widgetName='网站客服',widgetIcon='';
 const timestamp=()=>new Date().toISOString().replace(/\.(\d{3})Z$/,(_match,millis)=>`.${millis}${String(++ordinal%1000).padStart(3,'0')}Z`);
 const listen=async handler=>{
@@ -41,6 +43,13 @@ const api=await listen(async(req,res)=>{
   }
   const messages=sessions.get(sessionKey);
   if(!messages){json(401,{error:"visitor_not_found_or_expired"});return}
+  if(url.pathname.endsWith('/end-chat')&&req.method==='POST'){
+    const data=JSON.parse((await body(req)).toString());endRequests.push(data.clientRequestId);
+    if(endError){json(409,{error:endError});return}
+    if(!transcripts.has(data.clientRequestId))transcripts.set(data.clientRequestId,sessionKey);
+    if(dropEndResponse){dropEndResponse=false;json(503,{error:'response_lost'});return}
+    json(202,{ok:true,queued:true,closed:true});return;
+  }
   if(url.pathname.endsWith("/messages")){
     const after=url.searchParams.get("after"),before=url.searchParams.get("before");
     const ordered=[...messages].sort((a,b)=>a.created_at.localeCompare(b.created_at)||a.id.localeCompare(b.id));
@@ -121,6 +130,32 @@ try{
   assert.equal(await secondFrame.locator('#start').textContent(),'Start chat');
   await startChat(secondFrame,'独立渠道的访客');
   await page.waitForFunction(()=>Object.keys(localStorage).filter(k=>k.endsWith(':started')).length===2);assert.equal(sessions.size,3);
+  // 邮件未配置不能影响普通发送；确认丢失并刷新后仍使用相同结束请求 ID。
+  widgetLanguage='en';await other.reload();let endFrame=await frameFor(other);await endFrame.locator('#launcher').click();
+  endError='email_provider_not_configured';await endFrame.locator('#end').click();
+  await endFrame.locator('#confirmAction').click();
+  await endFrame.getByText('Email delivery is not configured. Your chat is still open. Please contact support.',{exact:true}).waitFor();
+  assert.equal(await endFrame.locator('#form').isVisible(),true);
+  await endFrame.locator('#draft').fill('Still able to send');await endFrame.locator('#send').click();
+  await endFrame.getByText('Still able to send',{exact:true}).waitFor();
+  await endFrame.waitForFunction(()=>!document.querySelector('#end').disabled);
+  endError='';dropEndResponse=true;await endFrame.locator('#end').click();
+  await endFrame.locator('#confirmAction').click();
+  await endFrame.getByText('Could not send. Please retry',{exact:true}).waitFor();
+  const retryEndId=endRequests.at(-1);
+  await other.reload();endFrame=await frameFor(other);await endFrame.locator('#launcher').click();
+  await endFrame.locator('#end').click();
+  await endFrame.locator('#confirmAction').click();
+  await endFrame.getByText('Chat ended. Your transcript is queued for email delivery.',{exact:true}).waitFor();
+  assert.equal(endRequests.at(-1),retryEndId);assert.equal(transcripts.size,1);
+  assert.equal(await endFrame.locator('#form').isVisible(),false);assert.equal(await endFrame.locator('#prechat').isVisible(),false);
+  await other.reload();endFrame=await frameFor(other);await endFrame.locator('#launcher').click();
+  await endFrame.getByText('Still able to send',{exact:true}).waitFor();
+  assert.equal(await endFrame.locator('#form').isVisible(),false);assert.equal(await endFrame.locator('#prechat').isVisible(),false);
+  await other.screenshot({path:`${screenshots}/ended-english.png`});
+  await endFrame.locator('#restart').click();await endFrame.locator('#confirmAction').click();await endFrame.locator('#prechat').waitFor({state:'visible'});
+  await startChat(endFrame,'New chat after transcript');assert.equal(transcripts.size,1);
+  widgetLanguage=undefined;
   const mobileContext=await browser.newContext({viewport:{width:375,height:740},isMobile:true,hasTouch:true}),mobile=await mobileContext.newPage();mobile.on("pageerror",error=>errors.push(error.message));
   await mobile.goto(hosts[0].url);const mobileFrame=await frameFor(mobile);await mobileFrame.locator("#launcher").click();
   await mobile.screenshot({path:`${screenshots}/mobile-prechat.png`});
@@ -169,6 +204,6 @@ try{
   widgetIcon='';widgetName='<Brand>';await page.reload();brandFrame=await frameFor(page);
   assert.equal(await brandFrame.locator('#avatar').textContent(),'<');assert.equal(await brandFrame.locator('#avatar').locator('*').count(),0);
   widgetName='';await page.reload();brandFrame=await frameFor(page);assert.equal(await brandFrame.locator('#avatar').textContent(),'?');
-  assert.deepEqual(errors,[]);console.log(`已通过：双站点及多渠道隔离、重复嵌入、样式隔离、匿名消息、坐席回复、刷新恢复、失败重试、确认丢失恢复、未读、多页历史与断线补齐、附件上传下载、六种界面语言及桌面/移动布局。截图：${screenshots}`);
+  assert.deepEqual(errors,[]);console.log(`已通过：双站点及多渠道隔离、重复嵌入、样式隔离、匿名消息、坐席回复、刷新恢复、失败重试、确认丢失恢复、未读、多页历史与断线补齐、附件上传下载、六种界面语言及桌面/移动布局、结束会话邮件错误隔离、确认丢失后的幂等重试及结束后刷新恢复。截图：${screenshots}`);
 }catch(error){console.error({errors,sessions:[...sessions.values()]});if(debugPage){const frame=debugPage.frames().find(f=>f.url().endsWith("/widget"));console.error(await frame?.locator("body").innerText());await debugPage.screenshot({path:`${screenshots}/failure.png`})}throw error}
 finally{await browser.close();await Promise.all([api,...hosts].map(({server})=>new Promise(resolve=>server.close(resolve))))}

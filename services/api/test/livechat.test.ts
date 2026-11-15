@@ -73,6 +73,8 @@ test("LiveChat 公开接口安全边界",async t=>{
     const query=calls.filter(c=>c.sql.startsWith("WITH visible")).at(-1)!;
     assert.deepEqual(query.values,[accountId,contactId,messageId]);assert.match(query.sql,/receipt.status='sent'/);assert.match(query.sql,/visible_at,id\) >/);
     assert.match(query.sql,/SS.US/);assert.match(query.sql,/sort_at/);
+    assert.match(query.sql,/NOT EXISTS\(SELECT 1 FROM message_email_details/);
+    assert.doesNotMatch(query.sql,/m\.kind\s*<>\s*'email'/);
     assert.equal((await get(`messages?before=${messageId}&after=${messageId}`)).statusCode,400);
   });
   await t.test("不存在、跨渠道或过期访客无法读取历史",async()=>{
@@ -92,6 +94,49 @@ test("LiveChat 公开接口安全边界",async t=>{
     enabled=false;assert.equal((await get("messages")).statusCode,404);assert.equal((await get("widget")).statusCode,404);
     assert.equal(await livechatCorsOrigin(`/livechat/${channelId}/messages`,origin),false);
   });
+});
+
+test("LiveChat 结束会话正确入队邮件、完整记录和事务内去重",async t=>{
+  let providerConfigured=true,active=true,existing:Record<string,unknown>|undefined;
+  const calls:Array<{sql:string;values:unknown[]}>=[];
+  const query=async(sql:string,values:unknown[]=[])=>{
+    calls.push({sql,values});
+    assert.doesNotMatch(sql,/m\.kind\s*<>\s*'email'|'out','email'/);
+    if(sql.includes("INSERT INTO livechat_rate_limits"))return result([{hits:1}]);
+    if(sql.includes("JOIN channel_accounts"))return result([row]);
+    if(sql.includes("FROM livechat_visitors"))return result([{id:channelId,contact_id:contactId}]);
+    if(sql.includes("FROM livechat_channels")&&sql.includes("FOR SHARE"))return result(active?[{}]:[]);
+    if(sql.includes("FROM email_messages e"))return result(existing?[existing]:[]);
+    if(sql.includes("SELECT cv.id conversation_id"))return result([{conversation_id:contactId,account_id:accountId,contact_id:contactId,recipient_email:"sam@example.com"}]);
+    if(sql.includes("FROM email_provider_settings"))return result(providerConfigured?[{provider:"smtp",config:{fromEmail:"support@example.com"},secret_encrypted:"encrypted"}]:[]);
+    if(sql.includes("FROM messages m"))return result([{direction:"in",text_content:"<script>"+"x".repeat(6000),file_name:"quote.pdf",occurred_at:new Date("2026-11-15T00:00:00Z")}]);
+    if(sql.startsWith("INSERT INTO email_messages"))return result([{id:messageId,status:"queued"}]);
+    if(sql.startsWith("INSERT INTO messages"))return result([{id:channelId}]);
+    return result();
+  };
+  t.mock.method(pool,"query",query);t.mock.method(pool,"connect",async()=>({query,release(){}}));
+  const app=Fastify();await registerLivechatPublicRoutes(app);t.after(()=>app.close());
+  const end=()=>app.inject({method:"POST",url:`/livechat/${channelId}/end-chat`,headers:{origin,authorization},payload:{clientRequestId:messageId}});
+  providerConfigured=false;
+  assert.equal((await end()).json().message,"email_provider_not_configured");
+  assert.ok(!calls.some(c=>c.sql.startsWith("UPDATE conversations")));assert.equal(calls.at(-1)?.sql,"ROLLBACK");
+  providerConfigured=true;calls.length=0;
+  const response=await end();assert.equal(response.statusCode,202,response.body);assert.equal(response.json().queued,true);
+  const transcript=calls.find(c=>c.sql.includes("FROM messages m"))!;
+  assert.match(transcript.sql,/NOT EXISTS\(SELECT 1 FROM message_email_details/);
+  assert.match(transcript.sql,/m.status IN \('sent','delivered','read'\)/);
+  const job=calls.find(c=>c.sql.startsWith("INSERT INTO email_messages"))!;
+  assert.ok(String(job.values[8]).length>6000);assert.match(String(job.values[8]),/\[Attachment: quote.pdf\]/);
+  assert.match(String(job.values[9]),/&lt;script&gt;/);assert.doesNotMatch(String(job.values[9]),/<script>/);
+  assert.match(job.sql,/\$8,'',\$9,\$10/);
+  assert.deepEqual(calls.find(c=>c.sql.startsWith("INSERT INTO message_email_details"))?.values,[channelId,"Your LiveChat transcript","support@example.com",'["sam@example.com"]',`<email-${messageId}@relaydesk.local>`,messageId]);
+  assert.ok(calls.some(c=>c.sql.includes("SET status='closed'")));assert.equal(calls.at(-1)?.sql,"COMMIT");
+  existing={id:messageId,status:"queued",account_id:accountId,contact_id:contactId,content_type:"livechat_transcript"};calls.length=0;
+  const duplicate=await end();assert.equal(duplicate.statusCode,202);assert.equal(duplicate.json().deduplicated,true);
+  assert.ok(!calls.some(c=>c.sql.startsWith("INSERT INTO email_messages")));
+  existing={...existing,contact_id:accountId};assert.equal((await end()).statusCode,409);
+  existing={...existing,contact_id:contactId,account_id:contactId};assert.equal((await end()).statusCode,409);
+  existing=undefined;active=false;assert.equal((await end()).statusCode,404);
 });
 
 test("LiveChat 入站幂等、跨渠道凭证和事务保护",async t=>{
