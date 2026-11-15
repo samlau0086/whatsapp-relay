@@ -75,6 +75,19 @@ const browser=await chromium.launch({headless:true});
 const screenshots=fileURLToPath(new URL("../outputs/livechat/",import.meta.url));await mkdir(screenshots,{recursive:true});
 const frameFor=async page=>{await page.waitForFunction(()=>document.querySelector('div')?.shadowRoot===null);for(let i=0;i<50;i++){const frame=page.frames().find(f=>f.url().endsWith("/widget"));if(frame){await frame.locator("#launcher").waitFor({state:"visible"});return frame}await page.waitForTimeout(100)}throw Error("窗口未加载")};
 const incoming=(messages,text)=>messages.push({id:randomUUID(),direction:"out",text_content:text,created_at:timestamp()});
+const assertMessageLayout=async frame=>{
+  const result=await frame.evaluate(()=>{
+    const rows=[...document.querySelectorAll('.message')];
+    return rows.every(row=>{
+      const avatar=row.querySelector('.message-avatar'),bubble=row.querySelector('.bubble'),reply=row.querySelector('.reply-message');
+      if(!avatar||!bubble)return false;
+      const a=avatar.getBoundingClientRect(),b=bubble.getBoundingClientRect(),r=reply?.getBoundingClientRect();
+      return a.right<=b.left&&(!r||(r.left>=b.right&&getComputedStyle(reply).opacity==='1'))&&
+        (!row.classList.contains('out')||avatar.textContent==='Me');
+    })&&rows.length>0&&document.querySelector('#composerTools').getBoundingClientRect().bottom<=document.querySelector('#draft').getBoundingClientRect().top;
+  });
+  assert.equal(result,true,'头像应在气泡左边，回复按钮在右边，工具栏在输入框上方');
+};
 const startChat=async(frame,text)=>{
   await frame.locator('#visitorName').fill('Sam');await frame.locator('#email').fill('sam@example.com');
   await frame.locator('#company').fill('Example Ltd');await frame.locator('#whatsapp').fill('+12025550123');
@@ -100,6 +113,10 @@ try{
   assert.equal(profiles[0].name,'Sam');assert.equal(profiles[0].email,'sam@example.com');assert.equal(profiles[0].company,'Example Ltd');assert.equal(profiles[0].whatsapp,'+12025550123');
   assert.ok(profiles[0].context.browserLanguage);assert.ok(profiles[0].context.timeZone);assert.equal(profiles[0].context.pageUrl,hosts[0].url+'/');
   incoming(firstSession,"坐席回复已送达");await frame.getByText("坐席回复已送达",{exact:true}).waitFor({timeout:10000});
+  await assertMessageLayout(frame);
+  assert.equal(await frame.locator('.support-avatar').first().textContent(),await frame.locator('#avatar').textContent());
+  await frame.locator('.message.in .reply-message').first().click();await frame.locator('#replyBar').waitFor({state:'visible'});
+  await frame.locator('#replyBar button').click();await frame.locator('#replyBar').waitFor({state:'hidden'});
   await page.screenshot({path:`${screenshots}/desktop.png`});
   await page.evaluate(()=>{const original=document.querySelector('script[data-channel]'),copy=document.createElement('script');copy.src=original.src;copy.dataset.channel=original.dataset.channel;document.body.append(copy)});
   await page.waitForLoadState("networkidle");assert.equal(page.frames().filter(f=>f.url().endsWith("/widget")).length,1);
@@ -172,10 +189,12 @@ try{
   await mobile.setViewportSize({width:320,height:460});await mobileFrame.locator('#start').scrollIntoViewIfNeeded();await mobile.screenshot({path:`${screenshots}/mobile-compact-prechat.png`});
   assert.equal(await mobileFrame.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   await startChat(mobileFrame,"手机端消息");await mobile.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(":started")));await mobile.setViewportSize({width:375,height:740});
+  await assertMessageLayout(mobileFrame);
   const bounds=await mobileFrame.locator("#panel").boundingBox();assert.ok(bounds&&bounds.x>=0&&bounds.y>=0&&bounds.x+bounds.width<=375&&bounds.y+bounds.height<=740);
   assert.equal(await mobileFrame.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   await mobile.screenshot({path:`${screenshots}/mobile.png`});await mobile.setViewportSize({width:320,height:460});
   assert.equal(await mobileFrame.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);await mobile.screenshot({path:`${screenshots}/mobile-compact.png`});
+  await assertMessageLayout(mobileFrame);
   const localized=[['zh-CN','请输入消息...','发送','您好，有什么可以帮助您？','附件不能超过 10 MB'],['zh-TW','請輸入訊息...','傳送','您好，有什麼可以幫助您？','附件不能超過 10 MB'],['en','Type a message...','Send','Hi! How can we help you?','Attachments must be 10 MB or smaller'],['ja','メッセージを入力...','送信','こんにちは。どのようなご用件でしょうか？','添付は10 MB以下にしてください'],['es','Escribe un mensaje...','Enviar','¡Hola! ¿Cómo podemos ayudarte?','El archivo no puede superar 10 MB'],['pt','Digite uma mensagem...','Enviar','Olá! Como podemos ajudar?','O anexo não pode exceder 10 MB']];
   for(const [language,placeholder,send,welcome,tooLarge] of localized){
     widgetLanguage=language;await mobile.reload();const localizedFrame=await frameFor(mobile);await localizedFrame.locator('#launcher').click();
@@ -204,6 +223,9 @@ try{
   await page.route('https://icons.example.test/**',route=>route.request().url().endsWith('brand.png')?route.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDAAAAAAASUVORK5CYII=','base64')}):route.fulfill({status:404,body:''}));
   widgetIcon='https://icons.example.test/brand.png';await page.reload();brandFrame=await frameFor(page);await brandFrame.locator('#launcher').click();
   await brandFrame.waitForFunction(()=>document.querySelector('#avatar img')?.naturalWidth>0);
+  await brandFrame.waitForFunction(()=>[...document.querySelectorAll('.support-avatar')].length>0&&[...document.querySelectorAll('.support-avatar')].every(avatar=>avatar.querySelector('img')?.naturalWidth>0));
+  assert.equal(await brandFrame.locator('.support-avatar img').first().getAttribute('src'),widgetIcon);
+  await assertMessageLayout(brandFrame);
   assert.equal(await brandFrame.locator('#avatar img').getAttribute('referrerpolicy'),'no-referrer');
   const avatarBounds=await brandFrame.locator('#avatar').boundingBox();assert.equal(avatarBounds.width,38);assert.equal(avatarBounds.height,38);
   await page.screenshot({path:`${screenshots}/desktop-custom-icon.png`});
@@ -211,6 +233,7 @@ try{
   assert.equal(await brandFrame.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   widgetIcon='https://icons.example.test/missing.png';await page.reload();brandFrame=await frameFor(page);await brandFrame.locator('#launcher').click();await page.waitForLoadState('networkidle');
   assert.equal(await brandFrame.locator('#avatar').textContent(),'B');assert.equal(await brandFrame.locator('#avatar img').count(),0);
+  assert.equal(await brandFrame.locator('.support-avatar').first().textContent(),'B');
   widgetIcon='';widgetName='<Brand>';await page.reload();brandFrame=await frameFor(page);
   assert.equal(await brandFrame.locator('#avatar').textContent(),'<');assert.equal(await brandFrame.locator('#avatar').locator('*').count(),0);
   widgetName='';await page.reload();brandFrame=await frameFor(page);assert.equal(await brandFrame.locator('#avatar').textContent(),'?');
