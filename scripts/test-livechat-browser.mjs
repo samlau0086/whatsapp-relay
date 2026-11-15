@@ -89,10 +89,10 @@ const assertMessageLayout=async frame=>{
         Math.abs(tailCenter-(a.top+a.height/2))<=1&&tail.backgroundColor===style.backgroundColor&&
         (visitor?parseFloat(tail.right)<0&&parseFloat(tail.left)>=0:parseFloat(tail.left)<0);
       return (visitor?a.left>=b.right&&avatar.textContent==='Me':a.right<=b.left)&&
-        alignedTail&&(!r||(r.left>=b.right&&getComputedStyle(reply).opacity==='1'&&(!visitor||r.right<=a.left)));
+        alignedTail&&(!r||((visitor?r.right<=b.left:r.left>=b.right)&&getComputedStyle(reply).opacity==='1'));
     })&&rows.length>0&&document.querySelector('#composerTools').getBoundingClientRect().bottom<=document.querySelector('#draft').getBoundingClientRect().top;
   });
-  assert.equal(result,true,'头像方向正确，气泡尖角与头像中心对齐且颜色一致，回复按钮不遮挡头像，工具栏在输入框上方');
+  assert.equal(result,true,'头像方向正确，气泡尖角对齐头像中心，访客回复按钮在气泡左边、客服回复按钮在右边，工具栏在输入框上方');
 };
 const startChat=async(frame,text)=>{
   await frame.locator('#visitorName').fill('Sam');await frame.locator('#email').fill('sam@example.com');
