@@ -73,8 +73,9 @@ for(let index=0;index<2;index++){
 }
 const browser=await chromium.launch({headless:true});
 const screenshots=fileURLToPath(new URL("../outputs/livechat/",import.meta.url));await mkdir(screenshots,{recursive:true});
-const frameFor=async page=>{await page.waitForFunction(()=>document.querySelector('div')?.shadowRoot===null);for(let i=0;i<50;i++){const frame=page.frames().find(f=>f.url().endsWith("/widget"));if(frame){await frame.locator("#launcher").waitFor({state:"visible"});return frame}await page.waitForTimeout(100)}throw Error("窗口未加载")};
+const frameFor=async page=>{await page.waitForFunction(()=>document.querySelector('div')?.shadowRoot===null);for(let i=0;i<50;i++){const frame=page.frames().find(f=>f.url().endsWith("/widget"));if(frame){await frame.locator("#launcher:visible, #panel:visible").waitFor({state:"visible"});return frame}await page.waitForTimeout(100)}throw Error("窗口未加载")};
 const incoming=(messages,text)=>messages.push({id:randomUUID(),direction:"out",text_content:text,created_at:timestamp()});
+const openChat=async frame=>{if(await frame.locator('#launcher').isVisible())await frame.locator('#launcher').click();await frame.locator('#panel').waitFor({state:'visible'})};
 const assertMessageLayout=async frame=>{
   const result=await frame.evaluate(()=>{
     const rows=[...document.querySelectorAll('.message')];
@@ -90,7 +91,7 @@ const assertMessageLayout=async frame=>{
         (visitor?parseFloat(tail.right)<0&&parseFloat(tail.left)>=0:parseFloat(tail.left)<0);
       return (visitor?a.left>=b.right&&avatar.textContent==='Me':a.right<=b.left)&&
         alignedTail&&(!r||((visitor?r.right<=b.left:r.left>=b.right)&&getComputedStyle(reply).opacity==='1'));
-    })&&rows.length>0&&document.querySelector('#composerTools').getBoundingClientRect().bottom<=document.querySelector('#draft').getBoundingClientRect().top;
+    })&&rows.length>0&&document.querySelector('#composerTools').getBoundingClientRect().bottom<=document.querySelector('#draft').getBoundingClientRect().top&&Math.abs(document.querySelector('#send').getBoundingClientRect().top-document.querySelector('#draft').getBoundingClientRect().top)<=1;
   });
   assert.equal(result,true,'头像方向正确，气泡尖角对齐头像中心，访客回复按钮在气泡左边、客服回复按钮在右边，工具栏在输入框上方');
 };
@@ -115,7 +116,16 @@ try{
   debugPage=page;
   page.on("pageerror",error=>errors.push(error.message));
   await page.goto(hosts[0].url);let frame=await frameFor(page);
-  await frame.locator("#launcher").click();
+  assert.equal(await frame.locator('#panel').isVisible(),false,'首次访问默认收起');
+  await openChat(frame);
+  await page.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(':expanded')&&localStorage.getItem(k)==='1'));
+  await page.goto(hosts[0].url+'/products');frame=await frameFor(page);await frame.locator('#panel').waitFor({state:'visible'});
+  await frame.locator('#close').click();
+  await page.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(':expanded')&&localStorage.getItem(k)==='0'));
+  await page.goto(hosts[0].url+'/contact');frame=await frameFor(page);await frame.locator('#launcher').waitFor({state:'visible'});
+  assert.equal(await frame.locator('#panel').isVisible(),false,'跨页面保持收起');
+  await openChat(frame);
+  await page.reload();frame=await frameFor(page);await frame.locator('#panel').waitFor({state:'visible'});
   await frame.locator('#start').click();assert.equal(sessions.size,0);
   assert.equal(await frame.locator('#visitorName').getAttribute('required'),'');
   await page.screenshot({path:`${screenshots}/desktop-prechat.png`});
@@ -123,12 +133,12 @@ try{
   await frame.locator('#visitorName').fill('Sam');await frame.locator('#email').fill('sam@example.com');await frame.locator('#company').fill('Example Ltd');await frame.locator('#whatsapp').fill('+12025550123');await frame.locator('#initialMessage').fill('第一条匿名消息');await frame.locator('#start').click();
   await frame.getByText('发送失败，点击重试').waitFor();
   await assertMessageLayout(frame);
-  await page.reload();frame=await frameFor(page);await frame.locator('#launcher').click();await frame.getByText('发送失败，点击重试').click();
+  await page.reload();frame=await frameFor(page);await openChat(frame);await frame.getByText('发送失败，点击重试').click();
   await frame.getByText("第一条匿名消息",{exact:true}).waitFor();await frame.locator("#send").waitFor({state:"visible"});
   await page.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(":started")));
   const firstSession=[...sessions.values()][0];assert.equal(firstSession.length,1);
   assert.equal(profiles[0].name,'Sam');assert.equal(profiles[0].email,'sam@example.com');assert.equal(profiles[0].company,'Example Ltd');assert.equal(profiles[0].whatsapp,'+12025550123');
-  assert.ok(profiles[0].context.browserLanguage);assert.ok(profiles[0].context.timeZone);assert.equal(profiles[0].context.pageUrl,hosts[0].url+'/');
+  assert.ok(profiles[0].context.browserLanguage);assert.ok(profiles[0].context.timeZone);assert.equal(profiles[0].context.pageUrl,hosts[0].url+'/contact');
   incoming(firstSession,"坐席回复已送达");await frame.getByText("坐席回复已送达",{exact:true}).waitFor({timeout:10000});
   await assertMessageLayout(frame);
   assert.equal(await frame.locator('.support-avatar').first().textContent(),await frame.locator('#avatar').textContent());
@@ -140,13 +150,13 @@ try{
   await page.waitForLoadState("networkidle");assert.equal(page.frames().filter(f=>f.url().endsWith("/widget")).length,1);
   await page.evaluate(()=>{const key=Object.keys(localStorage).find(k=>k.endsWith(':outbox')),messageId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';localStorage.setItem(key,JSON.stringify({[messageId]:{text:'已接收但确认丢失'}}))});
   firstSession.push({id:randomUUID(),client_message_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',direction:'in',text_content:'已接收但确认丢失',created_at:timestamp()});
-  await page.reload();frame=await frameFor(page);await frame.locator("#launcher").click();await frame.getByText("第一条匿名消息",{exact:true}).waitFor();
+  await page.reload();frame=await frameFor(page);await openChat(frame);await frame.getByText("第一条匿名消息",{exact:true}).waitFor();
   await page.waitForFunction(()=>Object.keys(JSON.parse(localStorage.getItem(Object.keys(localStorage).find(k=>k.endsWith(':outbox')))||'{}')).length===0);
   failNext=true;await frame.locator("#draft").fill("刷新后重试");await frame.locator("#send").click();await frame.getByText("发送失败，点击重试").waitFor();
-  await page.reload();frame=await frameFor(page);await frame.locator("#launcher").click();await frame.getByText("发送失败，点击重试").click();
+  await page.reload();frame=await frameFor(page);await openChat(frame);await frame.getByText("发送失败，点击重试").click();
   await page.waitForFunction(()=>Object.keys(JSON.parse(localStorage.getItem(Object.keys(localStorage).find(k=>k.endsWith(":outbox")))||"{}")).length===0);
   assert.equal(firstSession.filter(m=>m.text_content==="刷新后重试").length,1);
-  await frame.locator("#close").click();incoming(firstSession,"未读回复");await frame.locator("#badge").waitFor({state:"visible",timeout:10000});await frame.locator("#launcher").click();assert.equal(await frame.locator("#badge").isVisible(),false);
+  await frame.locator("#close").click();incoming(firstSession,"未读回复");await frame.locator("#badge").waitFor({state:"visible",timeout:10000});await openChat(frame);assert.equal(await frame.locator("#badge").isVisible(),false);
   await context.setOffline(true);incoming(firstSession,"断线期间回复");await page.waitForTimeout(4200);await context.setOffline(false);await frame.getByText("断线期间回复",{exact:true}).waitFor({timeout:12000});
   assert.equal(await frame.locator('#emoji svg,#image svg,#attach svg,#send svg').count(),4);
   await frame.locator("#file").setInputFiles({name:"remove.txt",mimeType:"text/plain",buffer:Buffer.from("remove")});await frame.locator('#composerPreview').getByText("remove.txt",{exact:true}).waitFor();await frame.locator('#composerPreview').getByRole('button',{name:'移除附件'}).click();await frame.locator('#composerPreview').waitFor({state:'hidden'});
@@ -160,22 +170,22 @@ try{
   await assertMessageLayout(frame);
   for(let i=0;i<205;i++)incoming(firstSession,`分页回复 ${i}`);
   await frame.getByText('分页回复 204',{exact:true}).waitFor({timeout:15000});
-  await page.reload();frame=await frameFor(page);await frame.locator('#launcher').click();await frame.getByText('分页回复 204',{exact:true}).waitFor();
+  await page.reload();frame=await frameFor(page);await openChat(frame);await frame.getByText('分页回复 204',{exact:true}).waitFor();
   await frame.locator('#older').click();await frame.getByText('分页回复 5',{exact:true}).waitFor();await frame.locator('#older').click();await frame.getByText('第一条匿名消息',{exact:true}).waitFor();
-  const other=await context.newPage();await other.goto(hosts[1].url);const otherFrame=await frameFor(other);await otherFrame.locator("#launcher").click();assert.equal(await otherFrame.getByText("第一条匿名消息",{exact:true}).count(),0);
+  const other=await context.newPage();await other.goto(hosts[1].url);const otherFrame=await frameFor(other);await openChat(otherFrame);assert.equal(await otherFrame.getByText("第一条匿名消息",{exact:true}).count(),0);
   await startChat(otherFrame,"第二个网站的访客");await other.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(":started")));assert.equal(sessions.size,2);
   await page.evaluate(({apiUrl,id})=>{const script=document.createElement('script');script.src=apiUrl+'/livechat/embed.js';script.dataset.channel=id;document.body.append(script)},{apiUrl:api.url,id:secondChannel});
   await page.waitForFunction(id=>Boolean(document.querySelector(`script[data-channel="${id}"]`)),secondChannel);
   await page.waitForLoadState('networkidle');
   let secondFrame;for(let i=0;i<50;i++){secondFrame=page.frames().find(f=>f.url().includes(secondChannel)&&f.url().endsWith('/widget'));if(secondFrame)break;await page.waitForTimeout(100)}assert.ok(secondFrame);
-  await secondFrame.locator('#launcher').waitFor({state:'visible'});
+  await secondFrame.locator('#launcher').waitFor({state:'visible'});assert.equal(await secondFrame.locator('#panel').isVisible(),false,'不同渠道不共享展开状态');
   assert.equal(await secondFrame.locator('#draft').getAttribute('placeholder'),'Type a message...');
-  await secondFrame.locator('#launcher').click();assert.equal(await secondFrame.getByText('第一条匿名消息',{exact:true}).count(),0);
+  await openChat(secondFrame);assert.equal(await secondFrame.getByText('第一条匿名消息',{exact:true}).count(),0);
   assert.equal(await secondFrame.locator('#start').textContent(),'Start chat');
   await startChat(secondFrame,'独立渠道的访客');
   await page.waitForFunction(()=>Object.keys(localStorage).filter(k=>k.endsWith(':started')).length===2);assert.equal(sessions.size,3);
   // 邮件未配置不能影响普通发送；确认丢失并刷新后仍使用相同结束请求 ID。
-  widgetLanguage='en';await other.reload();let endFrame=await frameFor(other);await endFrame.locator('#launcher').click();
+  widgetLanguage='en';await other.reload();let endFrame=await frameFor(other);await openChat(endFrame);
   endError='email_provider_not_configured';await endFrame.locator('#end').click();
   await endFrame.locator('#confirmAction').click();
   await endFrame.getByText('Email delivery is not configured. Your chat is still open. Please contact support.',{exact:true}).waitFor();
@@ -187,13 +197,13 @@ try{
   await endFrame.locator('#confirmAction').click();
   await endFrame.getByText('Could not send. Please retry',{exact:true}).waitFor();
   const retryEndId=endRequests.at(-1).clientRequestId;
-  await other.reload();endFrame=await frameFor(other);await endFrame.locator('#launcher').click();
+  await other.reload();endFrame=await frameFor(other);await openChat(endFrame);
   await endFrame.locator('#end').click();
   await endFrame.locator('#confirmAction').click();
   await endFrame.getByText('Chat ended. Your transcript is queued for email delivery.',{exact:true}).waitFor();
   assert.equal(endRequests.at(-1).clientRequestId,retryEndId);assert.equal(endRequests.at(-1).sendTranscript,true);assert.equal(transcripts.size,1);
   assert.equal(await endFrame.locator('#form').isVisible(),false);assert.equal(await endFrame.locator('#prechat').isVisible(),false);
-  await other.reload();endFrame=await frameFor(other);await endFrame.locator('#launcher').click();
+  await other.reload();endFrame=await frameFor(other);await openChat(endFrame);
   await endFrame.getByText('Still able to send',{exact:true}).waitFor();
   assert.equal(await endFrame.locator('#form').isVisible(),false);assert.equal(await endFrame.locator('#prechat').isVisible(),false);
   await other.screenshot({path:`${screenshots}/ended-english.png`});
@@ -203,7 +213,7 @@ try{
   assert.equal(endRequests.at(-1).sendTranscript,false);assert.equal(closedChats.size,1);assert.equal(transcripts.size,1);
   widgetLanguage=undefined;
   const mobileContext=await browser.newContext({viewport:{width:375,height:740},isMobile:true,hasTouch:true}),mobile=await mobileContext.newPage();mobile.on("pageerror",error=>errors.push(error.message));
-  await mobile.goto(hosts[0].url);const mobileFrame=await frameFor(mobile);await mobileFrame.locator("#launcher").click();
+  await mobile.goto(hosts[0].url);const mobileFrame=await frameFor(mobile);await openChat(mobileFrame);
   await mobile.screenshot({path:`${screenshots}/mobile-prechat.png`});
   await mobile.setViewportSize({width:320,height:460});await mobileFrame.locator('#start').scrollIntoViewIfNeeded();await mobile.screenshot({path:`${screenshots}/mobile-compact-prechat.png`});
   assert.equal(await mobileFrame.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
@@ -219,7 +229,7 @@ try{
   await mobileFrame.locator('#replyBar button').click();await mobileFrame.locator('#replyBar').waitFor({state:'hidden'});
   const localized=[['zh-CN','请输入消息...','发送','您好，有什么可以帮助您？','附件不能超过 10 MB'],['zh-TW','請輸入訊息...','傳送','您好，有什麼可以幫助您？','附件不能超過 10 MB'],['en','Type a message...','Send','Hi! How can we help you?','Attachments must be 10 MB or smaller'],['ja','メッセージを入力...','送信','こんにちは。どのようなご用件でしょうか？','添付は10 MB以下にしてください'],['es','Escribe un mensaje...','Enviar','¡Hola! ¿Cómo podemos ayudarte?','El archivo no puede superar 10 MB'],['pt','Digite uma mensagem...','Enviar','Olá! Como podemos ajudar?','O anexo não pode exceder 10 MB']];
   for(const [language,placeholder,send,welcome,tooLarge] of localized){
-    widgetLanguage=language;await mobile.reload();const localizedFrame=await frameFor(mobile);await localizedFrame.locator('#launcher').click();
+    widgetLanguage=language;await mobile.reload();const localizedFrame=await frameFor(mobile);await openChat(localizedFrame);
     assert.equal(await localizedFrame.locator('html').getAttribute('lang'),language);
     assert.equal(await localizedFrame.locator('#draft').getAttribute('placeholder'),placeholder);
     assert.equal(await localizedFrame.locator('#send').getAttribute('aria-label'),send);
@@ -230,20 +240,20 @@ try{
     if(language==='en')await mobile.screenshot({path:`${screenshots}/mobile-english.png`});
   }
   for(const language of [null,'invalid']){
-    widgetLanguage=language;await mobile.reload();const defaultFrame=await frameFor(mobile);await defaultFrame.locator('#launcher').click();
+    widgetLanguage=language;await mobile.reload();const defaultFrame=await frameFor(mobile);await openChat(defaultFrame);
     assert.equal(await defaultFrame.locator('html').getAttribute('lang'),'en');
     assert.equal(await defaultFrame.locator('#draft').getAttribute('placeholder'),'Type a message...');
     assert.equal(await defaultFrame.locator('#welcome').textContent(),'Hi! How can we help you?');
   }
-  widgetLanguage='en';await page.reload();const englishFrame=await frameFor(page);await englishFrame.locator('#launcher').click();
+  widgetLanguage='en';await page.reload();const englishFrame=await frameFor(page);await openChat(englishFrame);
   failNext=true;await englishFrame.locator('#draft').fill('Retry in English');await englishFrame.locator('#send').click();await englishFrame.getByText('Failed. Click to retry',{exact:true}).waitFor();
   assert.equal(await englishFrame.locator('#notice').textContent(),'Could not send. Please retry');
   await page.screenshot({path:`${screenshots}/desktop-english.png`});
   // 校验渠道首字母、自定义图标、失败回退和清除后的行为。
-  widgetName='  BelaroPrecision';await page.reload();let brandFrame=await frameFor(page);await brandFrame.locator('#launcher').click();
+  widgetName='  BelaroPrecision';await page.reload();let brandFrame=await frameFor(page);await openChat(brandFrame);
   assert.equal(await brandFrame.locator('#avatar').textContent(),'B');
   await page.route('https://icons.example.test/**',route=>route.request().url().endsWith('brand.png')?route.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDAAAAAAASUVORK5CYII=','base64')}):route.fulfill({status:404,body:''}));
-  widgetIcon='https://icons.example.test/brand.png';await page.reload();brandFrame=await frameFor(page);await brandFrame.locator('#launcher').click();
+  widgetIcon='https://icons.example.test/brand.png';await page.reload();brandFrame=await frameFor(page);await openChat(brandFrame);
   await brandFrame.waitForFunction(()=>document.querySelector('#avatar img')?.naturalWidth>0);
   await brandFrame.waitForFunction(()=>[...document.querySelectorAll('.support-avatar')].length>0&&[...document.querySelectorAll('.support-avatar')].every(avatar=>avatar.querySelector('img')?.naturalWidth>0));
   assert.equal(await brandFrame.locator('.support-avatar img').first().getAttribute('src'),widgetIcon);
@@ -253,7 +263,7 @@ try{
   await page.screenshot({path:`${screenshots}/desktop-custom-icon.png`});
   await page.setViewportSize({width:320,height:460});await page.screenshot({path:`${screenshots}/mobile-custom-icon.png`});
   assert.equal(await brandFrame.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
-  widgetIcon='https://icons.example.test/missing.png';await page.reload();brandFrame=await frameFor(page);await brandFrame.locator('#launcher').click();await page.waitForLoadState('networkidle');
+  widgetIcon='https://icons.example.test/missing.png';await page.reload();brandFrame=await frameFor(page);await openChat(brandFrame);await page.waitForLoadState('networkidle');
   assert.equal(await brandFrame.locator('#avatar').textContent(),'B');assert.equal(await brandFrame.locator('#avatar img').count(),0);
   assert.equal(await brandFrame.locator('.support-avatar').first().textContent(),'B');
   widgetIcon='';widgetName='<Brand>';await page.reload();brandFrame=await frameFor(page);
