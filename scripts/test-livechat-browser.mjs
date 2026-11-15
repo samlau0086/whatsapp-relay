@@ -82,11 +82,12 @@ const assertMessageLayout=async frame=>{
       const avatar=row.querySelector('.message-avatar'),bubble=row.querySelector('.bubble'),reply=row.querySelector('.reply-message');
       if(!avatar||!bubble)return false;
       const a=avatar.getBoundingClientRect(),b=bubble.getBoundingClientRect(),r=reply?.getBoundingClientRect();
-      return a.right<=b.left&&(!r||(r.left>=b.right&&getComputedStyle(reply).opacity==='1'))&&
-        (!row.classList.contains('out')||avatar.textContent==='Me');
+      const visitor=row.classList.contains('out');
+      return (visitor?a.left>=b.right&&avatar.textContent==='Me':a.right<=b.left)&&
+        (!r||(r.left>=b.right&&getComputedStyle(reply).opacity==='1'&&(!visitor||r.right<=a.left)));
     })&&rows.length>0&&document.querySelector('#composerTools').getBoundingClientRect().bottom<=document.querySelector('#draft').getBoundingClientRect().top;
   });
-  assert.equal(result,true,'头像应在气泡左边，回复按钮在右边，工具栏在输入框上方');
+  assert.equal(result,true,'客服头像在左、访客头像在右，回复按钮在气泡右边且不遮挡头像，工具栏在输入框上方');
 };
 const startChat=async(frame,text)=>{
   await frame.locator('#visitorName').fill('Sam');await frame.locator('#email').fill('sam@example.com');
@@ -106,7 +107,9 @@ try{
   await page.screenshot({path:`${screenshots}/desktop-prechat.png`});
   failNext=true;
   await frame.locator('#visitorName').fill('Sam');await frame.locator('#email').fill('sam@example.com');await frame.locator('#company').fill('Example Ltd');await frame.locator('#whatsapp').fill('+12025550123');await frame.locator('#initialMessage').fill('第一条匿名消息');await frame.locator('#start').click();
-  await frame.getByText('发送失败，点击重试').waitFor();await page.reload();frame=await frameFor(page);await frame.locator('#launcher').click();await frame.getByText('发送失败，点击重试').click();
+  await frame.getByText('发送失败，点击重试').waitFor();
+  await assertMessageLayout(frame);
+  await page.reload();frame=await frameFor(page);await frame.locator('#launcher').click();await frame.getByText('发送失败，点击重试').click();
   await frame.getByText("第一条匿名消息",{exact:true}).waitFor();await frame.locator("#send").waitFor({state:"visible"});
   await page.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(":started")));
   const firstSession=[...sessions.values()][0];assert.equal(firstSession.length,1);
