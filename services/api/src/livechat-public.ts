@@ -18,6 +18,7 @@ const messageSchema=z.object({
   name:z.string().trim().max(80).optional(),email:z.string().trim().email().max(254).optional(),
   company:z.string().trim().max(160).optional(),whatsapp:z.string().trim().max(80).optional(),
   context:z.object({browserLanguage:z.string().trim().max(80).optional(),timeZone:z.string().max(100).refine(isValidTimeZone).optional(),pageUrl:z.string().url().max(2048).optional()}).optional(),
+  quotedMessageId:uuid.optional(),
 }).refine(v=>Boolean(v.text||v.mediaId));
 const endChatSchema=z.object({clientRequestId:uuid,sendTranscript:z.boolean().default(true)});
 const fail=(statusCode:number,message:string)=>Object.assign(new Error(message),{statusCode});
@@ -115,6 +116,10 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
         if(old.direction!=="in"||old.sender_contact_id!==v.contact_id||(old.text_content??"")!==data.text||(old.media_id??null)!==(data.mediaId??null))throw fail(409,"client_message_id_conflict");
         return {id:old.id};
       }
+      if(data.quotedMessageId){
+        const quoted=await client.query("SELECT id FROM messages WHERE id=$1 AND account_id=$2 AND conversation_id=(SELECT id FROM conversations WHERE account_id=$2 AND contact_id=$3) AND (direction='in' OR status IN ('sent','delivered','read')) AND NOT EXISTS(SELECT 1 FROM message_email_details WHERE message_id=messages.id)",[data.quotedMessageId,c.account_id,v.contact_id]);
+        if(!quoted.rowCount)throw fail(404,"quoted_message_not_found");
+      }
       let kind="text";
       if(data.mediaId){
         const media=await client.query("SELECT mime_type FROM media WHERE id=$1 AND account_id=$2 AND object_key LIKE $3 AND status='ready' FOR SHARE",[data.mediaId,c.account_id,`livechat/${v.id}/%`]);
@@ -122,8 +127,8 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
         kind=String(media.rows[0].mime_type).startsWith("image/")?"image":"document";
       }
       const conv=await client.query(`INSERT INTO conversations(account_id,contact_id,unread_count) VALUES($1,$2,1) ON CONFLICT(account_id,contact_id) DO UPDATE SET unread_count=conversations.unread_count+1,status='open',closed_at=NULL RETURNING id`,[c.account_id,v.contact_id]);
-      const msg=await client.query(`INSERT INTO messages(conversation_id,account_id,sender_contact_id,provider_message_id,client_message_id,direction,kind,text_content,media_id,status,occurred_at)
-        VALUES($1,$2,$3,$4,$4,'in',$5,$6,$7,'received',now()) RETURNING id`,[conv.rows[0].id,c.account_id,v.contact_id,data.clientMessageId,kind,data.text||null,data.mediaId??null]);
+      const msg=await client.query(`INSERT INTO messages(conversation_id,account_id,sender_contact_id,provider_message_id,client_message_id,direction,kind,text_content,media_id,quoted_message_id,status,occurred_at)
+        VALUES($1,$2,$3,$4,$4,'in',$5,$6,$7,$8,'received',now()) RETURNING id`,[conv.rows[0].id,c.account_id,v.contact_id,data.clientMessageId,kind,data.text||null,data.mediaId??null,data.quotedMessageId??null]);
       if(data.mediaId)await client.query("UPDATE media SET delete_after=NULL WHERE id=$1",[data.mediaId]);
       // 页面地址只保留同源路径，避免查询参数、片段或 URL 账号泄露。
       const context:Record<string,string>={userAgent:(request.headers["user-agent"]||"").slice(0,512)};
