@@ -1,7 +1,7 @@
 "use client";
 
-import {ArrowDownLeft,ArrowUpRight,Bell,Facebook,Mail,MessageCircle,Users} from "lucide-react";
-import type {MouseEvent} from "react";
+import {ArrowDownLeft,ArrowUpRight,Bell,CheckSquare2,Facebook,Mail,MessageCircle,Square,Users} from "lucide-react";
+import type {KeyboardEvent,MouseEvent} from "react";
 import {formatMessageTime,formatMessageTimeTitle} from "./message-time";
 import type {Conversation} from "./conversation-types";
 
@@ -17,14 +17,16 @@ const reminderState=(value:string,clock:number)=>{
   return dueAt<tomorrow?{className:"today",label:"今天"}:{className:"upcoming",label:"3 天内"};
 };
 
-export function ConversationListRow({item,active,clock,markingUnreadId,onSelect,onMenu,onMarkUnread}:{item:Conversation;active:boolean;clock:number;markingUnreadId:string;onSelect:()=>void;onMenu:(event:MouseEvent)=>void;onMarkUnread:()=>void}){
+export function ConversationListRow({item,active,selected,multiSelect,selectionDisabled,clock,markingUnreadId,onSelect,onMenu,onMarkUnread}:{item:Conversation;active:boolean;selected:boolean;multiSelect:boolean;selectionDisabled:boolean;clock:number;markingUnreadId:string;onSelect:(shiftKey:boolean)=>void;onMenu:(event:MouseEvent)=>void;onMarkUnread:()=>void}){
   const lastMessageTime=item.lastMessageAt?formatMessageTime(item.lastMessageAt,new Date(clock)):item.time;
-  return <div role="button" tabIndex={0} onClick={onSelect} onContextMenu={onMenu} onKeyDown={event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();onSelect();}}} className={active?"conversation active":"conversation"} title="右键打开客户快捷操作">
+  const selectByKeyboard=(event:KeyboardEvent<HTMLDivElement>)=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();onSelect(event.shiftKey);}};
+return <div role="button" tabIndex={selectionDisabled?-1:0} aria-pressed={multiSelect?selected:undefined} aria-disabled={selectionDisabled||undefined} onMouseDown={event=>{if(event.shiftKey)event.preventDefault();}} onClick={event=>onSelect(event.shiftKey)} onContextMenu={onMenu} onKeyDown={selectByKeyboard} className={`conversation ${active&&!multiSelect?"active ":""}${selected?"selected ":""}${selectionDisabled?"selection-disabled":""}`.trim()} title={selectionDisabled?"仅支持同一个 channel 的单人会话":"右键打开客户快捷操作"}>
+    {multiSelect&&<span className="conversation-select-indicator" aria-hidden="true">{selected?<CheckSquare2 size={18}/>:<Square size={18}/>}</span>}
     <span className="avatar" style={{background:item.color}}>{item.conversationType==="group"?<Users size={17}/>:item.initials}<i className={`presence ${item.accountStatus==="online"?"online":"offline"}`}/></span>
     <span className="conversation-copy"><span className="conversation-line"><b>{item.name}</b><time dateTime={item.lastMessageAt??undefined} title={item.lastMessageAt?formatMessageTimeTitle(item.lastMessageAt):undefined}>{lastMessageTime}</time></span>
       <span className="conversation-line preview">{item.lastDirection&&<i className={`conversation-direction ${item.lastDirection}${item.lastDirection==="out"?` ${statusClass(item.lastMessageStatus)}`:""}`} role="img" aria-label={item.lastDirection==="in"?"最后一条消息为接收":`最后一条消息为发送，${statusText(item.lastMessageStatus)}`} title={item.lastDirection==="in"?"接收":statusText(item.lastMessageStatus)}>{item.lastDirection==="in"?<ArrowDownLeft size={13}/>:<ArrowUpRight size={13}/>}</i>}<span>{item.preview}</span>{item.unread>0&&<em>{item.unread}</em>}</span>
       <small className="conversation-meta"><span className={`channel-badge ${item.platform}`}>{item.platform==="messenger"?<Facebook size={10}/>:item.conversationType==="group"?<Users size={10}/>:<MessageCircle size={10}/>} {item.conversationType==="group"?`群聊 · ${item.groupParticipantCount} 人`:item.platform==="livechat"?`LiveChat · ${item.account}`:item.platform==="messenger"?`Facebook · ${item.account}`:`WhatsApp · ${item.account}`}</span>{item.conversationType!=="group"&&<span className={`conversation-stage stage-${stageValue(item.customerStage)}`}>{stages[stageValue(item.customerStage)]}</span>}{item.tags.slice(0,1).map(tag=><i key={tag.id} style={{background:tag.color}}>{tag.name}</i>)}{item.remindAt&&(()=>{const state=reminderState(item.remindAt,clock);return <em className={state.className}><Bell size={10}/>{state.label} · {dateTime(item.remindAt)}</em>;})()}</small>
     </span>
-    {item.unread===0&&<button className="mark-unread-button" disabled={markingUnreadId===item.id} onClick={event=>{event.stopPropagation();onMarkUnread();}} aria-label={`将 ${item.name} 标记为未读`} title="标记为未读"><Mail size={15}/></button>}
+    {!multiSelect&&item.unread===0&&<button className="mark-unread-button" disabled={markingUnreadId===item.id} onClick={event=>{event.stopPropagation();onMarkUnread();}} aria-label={`将 ${item.name} 标记为未读`} title="标记为未读"><Mail size={15}/></button>}
   </div>;
 }

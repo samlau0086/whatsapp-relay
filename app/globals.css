@@ -1221,4 +1221,24 @@ button { color:inherit; }
 .livechat-settings input[type=checkbox]{width:16px;height:16px;flex:0 0 16px}
 .livechat-settings input[type=color]{width:52px;height:32px;padding:2px}
 .livechat-settings textarea{resize:vertical;min-height:70px}
+.conversation-selection-toolbar{display:flex;align-items:center;gap:7px;flex:0 0 auto;min-height:48px;padding:7px 14px;border-block:1px solid var(--line);background:#f3faf6}
+.conversation-selection-toolbar>b{min-width:0;flex:1;font-size:12px;font-weight:600;color:#27654d}
+.conversation-selection-toolbar>button{display:inline-flex;align-items:center;justify-content:center;gap:4px;flex:0 0 auto;height:30px;min-height:30px;padding:0 8px;border-radius:6px;font-size:12px;white-space:nowrap}
+.conversation.selected{background:#e6f5ed;box-shadow:inset 3px 0 #168755}
+.conversation.selection-disabled{opacity:.45;cursor:not-allowed}
+.conversation:has(.conversation-select-indicator){user-select:none}
+.conversation-select-indicator{display:grid;place-items:center;flex:0 0 18px;color:#168755}
+.timeline-merge-dialog{width:min(480px,calc(100vw - 24px));max-height:calc(100dvh - 32px);overflow:auto;border-radius:8px}
+.timeline-merge-dialog>h2{font-size:20px}
+.timeline-merge-dialog>p{font-size:13px;line-height:1.7}
+.timeline-merge-options{display:grid;gap:8px;max-height:40dvh;overflow:auto;margin:16px 0}
+.timeline-merge-options>label{display:grid;grid-template-columns:18px minmax(0,1fr);align-items:center;gap:10px;margin:0;padding:12px;border:1px solid #dce5e0;border-radius:6px;cursor:pointer}
+.timeline-merge-options>label.active{border-color:#168755;background:#f0faf5}
+.timeline-merge-options input[type=radio]{width:16px;height:16px;margin:0;padding:0;accent-color:#168755}
+.timeline-merge-options span{min-width:0}
+.timeline-merge-options b,.timeline-merge-options small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.timeline-merge-options b{font-size:14px}.timeline-merge-options small{margin-top:4px;font-size:12px;color:#75827c}
+.timeline-merge-warning{display:block;font-size:12px;line-height:1.6;color:#75827c}
+.timeline-merge-dialog footer{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
+.timeline-merge-dialog footer button{min-height:36px;border-radius:6px}
 @media(max-width:640px){.livechat-settings .order-table{min-width:560px}.livechat-settings .management-head h2{font-size:18px}.livechat-settings .order-table-wrap{max-width:100%;overflow:auto}}

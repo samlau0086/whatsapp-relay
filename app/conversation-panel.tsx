@@ -1,6 +1,6 @@
 "use client";
 
-import {Bot,Check,ChevronDown,Clock3,Globe2,Menu,PanelLeftClose,PanelLeftOpen,RefreshCw,Search,ShoppingCart,Tag,UserRound,X} from "lucide-react";
+import {Bot,Check,ChevronDown,Clock3,Globe2,Menu,Merge,PanelLeftClose,PanelLeftOpen,RefreshCw,Search,ShoppingCart,Tag,UserRound,X} from "lucide-react";
 import {useEffect,useMemo,useRef,useState,type KeyboardEvent,type MouseEvent,type PointerEvent as ReactPointerEvent,type RefObject,type WheelEvent} from "react";
 import {CONVERSATION_DATE_FILTERS,type ConversationAgentMode,type ConversationCustomerStage,type ConversationDateFilter,type ConversationFollowupFilter,type ConversationLatestOrderStatus} from "./conversation-date-filter";
 import type {Conversation} from "./conversation-types";
@@ -9,7 +9,7 @@ import {CountryPicker} from "./country-picker";
 
 export function ConversationPanel({
   filter,subtitle,query,onQuery,tags,tagIds,onTagIds,onTagOpen,customerStage,onCustomerStage,latestOrderStatus,onLatestOrderStatus,followup,onFollowup,agentMode,onAgentMode,country,onCountry,onOpenSidebar,collapsed,onToggleCollapsed,onRefresh,dateFilter,onDateFilter,onDateKeyDown,
-  mobileOpen,onCloseMobile,listRef,sentinelRef,items,rows,totalSize,measure,effectiveActiveId,clock,markingUnreadId,onSelect,onMenu,onMarkUnread,
+  mobileOpen,onCloseMobile,listRef,sentinelRef,items,rows,totalSize,measure,effectiveActiveId,selectedIds,selectionAccountId,clock,markingUnreadId,onSelect,onMenu,onMarkUnread,onMergeSelection,onCancelSelection,
   loading,loadError,hasAccounts,loadingMore,loadMoreError,hasMore,onLoadMore,
 }:{
   filter:string;subtitle:string;query:string;onQuery:(value:string)=>void;tags:Array<{id:string;name:string;color:string}>;tagIds:string[];onTagIds:(value:string[])=>void;onTagOpen:()=>void;onOpenSidebar:()=>void;collapsed:boolean;onToggleCollapsed:()=>void;onRefresh:()=>void;mobileOpen:boolean;onCloseMobile:()=>void;
@@ -18,7 +18,7 @@ export function ConversationPanel({
   dateFilter:ConversationDateFilter;onDateFilter:(value:ConversationDateFilter)=>void;onDateKeyDown:(event:KeyboardEvent<HTMLButtonElement>)=>void;
   listRef:RefObject<HTMLDivElement|null>;sentinelRef:RefObject<HTMLDivElement|null>;items:Conversation[];rows:Array<{index:number;start:number}>;totalSize:number;
   measure:(element:HTMLDivElement|null)=>void;
-  effectiveActiveId:string;clock:number;markingUnreadId:string;onSelect:(id:string)=>void;onMenu:(event:MouseEvent,item:Conversation)=>void;onMarkUnread:(id:string)=>void;
+  effectiveActiveId:string;selectedIds:Set<string>;selectionAccountId:string;clock:number;markingUnreadId:string;onSelect:(id:string,shiftKey:boolean)=>void;onMenu:(event:MouseEvent,item:Conversation)=>void;onMarkUnread:(id:string)=>void;onMergeSelection:()=>void;onCancelSelection:()=>void;
   loading:boolean;loadError:string;hasAccounts:boolean;loadingMore:boolean;loadMoreError:string;hasMore:boolean;onLoadMore:()=>void;
 }){
   const dateTabsRef=useRef<HTMLDivElement>(null);
@@ -86,9 +86,10 @@ export function ConversationPanel({
     <div ref={dateTabsRef} className="conversation-date-tabs" role="tablist" aria-label="按最后联系时间筛选会话" onPointerDown={onDateTabsPointerDown} onPointerMove={onDateTabsPointerMove} onPointerUp={finishDateTabsDrag} onPointerCancel={finishDateTabsDrag} onClickCapture={event=>{if(dateTabsDragRef.current.moved){event.preventDefault();event.stopPropagation();}}} onWheel={onDateTabsWheel}>
       {CONVERSATION_DATE_FILTERS.map(item=><button key={item.value} type="button" role="tab" aria-selected={dateFilter===item.value} tabIndex={dateFilter===item.value?0:-1} className={dateFilter===item.value?"active":""} onClick={()=>onDateFilter(item.value)} onKeyDown={onDateKeyDown}>{item.label}</button>)}
     </div>
+    {selectedIds.size>0&&<div className="conversation-selection-toolbar"><b>已选择 {selectedIds.size} 个会话</b><button type="button" className="secondary-action" onClick={onCancelSelection}><X size={14}/>取消</button><button type="button" className="primary-action" disabled={selectedIds.size<2} onClick={onMergeSelection}><Merge size={14}/>合并</button></div>}
     <div className="conversation-list" ref={listRef}>
       {loading?<PanelEmpty title="正在读取中心数据" text="请稍候…"/>:loadError?<PanelEmpty title="中心数据加载失败" text={loadError}/>:items.length?<>
-        <ConversationVirtualList items={items} rows={rows} totalSize={totalSize} effectiveActiveId={effectiveActiveId} clock={clock} markingUnreadId={markingUnreadId} measure={measure} onSelect={onSelect} onMenu={onMenu} onMarkUnread={onMarkUnread}/>
+        <ConversationVirtualList items={items} rows={rows} totalSize={totalSize} effectiveActiveId={effectiveActiveId} selectedIds={selectedIds} selectionAccountId={selectionAccountId} clock={clock} markingUnreadId={markingUnreadId} measure={measure} onSelect={onSelect} onMenu={onMenu} onMarkUnread={onMarkUnread}/>
         <div ref={sentinelRef} className="conversation-load-sentinel">
           {loadingMore&&<span>正在加载更多会话…</span>}
           {loadMoreError&&<button onClick={onLoadMore}>加载失败，点击重试</button>}

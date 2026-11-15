@@ -7,7 +7,7 @@ import {
   Inbox, Info, Languages, Mail, MessageCircle, Mic, MonitorSmartphone, Paperclip, Phone, Plus, Truck,
   Pencil, RefreshCw, Search, Send, Settings, ShieldCheck, ShoppingBag, Smile, Sparkles, Star, Trash2, UploadCloud, UserPlus,
   Users, Wifi, WifiOff, X, ClipboardList, ExternalLink, Bot, Brain, BookOpen, MapPin, Copy, CreditCard, LayoutGrid, List, Eye, EyeOff, ReceiptText, Reply, Zap, Tag,
-  Facebook, Instagram, Linkedin, Building2, ArrowRightLeft, PanelLeftClose, PanelLeftOpen, ChevronLeft, ChevronRight, MessageSquare, ThumbsDown, ThumbsUp, Bold, Italic, ListOrdered, Link2,
+  Facebook, Instagram, Linkedin, Building2, ArrowRightLeft, Merge, PanelLeftClose, PanelLeftOpen, ChevronLeft, ChevronRight, MessageSquare, ThumbsDown, ThumbsUp, Bold, Italic, ListOrdered, Link2,
 } from "lucide-react";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -245,7 +245,7 @@ function updateCachedConversationDetails(conversationId:string,update:(details:C
 }
 const CONTACT_TASK_STATUS:Record<string,string>={planned:"计划中",in_progress:"进行中",waiting_approval:"待审批",scheduled:"待发送",completed:"已完成",overdue:"已逾期",failed:"失败",cancelled:"已取消"};
 type ChatMessage = {
-  id:string; direction:"in"|"out"; kind:string; text:string; time:string;occurredAt?:string;
+  id:string;sourceConversationId?:string; direction:"in"|"out"; kind:string; text:string; time:string;occurredAt?:string;
   senderJid?:string;senderName?:string;
   platform?:"whatsapp"|"messenger"|"livechat";providerMessageId?:string;pageId?:string;
   quoted?:{id:string;direction:"in"|"out";kind:string;text:string;senderName?:string;attachment?:{id:string;name:string;mime:string}};
@@ -412,6 +412,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [newConversationOpen,setNewConversationOpen]=useState(false);
   const [transferConversation,setTransferConversation]=useState<Conversation|null>(null);
   const [mergeSameAccountConversation,setMergeSameAccountConversation]=useState<Conversation|null>(null);
+  const [selectedConversations,setSelectedConversations]=useState<Map<string,Conversation>>(()=>new Map());
+  const [timelineMergeConversations,setTimelineMergeConversations]=useState<Conversation[]|null>(null);
   const [mediaOpen,setMediaOpen]=useState(false);
   const [imageViewerMessageId,setImageViewerMessageId]=useState("");
   const [composerImageBusy,setComposerImageBusy]=useState(false);
@@ -503,12 +505,21 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const currentEmailActivities=useMemo(()=>active?emailActivities[active.id]??[]:[],[active,emailActivities]);
   useEffect(()=>{if(!apiToken||!active?.accountId)return;let cancelled=false;void authorizedFetch("/api/v1/mailboxes",apiToken).then(async result=>{if(result.token!==apiToken)setApiToken(result.token);if(!result.response.ok)return;const body=await result.response.json().catch(()=>({})) as {data?:Array<Record<string,unknown>>};if(cancelled)return;const items=(body.data??[]).filter(item=>String(item.account_id)===active.accountId).map(item=>({id:String(item.id),account_id:String(item.account_id),address:String(item.address),display_name:String(item.display_name??""),is_primary:Boolean(item.is_primary),enabled:Boolean(item.enabled)}));setEmailMailboxes(items);setEmailMailboxId(current=>current&&items.some(item=>item.id===current)?current:(items.find(item=>item.is_primary&&item.enabled)?.id??items.find(item=>item.enabled)?.id??""));}).catch(()=>{});return()=>{cancelled=true};},[apiToken,active?.accountId]);
   const latestMessageId=currentMessages.at(-1)?.id??"";
-  const selectConversation=useCallback((conversationId:string)=>{
+  const selectConversation=useCallback((conversationId:string,shiftKey=false)=>{
     const item=visible.find(value=>value.id===conversationId);
+    if(shiftKey||selectedConversations.size){
+      if(!item)return;
+      if(item.conversationType==="group"){setToast("群会话不能与其他会话合并");return;}
+      const first=selectedConversations.values().next().value as Conversation|undefined;
+      if(first&&first.accountId!==item.accountId){setToast("只能选择同一个 channel 的会话进行合并");return;}
+      if(!selectedConversations.has(item.id)&&selectedConversations.size>=50){setToast("每次最多合并 50 个会话");return;}
+      setSelectedConversations(current=>{const next=new Map(current);if(next.has(item.id))next.delete(item.id);else next.set(item.id,item);return next;});
+      return;
+    }
     if(item)selectedConversationRef.current=item;
     setActiveId(conversationId);
     setMobileConversationOpen(false);
-  },[visible]);
+  },[visible,selectedConversations]);
   useEffect(()=>{
     const item=activeId?visible.find(value=>value.id===activeId):undefined;
     if(item)selectedConversationRef.current=item;
@@ -607,6 +618,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const logout=useCallback(()=>{
     void fetch(`${API_URL}/api/v1/auth/logout`,{method:"POST",credentials:"include"}).catch(()=>undefined);
     clearStoredSession();
+    setSelectedConversations(new Map());setTimelineMergeConversations(null);
     conversationDetailsCache.clear();
     conversationAbortRef.current?.abort();conversationCursorRef.current=null;
     accountsLoadedForRef.current="";conversationLoadKeyRef.current="";messageInitialLoadKeyRef.current="";messageCursorsRef.current={};messagePaginationDepthRef.current.clear();messageStickToBottomRef.current=true;
@@ -909,6 +921,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     const key=[tokenSubject(apiToken),view,dateFilter,followupFilter,filter,selectedAccount,debouncedQuery,selectedTags,selectedCustomerStage,selectedLatestOrderStatus,selectedAgentMode,selectedCountry].join("|");
     if(conversationLoadKeyRef.current===key)return;
     conversationLoadKeyRef.current=key;
+    setSelectedConversations(new Map());
     conversationCursorRef.current=null;setNextConversationCursor(null);conversationListRef.current?.scrollTo({top:0});
     void Promise.all([loadConversations(apiToken),loadConversationCounts(apiToken)]);
   },[view,apiToken,dateFilter,followupFilter,filter,selectedAccount,debouncedQuery,selectedTags,selectedCustomerStage,selectedLatestOrderStatus,selectedAgentMode,selectedCountry,loadConversations,loadConversationCounts]);
@@ -1968,7 +1981,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             </section>
           </aside>
 
-          <ConversationPanel filter={filter} subtitle={debouncedQuery||selectedTags.length||selectedCustomerStage||selectedLatestOrderStatus||selectedAgentMode||selectedCountry?`已加载 ${visible.length} 条结果`:`${counts[conversationFilterKey(filter)]} 个真实会话`} query={query} onQuery={setQuery} tags={contextTags} tagIds={selectedTags} onTagIds={setSelectedTags} onTagOpen={()=>void loadConversationTags(apiToken)} customerStage={selectedCustomerStage} onCustomerStage={setSelectedCustomerStage} latestOrderStatus={selectedLatestOrderStatus} onLatestOrderStatus={setSelectedLatestOrderStatus} agentMode={selectedAgentMode} onAgentMode={setSelectedAgentMode} followup={followupFilter} onFollowup={selectFollowupFilter} country={selectedCountry} onCountry={setSelectedCountry} onOpenSidebar={()=>setSidebarOpen(true)} collapsed={conversationListHidden} onToggleCollapsed={()=>setConversationListHidden(value=>!value)} onRefresh={()=>void loadWorkspace(apiToken)} dateFilter={dateFilter} onDateFilter={selectDateFilter} onDateKeyDown={handleDateFilterKeyDown} mobileOpen={mobileConversationOpen} onCloseMobile={()=>setMobileConversationOpen(false)} listRef={conversationListRef} sentinelRef={conversationLoadSentinelRef} items={visible} rows={conversationVirtualizer.getVirtualItems()} totalSize={conversationVirtualizer.getTotalSize()} measure={conversationVirtualizer.measureElement} effectiveActiveId={effectiveActiveId} clock={clock} markingUnreadId={markingUnreadId} onSelect={selectConversation} onMenu={openConversationMenu} onMarkUnread={id=>void markConversationUnread(id)} loading={loading} loadError={loadError} hasAccounts={Boolean(accounts.length)} loadingMore={loadingMoreConversations} loadMoreError={loadMoreError} hasMore={Boolean(nextConversationCursor)} onLoadMore={()=>void loadConversations(apiToken,{append:true})}/>
+          <ConversationPanel filter={filter} subtitle={debouncedQuery||selectedTags.length||selectedCustomerStage||selectedLatestOrderStatus||selectedAgentMode||selectedCountry?`已加载 ${visible.length} 条结果`:`${counts[conversationFilterKey(filter)]} 个真实会话`} query={query} onQuery={setQuery} tags={contextTags} tagIds={selectedTags} onTagIds={setSelectedTags} onTagOpen={()=>void loadConversationTags(apiToken)} customerStage={selectedCustomerStage} onCustomerStage={setSelectedCustomerStage} latestOrderStatus={selectedLatestOrderStatus} onLatestOrderStatus={setSelectedLatestOrderStatus} agentMode={selectedAgentMode} onAgentMode={setSelectedAgentMode} followup={followupFilter} onFollowup={selectFollowupFilter} country={selectedCountry} onCountry={setSelectedCountry} onOpenSidebar={()=>setSidebarOpen(true)} collapsed={conversationListHidden} onToggleCollapsed={()=>setConversationListHidden(value=>!value)} onRefresh={()=>void loadWorkspace(apiToken)} dateFilter={dateFilter} onDateFilter={selectDateFilter} onDateKeyDown={handleDateFilterKeyDown} mobileOpen={mobileConversationOpen} onCloseMobile={()=>setMobileConversationOpen(false)} listRef={conversationListRef} sentinelRef={conversationLoadSentinelRef} items={visible} rows={conversationVirtualizer.getVirtualItems()} totalSize={conversationVirtualizer.getTotalSize()} measure={conversationVirtualizer.measureElement} effectiveActiveId={effectiveActiveId} selectedIds={new Set(selectedConversations.keys())} selectionAccountId={selectedConversations.values().next().value?.accountId??""} clock={clock} markingUnreadId={markingUnreadId} onSelect={selectConversation} onMergeSelection={()=>{if(selectedConversations.size>=2)setTimelineMergeConversations([...selectedConversations.values()]);}} onCancelSelection={()=>setSelectedConversations(new Map())} onMenu={openConversationMenu} onMarkUnread={id=>void markConversationUnread(id)} loading={loading} loadError={loadError} hasAccounts={Boolean(accounts.length)} loadingMore={loadingMoreConversations} loadMoreError={loadMoreError} hasMore={Boolean(nextConversationCursor)} onLoadMore={()=>void loadConversations(apiToken,{append:true})}/>
 
           <section className="chat-panel">
             {active ? (
@@ -2112,7 +2125,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                           <div className="message-actions">
                             <button
                               className="message-reply-action"
-                              disabled={cloudWindowClosed}
+                              disabled={cloudWindowClosed||Boolean(message.sourceConversationId&&message.sourceConversationId!==active.id)}
                               onClick={() => {
                                 if (message.email) {
                                   setEmailMode(true);
@@ -2127,7 +2140,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                                 );
                               }}
                               aria-label="回复这条消息"
-                              title="回复"
+                              title={message.sourceConversationId&&message.sourceConversationId!==active.id?"不能跨原始会话引用回复，请直接发送新消息":"回复"}
                             >
                               <Reply size={14} />
                             </button>
@@ -2787,6 +2800,18 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
         await loadWorkspace(accessToken,true);
         await loadMessages(accessToken,targetId);
       }}/>}
+      {timelineMergeConversations&&<TimelineMergeDialog conversations={timelineMergeConversations} token={apiToken} onToken={setApiToken} onClose={()=>setTimelineMergeConversations(null)} onMerged={async(targetId,accessToken)=>{
+        setTimelineMergeConversations(null);
+        setSelectedConversations(new Map());
+        setActiveId(targetId);
+        setToast("会话时间线已合并，所有原始消息均已保留");
+        setMessages(all=>{const next={...all};delete next[targetId];return next;});
+        setReplyTo(null);
+        messageCursorsRef.current={};
+        messagePaginationDepthRef.current.clear();
+        await loadWorkspace(accessToken,true);
+        await loadMessages(accessToken,targetId);
+      }}/>}
       {replySuggestion&&active?.id===replySuggestion.conversationId&&(
         <ReplySuggestionDialog
           suggestion={replySuggestion}
@@ -3021,6 +3046,23 @@ function ConversationNoteDialog({conversation,token,onToken,onClose,onSaved}:{co
 }
 
 type SameAccountCandidate={id:string;name:string;whatsapp_username:string|null;phone_e164:string|null;provider_user_id:string|null;last_message_at:string|null;message_count:number};
+
+function TimelineMergeDialog({conversations,token,onToken,onClose,onMerged}:{conversations:Conversation[];token:string;onToken:(token:string)=>void;onClose:()=>void;onMerged:(targetId:string,token:string)=>Promise<void>}){
+  const [targetId,setTargetId]=useState(conversations[0]?.id??""),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  const target=conversations.find(item=>item.id===targetId);
+  async function merge(){
+    if(!target||busy)return;
+    setBusy(true);setError("");
+    try{
+      const result=await authorizedFetch("/api/v1/conversations/merge-timelines",token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({conversationIds:conversations.map(item=>item.id),targetConversationId:target.id})});
+      if(result.token!==token)onToken(result.token);
+      const body=await result.response.json().catch(()=>({})) as {message?:string;error?:string};
+      if(!result.response.ok)throw new Error(body.message??body.error??"合并失败");
+      await onMerged(target.id,result.token);
+    }catch(cause){setError(cause instanceof Error?cause.message:"合并失败");setBusy(false);}
+  }
+return <div className="modal-backdrop context-action-backdrop" role="presentation"><section className="login-dialog context-action-dialog timeline-merge-dialog" role="dialog" aria-modal="true" aria-labelledby="timeline-merge-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><Merge size={19}/></span><h2 id="timeline-merge-title">合并会话时间线</h2><p>所有消息都会保留并按时间显示。请选择主会话；合并后发送消息、客户资料和会话操作均以主会话为准。</p><div className="timeline-merge-options" role="radiogroup" aria-label="选择主会话">{conversations.map(item=><label key={item.id} className={targetId===item.id?"active":""}><input type="radio" name="timeline-merge-target" disabled={busy} checked={targetId===item.id} onChange={()=>setTargetId(item.id)}/><span><b>{item.name}</b><small>{item.account} · {item.preview||"暂无消息"}</small></span></label>)}</div><small className="timeline-merge-warning">此操作不会合并联系人身份，也不会删除或迁移原始消息。</small>{error&&<span className="login-error">{error}</span>}<footer><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void merge()} disabled={!target||busy}>{busy?"正在合并…":"确认合并"}</button></footer></section></div>;
+}
 
 function SameAccountMergeDialog({conversation,token,onToken,onClose,onMerged}:{conversation:Conversation;token:string;onToken:(token:string)=>void;onClose:()=>void;onMerged:(targetId:string,token:string)=>Promise<void>}){
   const [query,setQuery]=useState(""),[candidates,setCandidates]=useState<SameAccountCandidate[]>([]),[targetId,setTargetId]=useState(""),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState("");
@@ -5191,7 +5233,7 @@ function mapAdReferral(value:unknown):ChatMessage["adReferral"]{
 }
 function mapTag(item:Record<string,unknown>):TagItem{return{id:String(item.id),name:String(item.name??"标签"),color:String(item.color??"#DFF5E8")};}
 function mapMessageComment(item:Record<string,unknown>):MessageComment{return{id:String(item.id),body:String(item.body??""),userId:String(item.user_id??""),authorName:String(item.author_name??"团队成员"),createdAt:String(item.created_at??""),updatedAt:String(item.updated_at??""),score:Number(item.score??0),viewerVote:Number(item.viewer_vote??0)};}
-function mapMessage(item:Record<string,unknown>):ChatMessage {const kind=String(item.kind??"text"),mediaId=String(item.media_id??""),occurredAt=String(item.occurred_at),quotedId=String(item.quoted_message_id??""),quotedMediaId=String(item.quoted_media_id??""),quotedKind=String(item.quoted_kind??"text"),commandId=String(item.command_id??""),adReferral=mapAdReferral(item.ad_referral);const emailSubject=item.email_subject?String(item.email_subject):"";const email=emailSubject?{subject:emailSubject,htmlBody:item.email_html_body?String(item.email_html_body):undefined,from:String(item.email_from??""),to:Array.isArray(item.email_to)?item.email_to.map(String):[],attachments:Array.isArray(item.email_attachments)?item.email_attachments.map(value=>{const v=value as Record<string,unknown>;return{id:String(v.id),name:String(v.name??"附件"),mime:String(v.mime??""),size:v.size==null?undefined:formatBytes(Number(v.size)),inline:Boolean(v.inline),contentId:v.contentId?String(v.contentId):undefined}}):[],warning:item.email_attachment_warning?String(item.email_attachment_warning):undefined,jobId:item.email_job_id?String(item.email_job_id):undefined,quotedBody:item.email_quoted_body?String(item.email_quoted_body):undefined}:undefined;return{id:String(item.id),direction:item.direction as "in"|"out",kind,text:String(item.text_content??(mediaId?"":kindText(kind))),senderJid:item.sender_jid?String(item.sender_jid):undefined,senderName:item.sender_name?String(item.sender_name):undefined,platform:item.platform==="livechat"?"livechat" as const:item.platform==="messenger"?"messenger":"whatsapp",providerMessageId:item.provider_message_id?String(item.provider_message_id):undefined,pageId:item.page_id?String(item.page_id):undefined,email,quoted:quotedId?{id:quotedId,direction:item.quoted_direction as "in"|"out",kind:quotedKind,text:String(item.quoted_text_content??""),senderName:item.quoted_sender_name?String(item.quoted_sender_name):undefined,attachment:quotedMediaId?{id:quotedMediaId,name:String(item.quoted_file_name??kindText(quotedKind)),mime:String(item.quoted_mime_type??"")}:undefined}:undefined,adReferral,translationSourceText:item.translation_source_text?String(item.translation_source_text):undefined,translationTargetLanguage:item.translation_target_language?String(item.translation_target_language):undefined,failureMessage:item.failure_message?String(item.failure_message):undefined,queueDiagnostic:item.direction==="out"&&!email?{commandId,state:String(item.command_state??""),attempt:Number(item.command_attempt??0),lastError:String(item.command_last_error??""),availableAt:String(item.command_available_at??""),claimedAt:String(item.command_claimed_at??""),createdAt:String(item.command_created_at??""),accountStatus:String(item.account_status??""),agentStatus:String(item.agent_status??""),agentLastSeenAt:String(item.agent_last_seen_at??"")}:undefined,cachedTranslationText:item.cached_translation_text?String(item.cached_translation_text):undefined,cachedTranslationLanguage:item.cached_translation_language?String(item.cached_translation_language):undefined,cachedTranslationSourceLanguage:item.cached_translation_source_language?String(item.cached_translation_source_language):undefined,cachedTranscriptionText:item.cached_transcription_text?String(item.cached_transcription_text):undefined,time:formatMessageTime(occurredAt),occurredAt,status:item.status as ChatMessage["status"],attachment:item.file_name&&mediaId?{id:mediaId,name:String(item.file_name),mime:String(item.mime_type??"文件"),size:formatBytes(Number(item.byte_size??0))}:undefined,comments:Array.isArray(item.comments)?item.comments.map(value=>mapMessageComment(value as Record<string,unknown>)):[]};}
+function mapMessage(item:Record<string,unknown>):ChatMessage {const kind=String(item.kind??"text"),mediaId=String(item.media_id??""),occurredAt=String(item.occurred_at),quotedId=String(item.quoted_message_id??""),quotedMediaId=String(item.quoted_media_id??""),quotedKind=String(item.quoted_kind??"text"),commandId=String(item.command_id??""),adReferral=mapAdReferral(item.ad_referral);const emailSubject=item.email_subject?String(item.email_subject):"";const email=emailSubject?{subject:emailSubject,htmlBody:item.email_html_body?String(item.email_html_body):undefined,from:String(item.email_from??""),to:Array.isArray(item.email_to)?item.email_to.map(String):[],attachments:Array.isArray(item.email_attachments)?item.email_attachments.map(value=>{const v=value as Record<string,unknown>;return{id:String(v.id),name:String(v.name??"附件"),mime:String(v.mime??""),size:v.size==null?undefined:formatBytes(Number(v.size)),inline:Boolean(v.inline),contentId:v.contentId?String(v.contentId):undefined}}):[],warning:item.email_attachment_warning?String(item.email_attachment_warning):undefined,jobId:item.email_job_id?String(item.email_job_id):undefined,quotedBody:item.email_quoted_body?String(item.email_quoted_body):undefined}:undefined;return{id:String(item.id),sourceConversationId:item.conversation_id?String(item.conversation_id):undefined,direction:item.direction as "in"|"out",kind,text:String(item.text_content??(mediaId?"":kindText(kind))),senderJid:item.sender_jid?String(item.sender_jid):undefined,senderName:item.sender_name?String(item.sender_name):undefined,platform:item.platform==="livechat"?"livechat" as const:item.platform==="messenger"?"messenger":"whatsapp",providerMessageId:item.provider_message_id?String(item.provider_message_id):undefined,pageId:item.page_id?String(item.page_id):undefined,email,quoted:quotedId?{id:quotedId,direction:item.quoted_direction as "in"|"out",kind:quotedKind,text:String(item.quoted_text_content??""),senderName:item.quoted_sender_name?String(item.quoted_sender_name):undefined,attachment:quotedMediaId?{id:quotedMediaId,name:String(item.quoted_file_name??kindText(quotedKind)),mime:String(item.quoted_mime_type??"")}:undefined}:undefined,adReferral,translationSourceText:item.translation_source_text?String(item.translation_source_text):undefined,translationTargetLanguage:item.translation_target_language?String(item.translation_target_language):undefined,failureMessage:item.failure_message?String(item.failure_message):undefined,queueDiagnostic:item.direction==="out"&&!email?{commandId,state:String(item.command_state??""),attempt:Number(item.command_attempt??0),lastError:String(item.command_last_error??""),availableAt:String(item.command_available_at??""),claimedAt:String(item.command_claimed_at??""),createdAt:String(item.command_created_at??""),accountStatus:String(item.account_status??""),agentStatus:String(item.agent_status??""),agentLastSeenAt:String(item.agent_last_seen_at??"")}:undefined,cachedTranslationText:item.cached_translation_text?String(item.cached_translation_text):undefined,cachedTranslationLanguage:item.cached_translation_language?String(item.cached_translation_language):undefined,cachedTranslationSourceLanguage:item.cached_translation_source_language?String(item.cached_translation_source_language):undefined,cachedTranscriptionText:item.cached_transcription_text?String(item.cached_transcription_text):undefined,time:formatMessageTime(occurredAt),occurredAt,status:item.status as ChatMessage["status"],attachment:item.file_name&&mediaId?{id:mediaId,name:String(item.file_name),mime:String(item.mime_type??"文件"),size:formatBytes(Number(item.byte_size??0))}:undefined,comments:Array.isArray(item.comments)?item.comments.map(value=>mapMessageComment(value as Record<string,unknown>)):[]};}
 
 function messageQuote(message:ChatMessage):NonNullable<ChatMessage["quoted"]>{return{id:message.id,direction:message.direction,kind:message.kind,text:message.text||message.attachment?.name||kindText(message.kind)};}
 function mapEmailActivity(item:Record<string,unknown>):EmailActivity{return{id:String(item.id),subject:String(item.subject),recipients:Array.isArray(item.recipients)?item.recipients.map(value=>{const recipient=value as Record<string,unknown>;return{email:String(recipient.email),label:String(recipient.label??"")};}):[],contentType:String(item.content_type),status:String(item.status) as EmailActivity["status"],attempt:Number(item.attempt??0),lastError:String(item.last_error??""),createdAt:String(item.created_at),senderName:String(item.sender_name??""),attachmentCount:Number(item.attachment_count??0)};}
