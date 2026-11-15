@@ -260,6 +260,34 @@ try{
   await frame.locator('#older').click();await frame.getByText('分页回复 5',{exact:true}).waitFor();await frame.locator('#older').click();await frame.getByText('第一条匿名消息',{exact:true}).waitFor();
   for(const viewport of [{width:1280,height:850},{width:320,height:460}]){
     await page.setViewportSize(viewport);
+    const scrollUp=()=>frame.evaluate(()=>{document.querySelector('#timeline').scrollTop=0});
+    const waitForLatest=()=>frame.waitForFunction(()=>{const t=document.querySelector('#timeline');return t.clientHeight>0&&t.scrollHeight-t.scrollTop-t.clientHeight<=1});
+    await scrollUp();
+    const historyText=`翻阅历史时的新消息 ${viewport.width}`;incoming(firstSession,historyText);
+    await frame.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+    await frame.getByText(historyText,{exact:true}).waitFor();
+    assert.equal(await frame.locator('#timeline').evaluate(t=>t.scrollTop),0,'普通收信同步不能打断历史浏览');
+    const sentText=`历史位置发送 ${viewport.width}`;
+    await frame.locator('#draft').fill(sentText);await scrollUp();
+    await frame.locator('#send').click();
+    await frame.getByText(sentText,{exact:true}).waitFor();await waitForLatest();
+    await frame.waitForFunction(()=>!document.querySelector('#send').disabled);
+    await frame.locator('#file').setInputFiles({name:'scroll-test.txt',mimeType:'text/plain',buffer:Buffer.from('scroll test')});
+    await scrollUp();await frame.locator('#send').click();
+    await frame.waitForFunction(()=>!document.querySelector('#send').disabled);await waitForLatest();
+    failNext=true;await frame.locator('#draft').fill(`失败重试滚动 ${viewport.width}`);await scrollUp();
+    await frame.locator('#send').click();
+    await frame.getByText('发送失败，点击重试',{exact:true}).waitFor();await waitForLatest();
+    await scrollUp();
+    await frame.getByText('发送失败，点击重试',{exact:true}).evaluate(button=>button.click());
+    await frame.waitForFunction(()=>!document.querySelector('#send').disabled);await waitForLatest();
+    for(const maximized of [true,false]){
+      await scrollUp();await frame.locator('#maximize').click();
+      await frame.waitForFunction(height=>innerHeight===height,maximized?viewport.height-16:Math.min(640,viewport.height-32));
+      await waitForLatest();
+      assert.equal(await frame.locator('#maximize').getAttribute('aria-pressed'),String(maximized));
+      await page.screenshot({path:`${screenshots}/scroll-${viewport.width}-${maximized?'maximized':'restored'}.png`});
+    }
     await frame.evaluate(()=>{document.querySelector('#timeline').scrollTop=0});
     assert.equal(await frame.evaluate(()=>{const t=document.querySelector('#timeline');return t.scrollHeight-t.scrollTop-t.clientHeight>80}),true,'测试前停留在历史消息');
     await frame.locator('#close').click();await openChat(frame);
