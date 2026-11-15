@@ -7,6 +7,7 @@ function inbound(options:{outreach?:boolean;agentMessage?:boolean;mode?:string;c
   const queries:Array<{sql:string;params:unknown[]|undefined}>=[];
   const client={query:async(sql:string,params?:unknown[])=>{
     queries.push({sql,params});
+    if(sql.startsWith("SELECT root.id"))return{rows:[{id:"conversation-1"}],rowCount:1};
     if(sql.includes("SELECT j.id FROM proactive_outreach_jobs"))return{rows:options.outreach?[{id:"outreach-1"}]:[],rowCount:options.outreach?1:0};
     if(sql.includes("JOIN messages sent ON sent.id=st.last_agent_message_id"))return{rows:options.agentMessage?[{proactive_reply_mode:options.choice??"cautious"}]:[],rowCount:options.agentMessage?1:0};
     if(sql.includes("SELECT mode,proactive_reply_mode"))return{rows:[{mode:options.mode??"full",proactive_reply_mode:options.choice??"cautious"}],rowCount:1};
@@ -17,7 +18,7 @@ function inbound(options:{outreach?:boolean;agentMessage?:boolean;mode?:string;c
 
 test("first reply to full outreach switches to cautious within the conversation lock",async()=>{
   const scenario=inbound({outreach:true});await scenario.run();
-  const statements=scenario.queries.map(query=>query.sql);
+  const statements=scenario.queries.map(query=>query.sql).filter(sql=>!sql.startsWith("SELECT root.id"));
   assert.match(statements[0],/FOR UPDATE/);
   assert.match(statements[1],/sent_agent_mode='full'.*reply_processed_at IS NULL/s);
   assert.match(statements[1],/sent\.status IN \('sent','delivered','read'\)/);
@@ -78,9 +79,8 @@ test("migration, API, and inbox expose a per-conversation default without changi
   assert.match(migration,/ADD COLUMN IF NOT EXISTS sent_agent_mode text/);
   assert.match(migration,/ADD COLUMN IF NOT EXISTS sent_at timestamptz/);
   assert.match(migrator,/091_proactive_reply_mode\.sql/);
-  assert.match(server,/COALESCE\(st\.proactive_reply_mode,'cautious'\) proactive_reply_mode/);
-  assert.match(server,/if\(body\.mode!==undefined\)/);
-  assert.match(server,/if\(body\.proactiveReplyMode!==undefined\)await client\.query/);
+  assert.match(server,/COALESCE\(control\.proactive_reply_mode,'cautious'\) proactive_reply_mode/);
+  assert.match(server,/setTimelineAgentMode\(client,id,body,request\.principal!\.id\)/);
   assert.match(inbox,/回复时切换为<select/);
   assert.match(engine,/await applyProactiveReplyTransition\(client,conversationId,messageId,live\)/);
   assert.match(engine,/await applyProactiveReplyTransition\(client,conversationId,messageId,live\);\s*if\(!eligibleForReply\)return;/);

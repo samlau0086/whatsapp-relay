@@ -4,7 +4,7 @@ import { agentRunKind, buildReplyTimingContext, buildSalesSuggestionConversation
 
 test("human messages dismiss pending drafts and their outreach approvals",async()=>{
   const queries:string[]=[];
-  const client={query:async(sql:string)=>{queries.push(sql);return sql.startsWith("UPDATE ai_drafts")?{rows:[{id:"draft-id"}],rowCount:1}:{rows:[],rowCount:0};}};
+  const client={query:async(sql:string)=>{queries.push(sql);if(sql.startsWith("SELECT root.id"))return{rows:[{id:"conversation-id"}],rowCount:1};return sql.startsWith("UPDATE ai_drafts")?{rows:[{id:"draft-id"}],rowCount:1}:{rows:[],rowCount:0};}};
   await pauseAgentForHuman(client as never,"conversation-id");
   assert.match(queries[0],/conversations WHERE id=\$1 FOR UPDATE/);
   assert.match(queries.at(-2)??"",/UPDATE ai_drafts SET status='dismissed'.*status='pending' RETURNING id/);

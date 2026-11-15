@@ -6,6 +6,7 @@ import { decryptAtRest } from "./security.js";
 import { ensureOrderDetailsImage } from "./order-details-image.js";
 import { isTemplateRequiredError, queueChannelCommand } from "./whatsapp-outbound.js";
 import {cancelProactiveForConversation,suppressProactiveForContact,isProactiveOptOut} from "./proactive-outreach.js";
+import {enqueueTimelineAgentReply,loadAgentDeliveryContext,resolveTimelineAgentControl,timelineAgentControlJoin} from "./timeline-agent.js";
 
 const s3 = new S3Client({
   region: config.S3_REGION,
@@ -679,7 +680,7 @@ async function runConversationJob(job: Job): Promise<void> {
     job.kind === "refresh_memory" ||
     String(job.payload.memoryOnly ?? "") === "true";
   const context = await pool.query(
-    `SELECT c.id,c.status,c.customer_stage,c.account_id,a.status account_status,a.agent_id,s.enabled,COALESCE(s.persona,'You are a helpful, concise relationship assistant.') persona,COALESCE(s.reply_language,'auto') reply_language,s.timezone,s.business_days,s.business_start::text,s.business_end::text,COALESCE(s.confidence_threshold,0.8) confidence_threshold,s.followup_enabled,s.followup_delays_hours,COALESCE(st.mode,'human_paused') mode,COALESCE(st.followup_count,0) followup_count,mem.summary FROM conversations c JOIN channel_accounts a ON a.id=c.account_id LEFT JOIN account_agent_settings s ON s.account_id=c.account_id LEFT JOIN conversation_agent_state st ON st.conversation_id=c.id LEFT JOIN conversation_memories mem ON mem.conversation_id=c.id WHERE c.id=$1`,
+    `SELECT c.id,c.status,c.customer_stage,c.account_id,a.status account_status,a.agent_id,s.enabled,COALESCE(s.persona,'You are a helpful, concise relationship assistant.') persona,COALESCE(s.reply_language,'auto') reply_language,s.timezone,s.business_days,s.business_start::text,s.business_end::text,COALESCE(s.confidence_threshold,0.8) confidence_threshold,s.followup_enabled,s.followup_delays_hours,COALESCE(control.mode,'human_paused') mode,COALESCE(st.followup_count,0) followup_count,mem.summary FROM conversations c JOIN channel_accounts a ON a.id=c.account_id LEFT JOIN account_agent_settings s ON s.account_id=c.account_id LEFT JOIN conversation_agent_state st ON st.conversation_id=c.id LEFT JOIN conversation_memories mem ON mem.conversation_id=c.id ${timelineAgentControlJoin} WHERE c.id=$1`,
     [job.conversation_id],
   );
   if (!context.rowCount) return;
@@ -1588,6 +1589,9 @@ async function saveDraft(
 ): Promise<void> {
   await transaction(async (client) => {
     await client.query("SELECT id FROM conversations WHERE id=$1 FOR UPDATE", [job.conversation_id]);
+    await resolveTimelineAgentControl(client,String(job.conversation_id),true);
+    const delivery=await loadAgentDeliveryContext(client,String(job.conversation_id));
+    if(!delivery.rowCount||!isConversationAgentActive(delivery.rows[0].enabled,delivery.rows[0].mode))return;
     const active = await client.query(
       "SELECT id FROM agent_jobs WHERE id=$1 AND state='processing'",
       [job.id],
@@ -1623,10 +1627,8 @@ async function queueAiMessage(
       [job.conversation_id],
     );
     if (!locked.rowCount) return;
-    const account = await client.query(
-      "SELECT a.id,a.agent_id,a.transport,co.provider_user_id,s.enabled,COALESCE(st.mode,'human_paused') mode FROM conversations c JOIN channel_accounts a ON a.id=c.account_id JOIN contacts co ON co.id=c.contact_id LEFT JOIN account_agent_settings s ON s.account_id=c.account_id LEFT JOIN conversation_agent_state st ON st.conversation_id=c.id WHERE c.id=$1",
-      [job.conversation_id],
-    );
+    await resolveTimelineAgentControl(client,String(job.conversation_id),true);
+    const account = await loadAgentDeliveryContext(client,String(job.conversation_id));
     if (
       !account.rowCount ||
       (account.rows[0].transport === "web" && !account.rows[0].agent_id)
@@ -1732,6 +1734,8 @@ async function finishRun(id: string, decision: AgentDecision) {
 
 export async function applyProactiveReplyTransition(client:PoolClient,conversationId:string,messageId:string,live=true):Promise<void>{
   await client.query("SELECT id FROM conversations WHERE id=$1 FOR UPDATE",[conversationId]);
+  const controlId=await resolveTimelineAgentControl(client,conversationId,true);
+  if(!controlId)return;
   const outreach=live?await client.query(
     `SELECT j.id FROM proactive_outreach_jobs j
      JOIN messages sent ON sent.id=j.message_id
@@ -1753,7 +1757,7 @@ export async function applyProactiveReplyTransition(client:PoolClient,conversati
   let transitionMode:ConversationAgentMode|null=null;
   if(outreach?.rowCount){
     await client.query("UPDATE proactive_outreach_jobs SET reply_processed_at=now(),updated_at=now() WHERE id=$1 AND reply_processed_at IS NULL",[outreach.rows[0].id]);
-    const choice=await client.query("SELECT mode,proactive_reply_mode FROM conversation_agent_state WHERE conversation_id=$1",[conversationId]);
+    const choice=await client.query("SELECT mode,proactive_reply_mode FROM conversation_agent_state WHERE conversation_id=$1",[controlId]);
     if(choice.rows[0]?.mode==='full'&&choice.rows[0].proactive_reply_mode!=='full'){
       transitionMode=choice.rows[0].proactive_reply_mode as ConversationAgentMode;
     }
@@ -1764,12 +1768,13 @@ export async function applyProactiveReplyTransition(client:PoolClient,conversati
   // message as the fallback signal.
   if(!transitionMode&&live){
     const sent=await client.query(
-      `SELECT st.proactive_reply_mode
+      `SELECT control.proactive_reply_mode
        FROM conversation_agent_state st
+       JOIN conversation_agent_state control ON control.conversation_id=$3
        JOIN messages sent ON sent.id=st.last_agent_message_id
        JOIN messages incoming ON incoming.id=$2 AND incoming.conversation_id=st.conversation_id
-       WHERE st.conversation_id=$1 AND st.mode='full'
-         AND st.proactive_reply_mode<>'full' AND sent.direction='out'
+       WHERE st.conversation_id=$1 AND control.mode='full'
+         AND control.proactive_reply_mode<>'full' AND sent.direction='out'
          AND sent.status IN ('queued','dispatching','sent','delivered','read')
          AND sent.occurred_at<incoming.occurred_at
          AND NOT EXISTS (
@@ -1779,15 +1784,15 @@ export async function applyProactiveReplyTransition(client:PoolClient,conversati
              AND newer.occurred_at<=incoming.occurred_at
              AND newer.status IN ('queued','dispatching','sent','delivered','read')
          )`,
-      [conversationId,messageId],
+      [conversationId,messageId,controlId],
     );
     if(sent.rowCount)transitionMode=sent.rows[0].proactive_reply_mode as ConversationAgentMode;
   }
   if(transitionMode){
-    await client.query("UPDATE conversation_agent_state SET mode=$2,pause_reason=$3,updated_at=now() WHERE conversation_id=$1",[conversationId,transitionMode,transitionMode==='human_paused'?'proactive_customer_replied':null]);
+    await client.query("UPDATE conversation_agent_state SET mode=$2,pause_reason=$3,updated_at=now() WHERE conversation_id=$1",[controlId,transitionMode,transitionMode==='human_paused'?'proactive_customer_replied':null]);
     if(transitionMode==='human_paused'){
-      await client.query("UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error='proactive_customer_replied' WHERE conversation_id=$1 AND state='pending' AND kind IN ('reply','followup')",[conversationId]);
-      await client.query("UPDATE ai_drafts SET status='dismissed',resolved_at=now() WHERE conversation_id=$1 AND status='pending'",[conversationId]);
+      await client.query("UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error='proactive_customer_replied' WHERE conversation_id IN (SELECT relay_conversation_members($1)) AND state='pending' AND kind IN ('reply','followup')",[controlId]);
+      await client.query("UPDATE ai_drafts SET status='dismissed',resolved_at=now() WHERE conversation_id IN (SELECT relay_conversation_members($1)) AND status='pending'",[controlId]);
     }
   }
 }
@@ -1815,10 +1820,7 @@ export async function enqueueInboundAgentWork(
     const contact=await client.query("SELECT contact_id FROM conversations WHERE id=$1",[conversationId]);
     if(contact.rowCount)await suppressProactiveForContact(client,String(contact.rows[0].contact_id),"customer_opt_out");
   }
-  await client.query(
-    "INSERT INTO agent_jobs(conversation_id,source_message_id,kind,available_at) SELECT $1,$2,'reply',now()+interval '3 seconds' WHERE EXISTS(SELECT 1 FROM conversations c JOIN account_agent_settings s ON s.account_id=c.account_id JOIN conversation_agent_state st ON st.conversation_id=c.id WHERE c.id=$1 AND s.enabled AND st.mode IN ('cautious','full')) ON CONFLICT DO NOTHING",
-    [conversationId, messageId],
-  );
+  await enqueueTimelineAgentReply(client,conversationId,messageId);
 }
 
 export async function pauseAgentForHuman(
@@ -1826,21 +1828,23 @@ export async function pauseAgentForHuman(
   conversationId: string,
 ): Promise<void> {
   await client.query("SELECT id FROM conversations WHERE id=$1 FOR UPDATE", [conversationId]);
+  const controlId=await resolveTimelineAgentControl(client,conversationId,true);
+  if(!controlId)return;
   await client.query(
     "INSERT INTO conversation_agent_state(conversation_id,mode,pause_reason) VALUES($1,'human_paused','human_message') ON CONFLICT(conversation_id) DO UPDATE SET mode='human_paused',pause_reason='human_message',updated_at=now()",
-    [conversationId],
+    [controlId],
   );
   await client.query(
-    "UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error='human_takeover' WHERE conversation_id=$1 AND state='pending' AND kind IN ('reply','followup')",
-    [conversationId],
+    "UPDATE agent_jobs SET state='cancelled',completed_at=now(),last_error='human_takeover' WHERE conversation_id IN (SELECT relay_conversation_members($1)) AND state='pending' AND kind IN ('reply','followup')",
+    [controlId],
   );
   const drafts=await client.query(
-    "UPDATE ai_drafts SET status='dismissed',resolved_at=now() WHERE conversation_id=$1 AND status='pending' RETURNING id",
-    [conversationId],
+    "UPDATE ai_drafts SET status='dismissed',resolved_at=now() WHERE conversation_id IN (SELECT relay_conversation_members($1)) AND status='pending' RETURNING id",
+    [controlId],
   );
   if(drafts.rowCount)await client.query(
-    "UPDATE proactive_outreach_jobs SET state='skipped',completed_at=now(),last_error='human_takeover',updated_at=now() WHERE conversation_id=$1 AND state='awaiting_approval' AND payload->>'draftId'=ANY($2::text[])",
-    [conversationId,drafts.rows.map(row=>row.id)],
+    "UPDATE proactive_outreach_jobs SET state='skipped',completed_at=now(),last_error='human_takeover',updated_at=now() WHERE conversation_id IN (SELECT relay_conversation_members($1)) AND state='awaiting_approval' AND payload->>'draftId'=ANY($2::text[])",
+    [controlId,drafts.rows.map(row=>row.id)],
   );
 }
 
