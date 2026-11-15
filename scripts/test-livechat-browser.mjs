@@ -83,11 +83,16 @@ const assertMessageLayout=async frame=>{
       if(!avatar||!bubble)return false;
       const a=avatar.getBoundingClientRect(),b=bubble.getBoundingClientRect(),r=reply?.getBoundingClientRect();
       const visitor=row.classList.contains('out');
+      const tail=getComputedStyle(bubble,'::before'),style=getComputedStyle(bubble);
+      const tailCenter=b.top+bubble.clientTop+parseFloat(tail.top);
+      const alignedTail=tail.content!== 'none'&&tail.content!=='normal'&&
+        Math.abs(tailCenter-(a.top+a.height/2))<=1&&tail.backgroundColor===style.backgroundColor&&
+        (visitor?parseFloat(tail.right)<0&&parseFloat(tail.left)>=0:parseFloat(tail.left)<0);
       return (visitor?a.left>=b.right&&avatar.textContent==='Me':a.right<=b.left)&&
-        (!r||(r.left>=b.right&&getComputedStyle(reply).opacity==='1'&&(!visitor||r.right<=a.left)));
+        alignedTail&&(!r||(r.left>=b.right&&getComputedStyle(reply).opacity==='1'&&(!visitor||r.right<=a.left)));
     })&&rows.length>0&&document.querySelector('#composerTools').getBoundingClientRect().bottom<=document.querySelector('#draft').getBoundingClientRect().top;
   });
-  assert.equal(result,true,'客服头像在左、访客头像在右，回复按钮在气泡右边且不遮挡头像，工具栏在输入框上方');
+  assert.equal(result,true,'头像方向正确，气泡尖角与头像中心对齐且颜色一致，回复按钮不遮挡头像，工具栏在输入框上方');
 };
 const startChat=async(frame,text)=>{
   await frame.locator('#visitorName').fill('Sam');await frame.locator('#email').fill('sam@example.com');
@@ -142,6 +147,7 @@ try{
   await frame.locator('#image').click();await frame.locator('#file').setInputFiles({name:'preview.png',mimeType:'image/png',buffer:png});await frame.locator('#composerPreview img').waitFor();
   await frame.locator('#emoji').click();await frame.locator('#emojiPanel button').first().click();assert.ok((await frame.locator('#draft').inputValue()).length>0);
   await frame.locator('#send').click();const sentImage=frame.locator('.attachment-image img[alt="preview.png"]');await sentImage.waitFor();await sentImage.click();await frame.locator('dialog.image-preview').waitFor();await page.screenshot({path:`${screenshots}/desktop-media-preview.png`});await frame.locator('dialog.image-preview').getByText('取消',{exact:true}).click();
+  await assertMessageLayout(frame);
   for(let i=0;i<205;i++)incoming(firstSession,`分页回复 ${i}`);
   await frame.getByText('分页回复 204',{exact:true}).waitFor({timeout:15000});
   await page.reload();frame=await frameFor(page);await frame.locator('#launcher').click();await frame.getByText('分页回复 204',{exact:true}).waitFor();
