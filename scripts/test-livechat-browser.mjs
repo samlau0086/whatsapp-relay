@@ -10,7 +10,7 @@ import {livechatLoader,livechatWidget} from "../services/api/dist/livechat-widge
 const channel="11111111-1111-4111-8111-111111111111";
 const secondChannel="22222222-2222-4222-8222-222222222222";
 const sessions=new Map(),uploads=new Map(),origins=new Set(),errors=[],profiles=[];
-const transcripts=new Map(),endRequests=[];
+const transcripts=new Map(),closedChats=new Map(),endRequests=[];
 let endError='',dropEndResponse=false;
 let failNext=false,ordinal=0,widgetLanguage,widgetName='网站客服',widgetIcon='';
 const timestamp=()=>new Date().toISOString().replace(/\.(\d{3})Z$/,(_match,millis)=>`.${millis}${String(++ordinal%1000).padStart(3,'0')}Z`);
@@ -44,11 +44,12 @@ const api=await listen(async(req,res)=>{
   const messages=sessions.get(sessionKey);
   if(!messages){json(401,{error:"visitor_not_found_or_expired"});return}
   if(url.pathname.endsWith('/end-chat')&&req.method==='POST'){
-    const data=JSON.parse((await body(req)).toString());endRequests.push(data.clientRequestId);
-    if(endError){json(409,{error:endError});return}
-    if(!transcripts.has(data.clientRequestId))transcripts.set(data.clientRequestId,sessionKey);
+    const data=JSON.parse((await body(req)).toString());endRequests.push(data);
+    if(endError&&data.sendTranscript!==false){json(409,{error:endError});return}
+    if(data.sendTranscript===false){if(!closedChats.has(data.clientRequestId))closedChats.set(data.clientRequestId,sessionKey)}
+    else if(!transcripts.has(data.clientRequestId))transcripts.set(data.clientRequestId,sessionKey);
     if(dropEndResponse){dropEndResponse=false;json(503,{error:'response_lost'});return}
-    json(202,{ok:true,queued:true,closed:true});return;
+    json(202,{ok:true,queued:data.sendTranscript!==false,closed:true,sendTranscript:data.sendTranscript!==false});return;
   }
   if(url.pathname.endsWith("/messages")){
     const after=url.searchParams.get("after"),before=url.searchParams.get("before");
@@ -58,8 +59,8 @@ const api=await listen(async(req,res)=>{
     json(200,{data:page.map(message=>({...message,sort_at:message.created_at,created_at:new Date(message.created_at).toISOString()})),hasMore:data.length>100});return;
   }
   if(url.pathname.endsWith("/media")&&req.method==="POST"){
-    const bytes=await body(req),text=bytes.toString("latin1"),id=randomUUID();
-    uploads.set(id,{name:/filename="([^"]+)"/.exec(text)?.[1]||"attachment",mime:/Content-Type: ([^\r\n]+)/i.exec(text)?.[1]||"application/octet-stream",bytes:Buffer.from("附件内容")});json(201,{id});return;
+    const bytes=await body(req),text=bytes.toString("latin1"),id=randomUUID(),start=bytes.indexOf(Buffer.from("\r\n\r\n"))+4,end=bytes.lastIndexOf(Buffer.from("\r\n--"));
+    uploads.set(id,{name:/filename="([^"]+)"/.exec(text)?.[1]||"attachment",mime:/Content-Type: ([^\r\n]+)/i.exec(text)?.[1]||"application/octet-stream",bytes:bytes.subarray(start,end)});json(201,{id});return;
   }
   const upload=uploads.get(url.pathname.split("/").at(-1));
   if(upload){res.writeHead(200,{...cors,"content-type":upload.mime});res.end(upload.bytes);return}
@@ -112,8 +113,15 @@ try{
   assert.equal(firstSession.filter(m=>m.text_content==="刷新后重试").length,1);
   await frame.locator("#close").click();incoming(firstSession,"未读回复");await frame.locator("#badge").waitFor({state:"visible",timeout:10000});await frame.locator("#launcher").click();assert.equal(await frame.locator("#badge").isVisible(),false);
   await context.setOffline(true);incoming(firstSession,"断线期间回复");await page.waitForTimeout(4200);await context.setOffline(false);await frame.getByText("断线期间回复",{exact:true}).waitFor({timeout:12000});
-  await frame.locator("#file").setInputFiles({name:"sample.txt",mimeType:"text/plain",buffer:Buffer.from("test")});await frame.getByText("sample.txt",{exact:true}).waitFor();
+  assert.equal(await frame.locator('#emoji svg,#image svg,#attach svg,#send svg').count(),4);
+  await frame.locator("#file").setInputFiles({name:"remove.txt",mimeType:"text/plain",buffer:Buffer.from("remove")});await frame.locator('#composerPreview').getByText("remove.txt",{exact:true}).waitFor();await frame.locator('#composerPreview').getByRole('button',{name:'移除附件'}).click();await frame.locator('#composerPreview').waitFor({state:'hidden'});
+  await frame.locator("#file").setInputFiles({name:"sample.txt",mimeType:"text/plain",buffer:Buffer.from("test")});await frame.locator('#composerPreview').getByText("sample.txt",{exact:true}).waitFor();
+  await frame.locator('#draft').fill('附件说明');await frame.locator('#send').click();await frame.locator('#composerPreview').waitFor({state:'hidden'});await frame.getByRole('button',{name:'sample.txt',exact:true}).waitFor();
   const download=page.waitForEvent("download");await frame.getByRole("button",{name:"sample.txt",exact:true}).click();assert.equal((await download).suggestedFilename(),"sample.txt");
+  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDAAAAAAASUVORK5CYII=','base64');
+  await frame.locator('#image').click();await frame.locator('#file').setInputFiles({name:'preview.png',mimeType:'image/png',buffer:png});await frame.locator('#composerPreview img').waitFor();
+  await frame.locator('#emoji').click();await frame.locator('#emojiPanel button').first().click();assert.ok((await frame.locator('#draft').inputValue()).length>0);
+  await frame.locator('#send').click();const sentImage=frame.locator('.attachment-image img[alt="preview.png"]');await sentImage.waitFor();await sentImage.click();await frame.locator('dialog.image-preview').waitFor();await page.screenshot({path:`${screenshots}/desktop-media-preview.png`});await frame.locator('dialog.image-preview').getByText('取消',{exact:true}).click();
   for(let i=0;i<205;i++)incoming(firstSession,`分页回复 ${i}`);
   await frame.getByText('分页回复 204',{exact:true}).waitFor({timeout:15000});
   await page.reload();frame=await frameFor(page);await frame.locator('#launcher').click();await frame.getByText('分页回复 204',{exact:true}).waitFor();
@@ -142,12 +150,12 @@ try{
   endError='';dropEndResponse=true;await endFrame.locator('#end').click();
   await endFrame.locator('#confirmAction').click();
   await endFrame.getByText('Could not send. Please retry',{exact:true}).waitFor();
-  const retryEndId=endRequests.at(-1);
+  const retryEndId=endRequests.at(-1).clientRequestId;
   await other.reload();endFrame=await frameFor(other);await endFrame.locator('#launcher').click();
   await endFrame.locator('#end').click();
   await endFrame.locator('#confirmAction').click();
   await endFrame.getByText('Chat ended. Your transcript is queued for email delivery.',{exact:true}).waitFor();
-  assert.equal(endRequests.at(-1),retryEndId);assert.equal(transcripts.size,1);
+  assert.equal(endRequests.at(-1).clientRequestId,retryEndId);assert.equal(endRequests.at(-1).sendTranscript,true);assert.equal(transcripts.size,1);
   assert.equal(await endFrame.locator('#form').isVisible(),false);assert.equal(await endFrame.locator('#prechat').isVisible(),false);
   await other.reload();endFrame=await frameFor(other);await endFrame.locator('#launcher').click();
   await endFrame.getByText('Still able to send',{exact:true}).waitFor();
@@ -155,6 +163,8 @@ try{
   await other.screenshot({path:`${screenshots}/ended-english.png`});
   await endFrame.locator('#restart').click();await endFrame.locator('#confirmAction').click();await endFrame.locator('#prechat').waitFor({state:'visible'});
   await startChat(endFrame,'New chat after transcript');assert.equal(transcripts.size,1);
+  await endFrame.locator('#endOnly').click();await endFrame.locator('#confirmAction').click();await endFrame.getByText('Chat ended.',{exact:true}).waitFor();
+  assert.equal(endRequests.at(-1).sendTranscript,false);assert.equal(closedChats.size,1);assert.equal(transcripts.size,1);
   widgetLanguage=undefined;
   const mobileContext=await browser.newContext({viewport:{width:375,height:740},isMobile:true,hasTouch:true}),mobile=await mobileContext.newPage();mobile.on("pageerror",error=>errors.push(error.message));
   await mobile.goto(hosts[0].url);const mobileFrame=await frameFor(mobile);await mobileFrame.locator("#launcher").click();
@@ -204,6 +214,6 @@ try{
   widgetIcon='';widgetName='<Brand>';await page.reload();brandFrame=await frameFor(page);
   assert.equal(await brandFrame.locator('#avatar').textContent(),'<');assert.equal(await brandFrame.locator('#avatar').locator('*').count(),0);
   widgetName='';await page.reload();brandFrame=await frameFor(page);assert.equal(await brandFrame.locator('#avatar').textContent(),'?');
-  assert.deepEqual(errors,[]);console.log(`已通过：双站点及多渠道隔离、重复嵌入、样式隔离、匿名消息、坐席回复、刷新恢复、失败重试、确认丢失恢复、未读、多页历史与断线补齐、附件上传下载、六种界面语言及桌面/移动布局、结束会话邮件错误隔离、确认丢失后的幂等重试及结束后刷新恢复。截图：${screenshots}`);
+  assert.deepEqual(errors,[]);console.log(`已通过：双站点及多渠道隔离、重复嵌入、样式隔离、匿名消息、坐席回复、刷新恢复、失败重试、确认丢失恢复、未读、多页历史与断线补齐、附件预览上传下载、图片内联预览、表情发送、六种界面语言及桌面/移动布局、独立结束会话、结束并发送记录、邮件错误隔离、确认丢失后的幂等重试及结束后刷新恢复。截图：${screenshots}`);
 }catch(error){console.error({errors,sessions:[...sessions.values()]});if(debugPage){const frame=debugPage.frames().find(f=>f.url().endsWith("/widget"));console.error(await frame?.locator("body").innerText());await debugPage.screenshot({path:`${screenshots}/failure.png`})}throw error}
 finally{await browser.close();await Promise.all([api,...hosts].map(({server})=>new Promise(resolve=>server.close(resolve))))}
