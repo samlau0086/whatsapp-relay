@@ -14,6 +14,8 @@ export const livechatTranslations:Record<string,string[]>={
   "欢迎与我们联系":["歡迎與我們聯絡","Welcome! Get in touch","お気軽にお問い合わせください","¡Hola! Contáctanos","Olá! Fale conosco"],
   "您好，有什么可以帮助您？":["您好，有什麼可以幫助您？","Hi! How can we help you?","こんにちは。どのようなご用件でしょうか？","¡Hola! ¿Cómo podemos ayudarte?","Olá! Como podemos ajudar?"],
   "收起":["收合","Minimize","最小化","Minimizar","Minimizar"],
+  "放大全屏":["放大全螢幕","Expand chat","チャットを拡大","Ampliar chat","Expandir chat"],
+  "还原窗口":["還原視窗","Restore chat size","元のサイズに戻す","Restaurar tamaño","Restaurar tamanho"],
   "收起聊天":["收合聊天","Minimize chat","チャットを最小化","Minimizar chat","Minimizar chat"],
   "更早的消息":["更早的訊息","Earlier messages","以前のメッセージ","Mensajes anteriores","Mensagens anteriores"],
   "开始新会话":["開始新對話","Start a new chat","新しいチャット","Iniciar otro chat","Iniciar nova conversa"],

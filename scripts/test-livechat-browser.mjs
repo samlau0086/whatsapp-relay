@@ -77,6 +77,31 @@ const screenshots=fileURLToPath(new URL("../outputs/livechat/",import.meta.url))
 const frameFor=async page=>{await page.waitForFunction(()=>document.querySelector('div')?.shadowRoot===null);for(let i=0;i<50;i++){const frame=page.frames().find(f=>f.url().endsWith("/widget"));if(frame){await frame.locator("#launcher:visible, #panel:visible").waitFor({state:"visible"});return frame}await page.waitForTimeout(100)}throw Error("窗口未加载")};
 const incoming=(messages,text)=>messages.push({id:randomUUID(),direction:"out",text_content:text,created_at:timestamp()});
 const openChat=async frame=>{if(await frame.locator('#launcher').isVisible())await frame.locator('#launcher').click();await frame.locator('#panel').waitFor({state:'visible'})};
+const assertWindowControls=async(page,frame,label)=>{
+  const control=frame.locator('#maximize'),element=await frame.frameElement();
+  const normal=await element.boundingBox();
+  const expandIcon=await control.innerHTML();
+  assert.deepEqual(await frame.locator('#close svg path').evaluateAll(paths=>paths.map(path=>path.getAttribute('d'))),['M18 6 6 18','m6 6 12 12'],'收起按钮使用 X 图标');
+  await control.click();await frame.waitForFunction(width=>innerWidth===width-16,page.viewportSize().width);
+  const full=await element.boundingBox(),viewport=page.viewportSize();
+  assert.deepEqual(full,{x:8,y:8,width:viewport.width-16,height:viewport.height-16});
+  assert.equal(await control.getAttribute('aria-pressed'),'true');
+  assert.notEqual(await control.innerHTML(),expandIcon,'放大后切换为还原图标');
+  assert.equal(await frame.evaluate(()=>{const title=document.querySelector('header .title').getBoundingClientRect(),button=document.querySelector('#maximize').getBoundingClientRect(),close=document.querySelector('#close').getBoundingClientRect();return document.documentElement.scrollWidth<=innerWidth&&title.right<=button.left&&button.right<=close.left&&close.right<=innerWidth}),true,'标题和控件不重叠且无水平溢出');
+  await page.screenshot({path:`${screenshots}/${label}-maximized.png`});
+  await page.setViewportSize({width:viewport.width-24,height:viewport.height-24});
+  await frame.waitForFunction(width=>innerWidth===width-16,viewport.width-24);
+  assert.deepEqual(await element.boundingBox(),{x:8,y:8,width:viewport.width-40,height:viewport.height-40},'放大后跟随视口变化');
+  await page.setViewportSize(viewport);
+  await frame.waitForFunction(width=>innerWidth===width-16,viewport.width);
+  await frame.locator('#close').click();await frame.locator('#launcher').waitFor({state:'visible'});
+  await frame.waitForFunction(()=>innerWidth===72);await openChat(frame);
+  await frame.waitForFunction(width=>innerWidth===width-16,viewport.width);
+  await control.click();await frame.waitForFunction(width=>innerWidth===width,normal.width);
+  assert.deepEqual(await element.boundingBox(),normal,'还原后恢复原浮窗尺寸与位置');
+  assert.equal(await control.getAttribute('aria-pressed'),'false');
+  assert.equal(await control.innerHTML(),expandIcon);
+};
 const assertMessageLayout=async frame=>{
   const result=await frame.evaluate(()=>{
     const rows=[...document.querySelectorAll('.message')];
@@ -119,6 +144,7 @@ try{
   await page.goto(hosts[0].url);let frame=await frameFor(page);
   assert.equal(await frame.locator('#panel').isVisible(),false,'首次访问默认收起');
   await openChat(frame);
+  await assertWindowControls(page,frame,'desktop');
   await page.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(':expanded')&&localStorage.getItem(k)==='1'));
   await page.goto(hosts[0].url+'/products');frame=await frameFor(page);await frame.locator('#panel').waitFor({state:'visible'});
   await frame.locator('#close').click();
@@ -248,6 +274,7 @@ try{
   await secondFrame.locator('#launcher').waitFor({state:'visible'});assert.equal(await secondFrame.locator('#panel').isVisible(),false,'不同渠道不共享展开状态');
   assert.equal(await secondFrame.locator('#draft').getAttribute('placeholder'),'Type a message...');
   await openChat(secondFrame);assert.equal(await secondFrame.getByText('第一条匿名消息',{exact:true}).count(),0);
+  await assertWindowControls(page,secondFrame,'left-position');
   assert.equal(await secondFrame.locator('#start').textContent(),'Start chat');
   await startChat(secondFrame,'独立渠道的访客');
   await page.waitForFunction(()=>Object.keys(localStorage).filter(k=>k.endsWith(':started')).length===2);assert.equal(sessions.size,3);
@@ -331,8 +358,10 @@ try{
   widgetLanguage=undefined;
   const mobileContext=await browser.newContext({viewport:{width:375,height:740},isMobile:true,hasTouch:true}),mobile=await mobileContext.newPage();mobile.on("pageerror",error=>errors.push(error.message));
   await mobile.goto(hosts[0].url);const mobileFrame=await frameFor(mobile);await openChat(mobileFrame);
+  await assertWindowControls(mobile,mobileFrame,'mobile');
   await mobile.screenshot({path:`${screenshots}/mobile-prechat.png`});
   await mobile.setViewportSize({width:320,height:460});await mobileFrame.locator('#start').scrollIntoViewIfNeeded();await mobile.screenshot({path:`${screenshots}/mobile-compact-prechat.png`});
+  await assertWindowControls(mobile,mobileFrame,'mobile-compact');
   assert.equal(await mobileFrame.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   await startChat(mobileFrame,"手机端消息");await mobile.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(":started")));await mobile.setViewportSize({width:375,height:740});
   await assertMessageLayout(mobileFrame);
