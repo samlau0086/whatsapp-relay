@@ -9,6 +9,7 @@ import {enqueueInboundAgentWork} from "./agent-engine.js";
 import {createWebhookEvent} from "./agent-hub.js";
 import {livechatLoader,livechatWidget} from "./livechat-widget.js";
 import {isValidTimeZone} from "./order-number.js";
+import {emailShell,escapeHtml} from "./email.js";
 
 const s3=new S3Client({region:config.S3_REGION,endpoint:config.S3_ENDPOINT,forcePathStyle:true,credentials:{accessKeyId:config.S3_ACCESS_KEY,secretAccessKey:config.S3_SECRET_KEY}});
 const uuid=z.string().uuid();
@@ -18,6 +19,7 @@ const messageSchema=z.object({
   company:z.string().trim().max(160).optional(),whatsapp:z.string().trim().max(80).optional(),
   context:z.object({browserLanguage:z.string().trim().max(80).optional(),timeZone:z.string().max(100).refine(isValidTimeZone).optional(),pageUrl:z.string().url().max(2048).optional()}).optional(),
 }).refine(v=>Boolean(v.text||v.mediaId));
+const endChatSchema=z.object({clientRequestId:uuid});
 const fail=(statusCode:number,message:string)=>Object.assign(new Error(message),{statusCode});
 export const credentialHash=(value:string)=>createHash("sha256").update(value).digest("hex");
 export function livechatCredential(header:unknown):string{
@@ -135,6 +137,36 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
     });
     return reply.code(201).send(result);
   });
+  app.post("/livechat/:publicId/end-chat",async(request,reply)=>{
+    const c=await channel(request),v=await visitor(request,c),parsed=endChatSchema.safeParse(request.body);
+    if(!parsed.success)throw fail(400,"invalid_request");
+    await rate(`end:${v.id}`,10);
+    const existing=await pool.query("SELECT e.id,e.status FROM email_messages e WHERE e.client_send_id=$1 AND e.content_type='livechat_transcript'",[parsed.data.clientRequestId]);
+    if(existing.rowCount)return {ok:true,queued:true,closed:true,emailId:existing.rows[0].id,status:existing.rows[0].status,deduplicated:true};
+    const result=await transaction(async client=>{
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[`end:${v.id}`]);
+      const context=await client.query(`SELECT cv.id conversation_id,cv.status,cv.account_id,cv.contact_id,
+        (SELECT email FROM contact_emails WHERE contact_id=cv.contact_id AND is_primary LIMIT 1) recipient_email
+        FROM conversations cv WHERE cv.account_id=$1 AND cv.contact_id=$2 FOR UPDATE`,[c.account_id,v.contact_id]);
+      if(!context.rowCount)throw fail(404,"conversation_not_found");
+      const row=context.rows[0],recipient=String(row.recipient_email??"").trim();
+      if(!recipient)throw fail(409,"visitor_email_required");
+      const provider=await client.query("SELECT provider,config,secret_encrypted FROM email_provider_settings WHERE enabled AND secret_encrypted IS NOT NULL LIMIT 1");
+      if(!provider.rowCount)throw fail(409,"email_provider_not_configured");
+      const messages=await client.query(`SELECT m.direction,m.kind,m.text_content,m.occurred_at,media.file_name
+        FROM messages m LEFT JOIN media ON media.id=m.media_id WHERE m.conversation_id=$1 AND m.kind<>'email' ORDER BY m.occurred_at,m.id`,[row.conversation_id]);
+      const lines=messages.rows.map(item=>`[${new Date(item.occurred_at).toISOString()}] ${item.direction==='in'?'Visitor':'Support'}: ${String(item.text_content??(item.file_name?`[Attachment: ${item.file_name}]`:'[Message]'))}`).join("\n");
+      const text=`LiveChat transcript\n\n${lines}`.slice(0,5000);
+      const html=`<h2>LiveChat transcript</h2><p>${messages.rows.map(item=>`<strong>${item.direction==='in'?'Visitor':'Support'}</strong> <small>${escapeHtml(new Date(item.occurred_at).toISOString())}</small><br>${escapeHtml(String(item.text_content??(item.file_name?`[Attachment: ${item.file_name}]`:'[Message]')))}`).join("<br><br>")}</p>`;
+      const job=await client.query(`INSERT INTO email_messages(client_send_id,conversation_id,contact_id,sender_user_id,provider,provider_config,provider_secret_encrypted,recipients,subject,message_body,text_body,html_body,content_type)
+        VALUES($1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$9,$10,'livechat_transcript') RETURNING id,status`,[parsed.data.clientRequestId,row.conversation_id,row.contact_id,provider.rows[0].provider,JSON.stringify(provider.rows[0].config),provider.rows[0].secret_encrypted,JSON.stringify([{email:recipient,label:"LiveChat visitor"}]),"Your LiveChat transcript",text,emailShell(text,html)]);
+      await client.query(`INSERT INTO messages(conversation_id,account_id,direction,kind,text_content,status,occurred_at) VALUES($1,$2,'out','email',$3,'queued',now())`,[row.conversation_id,row.account_id,"LiveChat transcript sent to "+recipient]);
+      await client.query("UPDATE conversations SET status='closed',closed_at=now() WHERE id=$1",[row.conversation_id]);
+      await client.query("INSERT INTO audit_log(actor_type,action,target_type,target_id,metadata) VALUES('visitor','livechat.end_chat','conversation',$1,$2)",[row.conversation_id,JSON.stringify({emailId:job.rows[0].id,recipient})]);
+      return {emailId:job.rows[0].id,status:job.rows[0].status};
+    });
+    return reply.code(202).send({ok:true,queued:true,closed:true,...result});
+  });
   app.get("/livechat/:publicId/messages",async(request,reply)=>{
     const c=await channel(request),v=await visitor(request,c);
     const query=z.object({before:uuid.optional(),after:uuid.optional()}).refine(v=>!(v.before&&v.after)).safeParse(request.query);
@@ -146,7 +178,7 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
         COALESCE(receipt.occurred_at,m.created_at) visible_at
       FROM messages m LEFT JOIN media ON media.id=m.media_id JOIN conversations cv ON cv.id=m.conversation_id
       LEFT JOIN message_receipts receipt ON receipt.message_id=m.id AND receipt.status='sent'
-      WHERE cv.account_id=$1 AND cv.contact_id=$2 AND (m.direction='in' OR m.status IN ('sent','delivered','read'))
+      WHERE cv.account_id=$1 AND cv.contact_id=$2 AND m.kind<>'email' AND (m.direction='in' OR m.status IN ('sent','delivered','read'))
     ) SELECT *,to_char(visible_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') sort_at
       FROM visible WHERE ($3::uuid IS NULL OR (visible_at,id) ${after?">":"<"} (SELECT visible_at,id FROM visible WHERE id=$3))
       ORDER BY visible_at ${after?"ASC":"DESC"},id ${after?"ASC":"DESC"} LIMIT 101`,[c.account_id,v.contact_id,query.data.after??query.data.before??null]);
