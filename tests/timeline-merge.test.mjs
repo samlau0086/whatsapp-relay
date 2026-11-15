@@ -14,6 +14,110 @@ function visit(node){
   ts.forEachChild(node,visit);
 }
 visit(tree);
+function inboxFunction(name){
+  let found;
+  function find(node){if(ts.isFunctionDeclaration(node)&&node.name?.text===name)found=node.getText(tree);ts.forEachChild(node,find);}
+  find(tree);assert.ok(found,name);return found;
+}
+function deliveryFixture(overrides={}){
+  const sent=[],refreshed=[];let messages={sean:[]};
+  const noop=()=>{};
+  const context={exports:{},crypto:{randomUUID:()=>"client-id"},active:{id:"sean",accountId:"channel",platform:"livechat",accountStatus:"online"},conversations:[],effectiveActiveId:"sean",replyConversationId:"sam",apiToken:"token",selectedReply:null,
+    setDraft:noop,setReplyTo:noop,setTranslationPreview:noop,setTranslationError:noop,setApiToken:noop,setToast:noop,setMediaOpen:noop,setMaterialLibraryOpen:noop,
+    setMessages:update=>{messages=update(messages)},loadMessages:async(token,id)=>refreshed.push(id),messageQuote:message=>({id:message.id}),
+    formatTime:()=>"12:00",formatBytes:()=>"1 KB",mediaKind:()=>"image",retryingMessageId:"",setRetryingMessageId:noop,
+    authorizedFetch:async(path,token,init)=>{sent.push({path,body:JSON.parse(init.body)});return{token,response:{ok:true,json:async()=>({})}}},...overrides};
+  for(const name of ["queueTextMessage","sendMediaAsset","retryMessage"]){
+    const js=ts.transpileModule(`${inboxFunction(name)};exports.${name}=${name};`,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+    runInNewContext(js,context);
+  }
+  return{context,sent,refreshed,messages:()=>messages,...context.exports};
+}
+
+test("合并主会话 Sean 的文字和附件发送给 Sam，仍刷新主时间线",async()=>{
+  const fixture=deliveryFixture();
+  await fixture.queueTextMessage("hello");
+  await fixture.sendMediaAsset({id:"media",mimeType:"image/png",size:100,fileName:"test.png"},"image");
+  assert.deepEqual(fixture.sent.map(item=>item.body.conversationId),["sam","sam"]);
+  assert.deepEqual(fixture.refreshed,["sean","sean"]);
+  assert.equal(fixture.messages().sean.length,2);
+  assert.ok(fixture.messages().sean.every(item=>item.sourceConversationId==="sam"));
+  assert.equal(fixture.messages().sam,undefined);
+});
+
+test("引用 Sam 消息保持原会话约束，不把 Sean 引用附到 Sam 的回复",async()=>{
+  const fixture=deliveryFixture({selectedReply:{id:"quote",sourceConversationId:"sam"}});
+  await fixture.queueTextMessage("quoted");assert.equal(fixture.sent[0].body.quotedMessageId,"quote");
+  fixture.context.selectedReply={id:"other",sourceConversationId:"sean"};
+  await fixture.sendMediaAsset({id:"media",mimeType:"image/png",size:100,fileName:"test.png"},"");
+  assert.equal(fixture.sent[1].body.quotedMessageId,undefined);
+});
+
+test("入队失败仍更新主时间线中的失败状态，不创建隐藏的成员消息缓存",async()=>{
+  const fixture=deliveryFixture({authorizedFetch:async()=>({token:"token",response:{ok:false,status:503,json:async()=>({})}})});
+  assert.equal(await fixture.queueTextMessage("failed"),false);
+  await fixture.sendMediaAsset({id:"media",mimeType:"image/png",size:100,fileName:"test.png"},"");
+  assert.ok(fixture.messages().sean.every(item=>item.status==="failed"));
+  assert.equal(fixture.messages().sam,undefined);assert.deepEqual(fixture.refreshed,[]);
+});
+
+test("翻译确认显式冻结发送对象和时间线，不受当前会话切换影响",async()=>{
+  const fixture=deliveryFixture({effectiveActiveId:"other",replyConversationId:"other"});
+  await fixture.queueTextMessage("hola","hello","es","sam","channel","sean");
+  await fixture.sendMediaAsset({id:"media",mimeType:"image/png",size:100,fileName:"test.png"},"hola",false,true,"hello","es","sam","channel",true,"sean");
+  assert.deepEqual(fixture.sent.map(item=>item.body.conversationId),["sam","sam"]);
+  assert.deepEqual(fixture.refreshed,["sean","sean"]);
+});
+
+test("旧重试接口不可用时，失败消息仍重新发送给原成员 Sam",async()=>{
+  const calls=[];
+  const fixture=deliveryFixture({authorizedFetch:async(path,token,init)=>{calls.push({path,body:JSON.parse(init.body)});return{token,response:{status:calls.length===1?404:202,ok:calls.length>1,json:async()=>({})}}}});
+  await fixture.retryMessage({id:"failed",sourceConversationId:"sam",kind:"text",text:"retry",status:"failed"});
+  assert.equal(calls.length,2);assert.equal(calls[1].body.conversationId,"sam");assert.deepEqual(fixture.refreshed,["sean"]);
+});
+
+test("默认接收人按最新入站时间及 ID 判断，空历史优先主会话",async()=>{
+  const output={};const helper=await readFile(new URL("../app/timeline-recipient.tsx",import.meta.url),"utf8");
+  runInNewContext(ts.transpileModule(helper,{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,{exports:output,require});
+  const members=[{id:"sean",latestIncomingAt:"2026-11-15T20:00:00.000Z",latestIncomingId:"a"},{id:"sam",latestIncomingAt:"2026-11-15T21:00:00.000Z",latestIncomingId:"b"}];
+  assert.equal(output.defaultTimelineRecipient(members,"sean"),"sam");
+  members[0].latestIncomingAt=members[1].latestIncomingAt;members[0].latestIncomingId="c";
+  assert.equal(output.defaultTimelineRecipient(members,"sean"),"sean");
+  assert.equal(output.defaultTimelineRecipient([{id:"sean"},{id:"sam"}],"sean"),"sean");
+  assert.equal(output.defaultTimelineRecipient([],"sean"),"");
+});
+
+test("后台接收人信息经过账号权限检查且最新来信不受历史游标影响",async()=>{
+  const server=await readFile(new URL("../services/api/src/server.ts",import.meta.url),"utf8");
+  const ast=ts.createSourceFile("server.ts",server,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
+  let handler;
+  function find(node){
+    if(ts.isCallExpression(node)&&node.expression.getText(ast)==="app.get"&&node.arguments[0]?.text==="/api/v1/conversations/:id/messages")handler=node.arguments[2].getText(ast);
+    ts.forEachChild(node,find);
+  }
+  find(ast);assert.ok(handler);
+  const queries=[],members=[{id:"sam",contactId:"sam-contact",name:"Sam",latestIncomingAt:"2026-11-15T23:07:00Z",latestIncomingId:"incoming"}];
+  const context={exports:{},Buffer,isPostgresUuid:()=>true,sanitizeEmailDisplayHtml:value=>value,canAccessAccount:()=>true,
+    pool:{query:async(sql,params)=>{
+      queries.push({sql,params});
+      if(sql==="SELECT account_id FROM conversations WHERE id=$1")return{rowCount:1,rows:[{account_id:"channel"}]};
+      if(sql.includes('c.contact_id "contactId"'))return{rows:members};
+      if(sql.includes("count(*)"))return{rows:[{count:0}]};
+      return{rows:[{id:"old",occurred_at:"2020-01-01T00:00:00Z",conversation_id:"sean"}]};
+    }}};
+  runInNewContext(ts.transpileModule(`exports.handler=${handler}`,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,context);
+  const request={params:{id:"sean"},query:{before:"2021-01-01T00:00:00Z"},principal:{kind:"user",id:"operator"}};
+  const response=await context.exports.handler(request,{});
+  assert.equal(response.recipients,members);
+  const query=queries.find(item=>item.sql.includes('c.contact_id "contactId"'));
+  assert.match(query.sql,/relay_conversation_members\(\$1\)/);assert.match(query.sql,/c.account_id=\$2 AND a.platform='livechat'/);
+  assert.match(query.sql,/ORDER BY m.occurred_at DESC,m.id DESC LIMIT 1/);
+  assert.deepEqual(Array.from(query.params),["sean","channel"]);
+  queries.length=0;context.canAccessAccount=()=>false;
+  let status;
+  await context.exports.handler(request,{code:value=>{status=value;return{send:body=>body}}});
+  assert.equal(status,404);assert.equal(queries.length,1);
+});
 const javascript=ts.transpileModule(`const select=${callback};exports.select=select;`,{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;
 
 test("Shift 点击进入多选，普通点击继续选择，再次点击取消；不同 channel 和群会话不可选",()=>{

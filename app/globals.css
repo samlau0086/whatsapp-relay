@@ -238,11 +238,15 @@ button { color:inherit; }
   white-space:nowrap;
 }
 .composer-recipient b{color:#617068;font-weight:600}
+.timeline-recipient{display:flex;align-items:center;gap:6px;min-width:0;max-width:220px;color:#617068;font-size:12px}
+.timeline-recipient select{min-width:0;max-width:160px;height:30px;border:1px solid #dce5df;border-radius:4px;background:#fff;color:#315d49;text-overflow:ellipsis}
 
 @media(max-width:700px){
   .composer-tools{display:flex;gap:6px}
   .composer-tool-actions{flex:1}
   .composer-recipient{display:none}
+  .composer-tools:has(.timeline-recipient){flex-wrap:wrap}
+  .timeline-recipient{flex-basis:100%;max-width:100%}
   .composer-tools .reply-suggestion-trigger span,
   .composer-tools .material-library-trigger span,
   .composer-tools .translation-trigger span{display:none}
