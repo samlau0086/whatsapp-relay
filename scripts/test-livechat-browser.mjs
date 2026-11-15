@@ -80,25 +80,32 @@ const openChat=async frame=>{if(await frame.locator('#launcher').isVisible())awa
 const assertWindowControls=async(page,frame,label)=>{
   const control=frame.locator('#maximize'),element=await frame.frameElement();
   const normal=await element.boundingBox();
+  const leftDocked=normal.x===16;
+  const maximizedBounds=viewport=>{const narrow=viewport.width<=600,width=narrow?viewport.width-16:390;return {x:narrow?8:leftDocked?16:viewport.width-16-width,y:8,width,height:viewport.height-16}};
+  const waitForBounds=async bounds=>{await frame.waitForFunction(({width,height})=>innerWidth===width&&innerHeight===height,bounds);assert.deepEqual(await element.boundingBox(),bounds)};
   const expandIcon=await control.innerHTML();
   assert.deepEqual(await frame.locator('#close svg path').evaluateAll(paths=>paths.map(path=>path.getAttribute('d'))),['M18 6 6 18','m6 6 12 12'],'收起按钮使用 X 图标');
-  await control.click();await frame.waitForFunction(width=>innerWidth===width-16,page.viewportSize().width);
-  const full=await element.boundingBox(),viewport=page.viewportSize();
-  assert.deepEqual(full,{x:8,y:8,width:viewport.width-16,height:viewport.height-16});
+  await control.click();const viewport=page.viewportSize();
+  await waitForBounds(maximizedBounds(viewport));
+  if(viewport.width>600){
+    const full=await element.boundingBox();assert.equal(full.width,normal.width,'PC 放大仅扩展高度，宽度不变');assert.equal(full.x,normal.x,'PC 放大保持左右停靠位置');
+    if(!leftDocked)await page.getByRole('button',{name:'宿主按钮',exact:true}).click({trial:true});
+  }
   assert.equal(await control.getAttribute('aria-pressed'),'true');
   assert.notEqual(await control.innerHTML(),expandIcon,'放大后切换为还原图标');
   assert.equal(await frame.evaluate(()=>{const title=document.querySelector('header .title').getBoundingClientRect(),button=document.querySelector('#maximize').getBoundingClientRect(),close=document.querySelector('#close').getBoundingClientRect();return document.documentElement.scrollWidth<=innerWidth&&title.right<=button.left&&button.right<=close.left&&close.right<=innerWidth}),true,'标题和控件不重叠且无水平溢出');
   await page.screenshot({path:`${screenshots}/${label}-maximized.png`});
   await page.setViewportSize({width:viewport.width-24,height:viewport.height-24});
-  await frame.waitForFunction(width=>innerWidth===width-16,viewport.width-24);
-  assert.deepEqual(await element.boundingBox(),{x:8,y:8,width:viewport.width-40,height:viewport.height-40},'放大后跟随视口变化');
+  await waitForBounds(maximizedBounds(page.viewportSize()));
+  if(viewport.width>600){
+    for(const width of [600,601]){await page.setViewportSize({width,height:viewport.height});await waitForBounds(maximizedBounds(page.viewportSize()))}
+  }
   await page.setViewportSize(viewport);
-  await frame.waitForFunction(width=>innerWidth===width-16,viewport.width);
+  await waitForBounds(maximizedBounds(viewport));
   await frame.locator('#close').click();await frame.locator('#launcher').waitFor({state:'visible'});
   await frame.waitForFunction(()=>innerWidth===72);await openChat(frame);
-  await frame.waitForFunction(width=>innerWidth===width-16,viewport.width);
-  await control.click();await frame.waitForFunction(width=>innerWidth===width,normal.width);
-  assert.deepEqual(await element.boundingBox(),normal,'还原后恢复原浮窗尺寸与位置');
+  await waitForBounds(maximizedBounds(viewport));
+  await control.click();await waitForBounds(normal);
   assert.equal(await control.getAttribute('aria-pressed'),'false');
   assert.equal(await control.innerHTML(),expandIcon);
 };

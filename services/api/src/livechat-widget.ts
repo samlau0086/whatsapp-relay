@@ -56,7 +56,7 @@ frame.title=config.name;frame.setAttribute('sandbox','allow-scripts allow-same-o
 Object.assign(frame.style,{position:'fixed',bottom:'16px',border:'0',zIndex:'2147483647',background:'transparent',colorScheme:'light',display:'block'});
 frame.style[config.position==='left'?'left':'right']='16px';let expanded=false;try{expanded=localStorage.getItem(key+':expanded')==='1'}catch{}
 let maximized=false;
-function resize(){const full=expanded&&maximized,inset=full||innerHeight<500?8:16;frame.style.width=expanded?(full?Math.max(0,innerWidth-16):Math.min(390,Math.max(0,innerWidth-24)))+'px':'72px';frame.style.height=expanded?(full?Math.max(0,innerHeight-16):Math.min(640,Math.max(0,innerHeight-32)))+'px':'72px';frame.style.bottom=inset+'px';frame.style[config.position==='left'?'left':'right']=(full?8:16)+'px'}
+function resize(){const full=expanded&&maximized,wide=full&&innerWidth<=600,inset=full||innerHeight<500?8:16;frame.style.width=expanded?(wide?Math.max(0,innerWidth-16):Math.min(390,Math.max(0,innerWidth-24)))+'px':'72px';frame.style.height=expanded?(full?Math.max(0,innerHeight-16):Math.min(640,Math.max(0,innerHeight-32)))+'px':'72px';frame.style.bottom=inset+'px';frame.style[config.position==='left'?'left':'right']=(wide?8:16)+'px'}
 resize();addEventListener('resize',resize);
 const post=data=>frame.contentWindow.postMessage(data,base);
 addEventListener('message',async event=>{
