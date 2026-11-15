@@ -172,6 +172,20 @@ try{
   await frame.getByText('分页回复 204',{exact:true}).waitFor({timeout:15000});
   await page.reload();frame=await frameFor(page);await openChat(frame);await frame.getByText('分页回复 204',{exact:true}).waitFor();
   await frame.locator('#older').click();await frame.getByText('分页回复 5',{exact:true}).waitFor();await frame.locator('#older').click();await frame.getByText('第一条匿名消息',{exact:true}).waitFor();
+  for(const viewport of [{width:1280,height:850},{width:320,height:460}]){
+    await page.setViewportSize(viewport);
+    await frame.evaluate(()=>{document.querySelector('#timeline').scrollTop=0});
+    assert.equal(await frame.evaluate(()=>{const t=document.querySelector('#timeline');return t.scrollHeight-t.scrollTop-t.clientHeight>80}),true,'测试前停留在历史消息');
+    await frame.locator('#close').click();await openChat(frame);
+    await frame.waitForFunction(()=>{const t=document.querySelector('#timeline');return t.clientHeight>0&&t.scrollHeight-t.scrollTop-t.clientHeight<=1});
+    await frame.evaluate(()=>{document.querySelector('#timeline').scrollTop=0});
+    await frame.locator('#close').click();const text=`收起期间的新消息 ${viewport.width}`;incoming(firstSession,text);
+    await frame.locator('#badge').waitFor({state:'visible',timeout:10000});await openChat(frame);
+    await frame.getByText(text,{exact:true}).waitFor();
+    await frame.waitForFunction(()=>{const t=document.querySelector('#timeline');return t.clientHeight>0&&t.scrollHeight-t.scrollTop-t.clientHeight<=1});
+    await page.screenshot({path:`${screenshots}/reopened-${viewport.width}.png`});
+  }
+  await page.setViewportSize({width:1280,height:850});
   const other=await context.newPage();await other.goto(hosts[1].url);const otherFrame=await frameFor(other);await openChat(otherFrame);assert.equal(await otherFrame.getByText("第一条匿名消息",{exact:true}).count(),0);
   await startChat(otherFrame,"第二个网站的访客");await other.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(":started")));assert.equal(sessions.size,2);
   await page.evaluate(({apiUrl,id})=>{const script=document.createElement('script');script.src=apiUrl+'/livechat/embed.js';script.dataset.channel=id;document.body.append(script)},{apiUrl:api.url,id:secondChannel});
