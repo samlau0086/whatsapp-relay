@@ -100,6 +100,15 @@ const startChat=async(frame,text)=>{
   await frame.locator('#initialMessage').fill(text);await frame.locator('#start').click();
   await frame.locator('#form').waitFor({state:'visible'});
 };
+const assertReplyLayout=async frame=>{
+  await frame.locator('.reply-message').first().click();
+  await frame.locator('#replyBar').waitFor({state:'visible'});
+  assert.equal(await frame.evaluate(()=>{
+    const quote=document.querySelector('#replyBar'),tools=document.querySelector('#composerTools'),actions=document.querySelector('#endActions');
+    const q=quote.getBoundingClientRect(),t=tools.getBoundingClientRect(),a=actions.getBoundingClientRect();
+    return quote.parentElement.id==='form'&&quote.nextElementSibling===tools&&a.bottom<=q.top&&q.bottom<=t.top&&Math.abs(q.left-t.left)<=1&&q.height>0;
+  }),true,'引用预览位于结束会话按钮下方、工具栏正上方，与输入区域左侧对齐');
+};
 let debugPage;
 try{
   const context=await browser.newContext({viewport:{width:1280,height:850}}),page=await context.newPage();
@@ -123,7 +132,8 @@ try{
   incoming(firstSession,"坐席回复已送达");await frame.getByText("坐席回复已送达",{exact:true}).waitFor({timeout:10000});
   await assertMessageLayout(frame);
   assert.equal(await frame.locator('.support-avatar').first().textContent(),await frame.locator('#avatar').textContent());
-  await frame.locator('.message.in .reply-message').first().click();await frame.locator('#replyBar').waitFor({state:'visible'});
+  await assertReplyLayout(frame);
+  await page.screenshot({path:`${screenshots}/desktop-reply.png`});
   await frame.locator('#replyBar button').click();await frame.locator('#replyBar').waitFor({state:'hidden'});
   await page.screenshot({path:`${screenshots}/desktop.png`});
   await page.evaluate(()=>{const original=document.querySelector('script[data-channel]'),copy=document.createElement('script');copy.src=original.src;copy.dataset.channel=original.dataset.channel;document.body.append(copy)});
@@ -204,6 +214,9 @@ try{
   await mobile.screenshot({path:`${screenshots}/mobile.png`});await mobile.setViewportSize({width:320,height:460});
   assert.equal(await mobileFrame.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);await mobile.screenshot({path:`${screenshots}/mobile-compact.png`});
   await assertMessageLayout(mobileFrame);
+  await assertReplyLayout(mobileFrame);
+  await mobile.screenshot({path:`${screenshots}/mobile-compact-reply.png`});
+  await mobileFrame.locator('#replyBar button').click();await mobileFrame.locator('#replyBar').waitFor({state:'hidden'});
   const localized=[['zh-CN','请输入消息...','发送','您好，有什么可以帮助您？','附件不能超过 10 MB'],['zh-TW','請輸入訊息...','傳送','您好，有什麼可以幫助您？','附件不能超過 10 MB'],['en','Type a message...','Send','Hi! How can we help you?','Attachments must be 10 MB or smaller'],['ja','メッセージを入力...','送信','こんにちは。どのようなご用件でしょうか？','添付は10 MB以下にしてください'],['es','Escribe un mensaje...','Enviar','¡Hola! ¿Cómo podemos ayudarte?','El archivo no puede superar 10 MB'],['pt','Digite uma mensagem...','Enviar','Olá! Como podemos ajudar?','O anexo não pode exceder 10 MB']];
   for(const [language,placeholder,send,welcome,tooLarge] of localized){
     widgetLanguage=language;await mobile.reload();const localizedFrame=await frameFor(mobile);await localizedFrame.locator('#launcher').click();
