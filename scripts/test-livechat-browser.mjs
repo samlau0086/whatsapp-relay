@@ -2,12 +2,15 @@
 import assert from "node:assert/strict";
 import {createServer} from "node:http";
 import {randomUUID} from "node:crypto";
-import {mkdir} from "node:fs/promises";
+import {mkdir,mkdtemp,writeFile,rm} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
 import {fileURLToPath} from "node:url";
-import {chromium} from "playwright";
+import {chromium,firefox,webkit} from "playwright";
 import {livechatLoader,livechatWidget} from "../services/api/dist/livechat-widget.js";
 
 const channel="11111111-1111-4111-8111-111111111111";
+const testPng=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAHUlEQVR4nGNgaIr6TxFmGDWAYTQM/o+GQdRwCAMAqf3bEFNOlTwAAAAASUVORK5CYII=','base64');
 const secondChannel="22222222-2222-4222-8222-222222222222";
 const sessions=new Map(),uploads=new Map(),origins=new Set(),errors=[],profiles=[],expiredSessions=new Set();
 const transcripts=new Map(),closedChats=new Map(),endRequests=[];
@@ -72,8 +75,11 @@ for(let index=0;index<2;index++){
   const host=await listen((_req,res)=>{res.writeHead(200,{"content-type":"text/html; charset=utf-8"});res.end(`<!doctype html><html lang="zh-CN"><meta name="viewport" content="width=device-width,initial-scale=1"><title>嵌入网站 ${index+1}</title><style>body{font:16px system-ui;margin:24px;color:#24332f}button{background:#d94949;color:#fff;padding:12px}iframe{width:5px!important}*{box-sizing:content-box}</style><h1>测试网站 ${index+1}</h1><p>独立网站内容</p><button>宿主按钮</button><script async src="${api.url}/livechat/embed.js" data-channel="${channel}"></script></html>`)});
   origins.add(host.url);hosts.push(host);
 }
-const browser=await chromium.launch({headless:true});
-const screenshots=fileURLToPath(new URL("../outputs/livechat/",import.meta.url));await mkdir(screenshots,{recursive:true});
+const browserType={chromium,firefox,webkit}[process.env.LIVECHAT_TEST_BROWSER||'chromium'];
+assert.ok(browserType,'LIVECHAT_TEST_BROWSER 必须为 chromium、firefox 或 webkit');
+const browser=await browserType.launch({headless:true});
+const uploadFixtureDir=await mkdtemp(join(tmpdir(),'livechat-upload-'));
+const screenshots=fileURLToPath(new URL(`../outputs/livechat/${browserType.name()}/`,import.meta.url));await mkdir(screenshots,{recursive:true});
 const frameFor=async page=>{await page.waitForFunction(()=>document.querySelector('div')?.shadowRoot===null);for(let i=0;i<50;i++){const frame=page.frames().find(f=>f.url().endsWith("/widget"));if(frame){await frame.locator("#launcher:visible, #panel:visible").waitFor({state:"visible"});return frame}await page.waitForTimeout(100)}throw Error("窗口未加载")};
 const incoming=(messages,text)=>messages.push({id:randomUUID(),direction:"out",text_content:text,created_at:timestamp()});
 const openChat=async frame=>{if(await frame.locator('#launcher').isVisible())await frame.locator('#launcher').click();await frame.locator('#panel').waitFor({state:'visible'})};
@@ -194,18 +200,44 @@ try{
   await frame.locator("#close").click();incoming(firstSession,"未读回复");await frame.locator("#badge").waitFor({state:"visible",timeout:10000});await openChat(frame);assert.equal(await frame.locator("#badge").isVisible(),false);
   await context.setOffline(true);incoming(firstSession,"断线期间回复");await page.waitForTimeout(4200);await context.setOffline(false);await frame.getByText("断线期间回复",{exact:true}).waitFor({timeout:12000});
   assert.equal(await frame.locator('#emoji svg,#image svg,#attach svg,#send svg').count(),4);
+  // 从真实跨域 iframe 发出无效上传，宿主必须在请求网络前拒绝。
+  const uploadCount=uploads.size;
+  for(const [kind,expected] of [['legacy','upload_file_payload_invalid'],['empty','upload_file_payload_invalid'],['oversize','file_too_large'],['mime','unsupported_attachment_type']]){
+    const error=await frame.evaluate(async kind=>{
+      const requestId=crypto.randomUUID(),data={name:'test.txt',type:kind==='mime'?'text/html':'text/plain',bytes:new ArrayBuffer(kind==='oversize'?10485761:kind==='empty'?0:4)};
+      if(kind==='legacy'){delete data.bytes;data.file=new File(['test'],'test.txt',{type:'text/plain'})}
+      return new Promise((resolve,reject)=>{
+        const timer=setTimeout(()=>{removeEventListener('message',listener);reject(Error('未收到上传校验结果'))},5000);
+        const listener=event=>{if(event.source===parent&&event.data?.requestId===requestId){clearTimeout(timer);removeEventListener('message',listener);resolve(event.data.error)}};
+        addEventListener('message',listener);parent.postMessage({namespace:'relaydesk-livechat',action:'upload',data,requestId},'*');
+      });
+    },kind);
+    assert.equal(error,expected);
+  }
+  assert.equal(uploads.size,uploadCount,'无效文件不应上传');
+  await page.evaluate(()=>{window.uploadPayloads=[];addEventListener('message',event=>{if(event.data?.namespace==='relaydesk-livechat'&&event.data.action==='upload')window.uploadPayloads.push({bytes:event.data.data.bytes instanceof ArrayBuffer,hasFile:'file' in event.data.data})})});
   await frame.locator("#file").setInputFiles({name:"remove.txt",mimeType:"text/plain",buffer:Buffer.from("remove")});await frame.locator('#composerPreview').getByText("remove.txt",{exact:true}).waitFor();await frame.locator('#composerPreview').getByRole('button',{name:'移除附件'}).click();await frame.locator('#composerPreview').waitFor({state:'hidden'});
   await frame.locator("#file").setInputFiles({name:"sample.txt",mimeType:"text/plain",buffer:Buffer.from("test")});await frame.locator('#composerPreview').getByText("sample.txt",{exact:true}).waitFor();
   await frame.locator('#draft').fill('附件说明');await frame.locator('#send').click();await frame.locator('#composerPreview').waitFor({state:'hidden'});await frame.getByRole('button',{name:'sample.txt',exact:true}).waitFor();
   const download=page.waitForEvent("download");await frame.getByRole("button",{name:"sample.txt",exact:true}).click();assert.equal((await download).suggestedFilename(),"sample.txt");
-  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDAAAAAAASUVORK5CYII=','base64');
+  const png=testPng;
   const imageFileName='BelaroPrecision_工程卓越徽标.png';
-  await frame.locator('#image').click();await frame.locator('#file').setInputFiles({name:imageFileName,mimeType:'image/png',buffer:png});await frame.locator('#composerPreview img').waitFor();
+  const imagePath=join(uploadFixtureDir,imageFileName);await writeFile(imagePath,png);
+  await frame.locator('#image').click();await frame.locator('#file').setInputFiles(imagePath);await frame.locator('#composerPreview img').waitFor();
+  // 模拟本地文件读取失败，必须恢复控件并保留原附件，且不得发送请求。
+  await frame.evaluate(()=>{window.originalArrayBuffer=File.prototype.arrayBuffer;File.prototype.arrayBuffer=async()=>{throw new DOMException('文件读取失败','NotReadableError')}});
+  const beforeReadFailure=uploads.size;
+  await frame.locator('#draft').fill('读取失败后重试');await frame.locator('#send').click();
+  await frame.getByText('发送失败，请重试',{exact:true}).waitFor();
+  await frame.waitForFunction(()=>!document.querySelector('#send').disabled);
+  assert.equal(uploads.size,beforeReadFailure);assert.equal(await frame.locator('#composerPreview img').count(),1);
+  assert.equal(await frame.locator('#draft').inputValue(),'读取失败后重试');
+  await frame.evaluate(()=>{File.prototype.arrayBuffer=window.originalArrayBuffer;delete window.originalArrayBuffer});
   // 上传连接中断不能阻塞独立收信；文件和说明必须保留以便重试。
   const abortUpload=route=>route.request().method()==='POST'?route.abort('failed'):route.continue();
   await page.route('**/media',abortUpload);
   await frame.locator('#draft').fill('图片上传断线重试');await frame.locator('#send').click();
-  await frame.getByText('连接中断，正在重试...',{exact:true}).waitFor();
+  await frame.getByText('发送失败，请重试',{exact:true}).waitFor();
   await frame.waitForFunction(()=>!document.querySelector('#send').disabled);
   assert.equal(await frame.locator('#composerPreview img').count(),1);
   assert.equal(await frame.locator('#draft').inputValue(),'图片上传断线重试');
@@ -213,7 +245,11 @@ try{
   await frame.getByText('上传失败后仍能收信',{exact:true}).waitFor({timeout:12000});
   await page.unroute('**/media',abortUpload);
   await frame.locator('#emoji').click();await frame.locator('#emojiPanel button').first().click();assert.ok((await frame.locator('#draft').inputValue()).length>0);
-  await frame.locator('#send').click();const sentImage=frame.locator('.attachment-image img').filter({visible:true});await sentImage.waitFor();assert.equal(await sentImage.getAttribute('alt'),imageFileName);await sentImage.click();await frame.locator('dialog.image-preview').waitFor();await page.screenshot({path:`${screenshots}/desktop-media-preview.png`});await frame.locator('dialog.image-preview').getByText('取消',{exact:true}).click();
+  await frame.locator('#send').click();const sentImage=frame.locator('.attachment-image img').filter({visible:true});await sentImage.waitFor();await frame.waitForFunction(()=>document.querySelector('.attachment-image img')?.naturalWidth>0);assert.equal(await sentImage.getAttribute('alt'),imageFileName);await sentImage.click();await frame.locator('dialog.image-preview').waitFor();await page.screenshot({path:`${screenshots}/desktop-media-preview.png`});await frame.locator('dialog.image-preview').getByText('取消',{exact:true}).click();
+  const uploadedImage=[...uploads.values()].find(file=>file.name===imageFileName);
+  assert.equal(uploadedImage.mime,'image/png');assert.deepEqual(uploadedImage.bytes,png,'本地图片上传字节必须完全一致');
+  assert.deepEqual([...uploads.values()].find(file=>file.name==='sample.txt').bytes,Buffer.from('test'));
+  assert.ok((await page.evaluate(()=>window.uploadPayloads)).every(payload=>payload.bytes&&!payload.hasFile),'跨域上传仅传递 ArrayBuffer，不传递 File');
   // 不可用图片只自动尝试一次，重绘与后续收信不得反复消耗下载额度。
   const failedMedia=new Map();
   const failImages=route=>{const id=route.request().url().split('/').at(-1);if(!failedMedia.has(id)||uploads.has(id))return route.continue();failedMedia.set(id,failedMedia.get(id)+1);return route.fulfill({status:503,headers:{'access-control-allow-origin':hosts[0].url},contentType:'application/json',body:JSON.stringify({error:'storage_unavailable'})})};
@@ -304,7 +340,6 @@ try{
   await startChat(otherFrame,"第二个网站的访客");await other.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(":started")));assert.equal(sessions.size,2);
   await page.evaluate(({apiUrl,id})=>{const script=document.createElement('script');script.src=apiUrl+'/livechat/embed.js';script.dataset.channel=id;document.body.append(script)},{apiUrl:api.url,id:secondChannel});
   await page.waitForFunction(id=>Boolean(document.querySelector(`script[data-channel="${id}"]`)),secondChannel);
-  await page.waitForLoadState('networkidle');
   let secondFrame;for(let i=0;i<50;i++){secondFrame=page.frames().find(f=>f.url().includes(secondChannel)&&f.url().endsWith('/widget'));if(secondFrame)break;await page.waitForTimeout(100)}assert.ok(secondFrame);
   await secondFrame.locator('#launcher').waitFor({state:'visible'});assert.equal(await secondFrame.locator('#panel').isVisible(),false,'不同渠道不共享展开状态');
   assert.equal(await secondFrame.locator('#draft').getAttribute('placeholder'),'Type a message...');
@@ -391,7 +426,7 @@ try{
   await startChat(endFrame,'Fresh identity after expiry');
   assert.equal(profiles.length,profileCount+1);assert.ok(originalMessages.some(m=>m.text_content==='Still able to send'));
   widgetLanguage=undefined;
-  const mobileContext=await browser.newContext({viewport:{width:375,height:740},isMobile:true,hasTouch:true}),mobile=await mobileContext.newPage();mobile.on("pageerror",error=>errors.push(error.message));
+  const mobileContext=await browser.newContext({viewport:{width:375,height:740},...(browserType===firefox?{}:{isMobile:true}),hasTouch:true}),mobile=await mobileContext.newPage();mobile.on("pageerror",error=>errors.push(error.message));
   await mobile.goto(hosts[0].url);const mobileFrame=await frameFor(mobile);await openChat(mobileFrame);
   await assertWindowControls(mobile,mobileFrame,'mobile');
   await mobile.screenshot({path:`${screenshots}/mobile-prechat.png`});
@@ -433,7 +468,7 @@ try{
   // 校验渠道首字母、自定义图标、失败回退和清除后的行为。
   widgetName='  BelaroPrecision';await page.reload();let brandFrame=await frameFor(page);await openChat(brandFrame);
   assert.equal(await brandFrame.locator('#avatar').textContent(),'B');
-  await page.route('https://icons.example.test/**',route=>route.request().url().endsWith('brand.png')?route.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDAAAAAAASUVORK5CYII=','base64')}):route.fulfill({status:404,body:''}));
+  await page.route('https://icons.example.test/**',route=>route.request().url().endsWith('brand.png')?route.fulfill({contentType:'image/png',body:testPng}):route.fulfill({status:404,body:''}));
   widgetIcon='https://icons.example.test/brand.png';await page.reload();brandFrame=await frameFor(page);await openChat(brandFrame);
   await brandFrame.waitForFunction(()=>document.querySelector('#avatar img')?.naturalWidth>0);
   await brandFrame.waitForFunction(()=>[...document.querySelectorAll('.support-avatar')].length>0&&[...document.querySelectorAll('.support-avatar')].every(avatar=>avatar.querySelector('img')?.naturalWidth>0));
@@ -452,4 +487,4 @@ try{
   widgetName='';await page.reload();brandFrame=await frameFor(page);assert.equal(await brandFrame.locator('#avatar').textContent(),'?');
   assert.deepEqual(errors,[]);console.log(`已通过：双站点及多渠道隔离、重复嵌入、样式隔离、匿名消息、坐席回复、刷新恢复、失败重试、确认丢失恢复、未读、多页历史与断线补齐、附件预览上传下载、图片内联预览、表情发送、六种界面语言及桌面/移动布局、独立结束会话、结束并发送记录、邮件错误隔离、确认丢失后的幂等重试及结束后刷新恢复。截图：${screenshots}`);
 }catch(error){console.error({errors,sessions:[...sessions.values()]});if(debugPage){const frame=debugPage.frames().find(f=>f.url().endsWith("/widget"));console.error(await frame?.locator("body").innerText());await debugPage.screenshot({path:`${screenshots}/failure.png`})}throw error}
-finally{await browser.close();await Promise.all([api,...hosts].map(({server})=>new Promise(resolve=>server.close(resolve))))}
+finally{await browser.close();await rm(uploadFixtureDir,{recursive:true,force:true});await Promise.all([api,...hosts].map(({server})=>new Promise(resolve=>server.close(resolve))))}
