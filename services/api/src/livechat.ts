@@ -56,6 +56,20 @@ export async function processOneLivechatOutbound():Promise<boolean>{
 }
 
 export async function registerLivechatRoutes(app:FastifyInstance):Promise<void>{
+  app.post("/api/v1/livechat/presence/query",{preHandler:authenticate},async(request,reply)=>{
+    const parsed=z.object({contactIds:z.array(z.string().uuid()).max(500)}).safeParse(request.body);
+    if(!parsed.success)return reply.code(400).send({error:"invalid_request"});
+    const result=await pool.query(`SELECT v.contact_id "contactId",
+      CASE WHEN p.session_id IS NULL THEN 'offline' WHEN p.visible THEN 'online' ELSE 'away' END status,
+      CASE WHEN p.visible THEN p.page_url ELSE NULL END "pageUrl"
+      FROM livechat_visitors v JOIN livechat_channels channel ON channel.account_id=v.account_id
+      LEFT JOIN LATERAL (SELECT session_id,visible,page_url FROM livechat_presence
+        WHERE visitor_id=v.id AND connected AND updated_at>now()-interval '45 seconds'
+          AND v.expires_at>now() AND channel.enabled AND channel.archived_at IS NULL
+        ORDER BY visible DESC,updated_at DESC,session_id LIMIT 1) p ON true
+      WHERE v.contact_id=ANY($1::uuid[]) AND ($2::uuid[] IS NULL OR v.account_id=ANY($2::uuid[]))`,[parsed.data.contactIds,request.principal?.accountIds??null]);
+    return reply.header("cache-control","no-store").send({data:result.rows});
+  });
   app.get("/api/v1/admin/livechat/channels",{preHandler:authenticate},async(request,reply)=>{
     if(request.principal?.kind!=="user"||request.principal.role!=="admin")return reply.code(403).send({error:"admin_required"});
     const result=await pool.query(`SELECT a.id,a.display_name,c.public_id,c.welcome_message,c.theme_color,c.position,c.language,c.icon_url,c.allowed_origins,c.enabled,c.created_at,c.updated_at

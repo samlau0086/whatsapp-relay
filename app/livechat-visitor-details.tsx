@@ -4,12 +4,12 @@ export type LivechatVisitorInfo={
   createdAt:string;lastSeenAt:string;
 };
 
-export function LivechatVisitorDetails({visitor,companyName}:{visitor?:LivechatVisitorInfo|null;companyName?:string}){
+export function LivechatVisitorDetails({visitor,companyName,presence}:{visitor?:LivechatVisitorInfo|null;companyName?:string;presence?:import("./livechat-presence").LivechatPresence}){
   if(!visitor)return null;
   const fields=[
     ["公司",companyName],["首次 IP",visitor.firstIp],["最近 IP",visitor.lastIp],
     ["浏览器语言",visitor.context.browserLanguage],["浏览器时区",visitor.context.timeZone],
-    ["网站来源",visitor.embedOrigin],["最近消息页面",visitor.context.pageUrl],
+    ["网站来源",visitor.embedOrigin],["当前浏览页面",presence?.status==="online"?presence.pageUrl||"未上报":presence?.status==="away"?"访客已离开当前标签页":presence?.status==="offline"?"访客已离线":"状态未知"],["最近消息页面",visitor.context.pageUrl],
     ["浏览器",visitor.context.userAgent],
     ["首次接入",visitor.createdAt?new Date(visitor.createdAt).toLocaleString("zh-CN"):null],
     ["最近消息",visitor.lastSeenAt?new Date(visitor.lastSeenAt).toLocaleString("zh-CN"):null],

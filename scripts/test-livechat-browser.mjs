@@ -14,6 +14,7 @@ const testPng=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIW
 const secondChannel="22222222-2222-4222-8222-222222222222";
 const sessions=new Map(),uploads=new Map(),origins=new Set(),errors=[],profiles=[],expiredSessions=new Set();
 const transcripts=new Map(),closedChats=new Map(),endRequests=[];
+const presenceReports=[];
 let endError='',dropEndResponse=false;
 let failNext=false,ordinal=0,widgetLanguage,widgetName='网站客服',widgetIcon='';
 const timestamp=()=>new Date().toISOString().replace(/\.(\d{3})Z$/,(_match,millis)=>`.${millis}${String(++ordinal%1000).padStart(3,'0')}Z`);
@@ -47,6 +48,7 @@ const api=await listen(async(req,res)=>{
   }
   const messages=sessions.get(sessionKey);
   if(!messages){json(401,{error:"visitor_not_found_or_expired"});return}
+  if(url.pathname.endsWith('/presence')){presenceReports.push({...JSON.parse((await body(req)).toString()),sessionKey});json(200,{ok:true});return}
   if(url.pathname.endsWith('/end-chat')&&req.method==='POST'){
     const data=JSON.parse((await body(req)).toString());endRequests.push(data);
     if(endError&&data.sendTranscript!==false){json(409,{error:endError});return}
@@ -180,6 +182,15 @@ try{
   const firstSession=[...sessions.values()][0];assert.equal(firstSession.length,1);
   assert.equal(profiles[0].name,'Sam');assert.equal(profiles[0].email,'sam@example.com');assert.equal(profiles[0].company,'Example Ltd');assert.equal(profiles[0].whatsapp,'+12025550123');
   assert.ok(profiles[0].context.browserLanguage);assert.ok(profiles[0].context.timeZone);assert.equal(profiles[0].context.pageUrl,hosts[0].url+'/contact');
+  const waitPresence=async predicate=>{for(let i=0;i<60;i++){if(presenceReports.some(predicate))return;await page.waitForTimeout(100)}assert.fail('未收到预期访客心跳')};
+  await waitPresence(item=>item.pageUrl===hosts[0].url+'/contact'&&item.connected);
+  const originalPresence=presenceReports.at(-1);
+  await page.evaluate(()=>history.pushState({},'', '/live-products?private=1#secret'));
+  await waitPresence(item=>item.pageUrl===hosts[0].url+'/live-products'&&item.connected);
+  assert.equal(firstSession.length,1,'更新当前浏览页面无需再发消息');
+  await page.goto(hosts[0].url+'/presence-next');frame=await frameFor(page);await openChat(frame);
+  await waitPresence(item=>item.sessionId===originalPresence.sessionId&&!item.connected);
+  await waitPresence(item=>item.pageUrl===hosts[0].url+'/presence-next'&&item.connected&&item.sessionId!==originalPresence.sessionId);
   incoming(firstSession,"坐席回复已送达");await frame.getByText("坐席回复已送达",{exact:true}).waitFor({timeout:10000});
   await assertMessageLayout(frame);
   assert.equal(await frame.locator('.support-avatar').first().textContent(),await frame.locator('#avatar').textContent());

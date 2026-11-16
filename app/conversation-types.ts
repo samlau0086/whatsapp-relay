@@ -3,6 +3,7 @@ export type ContactMethodType="phone"|"wechat"|"telegram"|"line"|"website"|"face
 export type ContactMethod={id?:string;type:ContactMethodType;label:string;value:string};
 export type ConversationMessageStatus="received"|"queued"|"dispatching"|"sent"|"delivered"|"read"|"failed"|"uncertain";
 export type Conversation = {
+  visitorPresence?:import("./livechat-presence").LivechatPresence;
   id:string;name:string;initials:string;color:string;account:string;accountId:string;phone:string;providerUserId:string;
   contactId:string;alias:string;contactName:string;primaryEmail:string;contactMethods:ContactMethod[];
   preview:string;lastDirection:"in"|"out"|null;lastMessageStatus:ConversationMessageStatus|null;time:string;unread:number;accountStatus:string;assignedUserId:string|null;

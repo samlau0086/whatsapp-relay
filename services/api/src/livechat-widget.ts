@@ -23,6 +23,21 @@ const messageTime=m=>m.sort_at||(m.visible_at||m.created_at).replace(/\.(\d{3})Z
 let outbox={};try{const saved=JSON.parse(localStorage.getItem(key+':outbox')||'{}');if(saved&&typeof saved==='object'&&!Array.isArray(saved))outbox=saved}catch{}
 function saveOutbox(){try{localStorage.setItem(key+':outbox',JSON.stringify(outbox))}catch{}}
 if(!secret||!/^[a-f0-9]{64}$/.test(secret)){secret=Array.from(crypto.getRandomValues(new Uint8Array(32)),n=>n.toString(16).padStart(2,'0')).join('');try{localStorage.setItem(key,secret)}catch{}}
+const presenceSession=crypto.randomUUID();let presenceSequence=0,presenceStopped=false,lastPage=location.origin+location.pathname;
+function reportPresence(connected=true){
+  if(!started||presenceStopped&&connected)return;
+  lastPage=location.origin+location.pathname;
+  // 每个文档独立会话，序号阻止迟到心跳覆盖离开事件。
+  void fetch(path+'/presence',{method:'POST',credentials:'omit',headers:{authorization:'Bearer '+secret,'content-type':'application/json'},body:JSON.stringify({sessionId:presenceSession,sequence:++presenceSequence,visible:document.visibilityState==='visible',connected,pageUrl:lastPage}),keepalive:true,referrerPolicy:'origin',signal:AbortSignal.timeout(10000)}).catch(()=>{});
+}
+setInterval(()=>reportPresence(),10000);
+setInterval(()=>{if(lastPage!==location.origin+location.pathname)reportPresence()},500);
+document.addEventListener('visibilitychange',()=>reportPresence());
+addEventListener('pagehide',()=>{reportPresence(false);presenceStopped=true});
+addEventListener('pageshow',()=>{presenceStopped=false;reportPresence()});
+addEventListener('online',()=>reportPresence());
+addEventListener('offline',()=>reportPresence(false));
+reportPresence();
 async function api(action,data){
   if(action==='reset'){
     let reusedIdentity=false;
@@ -49,7 +64,7 @@ else if(action==='download'){if(!/^[a-f0-9-]{36}$/.test(data.id))throw Error('in
 else if(action!=='config')throw Error('invalid_action');
 const response=await fetch(url,{...options,referrerPolicy:'origin',signal:AbortSignal.timeout(30000)});
 if(!response.ok){const body=await response.json().catch(()=>({}));throw Error(response.status===401&&started?'visitor_session_expired':body.error||'HTTP '+response.status)}
-if(action==='send'||action==='history'){started=true;try{localStorage.setItem(key+':started','1')}catch{}}
+if(action==='send'||action==='history'){const wasStarted=started;started=true;if(!wasStarted)reportPresence();try{localStorage.setItem(key+':started','1')}catch{}}
   if(action==='send'){delete outbox[data.clientMessageId];saveOutbox();ended=false;endId='';endMode='';endedMode='';try{for(const suffix of [':ended',':endId',':endMode',':endedMode'])localStorage.removeItem(key+suffix)}catch{}}
 if(action==='download')return {blob:await response.blob()};
 const result=await response.json();

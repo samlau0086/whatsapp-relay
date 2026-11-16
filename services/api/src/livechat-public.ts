@@ -143,6 +143,19 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
     });
     return reply.code(201).send(result);
   });
+  app.post("/livechat/:publicId/presence",async(request,reply)=>{
+    const c=await channel(request),v=await visitor(request,c);
+    const parsed=z.object({sessionId:uuid,sequence:z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),visible:z.boolean(),connected:z.boolean(),pageUrl:z.string().url().max(2048)}).safeParse(request.body);
+    if(!parsed.success)throw fail(400,"invalid_presence");
+    const data=parsed.data,url=new URL(data.pageUrl);
+    if(url.origin!==embedOrigin(request)||url.username||url.password)throw fail(400,"invalid_presence_page");
+    await pool.query(`INSERT INTO livechat_presence(visitor_id,session_id,sequence,visible,connected,page_url)
+      VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(visitor_id,session_id) DO UPDATE
+      SET sequence=EXCLUDED.sequence,visible=EXCLUDED.visible,connected=EXCLUDED.connected,page_url=EXCLUDED.page_url,updated_at=now()
+      WHERE livechat_presence.sequence<EXCLUDED.sequence`,[v.id,data.sessionId,data.sequence,data.visible,data.connected,url.origin+url.pathname]);
+    await pool.query("DELETE FROM livechat_presence WHERE visitor_id=$1 AND updated_at<now()-interval '1 day'",[v.id]);
+    return reply.header("cache-control","no-store").send({ok:true});
+  });
   app.post("/livechat/:publicId/end-chat",async(request,reply)=>{
     const c=await channel(request),v=await visitor(request,c),parsed=endChatSchema.safeParse(request.body);
     if(!parsed.success)throw fail(400,"invalid_request");

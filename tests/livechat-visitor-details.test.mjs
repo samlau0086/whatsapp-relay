@@ -26,6 +26,17 @@ test("旧客户无访客资料时不显示空白环境面板",()=>{
   assert.equal(renderToStaticMarkup(LivechatVisitorDetails({})),"");
 });
 
+test("当前浏览页面独立于消息快照，离开或离线不冒充当前页面",()=>{
+  const visitor={embedOrigin:"https://shop.example.com",context:{pageUrl:"https://shop.example.com/old-message"}};
+  for(const [status,label] of [["online","https://shop.example.com/current"],["away","访客已离开当前标签页"],["offline","访客已离线"],[undefined,"状态未知"]]){
+    const html=renderToStaticMarkup(LivechatVisitorDetails({visitor,presence:status?{status,pageUrl:"https://shop.example.com/current"}:undefined}));
+    const current=html.slice(html.indexOf("当前浏览页面"),html.indexOf("最近消息页面"));
+    assert.ok(current.includes(label));assert.ok(!current.includes("old-message"));
+    if(status!=="online")assert.ok(!current.includes("https://shop.example.com/current"));
+    assert.ok(html.includes("https://shop.example.com/old-message"));
+  }
+});
+
 test("联系人详情映射不会丢失 LiveChat 访客环境资料",async()=>{
   const source=await readFile(new URL("../app/whatsapp-inbox.tsx",import.meta.url),"utf8");
   assert.match(source,/item\.livechatVisitor/);

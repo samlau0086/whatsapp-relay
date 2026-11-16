@@ -2,6 +2,7 @@
 import { EmailHtmlBody } from "./email-html-body";
 import {EmailProviderSettings as EmailSettingsPanel} from "./email-provider-settings";
 import { LivechatVisitorDetails, type LivechatVisitorInfo } from "./livechat-visitor-details";
+import {useLivechatPresence,visitorStatus,visitorStatusLabel,type LivechatPresence} from "./livechat-presence";
 
 import {
   Archive, Ban, Bell, Bookmark, CalendarDays, Check, CheckCheck, ChevronDown, CircleHelp, Clock3, FileText, FileDown,
@@ -479,9 +480,21 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
 
   const userId=user?.id??tokenSubject(apiToken);
   const counts=conversationCounts;
-  const visible=conversations;
+  const requestPresence=useCallback(async(contactIds:string[],signal:AbortSignal)=>{
+    const data:Array<LivechatPresence&{contactId:string}>=[];
+    for(let offset=0;offset<contactIds.length;offset+=500){
+      const result=await authorizedFetch("/api/v1/livechat/presence/query",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({contactIds:contactIds.slice(offset,offset+500)}),signal});
+      if(result.token!==apiToken)setApiToken(result.token);
+      if(!result.response.ok)throw Error("访客状态读取失败");
+      data.push(...(await result.response.json() as {data:Array<LivechatPresence&{contactId:string}>}).data);
+    }
+    return data;
+  },[apiToken]);
+  const visitorPresence=useLivechatPresence([...conversations.filter(item=>item.platform==="livechat").map(item=>item.contactId),...(selectedConversationRef.current?.platform==="livechat"?[selectedConversationRef.current.contactId]:[])],view==="inbox"&&Boolean(apiToken),requestPresence);
+  const visible=useMemo(()=>conversations.map(item=>item.platform==="livechat"?{...item,visitorPresence:visitorPresence[item.contactId]}:item),[conversations,visitorPresence]);
   const effectiveActiveId=activeId||visible[0]?.id||"";
-  const active=visible.find(item=>item.id===effectiveActiveId)??(selectedConversationRef.current?.id===effectiveActiveId?selectedConversationRef.current:null);
+  const selectedActive=visible.find(item=>item.id===effectiveActiveId)??(selectedConversationRef.current?.id===effectiveActiveId?selectedConversationRef.current:null);
+  const active=useMemo(()=>selectedActive?.platform==="livechat"?{...selectedActive,visitorPresence:visitorPresence[selectedActive.contactId]}:selectedActive,[selectedActive,visitorPresence]);
   const activePrimaryEmail=active?.primaryEmail??"";
   const emailOnlyConversation=Boolean(active&&!active.phone&&!active.providerUserId&&active.primaryEmail);
   // Email mode belongs to the active conversation. Do not carry it from an
@@ -2023,12 +2036,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                       <b>{active.name}</b>
                       <small>
                         <i
-                          className={`status-dot ${active.accountStatus === "online" ? "online" : ""}`}
+                          className={`status-dot ${visitorStatus(active) === "online" ? "online" : ""}`}
                         />
                         <span className={`channel-badge ${active.platform}`}>{active.platform==="messenger"?<Facebook size={10}/>:active.conversationType==="group"?<Users size={10}/>:<MessageCircle size={10}/>} {active.conversationType==="group"?"WhatsApp 群聊":active.platform==="livechat"?"LiveChat":active.platform==="messenger"?"Facebook":"WhatsApp"}</span>{" · "}
                         {(active.conversationType==="group"||active.platform==="livechat")?active.account:<button type="button" className="conversation-account-transfer" onClick={()=>setTransferConversation(active)} title="转移到其他账号">{active.account}<ArrowRightLeft size={11}/></button>}{active.conversationType==="group"?` · ${active.groupParticipantCount} 位成员`:""} ·{" "}
                         {active.platform==="livechat"?"网站访客":active.platform==="messenger"?"Page":active.transport === "cloud" ? "Cloud API" : "Web"} ·{" "}
-                        {statusText(active.accountStatus)}
+                        {active.platform==="livechat"?visitorStatusLabel(active):statusText(active.accountStatus)}
                       </small>
                     </span>
                   </div>
@@ -3714,9 +3727,9 @@ function CrmDetailsPanel({
           <p>{active.platform==="livechat"?"网站访客":active.platform==="messenger"?`Messenger 用户 · ${active.providerUserId}`:(active.phone || "号码待同步")}</p>
           <span className="contact-online">
             <i
-              className={`status-dot ${active.accountStatus === "online" ? "online" : ""}`}
+              className={`status-dot ${visitorStatus(active) === "online" ? "online" : ""}`}
             />
-            {statusText(active.accountStatus)}
+            {active.platform==="livechat"?visitorStatusLabel(active):statusText(active.accountStatus)}
           </span>
           {details?.contact&&<ContactLocalTime contact={details.contact}/>}
           {details?.contact?.preferredLanguage&&<div className="contact-preferred-language"><LanguageFlagIcon code={details.contact.preferredLanguage} countryCode={details.contact.country} title={details.contact.country?countryLabel(details.contact.country):undefined}/><b>{languageShortCode(details.contact.preferredLanguage)}</b></div>}
@@ -3725,7 +3738,7 @@ function CrmDetailsPanel({
           {details?.contact&&<ContactSocialLinks methods={details.contact.methods}/>}
           <div className="contact-profile-actions"><button className="contact-profile-edit" onClick={()=>setContactEditing(true)}><Pencil size={13}/>编辑资料</button><button className="contact-profile-edit" onClick={()=>setAddressEditing(true)}><MapPin size={13}/>收货地址{details?.contact?.addresses.length?` (${details.contact.addresses.length})`:""}</button>{active.platform==="whatsapp"&&active.transport==="web"&&<button className={`contact-profile-edit contact-block-button ${(blockOverride??Boolean(details?.contact?.blockedAt??active.blocked))?"blocked":""}`} disabled={busy} onClick={()=>void toggleContactBlock()}><Ban size={13}/>{(blockOverride??Boolean(details?.contact?.blockedAt??active.blocked))?"解除拉黑":"拉黑"}</button>}</div>
         </div>
-        {active.platform==="livechat"&&<LivechatVisitorDetails visitor={details?.contact?.livechatVisitor} companyName={details?.contact?.companyName}/>}
+        {active.platform==="livechat"&&<LivechatVisitorDetails visitor={details?.contact?.livechatVisitor} companyName={details?.contact?.companyName} presence={active.visitorPresence}/>}
         <AgentMemoryPanel conversationId={active.id} token={token} onToken={onToken} onToast={onToast}/>
         {loading ? (
           <div className="crm-loading">

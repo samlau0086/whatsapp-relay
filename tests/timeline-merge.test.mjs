@@ -139,12 +139,19 @@ test("Shift 点击进入多选，普通点击继续选择，再次点击取消�
 test("列表行传递鼠标和键盘的 Shift 状态并展示选择状态",async()=>{
   const row=await readFile(new URL("../app/conversation-list-row.tsx",import.meta.url),"utf8");
   const output={};
-  runInNewContext(ts.transpileModule(row,{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,{exports:output,require:name=>name==="./message-time"?{formatMessageTime:()=>"",formatMessageTimeTitle:()=>""}:require(name)});
+  const presence={};
+  const presenceSource=await readFile(new URL("../app/livechat-presence.ts",import.meta.url),"utf8");
+  runInNewContext(ts.transpileModule(presenceSource,{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:presence,require});
+  runInNewContext(ts.transpileModule(row,{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,{exports:output,require:name=>name==="./message-time"?{formatMessageTime:()=>"",formatMessageTimeTitle:()=>""}:name==="./livechat-presence"?presence:require(name)});
   const events=[];
   const element=output.ConversationListRow({item:{name:"客户",tags:[],conversationType:"direct",platform:"livechat",unread:0},multiSelect:true,selected:true,selectionDisabled:false,onSelect:shift=>events.push(shift)});
   element.props.onClick({shiftKey:true});element.props.onClick({shiftKey:false});
   let prevented=false;element.props.onKeyDown({key:" ",shiftKey:true,preventDefault:()=>{prevented=true}});
   assert.deepEqual(events,[true,false,true]);assert.equal(prevented,true);assert.equal(element.props["aria-pressed"],true);
+  assert.equal(presence.visitorStatus({platform:"livechat",accountStatus:"online"}),"unknown");
+  assert.equal(presence.visitorStatus({platform:"livechat",accountStatus:"online",visitorPresence:{status:"offline"}}),"offline");
+  assert.equal(presence.visitorStatus({platform:"livechat",accountStatus:"offline",visitorPresence:{status:"online"}}),"online");
+  assert.equal(presence.visitorStatus({platform:"whatsapp",accountStatus:"online"}),"online");
 });
 
 test("时间线查询按原始时间及 id 分页，公开访客接口不扩大读取范围",async()=>{
