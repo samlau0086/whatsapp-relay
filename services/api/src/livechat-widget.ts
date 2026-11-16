@@ -34,7 +34,20 @@ async function api(action,data){
   }
 let url=path+'/'+action,options={credentials:'omit',headers:{authorization:'Bearer '+secret}};
 if(action==='send'){if(!Object.hasOwn(outbox,data.clientMessageId)&&Object.keys(outbox).length>=30)throw Error('pending_outbox_limit');let timeZone;try{timeZone=Intl.DateTimeFormat().resolvedOptions().timeZone}catch{}data={...data,context:{browserLanguage:navigator.language,timeZone,pageUrl:location.origin+location.pathname}};outbox[data.clientMessageId]=data;saveOutbox();url=path+'/messages';options.method='POST';options.headers['content-type']='application/json';options.body=JSON.stringify(data)}
-else if(action==='upload'){url=path+'/media';options.method='POST';const body=new FormData();body.append('file',data.file);options.body=body}
+else if(action==='upload'){
+  url=path+'/media';options.method='POST';
+  const file=data?.file;
+  console.debug('[livechat upload host]',{
+    isFile:file instanceof File,
+    isBlob:file instanceof Blob,
+    name:file?.name,
+    size:file?.size,
+    type:file?.type,
+    constructor:file?.constructor?.name
+  });
+  if(!(file instanceof Blob)||!file.size)throw Error('upload_file_payload_invalid');
+  const body=new FormData();body.append('file',file,file.name||'attachment');options.body=body
+}
 else if(action==='history'){url=path+'/messages'+(data&&data.before?'?before='+encodeURIComponent(data.before):data&&data.after?'?after='+encodeURIComponent(data.after):'')}
 else if(action==='download'){if(!/^[a-f0-9-]{36}$/.test(data.id))throw Error('invalid_attachment');url=path+'/media/'+data.id}
   else if(action==='end'){const mode=data.sendTranscript===false?'close':'transcript';if(!endId||endMode!==mode){endId=data.clientRequestId;endMode=mode;try{localStorage.setItem(key+':endId',endId);localStorage.setItem(key+':endMode',endMode)}catch{}}url=path+'/end-chat';options.method='POST';options.headers['content-type']='application/json';options.body=JSON.stringify({clientRequestId:endId,sendTranscript:mode==='transcript'})}
@@ -148,7 +161,7 @@ $('older').onclick=async()=>{if(!first)return;const timeline=$('timeline'),heigh
   async function send(p,id){if(busy)return;busy=true;p.error='';local.set(id,p);notice('');render();scrollToLatest();try{const result=await rpc('send',{clientMessageId:id,text:p.text,mediaId:p.mediaId,name:p.name,email:p.email,company:p.company,whatsapp:p.whatsapp,fileName:p.fileName,mimeType:p.mimeType,quotedMessageId:replyTo?.id});active=true;local.delete(id);replyTo=null;updateReplyBar();if(p.previewUrl&&p.mediaId)mediaUrls.set(p.mediaId,p.previewUrl);messages.set(result.id,{id:result.id,client_message_id:id,direction:'in',text_content:p.text,media_id:p.mediaId,file_name:p.fileName,mime_type:p.mimeType,created_at:new Date().toISOString()});render();await sync()}catch(error){p.error=errorText(error.message);notice(error.message)}finally{busy=false;render()}}
 prechat.onsubmit=event=>{event.preventDefault();if(busy||active||local.size)return;for(const id of ['visitorName','initialMessage']){const input=$(id);input.setCustomValidity(input.value.trim()?'':t('请填写姓名、有效邮箱和消息'));if(!input.reportValidity())return}if(!prechat.reportValidity())return;send({text:$('initialMessage').value.trim(),name:$('visitorName').value.trim(),email:$('email').value.trim(),company:$('company').value.trim()||undefined,whatsapp:$('whatsapp').value.trim()||undefined},crypto.randomUUID())};
 for(const id of ['visitorName','initialMessage'])$(id).oninput=()=>$(id).setCustomValidity('');
-  $('form').onsubmit=async event=>{event.preventDefault();const text=$('draft').value.trim();if((!text&&!pendingFile)||busy||uploading||!active)return;if(!pendingFile){$('draft').value='';await send({text},crypto.randomUUID());return}const file=pendingFile,previewUrl=pendingPreviewUrl;uploading=true;render();notice(t('正在上传附件...'));try{const result=await rpc('upload',{file});pendingFile=null;pendingPreviewUrl='';renderComposerPreview();$('draft').value='';await send({text,mediaId:result.id,fileName:file.name,mimeType:file.type,previewUrl},crypto.randomUUID())}catch(error){notice(error.message)}finally{uploading=false;render()}};
+  $('form').onsubmit=async event=>{event.preventDefault();const text=$('draft').value.trim();if((!text&&!pendingFile)||busy||uploading||!active)return;if(!pendingFile){$('draft').value='';await send({text},crypto.randomUUID());return}const file=pendingFile,previewUrl=pendingPreviewUrl;console.debug('[livechat upload iframe]',{isFile:file instanceof File,isBlob:file instanceof Blob,name:file?.name,size:file?.size,type:file?.type});uploading=true;render();notice(t('正在上传附件...'));try{const result=await rpc('upload',{file});pendingFile=null;pendingPreviewUrl='';renderComposerPreview();$('draft').value='';await send({text,mediaId:result.id,fileName:file.name,mimeType:file.type,previewUrl},crypto.randomUUID())}catch(error){notice(error.message)}finally{uploading=false;render()}};
 $('draft').onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();$('form').requestSubmit()}};
   const emojis=['😀','😂','😊','😍','👍','🙏','🎉','❤️','👋','✅','🤔','😢'];for(const value of emojis){const button=document.createElement('button');button.type='button';button.textContent=value;button.setAttribute('aria-label',value);button.onclick=()=>{insertEmoji(value);$('emojiPanel').hidden=true};$('emojiPanel').append(button)}
   $('emoji').onclick=()=>{$('emojiPanel').hidden=!$('emojiPanel').hidden};
