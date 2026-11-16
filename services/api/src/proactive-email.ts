@@ -1,5 +1,6 @@
 import type {PoolClient} from "pg";
-import {escapeHtml,type EmailProviderConfig} from "./email.js";
+import {escapeHtml} from "./email.js";
+import {resolveEmailProvider,mailboxEmailTransport} from "./email-provider-routing.js";
 
 export type OutreachEmailDestination={mailbox_id:string;from_email:string;to_email:string};
 
@@ -25,12 +26,8 @@ export async function queueProactiveEmail(client:PoolClient,input:{jobId:string;
   const mailbox=await client.query("SELECT * FROM account_email_mailboxes WHERE id=$1 AND enabled AND is_primary",[destination.mailbox_id]);
   if(!mailbox.rowCount)throw new Error("primary_mailbox_unavailable");
   const row=mailbox.rows[0];
-  const resend=row.auth_type==="microsoft"?null:(await client.query("SELECT config,secret_encrypted FROM email_provider_settings WHERE provider='resend' AND enabled AND secret_encrypted IS NOT NULL LIMIT 1")).rows[0];
-  const useResend=Boolean(resend&&String(resend.config?.fromEmail??"").toLowerCase()===String(row.address).toLowerCase());
-  const provider=useResend?"resend":"smtp";
-  const config:EmailProviderConfig=useResend?{...resend.config,fromName:row.display_name||row.address,fromEmail:row.address}:{fromName:row.display_name||row.address,fromEmail:row.address,host:row.smtp_host,port:row.smtp_port,tls:row.smtp_tls,username:row.smtp_username};
-  if(row.auth_type==="microsoft")config.oauthMailboxId=String(row.id);
-  const secret=useResend?resend.secret_encrypted:row.smtp_secret_encrypted;
+  const selected=await resolveEmailProvider(client,accountId);
+  const {provider,config,secret}=mailboxEmailTransport(row,selected,true);
   if(!secret&&row.auth_type!=="microsoft")throw new Error("mailbox_send_unavailable");
   const previous=await client.query(`SELECT d.rfc_message_id,d.references_header,d.subject,d.message_id FROM message_email_details d
     JOIN messages m ON m.id=d.message_id WHERE m.conversation_id=$1 AND d.mailbox_id=$2 AND d.rfc_message_id IS NOT NULL

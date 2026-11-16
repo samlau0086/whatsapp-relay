@@ -123,7 +123,7 @@ test("LiveChat 结束会话正确入队邮件、完整记录和事务内去重",
     if(sql.includes("FROM livechat_end_requests r"))return result(requestExisting&&values[0]===channelId?[requestExisting]:[]);
     if(sql.includes("FROM email_messages e"))return result(existing?[existing]:[]);
     if(sql.includes("SELECT cv.id conversation_id"))return result([{conversation_id:contactId,account_id:accountId,contact_id:contactId,recipient_email:"sam@example.com"}]);
-    if(sql.includes("FROM email_provider_settings"))return result(providerConfigured?[{provider:"smtp",config:{fromEmail:"support@example.com"},secret_encrypted:"encrypted"}]:[]);
+    if(sql.includes("JOIN email_provider_instances"))return result(providerConfigured?[{provider:"smtp",config:{fromEmail:"support@example.com"},secret_encrypted:"encrypted"}]:[]);
     if(sql.includes("FROM messages m"))return result([{direction:"in",text_content:"<script>"+"x".repeat(6000),file_name:"quote.pdf",occurred_at:new Date("2026-11-15T00:00:00Z")}]);
     if(sql.startsWith("INSERT INTO email_messages"))return result([{id:messageId,status:"queued"}]);
     if(sql.startsWith("INSERT INTO messages"))return result([{id:channelId}]);
@@ -135,7 +135,7 @@ test("LiveChat 结束会话正确入队邮件、完整记录和事务内去重",
   providerConfigured=false;calls.length=0;
   const closeOnly=await end(false,channelId);assert.equal(closeOnly.statusCode,202,closeOnly.body);assert.equal(closeOnly.json().queued,false);assert.equal(closeOnly.json().closed,true);
   assert.ok(calls.some(c=>c.sql.startsWith("INSERT INTO livechat_end_requests")&&c.sql.includes("false")));
-  assert.ok(!calls.some(c=>c.sql.includes("FROM email_provider_settings")||c.sql.startsWith("INSERT INTO email_messages")));
+  assert.ok(!calls.some(c=>c.sql.includes("JOIN email_provider_instances")||c.sql.startsWith("INSERT INTO email_messages")));
   assert.match(String(calls.find(c=>c.sql.startsWith("INSERT INTO audit_log"))?.values[1]),/"sendTranscript":false/);
   requestExisting={visitor_id:channelId,account_id:accountId,contact_id:contactId,send_transcript:false,email_id:null,status:null};
   assert.equal((await end(false,channelId)).json().deduplicated,true);

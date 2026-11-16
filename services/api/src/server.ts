@@ -30,7 +30,9 @@ import { DEFAULT_PAYPAL_ITEM_NAME_TEMPLATE, DEFAULT_PAYPAL_NOTE_TEMPLATE, DEFAUL
 import { DEFAULT_PRODUCT_CARD_TEMPLATE, parseProductCardTemplate, productCardTemplateSchema, renderProductCardCaption } from "./product-card-template.js";
 import { renderProductCardGridPages, renderProductCardGridPdf, renderProductCards, type ProductCardRenderProduct } from "./product-card-image.js";
 import { fetchLatestExchangeRates } from "./exchange-rates.js";
-import { emailShell, ensureEmailTables, escapeHtml, sendProviderTest, verifySmtp, type EmailProvider, type EmailProviderConfig } from "./email.js";
+import { emailShell, ensureEmailTables, escapeHtml } from "./email.js";
+import {registerEmailProviderRoutes} from "./email-provider-routes.js";
+import {resolveEmailProvider} from "./email-provider-routing.js";
 import { sanitizeEmailDisplayHtml } from "./email-display.js";
 import { verifyMailbox } from "./mailboxes.js";
 import { registerMailboxRoutes } from "./mailbox-routes.js";
@@ -178,8 +180,9 @@ app.get("/api/v1/openapi.json", async () => ({ openapi:"3.1.0", info:{title:"Rel
   "/api/v1/admin/payment-methods/{methodId}/profiles/{profileId}":{patch:{summary:"更新付款 Profile"},delete:{summary:"删除付款 Profile"}},
   "/api/v1/payment-profiles":{get:{summary:"读取订单可选付款 Profiles"}},
   "/api/v1/admin/email-providers":{get:{summary:"读取 SMTP 与 Resend 邮件配置"}},
-  "/api/v1/admin/email-providers/{provider}":{put:{summary:"保存并启用邮件 Provider"}},
-  "/api/v1/admin/email-providers/{provider}/test":{post:{summary:"发送 Provider 测试邮件"}},
+  "/api/v1/admin/email-providers/{id}":{put:{summary:"保存邮件 Provider 实例"}},
+  "/api/v1/admin/email-providers/{id}/test":{post:{summary:"发送指定 Provider 的测试邮件"}},
+  "/api/v1/admin/email-provider-bindings/{accountId}":{put:{summary:"设置或取消渠道邮件 Provider 绑定"}},
   "/api/v1/conversations/{id}/email-sends":{post:{summary:"将订单或产品卡加入邮件发送队列"}},
   "/api/v1/conversations/{id}/email-activities":{get:{summary:"读取会话邮件活动"}},
   "/api/v1/orders/{orderId}/payment-request":{post:{summary:"创建 PayPal 付款请求"}},
@@ -1806,29 +1809,7 @@ app.put("/api/v1/admin/product-card-template",{preHandler:authenticate},async(re
   await auditCrm(request.principal.id,"product_card.template.update","product_card_settings","workspace",{blockCount:parsed.data.blocks.length});return{template:parsed.data,updatedAt:saved.rows[0].updated_at};
 });
 
-app.get("/api/v1/admin/email-providers",{preHandler:authenticate},async(request,reply)=>{
-  if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
-  const result=await pool.query("SELECT provider,enabled,config,secret_encrypted,updated_at FROM email_provider_settings");const rows=new Map(result.rows.map(row=>[String(row.provider),row]));
-  return{data:(["smtp","resend"] as EmailProvider[]).map(provider=>{const row=rows.get(provider),cfg=(row?.config??{}) as EmailProviderConfig;return{provider,enabled:Boolean(row?.enabled),configured:Boolean(row?.secret_encrypted),fromName:cfg.fromName??"",fromEmail:cfg.fromEmail??"",replyTo:cfg.replyTo??"",host:cfg.host??"",port:cfg.port??(provider==="smtp"?587:undefined),tls:cfg.tls??"starttls",username:cfg.username??"",updatedAt:row?.updated_at??null};})};
-});
-
-app.put("/api/v1/admin/email-providers/:provider",{preHandler:authenticate},async(request,reply)=>{
-  if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});const {provider}=request.params as {provider:string};if(provider!=="smtp"&&provider!=="resend")return reply.code(404).send({error:"provider_not_found"});
-  const parsed=emailProviderSettingsSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
-  if(provider==="smtp"&&(!parsed.data.host||!parsed.data.port||!parsed.data.tls))return reply.code(400).send({error:"smtp_settings_required"});
-  const current=await pool.query("SELECT secret_encrypted FROM email_provider_settings WHERE provider=$1",[provider]),secretEncrypted=parsed.data.secret?encryptAtRest(parsed.data.secret,config.DATA_ENCRYPTION_KEY):current.rows[0]?.secret_encrypted??null;
-  if(parsed.data.enabled&&!secretEncrypted)return reply.code(400).send({error:"provider_secret_required"});
-  const cfg:EmailProviderConfig={fromName:parsed.data.fromName,fromEmail:parsed.data.fromEmail,replyTo:parsed.data.replyTo||undefined,...(provider==="smtp"?{host:parsed.data.host,port:parsed.data.port,tls:parsed.data.tls,username:parsed.data.username||undefined}:{})};
-  if(provider==="smtp"&&parsed.data.enabled)try{await verifySmtp(cfg,decryptAtRest(secretEncrypted,config.DATA_ENCRYPTION_KEY));}catch(error){return reply.code(400).send({error:"smtp_verification_failed",message:error instanceof Error?error.message:String(error)});}
-  await transaction(async client=>{if(parsed.data.enabled)await client.query("UPDATE email_provider_settings SET enabled=false,updated_at=now() WHERE enabled");await client.query("INSERT INTO email_provider_settings(provider,enabled,config,secret_encrypted,updated_by) VALUES($1,$2,$3,$4,$5) ON CONFLICT(provider) DO UPDATE SET enabled=EXCLUDED.enabled,config=EXCLUDED.config,secret_encrypted=EXCLUDED.secret_encrypted,updated_by=EXCLUDED.updated_by,updated_at=now()",[provider,parsed.data.enabled,JSON.stringify(cfg),secretEncrypted,request.principal!.id]);});
-  await auditCrm(request.principal.id,"email.provider.update","email_provider",provider,{enabled:parsed.data.enabled,fromEmail:cfg.fromEmail});return{provider,enabled:parsed.data.enabled,configured:Boolean(secretEncrypted),...cfg};
-});
-
-app.post("/api/v1/admin/email-providers/:provider/test",{preHandler:authenticate},async(request,reply)=>{
-  if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});const {provider}=request.params as {provider:string};if(provider!=="smtp"&&provider!=="resend")return reply.code(404).send({error:"provider_not_found"});const parsed=emailProviderTestSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
-  const found=await pool.query("SELECT config,secret_encrypted FROM email_provider_settings WHERE provider=$1 AND secret_encrypted IS NOT NULL",[provider]);if(!found.rowCount)return reply.code(409).send({error:"provider_not_configured"});
-  try{const messageId=await sendProviderTest(provider,found.rows[0].config,decryptAtRest(found.rows[0].secret_encrypted,config.DATA_ENCRYPTION_KEY),parsed.data.recipientEmail);return{accepted:true,messageId};}catch(error){request.log.warn({provider,error:String(error)},"Email provider test failed");return reply.code(502).send({error:"email_test_failed",message:error instanceof Error?error.message:String(error)});}
-});
+registerEmailProviderRoutes(app);
 
 app.get("/api/v1/conversations/:conversationId/email-activities",{preHandler:authenticate},async(request,reply)=>{
   const {conversationId}=request.params as {conversationId:string};const conversation=await pool.query("SELECT account_id FROM conversations WHERE id=$1",[conversationId]);if(!conversation.rowCount||!canAccessAccount(request.principal,conversation.rows[0].account_id))return reply.code(404).send({error:"not_found"});
@@ -1843,7 +1824,8 @@ app.post("/api/v1/conversations/:conversationId/email-sends",{preHandler:authent
   if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});const principal=request.principal,{conversationId}=request.params as {conversationId:string},parsed=emailSendSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
   const duplicate=await pool.query("SELECT e.id,e.status,c.account_id FROM email_messages e JOIN conversations c ON c.id=e.conversation_id WHERE e.client_send_id=$1",[parsed.data.clientSendId]);if(duplicate.rowCount)return canAccessAccount(principal,duplicate.rows[0].account_id)?reply.code(202).send({emailId:duplicate.rows[0].id,status:duplicate.rows[0].status,deduplicated:true}):reply.code(404).send({error:"not_found"});
   const contextResult=await pool.query("SELECT c.account_id,c.contact_id,co.entity_type,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164,co.provider_user_id) customer_name,co.phone_e164 customer_phone,co.first_name contact_first_name,co.last_name contact_last_name,co.company_name contact_company_name,co.country contact_country,co.province contact_province,co.city contact_city,(SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) contact_email FROM conversations c JOIN contacts co ON co.id=c.contact_id WHERE c.id=$1",[conversationId]);if(!contextResult.rowCount||!canAccessAccount(principal,contextResult.rows[0].account_id))return reply.code(404).send({error:"not_found"});const context=contextResult.rows[0];if(context.entity_type==="group")return reply.code(409).send({error:"group_feature_unavailable"});
-  const [recipientResult,providerResult]=await Promise.all([pool.query("SELECT id,label,email,is_primary FROM contact_emails WHERE contact_id=$1 AND id=ANY($2::uuid[]) ORDER BY position,id",[context.contact_id,parsed.data.recipientEmailIds]),pool.query("SELECT provider,config,secret_encrypted FROM email_provider_settings WHERE enabled AND secret_encrypted IS NOT NULL LIMIT 1")]);
+  const [recipientResult,selectedProvider]=await Promise.all([pool.query("SELECT id,label,email,is_primary FROM contact_emails WHERE contact_id=$1 AND id=ANY($2::uuid[]) ORDER BY position,id",[context.contact_id,parsed.data.recipientEmailIds]),resolveEmailProvider(pool,context.account_id)]);
+  const providerResult={rowCount:selectedProvider?1:0,rows:[selectedProvider!]};
   if(recipientResult.rowCount!==parsed.data.recipientEmailIds.length)return reply.code(400).send({error:"invalid_recipient_email"});if(!providerResult.rowCount)return reply.code(409).send({error:"email_provider_not_configured",message:"管理员尚未启用邮件 Provider"});
   const recipients=recipientResult.rows.map(row=>({id:String(row.id),label:String(row.label??""),email:String(row.email),isPrimary:Boolean(row.is_primary)})),provider=providerResult.rows[0];let textContent="",contentHtml="",contentType:"order_text"|"order_image"|"order_pdf"|"product_cards",orderId:string|null=null,productIds:string[]|null=null;const attachments:Array<{mediaId:string;fileName:string;contentId:string;byteSize:number;mimeType:string}>=[];
   if(parsed.data.content.type==="order"){

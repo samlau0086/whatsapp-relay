@@ -294,6 +294,7 @@ export const orderAddressSchema=z.object({addressId:z.string().uuid().nullable()
 export const orderSendSchema=z.object({format:z.enum(["text","image","pdf"]).default("text"),clientSendId:z.string().uuid().optional(),translate:z.boolean().optional(),targetLanguage:languageCodeSchema.optional()}).default({format:"text"}).superRefine((value,ctx)=>{if(value.translate===true&&!value.targetLanguage)ctx.addIssue({code:"custom",path:["targetLanguage"],message:"target language is required when translation is requested"});});
 const emailSubjectSchema=z.string().trim().min(1).max(200).refine(value=>!/[\r\n]/.test(value),"subject must not contain line breaks");
 export const emailProviderSettingsSchema=z.object({
+  name:z.string().trim().min(1).max(120),provider:z.enum(["smtp","resend"]),isDefault:z.boolean().default(false),
   enabled:z.boolean(),fromName:z.string().trim().min(1).max(120),fromEmail:z.string().trim().email().max(254),replyTo:z.string().trim().email().max(254).or(z.literal("")).default(""),
   host:z.string().trim().max(255).optional(),port:z.coerce.number().int().min(1).max(65535).optional(),tls:z.enum(["tls","starttls"]).optional(),username:z.string().trim().max(255).optional(),secret:z.string().max(4096).optional(),
 });

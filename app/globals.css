@@ -1269,3 +1269,27 @@ button { color:inherit; }
 .timeline-merge-dialog footer{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
 .timeline-merge-dialog footer button{min-height:36px;border-radius:6px}
 @media(max-width:640px){.livechat-settings .order-table{min-width:560px}.livechat-settings .management-head h2{font-size:18px}.livechat-settings .order-table-wrap{max-width:100%;overflow:auto}}
+/* 多实例邮件配置沿用现有 Provider 布局，渠道绑定在窄屏改为单列。 */
+.email-instance-settings { max-width: 1240px; }
+.email-instance-toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.email-instance-toolbar input { min-width:0; max-width:220px; }
+.email-instance-fieldset { border:0; padding:0; margin:0; min-width:0; display:grid; gap:16px; }
+.email-instance-fieldset>header { display:flex; align-items:center; justify-content:space-between; gap:16px; padding-bottom:16px; border-bottom:1px solid #e9eeeb; }
+.email-instance-fieldset>label { display:block; font-size:13px; color:#56665e; }
+.email-instance-fieldset input:not([type=checkbox]),.email-instance-fieldset select { display:block; width:100%; min-width:0; height:42px; margin-top:5px; padding:0 10px; border:1px solid #dce4df; border-radius:8px; background:#fff; font:inherit; }
+.email-instance-fieldset .provider-form-grid label { margin:0; min-width:0; }
+.email-instance-settings .provider-list button { border-radius:8px; }
+.email-instance-settings .provider-list button>span { min-width:0; }
+.email-instance-settings .provider-form { border-radius:8px; }
+.email-instance-settings .settings-section-head { display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+.email-instance-secret { display:flex; gap:8px; min-width:0; }
+.email-instance-secret input { flex:1; min-width:0; }
+.email-instance-settings .provider-list b,.email-instance-settings .provider-list small { overflow-wrap:anywhere; }
+.email-instance-settings .provider-list button { min-width:0; }
+.email-channel-bindings { margin-top:28px; border-top:1px solid #dce7e1; padding-top:20px; }
+.email-channel-bindings h2 { margin-bottom:16px; }
+.email-channel-binding { display:grid; grid-template-columns:minmax(140px,1fr) minmax(180px,2fr) auto; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid #dce7e1; }
+.email-channel-binding label { min-width:0; overflow-wrap:anywhere; }
+.email-channel-binding small { display:block; color:#64756d; }
+.email-channel-binding select { width:100%; min-width:0; border:1px solid #dce7e1; padding:10px; border-radius:6px; background:white; }
+@media(max-width:640px){.email-instance-settings .settings-section-head{align-items:flex-start;flex-direction:column;gap:12px}.email-channel-binding{grid-template-columns:minmax(0,1fr) auto}.email-channel-binding label{grid-column:1/-1}.email-instance-settings .provider-settings-layout{grid-template-columns:minmax(0,1fr)}.email-instance-settings .provider-form-grid{grid-template-columns:minmax(0,1fr)}.email-instance-settings .provider-form{padding:16px;min-width:0}.email-instance-settings .email-instance-toolbar input{max-width:100%;width:100%}}

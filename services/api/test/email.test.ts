@@ -25,7 +25,7 @@ test("email send input rejects header injection and cross-shape content",()=>{
 });
 
 test("provider settings validate sender and SMTP transport fields",()=>{
-  assert.equal(emailProviderSettingsSchema.safeParse({enabled:true,fromName:"RelayDesk",fromEmail:"sales@example.com",replyTo:"",host:"smtp.example.com",port:587,tls:"starttls",username:"sales@example.com",secret:"secret"}).success,true);
+  assert.equal(emailProviderSettingsSchema.safeParse({name:"销售 SMTP",provider:"smtp",enabled:true,fromName:"RelayDesk",fromEmail:"sales@example.com",replyTo:"",host:"smtp.example.com",port:587,tls:"starttls",username:"sales@example.com",secret:"secret"}).success,true);
   assert.equal(emailProviderSettingsSchema.safeParse({enabled:true,fromName:"RelayDesk",fromEmail:"not-an-email",replyTo:""}).success,false);
 });
 

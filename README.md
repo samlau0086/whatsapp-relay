@@ -1,5 +1,17 @@
 # RelayDesk
 
+## 多实例邮件 Provider 与渠道配置
+
+管理员在“系统设置 → 邮件发送”可分别新增多个 SMTP 和 Resend 实例，每个实例拥有独立名称、发件人、密钥及启用状态。密钥继续加密保存，编辑时留空保留原值；可向测试邮箱发送测试邮件。SMTP 启用保存时会验证连接。可将一个已启用实例设为工作区默认，启用其他实例不会停用它。
+
+在同页“渠道邮件 Provider”中，为每个 WhatsApp、Messenger 或 LiveChat channel 独立选择已保存并启用的实例，再点击该行“保存”。选择“工作区默认”取消独立绑定。会话邮件、订单/产品邮件、主动邮件及 LiveChat 会话记录使用该路由。显式绑定的实例停用或缺少密钥时拒绝新邮件入队，不会静默改用其他实例。
+
+发送使用选定实例的发件人及凭据；会话邮箱仍负责收信、线程关联，Provider 未填写 Reply-To 时会话邮件使用该邮箱作为 Reply-To。主动邮件仍要求渠道的主要邮箱和客户主要邮箱；未独立绑定的旧渠道保留 Microsoft OAuth 及发件地址不匹配时的邮箱 SMTP 回退。未绑定且无工作区默认时，会话邮件使用邮箱自身 SMTP/OAuth，订单/产品邮件及 LiveChat 记录返回未配置错误。已排队邮件保持原配置快照，不受之后切换 Provider 影响。
+
+API 和 Worker 启动时自动执行 `103_email_provider_instances.sql`，将旧 SMTP/Resend 配置一次性导入新实例表，并保留原默认服务和加密密钥，不删除旧表或历史邮件。部署需同步更新前端、API 和 Worker 并重启服务；新部署仍使用完整数据库初始化流程。
+
+验证：在 `services/api` 运行 `npm test`、`npm run build`；根目录运行 `npm test`。浏览器回归运行 `node scripts/test-email-provider-settings-browser.mjs`，使用模拟 API，不向真实邮箱发信。可选临时数据库验证设置 `EMAIL_PROVIDER_PG_BIN` 为 PostgreSQL bin 目录后，在 `services/api` 运行 `node --import tsx --test test/email-provider-routing.postgres.test.ts`，不连接业务数据库。
+
 ## 会话时间线合并
 
 在统一收件箱按住 Shift 点击单人会话即可进入多选，之后直接点击其他会话切换选中状态。选中至少两个会话后，点击列表上方的“合并”，选择主会话并确认；“取消”可退出多选。每次最多选择 50 个会话。

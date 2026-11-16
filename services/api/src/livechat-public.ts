@@ -9,6 +9,7 @@ import {createWebhookEvent} from "./agent-hub.js";
 import {livechatLoader,livechatWidget} from "./livechat-widget.js";
 import {isValidTimeZone} from "./order-number.js";
 import {emailShell,escapeHtml} from "./email.js";
+import {resolveEmailProvider} from "./email-provider-routing.js";
 
 const s3=new S3Client({region:config.S3_REGION,endpoint:config.S3_ENDPOINT,forcePathStyle:true,credentials:{accessKeyId:config.S3_ACCESS_KEY,secretAccessKey:config.S3_SECRET_KEY}});
 const uuid=z.string().uuid();
@@ -180,7 +181,8 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
       }
       const recipient=String(row.recipient_email??"").trim();
       if(!recipient)throw fail(409,"visitor_email_required");
-      const provider=await client.query("SELECT provider,config,secret_encrypted FROM email_provider_settings WHERE enabled AND secret_encrypted IS NOT NULL LIMIT 1");
+      const selectedProvider=await resolveEmailProvider(client,row.account_id);
+      const provider={rowCount:selectedProvider?1:0,rows:[selectedProvider!]};
       if(!provider.rowCount)throw fail(409,"email_provider_not_configured");
       const messages=await client.query(`SELECT m.direction,m.kind,m.text_content,m.occurred_at,media.file_name
         FROM messages m LEFT JOIN media ON media.id=m.media_id WHERE m.conversation_id=$1

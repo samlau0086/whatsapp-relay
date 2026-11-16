@@ -12,7 +12,7 @@ function database(options:{state?:Record<string,unknown>;destination?:boolean;au
     if(sql.includes("FROM contacts co"))rows=[{proactive_email_allowed:true,enabled:true,email_enabled:true,status:"open",mode:"cautious",...options.state}];
     else if(sql.includes("CROSS JOIN contact_emails"))rows=options.destination===false?[]:[{mailbox_id:"mailbox",from_email:"sender@example.com",to_email:"customer@example.com"}];
     else if(sql.startsWith("SELECT * FROM account_email_mailboxes"))rows=[{id:"mailbox",address:"sender@example.com",auth_type:options.auth??"password",smtp_host:"smtp.example.com",smtp_port:587,smtp_tls:"starttls",smtp_username:"sender@example.com",smtp_secret_encrypted:options.auth==="microsoft"?"":"encrypted-password"}];
-    else if(sql.includes("FROM email_provider_settings"))rows=options.resend?[{config:{fromEmail:options.resend},secret_encrypted:"encrypted-api-key"}]:[];
+    else if(sql.includes("JOIN email_provider_instances"))rows=options.resend?[{provider:"resend",config:{fromEmail:options.resend},secret_encrypted:"encrypted-api-key",explicit:false}]:[];
     else if(sql.includes("FROM message_email_details"))rows=options.parent?[{rfc_message_id:"<previous@example.com>",references_header:"<first@example.com>",subject:"RE(2): Hello",message_id:"previous-message"}]:[];
     else if(sql.startsWith("INSERT INTO email_messages"))rows=[{id:"email-job"}];
     else if(sql.startsWith("INSERT INTO messages"))rows=[{id:"bubble"}];
@@ -35,7 +35,7 @@ test("Microsoft outreach uses the mailbox OAuth transport, not global Resend",as
   const values=db.calls.find(call=>call.sql.startsWith("INSERT INTO email_messages"))!.params;
   assert.equal(values[4],"smtp");assert.equal(values[6],"");
   assert.equal(JSON.parse(String(values[5])).oauthMailboxId,"mailbox");
-  assert.equal(db.calls.some(call=>call.sql.includes("FROM email_provider_settings")),false);
+  assert.equal(JSON.parse(String(values[5])).fromEmail,"sender@example.com");
 });
 
 test("Resend is used only when its sender is the configured primary mailbox",async()=>{

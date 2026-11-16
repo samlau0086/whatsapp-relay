@@ -3,7 +3,8 @@ import { z } from "zod";
 import { authenticate, canAccessAccount } from "./auth.js";
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
-import { emailShell, escapeHtml, sanitizeEmailHtml, type EmailProviderConfig } from "./email.js";
+import { emailShell, escapeHtml, sanitizeEmailHtml } from "./email.js";
+import {resolveEmailProvider,mailboxEmailTransport} from "./email-provider-routing.js";
 import { syncOneMailbox, verifyMailbox } from "./mailboxes.js";
 import { microsoftMailboxToken, registerMailboxOAuth } from "./mailbox-oauth.js";
 import { conversationEmailSchema, mailboxSettingsSchema } from "./schemas.js";
@@ -93,17 +94,15 @@ export function registerMailboxRoutes(app:FastifyInstance):void{
     const contact=await pool.query("SELECT co.id,co.account_id,co.entity_type FROM contacts co WHERE co.id=COALESCE($1::uuid,(SELECT contact_id FROM conversations WHERE id=$2))",[params.contactId??null,params.id??null]);
     if(!contact.rowCount||contact.rows[0].entity_type==="group"||!canAccessAccount(request.principal,contact.rows[0].account_id))return reply.code(404).send({error:"not_found"});
     const accountId=String(contact.rows[0].account_id),contactId=String(contact.rows[0].id);
-    const [mailbox,recipient,media,resendProvider]=await Promise.all([
+    const [mailbox,recipient,media,selectedProvider]=await Promise.all([
       pool.query("SELECT * FROM account_email_mailboxes WHERE id=$1 AND account_id=$2 AND enabled",[value.mailboxId,accountId]),
       value.recipientEmailId?pool.query("SELECT email FROM contact_emails WHERE id=$1 AND contact_id=$2",[value.recipientEmailId,contactId]):pool.query("SELECT email FROM contact_emails WHERE contact_id=$1 AND lower(email)=lower($2) LIMIT 1",[contactId,value.recipientEmail]),
       pool.query("SELECT id,file_name,mime_type,byte_size FROM media WHERE id=ANY($1::uuid[]) AND account_id=$2 AND status='ready'",[value.attachmentIds,accountId]),
-      pool.query("SELECT config,secret_encrypted FROM email_provider_settings WHERE provider='resend' AND enabled AND secret_encrypted IS NOT NULL LIMIT 1"),
+      resolveEmailProvider(pool,accountId),
     ]);
     if(!mailbox.rowCount||!recipient.rowCount)return reply.code(409).send({error:"email_address_unavailable"});
     if(media.rowCount!==new Set(value.attachmentIds).size||value.attachmentIds.reduce((sum,id)=>sum+Number(media.rows.find(row=>row.id===id)?.byte_size??0),0)>25*1024*1024||media.rows.some(row=>Number(row.byte_size)>20*1024*1024))return reply.code(413).send({error:"email_attachments_invalid"});
-    const row=mailbox.rows[0],resend=resendProvider.rows[0],provider=resend?"resend":"smtp",providerConfig:EmailProviderConfig=resend?{...(resend.config as EmailProviderConfig),fromName:row.display_name||resend.config.fromName||row.address,fromEmail:resend.config.fromEmail||row.address}:{fromName:row.display_name||row.address,fromEmail:row.address,host:row.smtp_host,port:row.smtp_port,tls:row.smtp_tls,username:row.smtp_username},providerSecret=resend?resend.secret_encrypted:row.smtp_secret_encrypted;
-    if(!resend&&row.auth_type==='microsoft')providerConfig.oauthMailboxId=String(row.id);
-    if(resend)providerConfig.replyTo=row.address;
+    const row=mailbox.rows[0],{provider,config:providerConfig,secret:providerSecret}=mailboxEmailTransport(row,selectedProvider);
     const result=await transaction(async client=>{
       const existing=await client.query("SELECT e.id,e.conversation_id FROM email_messages e WHERE e.client_send_id=$1",[value.clientSendId]);if(existing.rowCount){const belongs=await client.query("SELECT 1 FROM conversations WHERE id=$1 AND contact_id=$2",[existing.rows[0].conversation_id,contactId]);if(!belongs.rowCount)throw Object.assign(new Error("idempotency_conflict"),{statusCode:409});return {emailId:existing.rows[0].id,conversationId:existing.rows[0].conversation_id,deduplicated:true};}
       const conversation=await client.query("INSERT INTO conversations(account_id,contact_id,status) VALUES($1,$2,'open') ON CONFLICT(account_id,contact_id) DO UPDATE SET status='open',closed_at=NULL RETURNING id",[accountId,contactId]);const conversationId=String(conversation.rows[0].id);
