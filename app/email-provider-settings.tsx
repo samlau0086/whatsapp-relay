@@ -15,17 +15,14 @@ export function EmailProviderSettings({token,accounts=[],onToken,onToast}:Props)
     if(!result.response.ok)throw new Error(body.message||body.error||`HTTP ${result.response.status}`);
     return body;
   },[token,onToken]);
-  const load=useCallback(async()=>{
-    setLoading(true);
-    try{
-      const body=await request("/api/v1/admin/email-providers");
+  const load=useCallback(()=>request("/api/v1/admin/email-providers").then(body=>{
       const next:Provider[]=body.data.map((item:Provider)=>({...item,secret:""}));
       const mapping=Object.fromEntries(body.bindings.map((item:{account_id:string;provider_id:string})=>[item.account_id,item.provider_id]));
       setProviders(next);setBindings(mapping);setSavedBindings(mapping);
       setSelected(value=>next.some(item=>item.id===value)?value:next[0]?.id||"");setError("");
-    }catch(reason){setError(reason instanceof Error?reason.message:"邮件 Provider 加载失败");}finally{setLoading(false);}
-  },[request]);
+  }).catch(reason=>{setError(reason instanceof Error?reason.message:"邮件 Provider 加载失败");}).finally(()=>{setLoading(false);}),[request]);
   useEffect(()=>{void load();},[load]);
+  function refresh(){setLoading(true);void load();}
   const current=providers.find(item=>item.id===selected);
   function change(patch:Partial<Provider>){setProviders(items=>items.map(item=>item.id===selected?{...item,...patch}:item));}
   function add(provider:Provider["provider"]){
@@ -36,7 +33,7 @@ export function EmailProviderSettings({token,accounts=[],onToken,onToast}:Props)
     event.preventDefault();if(!current)return;setBusy(true);setError("");
     try{
       await request(`/api/v1/admin/email-providers/${current.id}`,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({...current,secret:current.secret||undefined})});
-      onToast("邮件 Provider 已保存");await load();
+      onToast("邮件 Provider 已保存");setLoading(true);await load();
     }catch(reason){setError(reason instanceof Error?reason.message:"保存失败");}finally{setBusy(false);}
   }
   async function test(){
@@ -50,7 +47,7 @@ export function EmailProviderSettings({token,accounts=[],onToken,onToast}:Props)
     catch(reason){setError(reason instanceof Error?reason.message:"渠道保存失败");}finally{setBusy(false);}
   }
   return <div className="settings-provider-section email-instance-settings" aria-busy={loading||busy}>
-    <div className="settings-section-head"><h2>邮件发送 Provider</h2><div className="email-instance-toolbar"><button className="secondary-action" disabled={loading||busy} onClick={()=>add("smtp")}><Plus size={15}/>新增 SMTP</button><button className="secondary-action" disabled={loading||busy} onClick={()=>add("resend")}><Plus size={15}/>新增 Resend</button><button className="secondary-action" disabled={loading||busy} onClick={()=>void load()}><RefreshCw size={15}/>刷新</button></div></div>
+    <div className="settings-section-head"><h2>邮件发送 Provider</h2><div className="email-instance-toolbar"><button className="secondary-action" disabled={loading||busy} onClick={()=>add("smtp")}><Plus size={15}/>新增 SMTP</button><button className="secondary-action" disabled={loading||busy} onClick={()=>add("resend")}><Plus size={15}/>新增 Resend</button><button className="secondary-action" disabled={loading||busy} onClick={refresh}><RefreshCw size={15}/>刷新</button></div></div>
     {error&&<p className="login-error" role="alert">{error}</p>}
     {loading?<p role="status">正在读取邮件 Provider…</p>:<>
       <div className="provider-settings-layout"><nav className="provider-list" aria-label="邮件 Provider">{providers.map(item=><button key={item.id} disabled={busy} className={selected===item.id?"active":""} onClick={()=>{setSelected(item.id);setVisible(false);}}><span><b>{item.name}</b><small>{item.provider==="smtp"?"SMTP":"Resend"} · {item.fromEmail||"未设置发件邮箱"}</small></span><em className={item.enabled?"enabled":""}>{!item.configured?"待保存":item.isDefault?"默认":item.enabled?"已启用":"已停用"}</em></button>)}</nav>

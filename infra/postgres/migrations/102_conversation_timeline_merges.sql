@@ -10,13 +10,17 @@ CREATE INDEX IF NOT EXISTS conversation_timeline_merges_target_idx ON conversati
 CREATE OR REPLACE FUNCTION relay_guard_timeline_merge_member() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
-  IF TG_OP='UPDATE' AND NEW.account_id IS NOT DISTINCT FROM OLD.account_id THEN
+  -- 删除由 API 先清理合并关系后执行；仅继续阻止已合并会话转移账号。
+  IF TG_OP='DELETE' THEN
+    RETURN OLD;
+  END IF;
+  IF NEW.account_id IS NOT DISTINCT FROM OLD.account_id THEN
     RETURN NEW;
   END IF;
   IF EXISTS (SELECT 1 FROM conversation_timeline_merges WHERE source_id=OLD.id OR target_id=OLD.id) THEN
     RAISE EXCEPTION 'conversation_timeline_merge_member' USING ERRCODE='23514';
   END IF;
-  RETURN CASE WHEN TG_OP='DELETE' THEN OLD ELSE NEW END;
+  RETURN NEW;
 END $$;
 
 DROP TRIGGER IF EXISTS conversation_timeline_merge_member_guard ON conversations;

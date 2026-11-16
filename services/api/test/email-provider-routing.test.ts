@@ -4,7 +4,7 @@ import type {Pool} from "pg";
 import {mailboxEmailTransport,resolveEmailProvider,type SelectedEmailProvider} from "../src/email-provider-routing.js";
 
 const selected:SelectedEmailProvider={id:"instance-a",provider:"resend",config:{fromName:"销售",fromEmail:"sales@example.com"},secret_encrypted:"encrypted-provider",explicit:true};
-const mailbox={id:"mailbox-a",address:"support@example.com",display_name:"客服",auth_type:"microsoft",smtp_host:"smtp.example.com",smtp_port:587,smtp_tls:"starttls",smtp_username:"support",smtp_secret_encrypted:"encrypted-mailbox"};
+const mailbox={id:"mailbox-a",address:"support@example.com",display_name:"客服",auth_type:"microsoft",smtp_host:"smtp.example.com",smtp_port:587,smtp_tls:"starttls" as const,smtp_username:"support",smtp_secret_encrypted:"encrypted-mailbox"};
 
 test("显式绑定始终使用指定实例，Reply-To 保持邮箱关联",()=>{
   for(const provider of ["smtp","resend"] as const){

@@ -40,7 +40,8 @@ test("PostgreSQL：合并保留全部消息、稳定分页、连续合并、入�
       CREATE TABLE audit_log(actor_type text,actor_id uuid,action text,target_type text,target_id uuid,metadata jsonb);
       CREATE FUNCTION relay_publish_conversation_change(uuid,uuid) RETURNS void LANGUAGE sql AS $$ SELECT pg_notify('timeline_test',$1::text) $$;`);
     const migration=await readFile(new URL("../../../infra/postgres/migrations/102_conversation_timeline_merges.sql",import.meta.url),"utf8");
-    await client.query(migration);await client.query(migration);
+    const deleteMigration=await readFile(new URL("../../../infra/postgres/migrations/104_allow_timeline_conversation_delete.sql",import.meta.url),"utf8");
+    await client.query(migration);await client.query(deleteMigration);
     await client.query("CREATE TRIGGER conversations_change_notify AFTER INSERT OR UPDATE OR DELETE ON conversations FOR EACH ROW EXECUTE FUNCTION relay_notify_conversation_row()");
     const account=randomUUID(),actor=randomUUID(),ids=[randomUUID(),randomUUID(),randomUUID()];
     await client.query("INSERT INTO users VALUES($1)",[actor]);
@@ -112,7 +113,6 @@ test("PostgreSQL：合并保留全部消息、稳定分页、连续合并、入�
     await client.query("SELECT relay_refresh_conversation_summary($1)",[ids[1]]);
     assert.equal((await client.query("SELECT last_message_id FROM conversations WHERE id=$1",[ids[2]])).rows[0].last_message_id,newest);
     for(const id of ids){
-      await assert.rejects(client.query("DELETE FROM conversations WHERE id=$1",[id]),/conversation_timeline_merge_member/);
       await assert.rejects(client.query("UPDATE conversations SET account_id=$2 WHERE id=$1",[id,randomUUID()]),/conversation_timeline_merge_member/);
       await client.query("UPDATE conversations SET account_id=account_id WHERE id=$1",[id]);
     }

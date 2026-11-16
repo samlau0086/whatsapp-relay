@@ -10,7 +10,7 @@
 
 API 和 Worker 启动时自动执行 `103_email_provider_instances.sql`，将旧 SMTP/Resend 配置一次性导入新实例表，并保留原默认服务和加密密钥，不删除旧表或历史邮件。部署需同步更新前端、API 和 Worker 并重启服务；新部署仍使用完整数据库初始化流程。
 
-验证：在 `services/api` 运行 `npm test`、`npm run build`；根目录运行 `npm test`。浏览器回归运行 `node scripts/test-email-provider-settings-browser.mjs`，使用模拟 API，不向真实邮箱发信。可选临时数据库验证设置 `EMAIL_PROVIDER_PG_BIN` 为 PostgreSQL bin 目录后，在 `services/api` 运行 `node --import tsx --test test/email-provider-routing.postgres.test.ts`，不连接业务数据库。
+验证：在 `services/api` 运行 `npm test`、`npm run build`；根目录运行 `npm run lint`、`npm test`，与 CI 的工作台校验保持一致。浏览器回归运行 `node scripts/test-email-provider-settings-browser.mjs`，使用模拟 API，不向真实邮箱发信。可选临时数据库验证设置 `EMAIL_PROVIDER_PG_BIN` 为 PostgreSQL bin 目录后，在 `services/api` 运行 `node --import tsx --test test/email-provider-routing.postgres.test.ts`，不连接业务数据库。
 
 ## 会话时间线合并
 
@@ -24,7 +24,7 @@ LiveChat 合并回复修复需要同时更新工作台和 API，并重启 API；
 
 合并后的 AI 接管模式和“回复时切换为”设置统一由主会话控制，成员的新入站消息按主会话模式触发 AI；自动回复及审批草稿仍发送给该消息所属的原联系人，不会发送给其他成员。AI 聊天上下文、记忆、任务归属和身份保持独立；主会话的 AI 面板汇总成员草稿与运行记录。人工发送消息或暂停 AI 会暂停整组的自动回复，并取消成员待执行的回复与跟进任务。已有合并关系无需重新合并，部署并重启 API 和 Worker 后生效，不自动补发历史消息。原有完全接管后的模式切换规则保持不变；需要持续完全接管时，将“回复时切换为”也设为完全接管。
 
-已有主会话可以继续参与时间线合并。已参与时间线合并的成员不能删除、转移账号或通过旧入口合并联系人身份；本功能暂不提供拆分入口。API 和 Worker 启动时自动执行 `102_conversation_timeline_merges.sql`，上线时需部署并重启这两个服务，不应仅更新前端。新部署仍需按现有流程初始化完整数据库。
+已有主会话可以继续参与时间线合并。已参与时间线合并的会话可以由管理员或主管删除；删除时会先解除时间线关联，再删除该会话及其可安全清理的媒体文件。已参与时间线合并的会话仍不能转移账号或通过旧入口合并联系人身份；本功能暂不提供拆分入口。API 和 Worker 启动时自动执行 `102_conversation_timeline_merges.sql`，上线时需部署并重启这两个服务，不应仅更新前端。新部署仍需按现有流程初始化完整数据库。
 
 验证：根目录 `npm test` 包含多选交互及查询边界回归测试；`services/api` 下运行 `npm test` 和 `npm run build`。可选浏览器检查 `node scripts/test-timeline-merge-browser.mjs` 需要本机可解析 Playwright 及 Chromium，使用模拟 API 验证桌面和手机布局，截图位于 `outputs/timeline-merge/`。可选真实数据库测试在 `services/api` 下设置 `TIMELINE_PG_BIN` 为 PostgreSQL 的 bin 目录，再运行 `node --import tsx --test test/timeline-merge.postgres.test.ts`；测试仅创建临时数据库实例并自动清理，不连接业务数据库。以上不能替代真实账号收发联调。
 

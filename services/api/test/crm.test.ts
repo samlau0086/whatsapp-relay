@@ -177,6 +177,7 @@ test("conversation deletion is privileged and blocks unsafe cascading deletes",a
   assert.match(server,/\["admin","supervisor"\]\.includes/);
   assert.match(server,/payment_request_exists/);
   assert.match(server,/outbound_pending/);
+  assert.match(server,/DELETE FROM conversation_merge_links WHERE source_conversation_id=\$1 OR target_conversation_id=\$1/);
   assert.match(server,/conversation\.delete/);
   assert.match(inbox,/永久删除会话/);
   assert.match(inbox,/method:"DELETE"/);
