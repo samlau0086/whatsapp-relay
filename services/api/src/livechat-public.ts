@@ -8,8 +8,7 @@ import {enqueueInboundAgentWork} from "./agent-engine.js";
 import {createWebhookEvent} from "./agent-hub.js";
 import {livechatLoader,livechatWidget} from "./livechat-widget.js";
 import {isValidTimeZone} from "./order-number.js";
-import {emailShell,escapeHtml} from "./email.js";
-import {resolveEmailProvider} from "./email-provider-routing.js";
+import {queueLivechatTranscript} from "./livechat-transcript.js";
 
 const s3=new S3Client({region:config.S3_REGION,endpoint:config.S3_ENDPOINT,forcePathStyle:true,credentials:{accessKeyId:config.S3_ACCESS_KEY,secretAccessKey:config.S3_SECRET_KEY}});
 const uuid=z.string().uuid();
@@ -192,26 +191,12 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
         await client.query("INSERT INTO audit_log(actor_type,action,target_type,target_id,metadata) VALUES('visitor','livechat.end_chat','conversation',$1,$2)",[row.conversation_id,JSON.stringify({sendTranscript:false})]);
         return {sendTranscript:false};
       }
-      const recipient=String(row.recipient_email??"").trim();
-      if(!recipient)throw fail(409,"visitor_email_required");
-      const selectedProvider=await resolveEmailProvider(client,row.account_id);
-      const provider={rowCount:selectedProvider?1:0,rows:[selectedProvider!]};
-      if(!provider.rowCount)throw fail(409,"email_provider_not_configured");
-      const messages=await client.query(`SELECT m.direction,m.kind,m.text_content,m.occurred_at,media.file_name
-        FROM messages m LEFT JOIN media ON media.id=m.media_id WHERE m.conversation_id=$1
-        AND NOT EXISTS(SELECT 1 FROM message_email_details d WHERE d.message_id=m.id)
-        AND (m.direction='in' OR m.status IN ('sent','delivered','read')) ORDER BY m.occurred_at,m.id`,[row.conversation_id]);
-      const lines=messages.rows.map(item=>`[${new Date(item.occurred_at).toISOString()}] ${item.direction==='in'?'Visitor':'Support'}: ${[item.text_content,item.file_name?`[Attachment: ${item.file_name}]`:null].filter(Boolean).join("\n")||'[Message]'}`).join("\n\n");
-      const text=`LiveChat transcript\n\n${lines}`;
-      const job=await client.query(`INSERT INTO email_messages(client_send_id,conversation_id,contact_id,sender_user_id,provider,provider_config,provider_secret_encrypted,recipients,subject,message_body,text_body,html_body,content_type)
-        VALUES($1,$2,$3,NULL,$4,$5,$6,$7,$8,'',$9,$10,'livechat_transcript') RETURNING id,status`,[parsed.data.clientRequestId,row.conversation_id,row.contact_id,provider.rows[0].provider,JSON.stringify(provider.rows[0].config),provider.rows[0].secret_encrypted,JSON.stringify([{email:recipient,label:"LiveChat visitor"}]),"Your LiveChat transcript",text,emailShell("",`<h2>LiveChat transcript</h2><p>${escapeHtml(lines)}</p>`)]);
-      const bubble=await client.query(`INSERT INTO messages(conversation_id,account_id,client_message_id,direction,kind,text_content,status,occurred_at) VALUES($1,$2,$3,'out','text',$4,'queued',now()) RETURNING id`,[row.conversation_id,row.account_id,`email:${job.rows[0].id}`,text]);
-      await client.query("INSERT INTO message_email_details(message_id,subject,from_email,to_emails,rfc_message_id,email_job_id) VALUES($1,$2,$3,$4,$5,$6)",[bubble.rows[0].id,"Your LiveChat transcript",provider.rows[0].config.fromEmail,JSON.stringify([recipient]),`<email-${job.rows[0].id}@relaydesk.local>`,job.rows[0].id]);
+      const {emailId,status,recipient}=await queueLivechatTranscript(client,row,parsed.data.clientRequestId);
       await client.query("UPDATE conversations SET status='closed',closed_at=now() WHERE id=$1",[row.conversation_id]);
       await client.query(`INSERT INTO livechat_end_requests(request_id,visitor_id,conversation_id,account_id,contact_id,send_transcript,email_id)
-        VALUES($1,$2,$3,$4,$5,true,$6)`,[parsed.data.clientRequestId,v.id,row.conversation_id,row.account_id,row.contact_id,job.rows[0].id]);
-      await client.query("INSERT INTO audit_log(actor_type,action,target_type,target_id,metadata) VALUES('visitor','livechat.end_chat','conversation',$1,$2)",[row.conversation_id,JSON.stringify({emailId:job.rows[0].id,recipient,sendTranscript:true})]);
-      return {emailId:job.rows[0].id,status:job.rows[0].status,sendTranscript:true};
+        VALUES($1,$2,$3,$4,$5,true,$6)`,[parsed.data.clientRequestId,v.id,row.conversation_id,row.account_id,row.contact_id,emailId]);
+      await client.query("INSERT INTO audit_log(actor_type,action,target_type,target_id,metadata) VALUES('visitor','livechat.end_chat','conversation',$1,$2)",[row.conversation_id,JSON.stringify({emailId,recipient,sendTranscript:true})]);
+      return {emailId,status,sendTranscript:true};
     });
     return reply.code(202).send({ok:true,queued:result.sendTranscript,closed:true,...result});
   });

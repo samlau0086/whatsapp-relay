@@ -49,6 +49,7 @@ import { authorizedFetch, clearStoredSession, SESSION_EXPIRED_EVENT, setCurrentA
 import {LivechatSettingsPanel} from "./livechat-settings";
 import { replyEmailSubject } from "./email-reply-subject";
 import {defaultTimelineRecipient,TimelineRecipientPicker,type TimelineRecipient} from "./timeline-recipient";
+import {LivechatTranscriptDialog} from "./livechat-transcript-dialog";
 
 const API_URL = (process.env.NEXT_PUBLIC_RELAY_API_URL ?? "").replace(/\/$/, "");
 const REMEMBER_LOGIN_KEY="relayRememberLogin";
@@ -342,6 +343,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [conversations,setConversations]=useState<Conversation[]>([]);
   const [messages,setMessages]=useState<Record<string,ChatMessage[]>>({});
   const [timelineRecipients,setTimelineRecipients]=useState<Record<string,TimelineRecipient[]>>({});
+  const [transcriptConversationId,setTranscriptConversationId]=useState("");
   const [replyRecipients,setReplyRecipients]=useState<Record<string,string>>({});
   const manualReplyRecipients=useRef(new Set<string>());
   const [messageCursors,setMessageCursors]=useState<Record<string,string|null>>({});
@@ -530,6 +532,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const currentEmailActivities=useMemo(()=>active?emailActivities[active.id]??[]:[],[active,emailActivities]);
   useEffect(()=>{if(!apiToken||!active?.accountId)return;let cancelled=false;void authorizedFetch("/api/v1/mailboxes",apiToken).then(async result=>{if(result.token!==apiToken)setApiToken(result.token);if(!result.response.ok)return;const body=await result.response.json().catch(()=>({})) as {data?:Array<Record<string,unknown>>};if(cancelled)return;const items=(body.data??[]).filter(item=>String(item.account_id)===active.accountId).map(item=>({id:String(item.id),account_id:String(item.account_id),address:String(item.address),display_name:String(item.display_name??""),is_primary:Boolean(item.is_primary),enabled:Boolean(item.enabled)}));setEmailMailboxes(items);setEmailMailboxId(current=>current&&items.some(item=>item.id===current)?current:(items.find(item=>item.is_primary&&item.enabled)?.id??items.find(item=>item.enabled)?.id??""));}).catch(()=>{});return()=>{cancelled=true};},[apiToken,active?.accountId]);
   const latestMessageId=currentMessages.at(-1)?.id??"";
+  useEffect(()=>{setTranscriptConversationId("");},[effectiveActiveId]);
   const selectConversation=useCallback((conversationId:string,shiftKey=false)=>{
     const item=visible.find(value=>value.id===conversationId);
     if(shiftKey||selectedConversations.size){
@@ -2046,6 +2049,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                     </span>
                   </div>
                   <div className="chat-actions">
+                    {active.platform==="livechat"&&<button type="button" className="icon-button" aria-label="发送会话记录" title="发送会话记录" disabled={!livechatRecipients.length} onClick={()=>setTranscriptConversationId(active.id)}><Mail size={17}/></button>}
                     {failedMessageCount > 0 && (
                       <button
                         onClick={() => void clearFailedMessages()}
@@ -2099,6 +2103,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                     </button>
                   </div>
                 </header>
+                {transcriptConversationId===active.id&&active.platform==="livechat"&&<LivechatTranscriptDialog key={active.id} conversationId={active.id} accountId={active.accountId} members={livechatRecipients} initialRecipientId={replyConversationId} token={apiToken} onToken={setApiToken} onClose={()=>setTranscriptConversationId("")} onSent={text=>{setToast(text);void loadMessages(apiToken,active.id);void loadConversations(apiToken);}}/>}
                 {active.conversationType!=="group"&&<AgentConversationBar
                   conversationId={active.id}
                   token={apiToken}

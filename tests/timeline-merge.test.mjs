@@ -158,8 +158,11 @@ test("时间线查询按原始时间及 id 分页，公开访客接口不扩大�
   const server=await readFile(new URL("../services/api/src/server.ts",import.meta.url),"utf8");
   assert.match(server,/msg\.conversation_id IN \(SELECT relay_conversation_members\(\$1\)\).*ORDER BY msg\.occurred_at DESC,msg\.id DESC/);
   assert.match(server,/102_|relay_conversation_members/);
-  const publicApi=await readFile(new URL("../services/api/src/livechat.ts",import.meta.url),"utf8");
+  const publicApi=await readFile(new URL("../services/api/src/livechat-public.ts",import.meta.url),"utf8");
   assert.equal(publicApi.includes("relay_conversation_members"),false);
+  const transcript=await readFile(new URL("../services/api/src/livechat-transcript.ts",import.meta.url),"utf8");
+  assert.equal(transcript.includes("relay_conversation_members"),false);
+  assert.match(transcript,/WHERE m\.conversation_id=\$1/);
 });
 
 test("旧身份合并入口在调用资料搬移前拒绝时间线成员",async()=>{

@@ -1,9 +1,10 @@
 import type {FastifyInstance} from "fastify";
 import {z} from "zod";
-import {authenticate} from "./auth.js";
+import {authenticate,canAccessAccount} from "./auth.js";
 import {pool,transaction} from "./db.js";
 import {createWebhookEvent} from "./agent-hub.js";
 import {recordProactiveOutreachDelivery} from "./proactive-outreach.js";
+import {queueLivechatTranscript} from "./livechat-transcript.js";
 
 export function normalizeLivechatOrigins(values:string[]):string[]{
   return [...new Set(values.map(value=>{
@@ -56,6 +57,46 @@ export async function processOneLivechatOutbound():Promise<boolean>{
 }
 
 export async function registerLivechatRoutes(app:FastifyInstance):Promise<void>{
+  app.post("/api/v1/conversations/:id/transcript",{preHandler:authenticate},async(request,reply)=>{
+    if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+    const params=z.object({id:z.string().uuid()}).safeParse(request.params);
+    const parsed=z.object({clientSendId:z.string().uuid(),targetConversationId:z.string().uuid().optional()}).safeParse(request.body);
+    if(!params.success||!parsed.success)return reply.code(400).send({error:"invalid_request"});
+    const principal=request.principal,rootId=params.data.id,targetId=parsed.data.targetConversationId??rootId;
+    const fail=(statusCode:number,message:string)=>Object.assign(new Error(message),{statusCode});
+    try{
+      const result=await transaction(async client=>{
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[`livechat-end:${parsed.data.clientSendId}`]);
+        const context=await client.query(`SELECT cv.id conversation_id,cv.account_id,cv.contact_id,
+          (SELECT email FROM contact_emails WHERE contact_id=cv.contact_id AND is_primary LIMIT 1) recipient_email
+          FROM conversations root JOIN conversations cv ON cv.account_id=root.account_id
+          JOIN livechat_channels channel ON channel.account_id=cv.account_id
+          WHERE root.id=$1 AND cv.id=$2 AND cv.id IN (SELECT relay_conversation_members(root.id))
+          AND channel.enabled AND channel.archived_at IS NULL FOR UPDATE OF cv`,[rootId,targetId]);
+        const row=context.rows[0];
+        if(!row||!canAccessAccount(principal,row.account_id))throw fail(404,"conversation_not_found");
+        if(principal.role!=="admin"){
+          const permission=await client.query("SELECT 1 FROM account_permissions WHERE account_id=$1 AND user_id=$2 AND can_read AND can_send LIMIT 1",[row.account_id,principal.id]);
+          if(!permission.rowCount)throw fail(403,"account_send_forbidden");
+        }
+        const existing=await client.query("SELECT id,status,conversation_id,sender_user_id,content_type FROM email_messages WHERE client_send_id=$1",[parsed.data.clientSendId]);
+        if(existing.rowCount){
+          const old=existing.rows[0];
+          if(old.conversation_id!==targetId||old.sender_user_id!==principal.id||old.content_type!=="livechat_transcript")throw fail(409,"client_send_id_conflict");
+          return {emailId:old.id,status:old.status,deduplicated:true};
+        }
+        const job=await queueLivechatTranscript(client,row,parsed.data.clientSendId,principal.id);
+        await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'livechat.send_transcript','conversation',$2,$3)",[principal.id,targetId,JSON.stringify({rootConversationId:rootId,emailId:job.emailId,recipient:job.recipient})]);
+        return {emailId:job.emailId,status:job.status,deduplicated:false};
+      });
+      return reply.code(202).send({ok:true,queued:true,...result});
+    }catch(error){
+      const code=error instanceof Error?error.message:"";
+      const messages:Record<string,string>={account_send_forbidden:"没有该渠道的邮件发送权限",conversation_not_found:"会话不存在、无权访问或 LiveChat 渠道已停用",visitor_email_required:"请先在客户资料中设置访客主邮箱",email_provider_not_configured:"请先配置渠道邮件 Provider 或工作区默认 Provider",channel_email_provider_unavailable:"渠道绑定的邮件 Provider 不可用，请联系管理员",client_send_id_conflict:"发送请求冲突，请重新打开后重试"};
+      if(messages[code])return reply.code((error as {statusCode?:number}).statusCode??409).send({error:code,message:messages[code]});
+      throw error;
+    }
+  });
   app.post("/api/v1/livechat/presence/query",{preHandler:authenticate},async(request,reply)=>{
     const parsed=z.object({contactIds:z.array(z.string().uuid()).max(500)}).safeParse(request.body);
     if(!parsed.success)return reply.code(400).send({error:"invalid_request"});
