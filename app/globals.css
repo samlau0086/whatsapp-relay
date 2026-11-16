@@ -1220,11 +1220,34 @@ button { color:inherit; }
 .livechat-settings td{overflow-wrap:anywhere}
 .livechat-settings .contact-row-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 .livechat-settings .contact-row-actions label{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
-.livechat-settings .login-dialog{max-height:calc(100dvh - 32px);overflow:auto;width:min(480px,calc(100vw - 24px));border-radius:8px}
-.livechat-settings .login-dialog label:has(input[type=checkbox]){display:flex;align-items:center;gap:8px}
 .livechat-settings input[type=checkbox]{width:16px;height:16px;flex:0 0 16px}
-.livechat-settings input[type=color]{width:52px;height:32px;padding:2px}
-.livechat-settings textarea{resize:vertical;min-height:70px}
+.livechat-editor-backdrop{position:fixed;padding:16px}
+.livechat-editor{display:flex;flex-direction:column;width:min(560px,100%);max-height:calc(100dvh - 32px);min-height:0;overflow:hidden;border:1px solid #dce5e0;border-radius:8px;background:#fff;box-shadow:0 24px 70px #07181140}
+.livechat-editor-header{display:flex;align-items:center;justify-content:space-between;gap:16px;flex:0 0 auto;padding:18px 24px;border-bottom:1px solid #e5ebe8}
+.livechat-editor-header h2{margin:0;min-width:0;font-weight:600;overflow-wrap:anywhere}
+.livechat-editor-close{display:grid;place-items:center;width:36px;height:36px;flex:0 0 36px;padding:0;border:0;border-radius:6px;background:#f1f4f2;color:#52645b;cursor:pointer}
+.livechat-editor-close:hover{background:#e5ece8;color:#16201d}
+.livechat-editor-body{min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:20px 24px}
+.livechat-editor-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:0;padding:0;min-width:0;border:0}
+.livechat-editor-fields>label{display:flex;flex-direction:column;gap:6px;min-width:0;margin:0;color:#52645b;font-weight:500}
+.livechat-editor-wide{grid-column:1/-1}
+.livechat-editor-fields :is(input:not([type=checkbox]):not([type=color]),select,textarea){display:block;width:100%;min-width:0;margin:0;border:1px solid #d6e1da;border-radius:6px;background:#fff;color:#20372b;padding:10px 12px;font:inherit;outline:none}
+.livechat-editor-fields :is(input:not([type=checkbox]):not([type=color]),select){height:42px}
+.livechat-editor-fields textarea{min-height:88px;resize:vertical;overflow-wrap:anywhere}
+.livechat-editor-fields :is(input,textarea)::placeholder{color:#98a49e;font-weight:400;opacity:1}
+.livechat-editor-fields :is(input,select,textarea):focus-visible{border-color:#269a68;outline:2px solid #269a6826;outline-offset:1px}
+.livechat-editor-color{display:flex;align-items:center;gap:12px;min-height:42px}
+.livechat-editor-color input[type=color]{display:block;width:52px;height:38px;margin:0;padding:4px;border:1px solid #d6e1da;border-radius:6px;background:#fff;cursor:pointer}
+.livechat-editor-color output{font:13px ui-monospace,Consolas,monospace;color:#52645b}
+.livechat-editor-fields>.livechat-editor-enabled{flex-direction:row;align-items:center;gap:8px;cursor:pointer}
+.livechat-editor-enabled input[type=checkbox]{margin:0;accent-color:#168052}
+.livechat-editor-footer{flex:0 0 auto;padding:14px 24px;border-top:1px solid #e5ebe8;background:#fafcfb}
+.livechat-editor-footer>div{display:flex;justify-content:flex-end;gap:10px}
+.livechat-editor-footer button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-width:88px;border-radius:6px}
+.livechat-editor-error{margin:0 0 12px;color:#b34c3d;overflow-wrap:anywhere}
+.livechat-editor :is(button,input,select,textarea):disabled{opacity:.55;cursor:not-allowed}
+.livechat-editor button:focus-visible{outline:2px solid #269a68;outline-offset:2px}
+@media(max-width:480px){.livechat-editor-backdrop{padding:8px}.livechat-editor{max-height:calc(100dvh - 16px)}.livechat-editor-header{padding:14px 16px}.livechat-editor-body{padding:16px}.livechat-editor-fields{grid-template-columns:minmax(0,1fr);gap:14px}.livechat-editor-footer{padding:12px 16px}.livechat-editor-footer>div>button{flex:1}}
 .conversation-selection-toolbar{display:flex;align-items:center;gap:7px;flex:0 0 auto;min-height:48px;padding:7px 14px;border-block:1px solid var(--line);background:#f3faf6}
 .conversation-selection-toolbar>b{min-width:0;flex:1;font-size:12px;font-weight:600;color:#27654d}
 .conversation-selection-toolbar>button{display:inline-flex;align-items:center;justify-content:center;gap:4px;flex:0 0 auto;height:30px;min-height:30px;padding:0 8px;border-radius:6px;font-size:12px;white-space:nowrap}
