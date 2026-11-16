@@ -7,6 +7,8 @@ import {tmpdir} from "node:os";
 import {join,resolve} from "node:path";
 import test from "node:test";
 import pg from "pg";
+import Fastify from "fastify";
+import ts from "typescript";
 import {mergeConversationTimelines} from "../src/timeline-merge.js";
 import {enqueueTimelineAgentReply,loadAgentDeliveryContext,resolveTimelineAgentControl,setTimelineAgentMode} from "../src/timeline-agent.js";
 import {pauseAgentForHuman} from "../src/agent-engine.js";
@@ -20,6 +22,7 @@ test("PostgreSQL：合并保留全部消息、稳定分页、连续合并、入�
   const port=(listener.address() as {port:number}).port;await new Promise<void>(done=>listener.close(()=>done()));
   let started=false;
   const client=new pg.Client({host:"127.0.0.1",port,user:"postgres",database:"postgres"});
+  const app=Fastify();
   try{
     run("initdb",["-D",directory,"-A","trust","-U","postgres","--encoding=UTF8","--no-locale"]);
     run("pg_ctl",["-D",directory,"-l",join(directory,"postgres.log"),"-o",`-h 127.0.0.1 -p ${port}`,"-w","start"]);
@@ -35,7 +38,12 @@ test("PostgreSQL：合并保留全部消息、稳定分页、连续合并、入�
       CREATE TABLE conversations(id uuid PRIMARY KEY,account_id uuid,contact_id uuid,unread_count int DEFAULT 0,status text DEFAULT 'open',closed_at timestamptz,
         last_message_id uuid,last_message_text text,last_message_kind text,last_message_direction text,last_message_status text,last_message_at timestamptz,
         last_message_sender_provider_user_id text,last_message_sender_name text,summary_updated_at timestamptz);
-      CREATE TABLE messages(id uuid PRIMARY KEY,conversation_id uuid REFERENCES conversations(id),text_content text,kind text DEFAULT 'text',direction text DEFAULT 'in',status text DEFAULT 'sent',occurred_at timestamptz,sender_provider_user_id text,sender_display_name text);
+      CREATE TABLE messages(id uuid PRIMARY KEY,conversation_id uuid REFERENCES conversations(id) ON DELETE CASCADE,media_id uuid,text_content text,kind text DEFAULT 'text',direction text DEFAULT 'in',status text DEFAULT 'sent',occurred_at timestamptz,sender_provider_user_id text,sender_display_name text);
+      CREATE TABLE orders(id uuid PRIMARY KEY,conversation_id uuid);
+      CREATE TABLE order_payment_requests(order_id uuid,is_current boolean);
+      CREATE TABLE outbound_commands(message_id uuid,state text);
+      CREATE TABLE email_messages(conversation_id uuid,status text);
+      CREATE TABLE media(id uuid PRIMARY KEY,object_key text);
       CREATE TABLE conversation_merge_links(source_conversation_id uuid,target_conversation_id uuid);
       CREATE TABLE audit_log(actor_type text,actor_id uuid,action text,target_type text,target_id uuid,metadata jsonb);
       CREATE FUNCTION relay_publish_conversation_change(uuid,uuid) RETURNS void LANGUAGE sql AS $$ SELECT pg_notify('timeline_test',$1::text) $$;`);
@@ -117,7 +125,58 @@ test("PostgreSQL：合并保留全部消息、稳定分页、连续合并、入�
       await client.query("UPDATE conversations SET account_id=account_id WHERE id=$1",[id]);
     }
     assert.equal((await client.query("SELECT COUNT(*)::int count FROM messages")).rows[0].count,5);
+    // 上次仅放开触发器但不清理关联时，主、源会话均被外键拒绝。
+    for(const id of [ids[2],ids[1]])await assert.rejects(client.query("DELETE FROM conversations WHERE id=$1",[id]),{code:"23503"});
+    await client.query("INSERT INTO messages(id,conversation_id,text_content,occurred_at) VALUES($1,$2,'主会话消息','2026-11-14T00:00:00Z')",[randomUUID(),ids[2]]);
+
+    // 运行 server.ts 中实际的删除路由，避免仅验证 SQL 文本而漏掉事务中的外键错误。
+    const server=await readFile(new URL("../src/server.ts",import.meta.url),"utf8");
+    const route=server.slice(server.indexOf('app.delete("/api/v1/conversations/:id"'),server.indexOf('app.patch("/api/v1/conversations/:id/contact"'));
+    let role="admin",allowed=true,failCommit=false;
+    const transaction=async(work:(db:pg.Client)=>Promise<unknown>)=>{
+      await client.query("BEGIN");
+      try{const result=await work(client);if(failCommit)throw new Error("测试事务回滚");await client.query("COMMIT");return result;}
+      catch(error){await client.query("ROLLBACK");throw error;}
+    };
+    new Function("app","authenticate","transaction","canAccessAccount",ts.transpile(route,{target:ts.ScriptTarget.ES2022}))(
+      app,async(request:{principal:unknown})=>{request.principal={kind:"user",id:actor,role};},transaction,()=>allowed,
+    );
+    const remove=(id:string)=>app.inject({method:"DELETE",url:`/api/v1/conversations/${id}`});
+    const links=async()=>(await client.query("SELECT source_id,target_id FROM conversation_timeline_merges ORDER BY source_id")).rows;
+    const originalLinks=await links();
+    role="agent";assert.equal((await remove(ids[2])).statusCode,403);role="admin";
+    allowed=false;assert.equal((await remove(ids[2])).statusCode,404);allowed=true;
+    assert.equal((await remove(randomUUID())).statusCode,404);
+    await client.query("INSERT INTO orders VALUES($1,$2);",[actor,ids[2]]);
+    await client.query("INSERT INTO order_payment_requests VALUES($1,true)",[actor]);
+    assert.equal((await remove(ids[2])).json().error,"payment_request_exists");
+    await client.query("DELETE FROM order_payment_requests");
+    await client.query("INSERT INTO outbound_commands VALUES($1,'pending')",[newest]);
+    assert.equal((await remove(ids[1])).json().error,"outbound_pending");
+    await client.query("DELETE FROM outbound_commands");
+    await client.query("INSERT INTO email_messages VALUES($1,'queued')",[ids[2]]);
+    assert.equal((await remove(ids[2])).json().error,"email_pending");
+    await client.query("DELETE FROM email_messages");
+    assert.deepEqual(await links(),originalLinks);
+    failCommit=true;assert.equal((await remove(ids[2])).statusCode,500);failCommit=false;
+    assert.deepEqual(await links(),originalLinks);
+    assert.equal((await client.query("SELECT COUNT(*)::int count FROM messages")).rows[0].count,6);
+    assert.equal((await client.query("SELECT COUNT(*)::int count FROM audit_log WHERE action='conversation.delete'")).rows[0].count,0);
+    // 删除源成员，主会话仍保留其他成员，摘要不再指向源成员的消息。
+    assert.equal((await remove(ids[1])).statusCode,204);
+    assert.equal((await client.query("SELECT 1 FROM messages WHERE conversation_id=$1",[ids[1]])).rowCount,0);
+    assert.equal((await client.query("SELECT relay_conversation_members($1)",[ids[2]])).rowCount,2);
+    assert.notEqual((await client.query("SELECT last_message_id FROM conversations WHERE id=$1",[ids[2]])).rows[0].last_message_id,newest);
+    // 删除主会话不会级联删除其他成员；独立成员随后也可正常删除。
+    assert.equal((await remove(ids[2])).statusCode,204);
+    assert.equal((await links()).length,0);
+    assert.equal((await client.query("SELECT 1 FROM conversations WHERE id=$1",[ids[0]])).rowCount,1);
+    assert.equal((await client.query("SELECT 1 FROM messages WHERE conversation_id=$1",[ids[0]])).rowCount,2);
+    assert.equal((await client.query("SELECT last_message_id FROM conversations WHERE id=$1",[ids[0]])).rows[0].last_message_id,messageIds[2]);
+    assert.equal((await remove(ids[0])).statusCode,204);
+    assert.equal((await client.query("SELECT COUNT(*)::int count FROM audit_log WHERE action='conversation.delete'")).rows[0].count,3);
   }finally{
+    await app.close();
     await client.end().catch(()=>{});
     if(started)run("pg_ctl",["-D",directory,"-m","fast","-w","stop"]);
     const target=resolve(directory);

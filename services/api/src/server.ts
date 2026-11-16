@@ -1043,6 +1043,8 @@ app.delete("/api/v1/conversations/:id", { preHandler:authenticate }, async (requ
   if(request.principal?.kind!=="user"||!["admin","supervisor"].includes(request.principal.role??""))return reply.code(403).send({error:"supervisor_required",message:"只有管理员或主管可以永久删除会话"});
   const principal=request.principal,{id}=request.params as {id:string};
   const result=await transaction(async client=>{
+    // 与时间线合并使用同一把事务锁，必须先于会话行锁获取。
+    await client.query("SELECT pg_advisory_xact_lock(774129704)");
     const conversation=await client.query("SELECT c.account_id,c.contact_id,co.provider_user_id FROM conversations c JOIN contacts co ON co.id=c.contact_id WHERE c.id=$1 FOR UPDATE OF c",[id]);
     if(!conversation.rowCount||!canAccessAccount(principal,conversation.rows[0].account_id))return"not_found" as const;
     const payment=await client.query("SELECT 1 FROM order_payment_requests pr JOIN orders o ON o.id=pr.order_id WHERE o.conversation_id=$1 AND pr.is_current LIMIT 1",[id]);
@@ -1052,6 +1054,10 @@ app.delete("/api/v1/conversations/:id", { preHandler:authenticate }, async (requ
     const pendingEmail=await client.query("SELECT 1 FROM email_messages WHERE conversation_id=$1 AND status IN ('queued','sending','retrying') LIMIT 1",[id]);
     if(pendingEmail.rowCount)return"email_pending" as const;
     const conversationMedia=await client.query("SELECT DISTINCT m.id,m.object_key FROM messages msg JOIN media m ON m.id=msg.media_id WHERE msg.conversation_id=$1",[id]);
+    const timelineLinks=await client.query<{source_id:string;target_id:string}>("DELETE FROM conversation_timeline_merges WHERE source_id=$1 OR target_id=$1 RETURNING source_id,target_id",[id]);
+    // 只删除指定的原会话；其余成员恢复独立展示，摘要不再引用被删除成员。
+    const remainingIds=[...new Set(timelineLinks.rows.flatMap(row=>[row.source_id,row.target_id]))].filter(value=>value!==id).sort();
+    for(const remainingId of remainingIds)await client.query("SELECT relay_refresh_conversation_summary($1)",[remainingId]);
     await client.query("DELETE FROM conversation_merge_links WHERE source_conversation_id=$1 OR target_conversation_id=$1",[id]).catch(error=>{
       if((error as {code?:string}).code!=="42P01")throw error;
     });

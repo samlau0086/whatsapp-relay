@@ -178,6 +178,10 @@ test("conversation deletion is privileged and blocks unsafe cascading deletes",a
   assert.match(server,/payment_request_exists/);
   assert.match(server,/outbound_pending/);
   assert.match(server,/DELETE FROM conversation_merge_links WHERE source_conversation_id=\$1 OR target_conversation_id=\$1/);
+  const deletion=server.slice(server.indexOf('app.delete("/api/v1/conversations/:id"'),server.indexOf('app.patch("/api/v1/conversations/:id/contact"'));
+  assert.match(deletion,/DELETE FROM conversation_timeline_merges WHERE source_id=\$1 OR target_id=\$1/);
+  assert.ok(deletion.indexOf("pg_advisory_xact_lock")<deletion.indexOf("FOR UPDATE OF c"));
+  assert.ok(deletion.indexOf("DELETE FROM conversation_timeline_merges")<deletion.indexOf("DELETE FROM conversations"));
   assert.match(server,/conversation\.delete/);
   assert.match(inbox,/永久删除会话/);
   assert.match(inbox,/method:"DELETE"/);
