@@ -63,3 +63,18 @@ test("Gmail migration enables Google auth and persists label, history, and idemp
   assert.match(migration,/gmail_history_id/);
   assert.match(migration,/PRIMARY KEY\(mailbox_id,gmail_message_id\)/);
 });
+
+test("VPS 部署将 Google OAuth 环境变量和密钥写入服务端配置",async()=>{
+  const {readFile}=await import("node:fs/promises");
+  const workflow=await readFile(new URL("../../../.github/workflows/deploy-vps.yml",import.meta.url),"utf8");
+  assert.ok(workflow.includes("GOOGLE_MAIL_CLIENT_ID: ${{ vars.GOOGLE_MAIL_CLIENT_ID }}"));
+  assert.ok(workflow.includes("GOOGLE_MAIL_CLIENT_SECRET: ${{ secrets.GOOGLE_MAIL_CLIENT_SECRET }}"));
+  for(const key of ["GOOGLE_MAIL_CLIENT_ID","GOOGLE_MAIL_CLIENT_SECRET"]){
+    assert.ok(workflow.includes(`${key}: process.env.${key} || ""`));
+  }
+  const compose=await readFile(new URL("../../../compose.yaml",import.meta.url),"utf8");
+  for(const service of ["api","worker"]){
+    const block=compose.match(new RegExp(`^  ${service}:\\r?\\n([\\s\\S]*?)(?=^  \\w|(?![\\s\\S]))`,"m"))?.[1];
+    assert.ok(block?.includes("env_file: .env"),`${service} 必须读取部署环境文件`);
+  }
+});

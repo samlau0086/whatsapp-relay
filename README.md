@@ -890,18 +890,65 @@ CORS_ORIGIN=https://wsdesk.geekmt.com
 
 会话邮箱也支持通过 Google OAuth 和 Gmail API 只读收件。此方式适用于 Cloudflare Email Routing 将域名邮件转发至 Gmail，并由 Gmail 过滤器自动加标签的场景。Gmail API 仅负责读取来信；发件仍使用渠道邮件 Provider，未配置 Provider 时 Gmail OAuth 邮箱不能发信。
 
-1. 在 [Google Cloud Console](https://console.cloud.google.com/) 创建或选择项目，并启用 **Gmail API**。
-2. 配置 OAuth 同意屏幕及测试/生产用户范围，然后创建 **Web application** OAuth 客户端。添加授权重定向 URI：
+#### 获取 Client ID 和 Client Secret
+
+这两项凭据在 Google Cloud 中创建，不是 Gmail 登录密码、应用密码或 Cloudflare API Token，也不是在 RelayDesk 设置页面中填写。
+
+1. 打开 [Google Cloud Console](https://console.cloud.google.com/)，在顶部项目选择器中创建或选择一个项目；后续操作均使用此项目。
+2. 进入 **API 和服务（APIs & Services）→ 库（Library）**，搜索 **Gmail API** 并点击 **启用（Enable）**。
+3. 进入 **Google Auth platform → Branding（品牌信息）**，点击 **Get started**（首次配置时），填写应用名称（例如 RelayDesk）、用户支持邮箱和开发者联系邮箱。
+4. 在 **Audience（目标对象）** 中，个人 Gmail 或组织外账号选择 **External（外部）**；仍处于 **Testing（测试）** 状态时，在 **Test users（测试用户）** 中添加实际用于收件授权的 Gmail 地址。仅供符合条件的 Google Workspace 组织内部使用时才选择 Internal。
+5. 在 **Data Access（数据访问）→ Add or remove scopes（添加或移除范围）** 中添加 `https://www.googleapis.com/auth/gmail.readonly`，保存。该权限用于读取邮件原文及标签，不申请 Gmail 发信权限。
+6. 进入 **Clients（客户端）→ Create client（创建客户端）**，应用类型选择 **Web application（Web 应用）**，不要选择 Desktop app、API key 或 Service account。名称可填写 RelayDesk Gmail。旧版控制台也可从 **API 和服务 → 凭据 → 创建凭据 → OAuth 客户端 ID** 进入。
+7. 在 **Authorized redirect URIs（已获授权的重定向 URI）** 中添加完整回调地址，而不是只填写 JavaScript origin：
 
    ```text
    https://你的域名/api/v1/mailboxes/google/callback
    ```
 
-3. 将客户端 ID 和客户端密钥配置到 API 与 Worker 环境：`GOOGLE_MAIL_CLIENT_ID`、`GOOGLE_MAIL_CLIENT_SECRET`。公网回调由 `PUBLIC_API_URL` 生成，必须与 Google Cloud 中的地址完全一致；不要将密钥放入浏览器配置。
-4. 完成部署并重启 API 和 Worker。在 **系统设置 → 邮件发送 → 会话邮箱配置 → 新增邮箱** 选择 **Google OAuth (Gmail API 收件)**，填写转发目标 Gmail 地址及 WhatsApp 或 Live Chat 渠道，然后登录对应 Google 账号授权。
-5. 授权完成后，在邮箱列表的标签下拉框中选择 Gmail 自动过滤器使用的标签。保存后只同步此时之后新进入所选标签的邮件；切换标签也会从切换时开始，不回填标签中的历史邮件。
+8. 创建后复制 **Client ID（客户端 ID）** 和 **Client Secret（客户端密钥）**，安全保存；Client ID 通常以 `.apps.googleusercontent.com` 结尾。若下载客户端 JSON，对应字段分别为 `web.client_id` 和 `web.client_secret`；本项目只需配置这两个值，不需要上传 JSON 文件。
+
+#### 配置到 RelayDesk 部署环境
+
+使用本仓库 GitHub Actions VPS 部署时，在仓库 **Settings → Environments → production** 中设置：
+
+| 配置区域 | 名称 | 值 |
+| --- | --- | --- |
+| Environment variables | `GOOGLE_MAIL_CLIENT_ID` | Google 客户端 ID |
+| Environment secrets | `GOOGLE_MAIL_CLIENT_SECRET` | Google 客户端密钥 |
+| Environment variables | `PUBLIC_API_URL` | 公网 API 地址，例如 `https://wsdesk.geekmt.com`，不含回调路径 |
+| Environment variables | `CORS_ORIGIN` | Web 工作台 origin，同域部署可与 `PUBLIC_API_URL` 相同 |
+
+保存后重新运行 **Deploy to VPS** 部署流程（`.github/workflows/deploy-vps.yml`）。流程会将 Google 凭据写入服务器 `.env`，供 API 和 Worker 读取；只在 GitHub 保存变量、不重新部署不会生效。不要只手改 Actions 管理的服务器 `.env`，后续部署会按 GitHub 配置重新生成该文件。
+
+手动或本地 Docker 部署时，在与 `compose.yaml` 同目录的私有 `.env` 中填写（没有 `.env` 时先按首次部署说明从 `.env.example` 创建，保留其他已有配置）：
+
+```env
+GOOGLE_MAIL_CLIENT_ID=你的客户端ID.apps.googleusercontent.com
+GOOGLE_MAIL_CLIENT_SECRET=你的客户端密钥
+PUBLIC_API_URL=https://wsdesk.geekmt.com
+CORS_ORIGIN=https://wsdesk.geekmt.com
+```
+
+修改后在该目录执行 `docker compose up -d --force-recreate api worker`，使两个容器重新读取环境；仅执行 `docker compose restart` 不会更新已有容器的环境变量。非 Docker 部署应通过服务管理器向 API 和 Worker 进程传入相同配置，再重启两个进程；当前 API 直接读取进程环境，不会自行加载 `.env` 文件。
+
+公网回调由 `PUBLIC_API_URL` 生成。例如上述配置对应 `https://wsdesk.geekmt.com/api/v1/mailboxes/google/callback`，必须与 Google Cloud 登记的 URI 完全一致，包括协议、域名、端口和路径；生产环境使用 HTTPS。本机开发可登记 `http://localhost:8080/api/v1/mailboxes/google/callback` 并设置相应 `PUBLIC_API_URL`。
+
+不要把 Client Secret 提交到仓库、放入 `NEXT_PUBLIC_*` 前端变量、粘贴到聊天或写入 README。已有授权的刷新令牌使用 `DATA_ENCRYPTION_KEY` 加密，配置 Google 凭据时不要更换该加密密钥。
+
+#### 授权与常见问题
+
+1. 完成部署后，在 **系统设置 → 邮件发送 → 会话邮箱配置 → 新增邮箱** 选择 **Google OAuth (Gmail API 收件)**，填写转发目标 Gmail 地址及 WhatsApp 或 Live Chat 渠道，然后登录对应 Google 账号授权。
+2. 授权完成后，在邮箱列表的标签下拉框中选择 Gmail 自动过滤器使用的标签。保存后只同步此时之后新进入所选标签的邮件；切换标签也会从切换时开始，不回填标签中的历史邮件。
 
 Google 账号必须与配置的邮箱地址一致。授权只请求 `gmail.readonly`；如果 Google OAuth 同意屏幕仍处于测试状态，需将授权 Gmail 地址加入测试用户。若授权被撤销或刷新令牌失效，可在邮箱列表点击“重新授权”。
+
+- 提示“请先配置 Google OAuth Client ID 和 Client Secret”：API 进程读取到的两个变量至少有一个为空，检查配置位置与部署环境，重新部署或重建 API 和 Worker 容器；仅修改 `.env.example` 无效。
+- Google 提示 `redirect_uri_mismatch`：核对 Web 应用客户端的重定向 URI 与 `PUBLIC_API_URL` 生成的完整回调地址。
+- 提示应用处于测试阶段或账号无权访问：检查 Audience 的用户类型，并将实际 Gmail 地址加入测试用户。
+- 外部应用处于 Testing 且请求 Gmail 权限时，刷新令牌通常在 7 天后过期，适合短期联调；长期运行需按 Google 要求配置生产发布，并根据适用规则完成验证。发布不等于自动通过验证；不要通过扩大权限解决授权问题。
+
+官方参考：[配置 OAuth 同意屏幕](https://developers.google.com/workspace/guides/configure-oauth-consent)、[Web 服务端 OAuth 凭据及回调](https://developers.google.com/identity/protocols/oauth2/web-server)、[刷新令牌有效期](https://developers.google.com/identity/protocols/oauth2#expiration)。
 
 1. 首次部署时替换 `.env` 的示例数据库、JWT、数据加密、管理员和对象存储密钥；恢复或迁移时保留备份对应的原密钥。
 2. 使用 HTTPS 反向代理暴露 Web/API，并限制 MinIO 与 PostgreSQL 只在内部网络访问。
