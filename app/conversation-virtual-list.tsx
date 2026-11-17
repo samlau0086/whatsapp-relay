@@ -24,7 +24,7 @@ export function ConversationVirtualList({
     {rows.map(row=>{
       const item=items[row.index];
       return <div key={item.id} data-index={row.index} ref={measure} className="conversation-virtual-row" style={{transform:`translateY(${row.start}px)`}}>
-        <ConversationListRow item={item} active={item.id===effectiveActiveId} selected={selectedIds.has(item.id)} multiSelect={selectedIds.size>0} selectionDisabled={Boolean(selectionAccountId&&(item.accountId!==selectionAccountId||item.conversationType==="group"))} clock={clock} markingUnreadId={markingUnreadId} onSelect={shiftKey=>onSelect(item.id,shiftKey)} onMenu={event=>onMenu(event,item)} onMarkUnread={()=>onMarkUnread(item.id)}/>
+        <ConversationListRow item={item} active={item.id===effectiveActiveId} selected={selectedIds.has(item.id)} multiSelect={selectedIds.size>0} selectionDisabled={Boolean(selectionAccountId&&(item.platform==="messenger"||item.conversationType==="group"))} clock={clock} markingUnreadId={markingUnreadId} onSelect={shiftKey=>onSelect(item.id,shiftKey)} onMenu={event=>onMenu(event,item)} onMarkUnread={()=>onMarkUnread(item.id)}/>
       </div>;
     })}
   </div>;

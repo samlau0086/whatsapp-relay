@@ -14,7 +14,7 @@ test("email reply subjects increment and are prefilled from the selected message
   assert.equal(replyEmailSubject(""), "Re: 无主题");
 
   const inbox = await readFile(new URL("../app/whatsapp-inbox.tsx", import.meta.url), "utf8");
-  assert.match(inbox, /if \(message\.email\) \{\s*setEmailMode\(true\);\s*setEmailSubject\(replyEmailSubject\(message\.email\.subject\)\)/);
+  assert.match(inbox, /if \(message\.email\) \{\s*setConversationMode\("email"\);\s*setEmailSubject\(replyEmailSubject\(message\.email\.subject\)\)/);
   assert.match(inbox, /emailSubject\.trim\(\)\|\|\(selectedReply\?\.email\?replyEmailSubject\(selectedReply\.email\.subject\):"无主题"\)/);
 });
 

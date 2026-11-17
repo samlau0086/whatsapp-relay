@@ -52,6 +52,7 @@ import {isPostgresUuid} from "./conversation-cursor.js";
 import {parseConversationTagFilter,matchesConversationTags} from "./conversation-tag-filter.js";
 import {mergeSameAccountConversations,validateSameAccountMerge,type MergeIdentity} from "./same-account-merge.js";
 import {mergeConversationTimelines,timelineMergeSchema} from "./timeline-merge.js";
+import {registerConversationModeRoutes} from "./conversation-modes.js";
 import {setTimelineAgentMode,timelineAgentControlJoin} from "./timeline-agent.js";
 import { paypalProfileSetting, registerPaymentMethodRoutes, resolvePaymentProfile, type PaymentProfileSnapshot } from "./payment-methods.js";
 import { calculatePayPalFee, PAYPAL_FEE_NAME } from "./paypal-fee.js";
@@ -108,6 +109,7 @@ await registerBrowserEvents(app);
 await registerPaymentMethodRoutes(app);
 await registerShippingRoutes(app);
 registerMailboxRoutes(app);
+registerConversationModeRoutes(app);
 app.setErrorHandler((error,request,reply)=>{
   if(isTemplateRequiredError(error))return reply.code(409).send({error:"template_required",message:error.message,serviceWindowExpiresAt:error.serviceWindowExpiresAt});
   if(isMessengerReplyWindowClosedError(error))return reply.code(409).send({error:error.code,message:error.message,replyWindowExpiresAt:error.replyWindowExpiresAt});
@@ -503,6 +505,7 @@ function countBlockedConversations(params:unknown[]){
     WHERE co.whatsapp_blocked_at IS NOT NULL AND (a.transport='cloud' OR a.agent_id IS NOT NULL)
       AND (a.platform IS DISTINCT FROM 'messenger' OR EXISTS(SELECT 1 FROM messenger_page_accounts active_page WHERE active_page.account_id=a.id))
       AND NOT EXISTS(SELECT 1 FROM conversation_timeline_merges merged WHERE merged.source_id=c.id)
+      AND ($2::uuid[] IS NULL OR NOT EXISTS(SELECT 1 FROM conversation_timeline_merges link JOIN conversations member ON member.id=link.source_id WHERE link.target_id=c.id AND NOT(member.account_id=ANY($2))))
       AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
       AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
@@ -567,6 +570,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
     WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL)
       AND (a.platform IS DISTINCT FROM 'messenger' OR EXISTS(SELECT 1 FROM messenger_page_accounts active_page WHERE active_page.account_id=a.id))
       AND NOT EXISTS(SELECT 1 FROM conversation_timeline_merges merged WHERE merged.source_id=c.id)
+      AND ($2::uuid[] IS NULL OR NOT EXISTS(SELECT 1 FROM conversation_timeline_merges link JOIN conversations member ON member.id=link.source_id WHERE link.target_id=c.id AND NOT(member.account_id=ANY($2))))
       AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::text IS NULL OR c.status::text=$3)
       AND ($14::uuid[] IS NULL OR EXISTS(SELECT 1 FROM conversation_tags selected_tag WHERE selected_tag.conversation_id=c.id AND selected_tag.tag_id=ANY($14::uuid[])))
@@ -583,7 +587,7 @@ app.get("/api/v1/conversations", { preHandler:authenticate }, async (request,rep
     ORDER BY sort_at ${reminderMode?"ASC":"DESC"},c.id DESC
     LIMIT $13
   )
-    SELECT c.id,c.status,c.favorite,(c.unread_count+COALESCE((SELECT SUM(member.unread_count) FROM conversations member JOIN conversation_timeline_merges merged ON merged.source_id=member.id WHERE merged.target_id=c.id),0))::int unread_count,CASE WHEN c.summary_updated_at IS NOT NULL THEN c.last_message_at ELSE m.occurred_at END last_message_at,c.created_at,c.service_window_expires_at,c.service_window_expires_at reply_window_expires_at,c.assigned_user_id,c.customer_stage,
+    SELECT c.id,c.origin_mode,c.status,c.favorite,(c.unread_count+COALESCE((SELECT SUM(member.unread_count) FROM conversations member JOIN conversation_timeline_merges merged ON merged.source_id=member.id WHERE merged.target_id=c.id),0))::int unread_count,CASE WHEN c.summary_updated_at IS NOT NULL THEN c.last_message_at ELSE m.occurred_at END last_message_at,c.created_at,c.service_window_expires_at,c.service_window_expires_at reply_window_expires_at,c.assigned_user_id,c.customer_stage,
       co.id contact_id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164,co.provider_user_id,co.whatsapp_username) display_name,co.alias,co.display_name contact_name,co.phone_e164,co.provider_user_id,co.avatar_url,co.whatsapp_blocked_at IS NOT NULL blocked,
       CASE WHEN co.entity_type='group' THEN 'group' ELSE 'direct' END conversation_type,wg.group_jid,wg.subject group_subject,wg.participant_count group_participant_count,wg.active group_active,c.last_message_sender_name,
       (SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) primary_email,
@@ -626,6 +630,7 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
     WHERE (a.transport='cloud' OR a.agent_id IS NOT NULL)
       AND (a.platform IS DISTINCT FROM 'messenger' OR EXISTS(SELECT 1 FROM messenger_page_accounts active_page WHERE active_page.account_id=a.id))
       AND NOT EXISTS(SELECT 1 FROM conversation_timeline_merges merged WHERE merged.source_id=c.id)
+      AND ($2::uuid[] IS NULL OR NOT EXISTS(SELECT 1 FROM conversation_timeline_merges link JOIN conversations member ON member.id=link.source_id WHERE link.target_id=c.id AND NOT(member.account_id=ANY($2))))
       AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
       AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
@@ -638,6 +643,7 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
     WHERE co.entity_type='group' AND c.status NOT IN ('closed','archived') AND (a.transport='cloud' OR a.agent_id IS NOT NULL)
       AND (a.platform IS DISTINCT FROM 'messenger' OR EXISTS(SELECT 1 FROM messenger_page_accounts active_page WHERE active_page.account_id=a.id))
       AND NOT EXISTS(SELECT 1 FROM conversation_timeline_merges merged WHERE merged.source_id=c.id)
+      AND ($2::uuid[] IS NULL OR NOT EXISTS(SELECT 1 FROM conversation_timeline_merges link JOIN conversations member ON member.id=link.source_id WHERE link.target_id=c.id AND NOT(member.account_id=ANY($2))))
       AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
       AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
       AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
@@ -654,6 +660,7 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
         AND (a.transport='cloud' OR a.agent_id IS NOT NULL)
         AND (a.platform IS DISTINCT FROM 'messenger' OR EXISTS(SELECT 1 FROM messenger_page_accounts active_page WHERE active_page.account_id=a.id))
         AND NOT EXISTS(SELECT 1 FROM conversation_timeline_merges merged WHERE merged.source_id=c.id)
+      AND ($2::uuid[] IS NULL OR NOT EXISTS(SELECT 1 FROM conversation_timeline_merges link JOIN conversations member ON member.id=link.source_id WHERE link.target_id=c.id AND NOT(member.account_id=ANY($2))))
         AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
         AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
         AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
@@ -669,6 +676,7 @@ app.get("/api/v1/conversations/counts",{preHandler:authenticate},async(request,r
         AND (a.transport='cloud' OR a.agent_id IS NOT NULL)
         AND (a.platform IS DISTINCT FROM 'messenger' OR EXISTS(SELECT 1 FROM messenger_page_accounts active_page WHERE active_page.account_id=a.id))
         AND NOT EXISTS(SELECT 1 FROM conversation_timeline_merges merged WHERE merged.source_id=c.id)
+      AND ($2::uuid[] IS NULL OR NOT EXISTS(SELECT 1 FROM conversation_timeline_merges link JOIN conversations member ON member.id=link.source_id WHERE link.target_id=c.id AND NOT(member.account_id=ANY($2))))
         AND ($1::uuid IS NULL OR c.account_id=$1) AND ($2::uuid[] IS NULL OR c.account_id=ANY($2))
         AND ($3::timestamptz IS NULL OR c.last_message_at>=$3) AND ($4::timestamptz IS NULL OR c.last_message_at<$4)
         AND ($5::boolean IS NOT TRUE OR COALESCE(c.last_message_direction,m.direction)='in') AND ($6::timestamptz IS NULL OR c.last_message_at<$6)
@@ -694,7 +702,7 @@ app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(requ
   const range=parseConversationRange(query);if(!range)return reply.code(400).send({error:"invalid_conversation_date_range"});
   const keyword=query.q?.trim().toLocaleLowerCase()||"";if(keyword.length>100)return reply.code(400).send({error:"conversation_query_too_long"});
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null;
-  const result=await pool.query(`SELECT c.id,c.status,c.favorite,(c.unread_count+COALESCE((SELECT SUM(member.unread_count) FROM conversations member JOIN conversation_timeline_merges merged ON merged.source_id=member.id WHERE merged.target_id=c.id),0))::int unread_count,CASE WHEN c.summary_updated_at IS NOT NULL THEN c.last_message_at ELSE m.occurred_at END last_message_at,
+  const result=await pool.query(`SELECT c.id,c.origin_mode,c.status,c.favorite,(c.unread_count+COALESCE((SELECT SUM(member.unread_count) FROM conversations member JOIN conversation_timeline_merges merged ON merged.source_id=member.id WHERE merged.target_id=c.id),0))::int unread_count,CASE WHEN c.summary_updated_at IS NOT NULL THEN c.last_message_at ELSE m.occurred_at END last_message_at,
     c.created_at,c.service_window_expires_at,c.service_window_expires_at reply_window_expires_at,c.assigned_user_id,c.customer_stage,COALESCE((SELECT mode FROM conversation_agent_state WHERE conversation_id=c.id),'human_paused') agent_mode,co.id contact_id,COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164,co.provider_user_id) display_name,
     co.alias,co.display_name contact_name,co.phone_e164,co.provider_user_id,co.avatar_url,co.whatsapp_blocked_at IS NOT NULL blocked,(SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) primary_email,
     CASE WHEN co.entity_type='group' THEN 'group' ELSE 'direct' END conversation_type,wg.group_jid,wg.subject group_subject,wg.participant_count group_participant_count,wg.active group_active,c.last_message_sender_name,
@@ -1002,7 +1010,7 @@ app.post("/api/v1/conversations/:id/merge", {preHandler:authenticate}, async(req
     if(source.entity_type==="group"||source.platform==="livechat")return{status:"group_unsupported" as const};
     const targetResult=await client.query(`SELECT a.id account_id,a.display_name account_name,co.id contact_id,c.id conversation_id
       FROM channel_accounts a JOIN contacts co ON co.account_id=a.id JOIN conversations c ON c.contact_id=co.id
-      WHERE a.id=$1 AND a.platform=$2 AND c.account_id=a.id
+      WHERE a.id=$1 AND a.platform::text=$2 AND c.account_id=a.id
         AND (($3::text IS NOT NULL AND co.provider_user_id=$3)
           OR ($4::text IS NOT NULL AND co.phone_e164=$4)
           OR ($5::text IS NOT NULL AND co.whatsapp_username=$5))
@@ -2101,7 +2109,8 @@ app.post("/api/v1/conversations", {preHandler:authenticate}, async(request,reply
 });
 
 app.get("/api/v1/conversations/:id/messages", { preHandler:authenticate }, async (request, reply) => {
-  const { id } = request.params as {id:string}; const query = request.query as { accountId?:string; before?:string; cursor?:string; limit?:string; direction?:string; from?:string; until?:string };
+  const { id } = request.params as {id:string}; const query = request.query as { accountId?:string; before?:string; cursor?:string; limit?:string; direction?:string; from?:string; until?:string; mode?:string };
+  if(query.mode&&!["email","whatsapp","livechat","messenger"].includes(query.mode))return reply.code(400).send({error:"invalid_message_mode"});
   if(query.direction&&query.direction!=="in"&&query.direction!=="out")return reply.code(400).send({error:"invalid_direction"});
   const from=query.from?new Date(query.from):null,until=query.until?new Date(query.until):null;
   if(from&&Number.isNaN(from.getTime())||until&&Number.isNaN(until.getTime())||from&&until&&from>=until)return reply.code(400).send({error:"invalid_message_date_range"});
@@ -2122,15 +2131,15 @@ app.get("/api/v1/conversations/:id/messages", { preHandler:authenticate }, async
   }
   const principalUserId=request.principal?.kind==="user"?request.principal.id:null;
   const [result,failed,recipients]=await Promise.all([
-    pool.query("SELECT msg.id,msg.conversation_id,msg.direction,msg.kind,msg.text_content,msg.translation_source_text,msg.translation_target_language,msg.status,msg.failure_code,COALESCE(msg.failure_message,email_job.last_error) failure_message,msg.provider_message_id,msg.provider_payload->'adReferral' ad_referral,msg.sender_provider_user_id sender_jid,msg.sender_display_name sender_name,msg.media_id,msg.quoted_message_id,msg.occurred_at,account.platform,mp.page_id,media.file_name,media.mime_type,media.byte_size,quoted.direction quoted_direction,quoted.kind quoted_kind,quoted.text_content quoted_text_content,quoted.sender_provider_user_id quoted_sender_jid,quoted.sender_display_name quoted_sender_name,quoted_media.id quoted_media_id,quoted_media.file_name quoted_file_name,quoted_media.mime_type quoted_mime_type,preference.agent_language cached_translation_language,translation.translated_text cached_translation_text,translation.source_language cached_translation_source_language,transcription.transcript_text cached_transcription_text,email_detail.subject email_subject,email_detail.from_email email_from,email_detail.to_emails email_to,email_detail.mailbox_id email_mailbox_id,email_detail.email_job_id email_job_id,email_detail.attachment_warning email_attachment_warning,email_detail.quoted_body email_quoted_body,COALESCE(email_detail.html_body,CASE WHEN email_detail.quoted_body IS NULL THEN email_job.html_body END) email_html_body,COALESCE(email_files.attachments,'[]'::json) email_attachments,command.id command_id,command.state command_state,command.attempt command_attempt,command.last_error command_last_error,command.available_at command_available_at,command.claimed_at command_claimed_at,command.created_at command_created_at,account.status account_status,agent.status agent_status,agent.last_seen_at agent_last_seen_at,COALESCE(comment_list.comments,'[]'::json) comments FROM messages msg LEFT JOIN media ON media.id=msg.media_id LEFT JOIN message_email_details email_detail ON email_detail.message_id=msg.id LEFT JOIN email_messages email_job ON email_job.id=email_detail.email_job_id LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',a.media_id,'name',a.file_name,'mime',a.mime_type,'size',a.byte_size,'contentId',a.content_id,'inline',a.is_inline) ORDER BY a.position) attachments FROM message_email_attachments a WHERE a.message_id=msg.id) email_files ON true LEFT JOIN messages quoted ON quoted.id=msg.quoted_message_id LEFT JOIN media quoted_media ON quoted_media.id=quoted.media_id LEFT JOIN conversation_translation_preferences preference ON preference.conversation_id=msg.conversation_id AND preference.user_id=$5::uuid LEFT JOIN message_translations translation ON translation.message_id=msg.id AND translation.target_language=preference.agent_language LEFT JOIN message_transcriptions transcription ON transcription.message_id=msg.id LEFT JOIN channel_accounts account ON account.id=msg.account_id LEFT JOIN messenger_page_accounts mp ON mp.account_id=account.id LEFT JOIN agents agent ON agent.id=account.agent_id LEFT JOIN LATERAL (SELECT oc.id,oc.state,oc.attempt,oc.last_error,oc.available_at,oc.claimed_at,oc.created_at FROM outbound_commands oc WHERE oc.message_id=msg.id ORDER BY oc.sequence DESC LIMIT 1) command ON true LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',mc.id,'body',mc.body,'user_id',mc.user_id,'author_name',u.display_name,'created_at',mc.created_at,'updated_at',mc.updated_at,'score',COALESCE(votes.score,0),'viewer_vote',COALESCE(votes.viewer_vote,0)) ORDER BY mc.created_at,mc.id) comments FROM message_comments mc LEFT JOIN users u ON u.id=mc.user_id LEFT JOIN LATERAL (SELECT SUM(value)::int score,MAX(value) FILTER (WHERE user_id=$5::uuid)::int viewer_vote FROM message_comment_votes WHERE comment_id=mc.id) votes ON true WHERE mc.message_id=msg.id) comment_list ON true WHERE msg.conversation_id IN (SELECT relay_conversation_members($1)) AND ($2::timestamptz IS NULL OR msg.occurred_at<$2 OR (msg.occurred_at=$2 AND msg.id<$3::uuid)) AND ($6::text IS NULL OR msg.direction::text=$6) AND ($7::timestamptz IS NULL OR msg.occurred_at >= $7) AND ($8::timestamptz IS NULL OR msg.occurred_at < $8) ORDER BY msg.occurred_at DESC,msg.id DESC LIMIT $4",[id,cursor?.occurredAt??null,cursor?.id??null,limit,principalUserId,query.direction??null,from?.toISOString()??null,until?.toISOString()??null]),
-    pool.query("SELECT count(*)::int count FROM messages WHERE conversation_id IN (SELECT relay_conversation_members($1)) AND direction='out' AND status IN ('failed','uncertain')",[id]),
-    pool.query(`SELECT c.id,c.contact_id "contactId",COALESCE(NULLIF(co.alias,''),NULLIF(co.display_name,''),co.provider_user_id,'访客') name,
+    pool.query("SELECT msg.id,msg.conversation_id,msg.direction,msg.kind,msg.text_content,msg.translation_source_text,msg.translation_target_language,msg.status,msg.failure_code,COALESCE(msg.failure_message,email_job.last_error) failure_message,msg.provider_message_id,msg.provider_payload->'adReferral' ad_referral,msg.sender_provider_user_id sender_jid,msg.sender_display_name sender_name,msg.media_id,msg.quoted_message_id,msg.occurred_at,account.platform,mp.page_id,media.file_name,media.mime_type,media.byte_size,quoted.direction quoted_direction,quoted.kind quoted_kind,quoted.text_content quoted_text_content,quoted.sender_provider_user_id quoted_sender_jid,quoted.sender_display_name quoted_sender_name,quoted_media.id quoted_media_id,quoted_media.file_name quoted_file_name,quoted_media.mime_type quoted_mime_type,preference.agent_language cached_translation_language,translation.translated_text cached_translation_text,translation.source_language cached_translation_source_language,transcription.transcript_text cached_transcription_text,email_detail.subject email_subject,email_detail.from_email email_from,email_detail.to_emails email_to,email_detail.mailbox_id email_mailbox_id,email_detail.email_job_id email_job_id,email_detail.attachment_warning email_attachment_warning,email_detail.quoted_body email_quoted_body,COALESCE(email_detail.html_body,CASE WHEN email_detail.quoted_body IS NULL THEN email_job.html_body END) email_html_body,COALESCE(email_files.attachments,'[]'::json) email_attachments,command.id command_id,command.state command_state,command.attempt command_attempt,command.last_error command_last_error,command.available_at command_available_at,command.claimed_at command_claimed_at,command.created_at command_created_at,account.status account_status,agent.status agent_status,agent.last_seen_at agent_last_seen_at,COALESCE(comment_list.comments,'[]'::json) comments FROM messages msg LEFT JOIN media ON media.id=msg.media_id LEFT JOIN message_email_details email_detail ON email_detail.message_id=msg.id LEFT JOIN email_messages email_job ON email_job.id=email_detail.email_job_id LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',a.media_id,'name',a.file_name,'mime',a.mime_type,'size',a.byte_size,'contentId',a.content_id,'inline',a.is_inline) ORDER BY a.position) attachments FROM message_email_attachments a WHERE a.message_id=msg.id) email_files ON true LEFT JOIN messages quoted ON quoted.id=msg.quoted_message_id LEFT JOIN media quoted_media ON quoted_media.id=quoted.media_id LEFT JOIN conversation_translation_preferences preference ON preference.conversation_id=msg.conversation_id AND preference.user_id=$5::uuid LEFT JOIN message_translations translation ON translation.message_id=msg.id AND translation.target_language=preference.agent_language LEFT JOIN message_transcriptions transcription ON transcription.message_id=msg.id LEFT JOIN channel_accounts account ON account.id=msg.account_id LEFT JOIN messenger_page_accounts mp ON mp.account_id=account.id LEFT JOIN agents agent ON agent.id=account.agent_id LEFT JOIN LATERAL (SELECT oc.id,oc.state,oc.attempt,oc.last_error,oc.available_at,oc.claimed_at,oc.created_at FROM outbound_commands oc WHERE oc.message_id=msg.id ORDER BY oc.sequence DESC LIMIT 1) command ON true LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',mc.id,'body',mc.body,'user_id',mc.user_id,'author_name',u.display_name,'created_at',mc.created_at,'updated_at',mc.updated_at,'score',COALESCE(votes.score,0),'viewer_vote',COALESCE(votes.viewer_vote,0)) ORDER BY mc.created_at,mc.id) comments FROM message_comments mc LEFT JOIN users u ON u.id=mc.user_id LEFT JOIN LATERAL (SELECT SUM(value)::int score,MAX(value) FILTER (WHERE user_id=$5::uuid)::int viewer_vote FROM message_comment_votes WHERE comment_id=mc.id) votes ON true WHERE mc.message_id=msg.id) comment_list ON true WHERE msg.conversation_id IN (SELECT relay_conversation_members($1)) AND ($2::timestamptz IS NULL OR msg.occurred_at<$2 OR (msg.occurred_at=$2 AND msg.id<$3::uuid)) AND ($6::text IS NULL OR msg.direction::text=$6) AND ($7::timestamptz IS NULL OR msg.occurred_at >= $7) AND ($8::timestamptz IS NULL OR msg.occurred_at < $8) AND ($9::text IS NULL OR ($9='email' AND email_detail.message_id IS NOT NULL) OR ($9<>'email' AND email_detail.message_id IS NULL AND account.platform::text=$9)) ORDER BY msg.occurred_at DESC,msg.id DESC LIMIT $4",[id,cursor?.occurredAt??null,cursor?.id??null,limit,principalUserId,query.direction??null,from?.toISOString()??null,until?.toISOString()??null,query.mode??null]),
+    pool.query("SELECT count(*)::int count FROM messages m JOIN channel_accounts a ON a.id=m.account_id LEFT JOIN message_email_details e ON e.message_id=m.id WHERE m.conversation_id IN (SELECT relay_conversation_members($1)) AND m.direction='out' AND m.status IN ('failed','uncertain') AND ($2::text IS NULL OR ($2='email' AND e.message_id IS NOT NULL) OR ($2<>'email' AND e.message_id IS NULL AND a.platform::text=$2))",[id,query.mode??null]),
+    pool.query(`SELECT c.id,c.account_id "accountId",c.contact_id "contactId",COALESCE(NULLIF(co.alias,''),NULLIF(co.display_name,''),co.provider_user_id,'访客') name,
       incoming.occurred_at "latestIncomingAt",incoming.id "latestIncomingId"
       FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN channel_accounts a ON a.id=c.account_id
       LEFT JOIN LATERAL (SELECT m.id,m.occurred_at FROM messages m WHERE m.conversation_id=c.id AND m.direction='in'
         ORDER BY m.occurred_at DESC,m.id DESC LIMIT 1) incoming ON true
-      WHERE c.id IN (SELECT relay_conversation_members($1)) AND c.account_id=$2 AND a.platform='livechat'
-      ORDER BY c.id`,[id,conversation.rows[0].account_id]),
+      WHERE c.id IN (SELECT relay_conversation_members($1))
+      ORDER BY c.id`,[id]),
   ]);
   const oldest=result.rows[result.rows.length-1];
   const nextCursor=result.rows.length===limit&&oldest?Buffer.from(JSON.stringify({occurredAt:new Date(oldest.occurred_at).toISOString(),id:oldest.id}),"utf8").toString("base64url"):null;
@@ -2162,7 +2171,7 @@ app.post("/api/v1/messages", { preHandler:authenticate }, async (request, reply)
   const parsed=messageSchema.safeParse(request.body); if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
   if(!canAccessAccount(request.principal,parsed.data.accountId))return reply.code(403).send({error:"account_forbidden"});
   const result=await transaction(async(client)=>{
-    const conversation=await client.query("SELECT c.id,c.account_id,a.agent_id,a.status,a.transport,a.platform,agent.protocol_version agent_protocol_version,agent.capabilities,co.provider_user_id,co.whatsapp_username,co.entity_type,wg.active group_active FROM conversations c JOIN channel_accounts a ON a.id=c.account_id LEFT JOIN agents agent ON agent.id=a.agent_id JOIN contacts co ON co.id=c.contact_id LEFT JOIN whatsapp_groups wg ON wg.contact_id=co.id WHERE c.id=$1 AND c.account_id=$2",[parsed.data.conversationId,parsed.data.accountId]);
+    const conversation=await client.query("SELECT c.id,c.account_id,a.agent_id,a.status,a.transport,a.platform,agent.protocol_version agent_protocol_version,agent.capabilities,co.provider_user_id,co.phone_e164,co.whatsapp_username,co.entity_type,wg.active group_active FROM conversations c JOIN channel_accounts a ON a.id=c.account_id LEFT JOIN agents agent ON agent.id=a.agent_id JOIN contacts co ON co.id=c.contact_id LEFT JOIN whatsapp_groups wg ON wg.contact_id=co.id WHERE c.id=$1 AND c.account_id=$2",[parsed.data.conversationId,parsed.data.accountId]);
     if(!conversation.rowCount) return null;
     if(conversation.rows[0].entity_type==="group"){
       if(conversation.rows[0].transport!=="web"||!Array.isArray(conversation.rows[0].capabilities)||!conversation.rows[0].capabilities.includes("group_chat_v1"))throw Object.assign(new Error("agent_upgrade_required"),{statusCode:409});
@@ -2184,7 +2193,7 @@ app.post("/api/v1/messages", { preHandler:authenticate }, async (request, reply)
     if(request.principal?.kind==='user')await pauseAgentForHuman(client,parsed.data.conversationId);
     const outboundMessage={...parsed.data};delete outboundMessage.translationSourceText;delete outboundMessage.translationTargetLanguage;delete outboundMessage.quotedMessageId;
     if(quoted?.rowCount){const row=quoted.rows[0];Object.assign(outboundMessage,{quotedProviderMessageId:String(row.provider_message_id),quotedWhatsappMessageId:conversation.rows[0].platform==="whatsapp"?String(row.provider_message_id):undefined,quotedParticipantJid:row.sender_provider_user_id?String(row.sender_provider_user_id):undefined,quotedDirection:row.direction as "in"|"out",quotedText:String(row.text_content??`[${row.kind??"message"}]`)});}
-    const toJid=String(conversation.rows[0].provider_user_id??"").trim(),toUsername=String(conversation.rows[0].whatsapp_username??"").trim().replace(/^@/,"").toLowerCase();if(!toJid&&!toUsername)throw Object.assign(new Error("missing_destination"),{statusCode:409});
+    const toJid=String(conversation.rows[0].provider_user_id??(conversation.rows[0].platform==="whatsapp"&&conversation.rows[0].phone_e164?`${String(conversation.rows[0].phone_e164).replace(/\D/g,"")}@s.whatsapp.net`:"")).trim(),toUsername=String(conversation.rows[0].whatsapp_username??"").trim().replace(/^@/,"").toLowerCase();if(!toJid&&!toUsername)throw Object.assign(new Error("missing_destination"),{statusCode:409});
     const queued=await queueChannelCommand(client,{accountId:parsed.data.accountId,conversationId:parsed.data.conversationId,messageId:message.rows[0].id,payload:{...outboundMessage,messageId:message.rows[0].id,...(toJid?{toJid,destinationId:toJid}:{toUsername})} as Parameters<typeof queueChannelCommand>[1]["payload"]});
     await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES($1,$2,'message.queue','message',$3,$4)",[request.principal?.kind,request.principal?.id,message.rows[0].id,JSON.stringify({commandId:queued.commandId})]);
     return {messageId:message.rows[0].id,status:"queued",deduplicated:false,agentId:queued.agentId};
@@ -2265,10 +2274,12 @@ app.delete("/api/v1/conversations/:id/messages/failed", {preHandler:authenticate
   if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
   const principal=request.principal;
   const {id}=request.params as {id:string};
+  const {mode}=request.query as {mode?:string};
+  if(mode&&!["email","whatsapp","livechat","messenger"].includes(mode))return reply.code(400).send({error:"invalid_message_mode"});
   const result=await transaction(async client=>{
     const conversation=await client.query("SELECT id,account_id FROM conversations WHERE id=$1 FOR UPDATE",[id]);
     if(!conversation.rowCount||!canAccessAccount(principal,conversation.rows[0].account_id))return null;
-    const deleted=await client.query("DELETE FROM messages WHERE conversation_id IN (SELECT relay_conversation_members($1)) AND direction='out' AND status IN ('failed','uncertain') RETURNING id",[id]);
+    const deleted=await client.query("DELETE FROM messages m USING channel_accounts a WHERE a.id=m.account_id AND m.conversation_id IN (SELECT relay_conversation_members($1)) AND m.direction='out' AND m.status IN ('failed','uncertain') AND ($2::text IS NULL OR ($2='email' AND EXISTS(SELECT 1 FROM message_email_details e WHERE e.message_id=m.id)) OR ($2<>'email' AND a.platform::text=$2 AND NOT EXISTS(SELECT 1 FROM message_email_details e WHERE e.message_id=m.id))) RETURNING m.id",[id,mode??null]);
     const messageIds=deleted.rows.map(row=>String(row.id));
     if(messageIds.length){
       await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'message.clear_failed','conversation',$2,$3)",[principal.id,id,JSON.stringify({deletedCount:messageIds.length,messageIds})]);

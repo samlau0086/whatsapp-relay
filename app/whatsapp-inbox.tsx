@@ -1,4 +1,5 @@
 "use client";
+import {initialConversationMode,modeMembers,matchesMessageMode,type ConversationMode,type ConversationModeMember} from "./conversation-modes";
 import { EmailHtmlBody } from "./email-html-body";
 import {EmailProviderSettings as EmailSettingsPanel} from "./email-provider-settings";
 import { LivechatVisitorDetails, type LivechatVisitorInfo } from "./livechat-visitor-details";
@@ -369,7 +370,13 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [loadMoreError,setLoadMoreError]=useState("");
   const [draft,setDraft]=useState("");
   const [emailBodyHtml,setEmailBodyHtml]=useState("");
-  const [emailMode,setEmailMode]=useState(false);
+  const [conversationMode,setConversationMode]=useState<ConversationMode>("whatsapp");
+  const emailMode=conversationMode==="email";
+  const [modeMembersById,setModeMembersById]=useState<Record<string,ConversationModeMember[]>>({});
+  const [whatsappAccountId,setWhatsappAccountId]=useState("");
+  const [modeBusy,setModeBusy]=useState(false);
+  const modeRequestRef=useRef({id:"",mode:conversationMode,version:0});
+  const modeDrafts=useRef<Record<string,string>>({});
   const [emailSubject,setEmailSubject]=useState("");
   const [emailAttachments,setEmailAttachments]=useState<EmailComposerAttachment[]>([]);
   const [emailDocumentBusy,setEmailDocumentBusy]=useState(false);
@@ -497,15 +504,17 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const effectiveActiveId=activeId||visible[0]?.id||"";
   const selectedActive=visible.find(item=>item.id===effectiveActiveId)??(selectedConversationRef.current?.id===effectiveActiveId?selectedConversationRef.current:null);
   const active=useMemo(()=>selectedActive?.platform==="livechat"?{...selectedActive,visitorPresence:visitorPresence[selectedActive.contactId]}:selectedActive,[selectedActive,visitorPresence]);
-  const activePrimaryEmail=active?.primaryEmail??"";
-  const emailOnlyConversation=Boolean(active&&!active.phone&&!active.providerUserId&&active.primaryEmail);
-  // Email mode belongs to the active conversation. Do not carry it from an
-  // email reply into the next WhatsApp conversation, while keeping it enabled
-  // for contacts that have no WhatsApp identity.
-  useEffect(()=>{setEmailMode(emailOnlyConversation);},[emailOnlyConversation,active?.id]);
+  const members=modeMembersById[effectiveActiveId]??[];
+  const availableModeMembers=modeMembers(members,conversationMode);
+  const sender=availableModeMembers.find(item=>item.id===replyRecipients[`${effectiveActiveId}:${conversationMode}`])??availableModeMembers[0];
+  const emailAvailable=modeMembers(members,"email").length>0;
+  const whatsappAvailable=modeMembers(members,"whatsapp").length>0||Boolean(members.some(item=>item.phone||item.whatsappUsername)&&accounts.some(item=>item.platform==="whatsapp"));
+  const livechatAvailable=modeMembers(members,"livechat").length>0;
+  useEffect(()=>{if(active)setConversationMode(initialConversationMode(active));},[active?.id]);
+  if(modeRequestRef.current.id!==effectiveActiveId||modeRequestRef.current.mode!==conversationMode)modeRequestRef.current={id:effectiveActiveId,mode:conversationMode,version:modeRequestRef.current.version+1};
   const translationPreference=active?translationPreferences[active.id]??DEFAULT_TRANSLATION_PREFERENCE:DEFAULT_TRANSLATION_PREFERENCE;
   const translationReady=Boolean(active&&translationReadyConversationId===active.id);
-  const currentMessages=useMemo(()=>active?messages[active.id]??[]:[],[active,messages]);
+  const currentMessages=useMemo(()=>active?(messages[active.id]??[]).filter(message=>matchesMessageMode(message,conversationMode)):[],[active,messages,conversationMode]);
   const hasPendingEmail=currentMessages.some(message=>message.direction==="out"&&message.email&&(message.status==="queued"||message.status==="dispatching"));
   const conversationImages=useMemo(()=>currentMessages.flatMap(message=>[
     ...(message.attachment?.mime.startsWith("image/")?[{messageId:message.id,attachment:message.attachment}]:[]),
@@ -513,15 +522,17 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   ]),[currentMessages]);
   const failedMessageCount=active?Math.max(failedMessageCounts[active.id]??0,currentMessages.filter(message=>message.direction==="out"&&(message.status==="failed"||message.status==="uncertain")).length):0;
   const selectedReply=replyTo?.conversationId===effectiveActiveId?replyTo.message:null;
-  const livechatRecipients=timelineRecipients[effectiveActiveId]??[];
+  const livechatRecipients=(timelineRecipients[effectiveActiveId]??[]).filter(item=>members.find(member=>member.id===item.id)?.platform==="livechat").map(item=>({...item,accountId:members.find(member=>member.id===item.id)?.accountId}));
   const recommendedRecipient=defaultTimelineRecipient(livechatRecipients,effectiveActiveId);
-  const replyConversationId=active?.platform==="livechat"&&!emailMode
-    ?selectedReply?.sourceConversationId??replyRecipients[effectiveActiveId]??recommendedRecipient
-    :effectiveActiveId;
+  const replyConversationId=conversationMode==="livechat"
+    ?selectedReply?.sourceConversationId??(livechatRecipients.some(item=>item.id===replyRecipients[effectiveActiveId])?replyRecipients[effectiveActiveId]:recommendedRecipient)
+    :selectedReply?.sourceConversationId??sender?.id??(active?.conversationType==="group"?effectiveActiveId:"");
+  const sendingConversation=members.find(item=>item.id===replyConversationId)??sender??active;
+  const activePrimaryEmail=sendingConversation?.primaryEmail??"";
   useEffect(()=>{
-    if(active?.platform!=="livechat"||manualReplyRecipients.current.has(effectiveActiveId)||!recommendedRecipient||draft.trim()||pendingComposerImages.length||selectedReply||translationPreview||translatingDraft||composerImageBusy||quickReplyResolving||mediaOpen||materialLibraryOpen||productCardsOpen)return;
+    if(conversationMode!=="livechat"||manualReplyRecipients.current.has(effectiveActiveId)||!recommendedRecipient||draft.trim()||pendingComposerImages.length||selectedReply||translationPreview||translatingDraft||composerImageBusy||quickReplyResolving||mediaOpen||materialLibraryOpen||productCardsOpen)return;
     setReplyRecipients(all=>all[effectiveActiveId]===recommendedRecipient?all:{...all,[effectiveActiveId]:recommendedRecipient});
-  },[active?.platform,effectiveActiveId,recommendedRecipient,draft,pendingComposerImages.length,selectedReply,translationPreview,translatingDraft,composerImageBusy,quickReplyResolving,mediaOpen,materialLibraryOpen,productCardsOpen]);
+  },[conversationMode,effectiveActiveId,recommendedRecipient,draft,pendingComposerImages.length,selectedReply,translationPreview,translatingDraft,composerImageBusy,quickReplyResolving,mediaOpen,materialLibraryOpen,productCardsOpen]);
   useEffect(()=>{
     const previous=emailComposerConversationRef.current;
     emailComposerConversationRef.current=effectiveActiveId;
@@ -530,7 +541,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     emailAttachmentsRef.current=[];setEmailAttachments([]);setEmailBodyHtml("");setEmailSubject("");
   },[effectiveActiveId]);
   const currentEmailActivities=useMemo(()=>active?emailActivities[active.id]??[]:[],[active,emailActivities]);
-  useEffect(()=>{if(!apiToken||!active?.accountId)return;let cancelled=false;void authorizedFetch("/api/v1/mailboxes",apiToken).then(async result=>{if(result.token!==apiToken)setApiToken(result.token);if(!result.response.ok)return;const body=await result.response.json().catch(()=>({})) as {data?:Array<Record<string,unknown>>};if(cancelled)return;const items=(body.data??[]).filter(item=>String(item.account_id)===active.accountId).map(item=>({id:String(item.id),account_id:String(item.account_id),address:String(item.address),display_name:String(item.display_name??""),is_primary:Boolean(item.is_primary),enabled:Boolean(item.enabled)}));setEmailMailboxes(items);setEmailMailboxId(current=>current&&items.some(item=>item.id===current)?current:(items.find(item=>item.is_primary&&item.enabled)?.id??items.find(item=>item.enabled)?.id??""));}).catch(()=>{});return()=>{cancelled=true};},[apiToken,active?.accountId]);
+  useEffect(()=>{if(!apiToken||!sendingConversation?.accountId)return;setEmailMailboxes([]);setEmailMailboxId("");let cancelled=false;void authorizedFetch("/api/v1/mailboxes",apiToken).then(async result=>{if(result.token!==apiToken)setApiToken(result.token);if(!result.response.ok)return;const body=await result.response.json().catch(()=>({})) as {data?:Array<Record<string,unknown>>};if(cancelled)return;const items=(body.data??[]).filter(item=>String(item.account_id)===sendingConversation.accountId).map(item=>({id:String(item.id),account_id:String(item.account_id),address:String(item.address),display_name:String(item.display_name??""),is_primary:Boolean(item.is_primary),enabled:Boolean(item.enabled)}));setEmailMailboxes(items);setEmailMailboxId(current=>current&&items.some(item=>item.id===current)?current:(items.find(item=>item.is_primary&&item.enabled)?.id??items.find(item=>item.enabled)?.id??""));}).catch(()=>{});return()=>{cancelled=true};},[apiToken,sendingConversation?.accountId]);
   const latestMessageId=currentMessages.at(-1)?.id??"";
   useEffect(()=>{setTranscriptConversationId("");},[effectiveActiveId]);
   const selectConversation=useCallback((conversationId:string,shiftKey=false)=>{
@@ -539,7 +550,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       if(!item)return;
       if(item.conversationType==="group"){setToast("群会话不能与其他会话合并");return;}
       const first=selectedConversations.values().next().value as Conversation|undefined;
-      if(first&&first.accountId!==item.accountId){setToast("只能选择同一个 channel 的会话进行合并");return;}
+      if(first&&item.platform==="messenger"){setToast("仅支持 Email、WhatsApp 和 Live Chat 会话合并");return;}
       if(!selectedConversations.has(item.id)&&selectedConversations.size>=50){setToast("每次最多合并 50 个会话");return;}
       setSelectedConversations(current=>{const next=new Map(current);if(next.has(item.id))next.delete(item.id);else next.set(item.id,item);return next;});
       return;
@@ -780,13 +791,23 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     if(older){setLoadingOlderConversationId(conversationId);setOlderMessageErrors(all=>({...all,[conversationId]:""}));messageStickToBottomRef.current=false;}
     try{
       const params=new URLSearchParams({limit:String(MESSAGE_PAGE_SIZE)});
+      const requestedMode=modeRequestRef.current.mode,requestedVersion=modeRequestRef.current.version;
+      params.set("mode",requestedMode);
       if(older&&cursor)params.set("cursor",cursor);
       const messageRequest=authorizedFetch(`/api/v1/conversations/${conversationId}/messages?${params}`,token);
       const emailRequest=older?Promise.resolve(null):authorizedFetch(`/api/v1/conversations/${conversationId}/email-activities`,token);
-      const [result,emailResult]=await Promise.all([messageRequest,emailRequest]);
+      const modesRequest=older?Promise.resolve(null):authorizedFetch(`/api/v1/conversations/${conversationId}/modes`,token);
+      const [result,emailResult,modesResult]=await Promise.all([messageRequest,emailRequest,modesRequest]);
       const response=result.response;if(result.token!==token)setApiToken(result.token);
       if(response.status===401){logout();return;}if(!response.ok)throw new Error(`HTTP ${response.status}`);
       const body=await response.json() as {data:Array<Record<string,unknown>>;nextCursor?:string|null;failedCount?:number;recipients?:TimelineRecipient[]};
+      if(conversationId!==modeRequestRef.current.id||requestedVersion!==modeRequestRef.current.version)return;
+      if(modesResult?.response.ok){
+        const modeBody=await modesResult.response.json() as {data:Array<Record<string,unknown>>};
+        const nextMembers=modeBody.data.map((item,index)=>({...mapConversation(item,index),mode:String(item.conversation_mode) as ConversationMode,hasMailbox:Boolean(item.has_mailbox),hasEmailProvider:Boolean(item.has_email_provider),whatsappUsername:String(item.whatsapp_username??"")}));
+        if(conversationId!==modeRequestRef.current.id||requestedVersion!==modeRequestRef.current.version)return;
+        setModeMembersById(all=>({...all,[conversationId]:nextMembers}));
+      }
       if(!older){
         setTimelineRecipients(all=>({...all,[conversationId]:body.recipients??[]}));
         const initialRecipient=defaultTimelineRecipient(body.recipients??[],conversationId);
@@ -817,6 +838,37 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       else setToast("消息加载失败，正在等待下次同步");
     }finally{if(older)setLoadingOlderConversationId(current=>current===conversationId?"":current);}
   },[effectiveActiveId,logout,setMessageCursor]);
+
+  useEffect(()=>{
+    if(!effectiveActiveId||!apiToken)return;
+    setReplyTo(null);setTranslationPreview(null);setImageViewerMessageId("");
+    messagePaginationDepthRef.current.delete(effectiveActiveId);
+    setMessageCursor(effectiveActiveId,null);
+    setMessages(all=>({...all,[effectiveActiveId]:[]}));
+    void loadMessages(apiToken,effectiveActiveId);
+  },[conversationMode,effectiveActiveId,apiToken,loadMessages,setMessageCursor]);
+
+  async function switchConversationMode(mode:ConversationMode){
+    if(modeBusy||mode===conversationMode)return;
+    if(translatingDraft||quickReplyResolving||composerImageBusy||emailDocumentBusy||translationPreview||pendingComposerImages.length||mediaOpen||materialLibraryOpen||productCardsOpen||ttsOpen){setToast("请先完成或取消当前发送操作");return;}
+    if(mode==="email"&&!emailAvailable||mode==="livechat"&&!livechatAvailable||mode==="whatsapp"&&!whatsappAvailable)return;
+    if(mode==="whatsapp"&&!modeMembers(members,"whatsapp").length){
+      const channels=accounts.filter(item=>item.platform==="whatsapp"),accountId=whatsappAccountId||(channels.length===1?channels[0].id:"");
+      if(!accountId){setToast("请先选择 WhatsApp 发送渠道");return;}
+      const rootId=effectiveActiveId;setModeBusy(true);
+      try{
+        const result=await authorizedFetch(`/api/v1/conversations/${rootId}/modes/whatsapp`,apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId})});
+        if(result.token!==apiToken)setApiToken(result.token);
+        if(!result.response.ok){const body=await result.response.json().catch(()=>({}));throw new Error(body.message??"WhatsApp 会话准备失败");}
+        if(modeRequestRef.current.id!==rootId)return;
+        await loadMessages(result.token,rootId);void loadConversations(result.token);
+        if(modeRequestRef.current.id!==rootId)return;
+      }catch(reason){setToast(reason instanceof Error?reason.message:"模式切换失败");return;}finally{setModeBusy(false);}
+    }
+    modeDrafts.current[`${effectiveActiveId}:${conversationMode}`]=draft;
+    setDraft(modeDrafts.current[`${effectiveActiveId}:${mode}`]??"");
+    setReplyTo(null);setConversationMode(mode);
+  }
 
   const jumpToQuotedMessage=useCallback(async(messageId:string)=>{
     if(!active||!apiToken)return;
@@ -1006,7 +1058,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     return()=>window.clearTimeout(timer);
   },[translationPreference.agentLanguage]);
   useEffect(()=>{
-    const accountId=active?.accountId;
+    const accountId=sendingConversation?.accountId;
     if(!accountId||!userId||!apiToken){setSavedQuickReplies([]);return;}
     let cancelled=false;
     void (async()=>{
@@ -1020,7 +1072,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       if(!cancelled){setSavedQuickReplies(items);localStorage.setItem(key,JSON.stringify({version:2,items}));}
     })().catch(()=>{if(!cancelled)setSavedQuickReplies(loadQuickReplyStore(localStorage.getItem(quickReplyStorageKey(userId,accountId))));});
     return()=>{cancelled=true;};
-  },[active?.accountId,userId,apiToken]);
+  },[sendingConversation?.accountId,userId,apiToken]);
   useEffect(()=>{if(!apiToken||!translationPreference.enabled||!translationConfigured)return;const ids=currentMessages.filter(message=>message.direction==="in"&&((["text","image","video","document"].includes(message.kind)&&message.text.trim())||(message.kind==="audio"&&message.attachment))&&!messageTranslations[message.id]).map(message=>message.id);if(!ids.length)return;const timer=window.setTimeout(()=>void loadIncomingTranslations(apiToken,ids,translationPreference.agentLanguage,translationPreference.customerLanguage),0);return()=>window.clearTimeout(timer);},[apiToken,currentMessages,translationPreference.enabled,translationPreference.agentLanguage,translationPreference.customerLanguage,translationConfigured,messageTranslations,loadIncomingTranslations]);
   useEffect(()=>{if(!toast)return;const timer=window.setTimeout(()=>setToast(""),3200);return()=>window.clearTimeout(timer);},[toast]);
   useEffect(()=>{const timer=window.setInterval(()=>setClock(Date.now()),30_000);return()=>window.clearInterval(timer);},[]);
@@ -1199,7 +1251,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
 
   async function sendMessage(){
     if(emailMode){await sendEmailMessage();return;}
-    if(emailOnlyConversation){setToast("此联系人仅有邮箱，请使用 Email 模式发送");return;}
+    if(!sender){setToast("当前模式尚无可用发送会话");return;}
     if(pendingComposerImages.length){await sendPendingComposerImages();return;}
     if(!active||!apiToken||!draft.trim()||translatingDraft||composerImageBusy||quickReplyResolving)return;
     if(!replyConversationId){setToast("正在加载接收人，请稍后发送");return;}
@@ -1210,7 +1262,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     if(translationPreference.enabled){
       if(!translationConfigured){setToast("AI 翻译暂不可用，请联系管理员配置 Provider");return;}
       setTranslatingDraft(true);setTranslationError("");
-      try{const targetLanguage=translationPreference.customerLanguage,conversationId=replyConversationId,accountId=active.accountId,result=await authorizedFetch("/api/v1/translations/preview",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:source,targetLanguage,conversationId})});if(result.token!==apiToken)setApiToken(result.token);const body=await result.response.json().catch(()=>({})) as {translatedText?:string;message?:string};if(!result.response.ok||!body.translatedText)throw new Error(body.message??"翻译失败");setTranslationPreview({source,translated:body.translatedText,targetLanguage,conversationId,accountId,timelineConversationId:effectiveActiveId});}catch(reason){setTranslationError(reason instanceof Error?reason.message:"翻译失败");setToast("AI 翻译失败，原文未发送");}finally{setTranslatingDraft(false);}return;
+      try{const targetLanguage=translationPreference.customerLanguage,conversationId=replyConversationId,accountId=sendingConversation?.accountId??active.accountId,result=await authorizedFetch("/api/v1/translations/preview",apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:source,targetLanguage,conversationId})});if(result.token!==apiToken)setApiToken(result.token);const body=await result.response.json().catch(()=>({})) as {translatedText?:string;message?:string};if(!result.response.ok||!body.translatedText)throw new Error(body.message??"翻译失败");setTranslationPreview({source,translated:body.translatedText,targetLanguage,conversationId,accountId,timelineConversationId:effectiveActiveId});}catch(reason){setTranslationError(reason instanceof Error?reason.message:"翻译失败");setToast("AI 翻译失败，原文未发送");}finally{setTranslatingDraft(false);}return;
     }
     await queueTextMessage(source);
   }
@@ -1219,13 +1271,13 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     const body=htmlToPlainText(emailBodyHtml)||emailAttachments.filter(item=>item.inline).map(item=>item.fileName).join(", ");
     if(!active||!apiToken||!body)return;
     if(emailDocumentBusyRef.current){setToast("请等待单据准备完成");return;}
-    if(!activePrimaryEmail||!emailMailboxId){setToast("请先为联系人和当前账号配置邮箱");return;}
+    if(!activePrimaryEmail||!sender){setToast("请先为联系人设置邮箱并配置渠道邮件 Provider 或会话邮箱");return;}
     if(pendingComposerImages.length){setToast("请先移除待发送的 WhatsApp 图片，再发送邮件");return;}
     const clientSendId=crypto.randomUUID(),subject=emailSubject.trim()||(selectedReply?.email?replyEmailSubject(selectedReply.email.subject):"无主题");
     const optimisticId=`email:${clientSendId}`;
-    setMessages(all=>({...all,[active.id]:[...(all[active.id]??[]),{id:optimisticId,direction:"out",kind:"text",text:body,time:formatTime(new Date()),occurredAt:new Date().toISOString(),status:"queued",email:{subject,from:emailMailboxes.find(item=>item.id===emailMailboxId)?.address??"",to:[activePrimaryEmail],attachments:emailAttachments.map(item=>({id:item.id,name:item.fileName,mime:item.mimeType,size:formatBytes(item.size),inline:item.inline}))},quoted:selectedReply?messageQuote(selectedReply):undefined,comments:[]}] }));
+    setMessages(all=>({...all,[active.id]:[...(all[active.id]??[]),{id:optimisticId,sourceConversationId:replyConversationId,direction:"out",kind:"text",text:body,time:formatTime(new Date()),occurredAt:new Date().toISOString(),status:"queued",email:{subject,from:emailMailboxes.find(item=>item.id===emailMailboxId)?.address??"",to:[activePrimaryEmail],attachments:emailAttachments.map(item=>({id:item.id,name:item.fileName,mime:item.mimeType,size:formatBytes(item.size),inline:item.inline}))},quoted:selectedReply?messageQuote(selectedReply):undefined,comments:[]}] }));
     const bodyHtml=emailAttachments.reduce((html,item,index)=>item.previewUrl?html.replaceAll(item.previewUrl,`cid:attachment-${index}`):html,emailBodyHtml);
-    const result=await authorizedFetch(`/api/v1/conversations/${active.id}/email-sends/text`,apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({clientSendId,mailboxId:emailMailboxId,recipientEmail:activePrimaryEmail,subject,body,bodyHtml,attachmentIds:emailAttachments.map(item=>item.id),...(selectedReply?.email?{replyToMessageId:selectedReply.id}:{})})});
+    const result=await authorizedFetch(`/api/v1/conversations/${selectedReply?.sourceConversationId??sender.id}/email-sends/text`,apiToken,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({clientSendId,mailboxId:emailMailboxId||undefined,recipientEmail:activePrimaryEmail,subject,body,bodyHtml,attachmentIds:emailAttachments.map(item=>item.id),...(selectedReply?.email?{replyToMessageId:selectedReply.id}:{})})});
     if(result.token!==apiToken)setApiToken(result.token);
     if(!result.response.ok){setMessages(all=>({...all,[active.id]:(all[active.id]??[]).map(item=>item.id===optimisticId?{...item,status:"failed",failureMessage:"邮件发送失败"}:item)}));setToast("邮件发送失败，请检查邮箱配置");return;}
     emailAttachments.forEach(item=>{if(item.previewUrl)URL.revokeObjectURL(item.previewUrl);});
@@ -1247,7 +1299,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       if(emailAttachmentsRef.current.length>=10||emailAttachmentsRef.current.reduce((sum,value)=>sum+value.size,0)+blob.size>25*1024*1024)throw new Error("邮件最多 10 个附件，总大小不能超过 25 MB");
       const extension=mode==="image"?"png":"pdf",name=`${documentType.toUpperCase()}-${orderNumber.replace(/[^a-z0-9_-]/gi,"_")}.${extension}`;
       const form=new FormData();form.append("file",new File([blob],name,{type:mode==="image"?"image/png":"application/pdf"}));
-      const upload=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(active.accountId)}`,apiToken,{method:"POST",body:form});
+      const upload=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(sendingConversation?.accountId??active.accountId)}`,apiToken,{method:"POST",body:form});
       if(emailComposerConversationRef.current!==conversationId)return;
       if(upload.token!==apiToken)setApiToken(upload.token);
       const uploaded=await upload.response.json().catch(()=>({})) as {mediaId?:string;fileName?:string;mimeType?:string;size?:number;sha256?:string;message?:string};
@@ -1291,7 +1343,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     timelineConversationId?: string,
   ): Promise<boolean> {
     const conversationId=targetConversationId??replyConversationId;
-    const accountId=targetAccountId??active?.accountId;
+    const accountId=targetAccountId??sendingConversation?.accountId;
     const displayConversationId=timelineConversationId??effectiveActiveId;
     if (!conversationId || !accountId || !apiToken || !text.trim()) return false;
     const clientMessageId = crypto.randomUUID(),
@@ -1307,6 +1359,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
         {
           id: clientMessageId,
           sourceConversationId:conversationId,
+          platform:members.find(item=>item.id===conversationId)?.platform??sendingConversation?.platform,
           direction: "out",
           kind: "text",
           text,
@@ -1409,7 +1462,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            accountId: active.accountId,
+            accountId: members.find(item=>item.id===message.sourceConversationId)?.accountId??active.accountId,
             conversationId: message.sourceConversationId??active.id,
             clientMessageId,
             type: message.kind,
@@ -1460,7 +1513,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     try {
       const conversationId = active.id;
       const result = await authorizedFetch(
-        `/api/v1/conversations/${conversationId}/messages/failed`,
+        `/api/v1/conversations/${conversationId}/messages/failed?mode=${conversationMode}`,
         apiToken,
         { method: "DELETE" },
       );
@@ -1477,7 +1530,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
         ...all,
         [conversationId]: (all[conversationId] ?? []).filter(
           (message) =>
-            message.direction !== "out" ||
+            !matchesMessageMode(message,conversationMode)||message.direction !== "out" ||
             (message.status !== "failed" && message.status !== "uncertain"),
         ),
       }));
@@ -1498,7 +1551,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
 
   async function sendMediaAsset(asset:MediaAsset,caption:string,throwOnFailure=false,includeReply=true,translationSourceText?:string,translationTargetLanguage?:string,targetConversationId?:string,targetAccountId?:string,refreshMessages=true,timelineConversationId?:string){
     const conversationId=targetConversationId??replyConversationId;
-    const target=conversations.find(item=>item.id===conversationId)??active;
+    const target=members.find(item=>item.id===conversationId)??conversations.find(item=>item.id===conversationId)??active;
     const accountId=targetAccountId??target?.accountId,displayConversationId=timelineConversationId??effectiveActiveId;
     if(!conversationId||!accountId||!apiToken)return;
     if(target?.platform==="livechat"&&(!["image/png","image/jpeg","image/webp","application/pdf","text/plain"].includes(asset.mimeType)||asset.size>10485760)){
@@ -1527,7 +1580,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       if(result.token!==apiToken)setApiToken(result.token);
       const body=await result.response.json().catch(()=>({})) as {translatedText?:string;message?:string};
       if(!result.response.ok||!body.translatedText)throw new Error(body.message??"翻译失败");
-      setTranslationPreview({source,translated:body.translatedText,targetLanguage,conversationId:replyConversationId,accountId:active.accountId,timelineConversationId:effectiveActiveId,media:{asset,throwOnFailure,includeReply,followingAssets}});
+      setTranslationPreview({source,translated:body.translatedText,targetLanguage,conversationId:replyConversationId,accountId:sendingConversation?.accountId??active.accountId,timelineConversationId:effectiveActiveId,media:{asset,throwOnFailure,includeReply,followingAssets}});
     }catch(reason){const message=reason instanceof Error?reason.message:"翻译失败";setTranslationError(message);setToast("AI 翻译失败，附件未发送");if(throwOnFailure)throw reason;}
     finally{setTranslatingDraft(false);}
   }
@@ -1546,7 +1599,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     try{
       const uploaded:MediaAsset[]=[];
       const uploadedByIndex:Array<MediaAsset|undefined>=new Array(images.length);let nextIndex=0;
-      const uploadNext=async()=>{for(;;){const index=nextIndex++;if(index>=images.length)return;const file=images[index];const form=new FormData();form.append("file",file);const result=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(active.accountId)}`,apiToken,{method:"POST",body:form});if(result.token!==apiToken)setApiToken(result.token);const body=await result.response.json().catch(()=>({})) as {mediaId?:string;fileName?:string;mimeType?:string;size?:number;sha256?:string;message?:string};if(!result.response.ok||!body.mediaId)throw new Error(body.message??`${file.name} 上传失败（HTTP ${result.response.status}）`);uploadedByIndex[index]={id:body.mediaId,fileName:body.fileName??file.name,mimeType:body.mimeType??file.type,size:body.size??file.size,sha256:body.sha256??"",createdAt:new Date().toISOString(),usageCount:0};}};
+      const uploadNext=async()=>{for(;;){const index=nextIndex++;if(index>=images.length)return;const file=images[index];const form=new FormData();form.append("file",file);const result=await authorizedFetch(`/api/v1/media?accountId=${encodeURIComponent(sendingConversation?.accountId??active.accountId)}`,apiToken,{method:"POST",body:form});if(result.token!==apiToken)setApiToken(result.token);const body=await result.response.json().catch(()=>({})) as {mediaId?:string;fileName?:string;mimeType?:string;size?:number;sha256?:string;message?:string};if(!result.response.ok||!body.mediaId)throw new Error(body.message??`${file.name} 上传失败（HTTP ${result.response.status}）`);uploadedByIndex[index]={id:body.mediaId,fileName:body.fileName??file.name,mimeType:body.mimeType??file.type,size:body.size??file.size,sha256:body.sha256??"",createdAt:new Date().toISOString(),usageCount:0};}};
       await Promise.all(Array.from({length:Math.min(3,images.length)},()=>uploadNext()));
       uploaded.push(...uploadedByIndex.filter((item):item is MediaAsset=>Boolean(item)));
       setPendingComposerImages(current=>[...current,...uploaded]);
@@ -1581,7 +1634,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     if(!active){setToast("请先选择客户会话");return null;}
     setQuickReplyResolving(true);
     try{
-      const contactId=active.platform==="livechat"&&!emailMode?livechatRecipients.find(item=>item.id===replyConversationId)?.contactId:active.contactId;
+      const contactId=members.find(item=>item.id===replyConversationId)?.contactId??active.contactId;
       if(!contactId)throw new Error("接收人资料尚未加载，请稍后重试");
       const result=await authorizedFetch(`/api/v1/contacts/${contactId}`,apiToken);
       if(result.token!==apiToken)setApiToken(result.token);
@@ -1637,7 +1690,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   }
 
   function persistQuickReplies(next:SavedQuickReply[]){
-    if(!active||!userId)return;localStorage.setItem(quickReplyStorageKey(userId,active.accountId),JSON.stringify({version:2,items:next}));setSavedQuickReplies(next);if(apiToken)void syncQuickReplies(active.accountId,apiToken,next);
+    if(!sendingConversation||!userId)return;localStorage.setItem(quickReplyStorageKey(userId,sendingConversation.accountId),JSON.stringify({version:2,items:next}));setSavedQuickReplies(next);if(apiToken)void syncQuickReplies(sendingConversation.accountId,apiToken,next);
   }
 
   async function syncQuickReplies(accountId:string,token:string,items:SavedQuickReply[]):Promise<void>{
@@ -1661,7 +1714,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const handleQuickReplyOpen=useCallback((value:boolean)=>{if(value)saveEmailSelection();setQuickReplyOpen(value);if(value){setEmojiOpen(false);setTranslationMenuOpen(false);}},[emailMode]);
 
   const onlineCount=accounts.filter(item=>item.status==="online").length;
-  const cloudWindowClosed=Boolean(!emailMode&&!emailOnlyConversation&&active?.platform!=="livechat"&&active?.transport==="cloud"&&(!active.replyWindowExpiresAt||new Date(active.replyWindowExpiresAt).getTime()<=clock));
+  const cloudWindowClosed=Boolean(!emailMode&&sendingConversation?.platform!=="livechat"&&sendingConversation?.transport==="cloud"&&(!sendingConversation.replyWindowExpiresAt||new Date(sendingConversation.replyWindowExpiresAt).getTime()<=clock));
   const profileText=(user?.displayName||user?.email||"坐席").slice(0,1).toUpperCase();
   const userRole=user?.role||tokenRole(apiToken);
   useEffect(()=>{setWorkspaceView(routeView);},[routeView]);
@@ -2049,7 +2102,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                     </span>
                   </div>
                   <div className="chat-actions">
-                    {active.platform==="livechat"&&<button type="button" className="icon-button" aria-label="发送会话记录" title="发送会话记录" disabled={!livechatRecipients.length} onClick={()=>setTranscriptConversationId(active.id)}><Mail size={17}/></button>}
+                    {livechatAvailable&&<button type="button" className="icon-button" aria-label="发送会话记录" title="发送会话记录" disabled={!livechatRecipients.length} onClick={()=>setTranscriptConversationId(active.id)}><Mail size={17}/></button>}
                     {failedMessageCount > 0 && (
                       <button
                         onClick={() => void clearFailedMessages()}
@@ -2103,7 +2156,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                     </button>
                   </div>
                 </header>
-                {transcriptConversationId===active.id&&active.platform==="livechat"&&<LivechatTranscriptDialog key={active.id} conversationId={active.id} accountId={active.accountId} members={livechatRecipients} initialRecipientId={replyConversationId} token={apiToken} onToken={setApiToken} onClose={()=>setTranscriptConversationId("")} onSent={text=>{setToast(text);void loadMessages(apiToken,active.id);void loadConversations(apiToken);}}/>}
+                {transcriptConversationId===active.id&&livechatAvailable&&<LivechatTranscriptDialog key={active.id} conversationId={active.id} accountId={sendingConversation?.accountId??active.accountId} members={livechatRecipients} initialRecipientId={replyConversationId} token={apiToken} onToken={setApiToken} onClose={()=>setTranscriptConversationId("")} onSent={text=>{setToast(text);void loadMessages(apiToken,active.id);void loadConversations(apiToken);}}/>}
                 {active.conversationType!=="group"&&<AgentConversationBar
                   conversationId={active.id}
                   token={apiToken}
@@ -2121,6 +2174,11 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                   </div>
                 )}
                 {false && currentEmailActivities.length > 0 && <div className="email-activity-stream" aria-hidden="true" />}
+                {active.conversationType!=="group"&&<div className="conversation-mode-bar">
+                  <div role="tablist" aria-label="会话消息模式">{(["email","whatsapp","livechat",...(active.platform==="messenger"?["messenger"]:[])] as ConversationMode[]).map(mode=><button key={mode} type="button" role="tab" aria-selected={conversationMode===mode} disabled={modeBusy||(mode==="email"?!emailAvailable:mode==="whatsapp"?!whatsappAvailable:mode==="livechat"?!livechatAvailable:false)} title={mode==="email"&&!emailAvailable?"需要客户邮箱及渠道邮件 Provider 或会话邮箱":mode==="whatsapp"&&!whatsappAvailable?"需要客户 WhatsApp 资料或已合并的 WhatsApp 会话":mode==="livechat"&&!livechatAvailable?"需要原始或已合并的 Live Chat 会话":undefined} onClick={()=>void switchConversationMode(mode)}>{mode==="email"?<Mail size={14}/>:<MessageCircle size={14}/>}<span>{mode==="email"?"Email":mode==="whatsapp"?"WhatsApp":mode==="livechat"?"Live Chat":"Messenger"}</span></button>)}</div>
+                  {whatsappAvailable&&!modeMembers(members,"whatsapp").length&&accounts.filter(item=>item.platform==="whatsapp").length>1&&<select aria-label="WhatsApp 发送渠道" value={whatsappAccountId} onChange={event=>setWhatsappAccountId(event.target.value)} disabled={modeBusy}><option value="">选择 WhatsApp 渠道</option>{accounts.filter(item=>item.platform==="whatsapp").map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select>}
+                  {conversationMode!=="livechat"&&availableModeMembers.length>1&&<select aria-label="模式回复接收人" value={sender?.id??""} disabled={Boolean(selectedReply)||modeBusy||emailAttachments.length>0||emailDocumentBusy||composerImageBusy||pendingComposerImages.length>0} onChange={event=>setReplyRecipients(all=>({...all,[`${effectiveActiveId}:${conversationMode}`]:event.target.value}))}>{availableModeMembers.map(item=><option value={item.id} key={item.id}>{item.name} · {item.account}</option>)}</select>}
+                </div>}
                 <div
                   ref={messagesRef}
                   className="messages"
@@ -2165,14 +2223,14 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                           className={`message-bubble ${message.attachment?.name.startsWith("sticker-") ? "sticker-bubble" : ""}`}
                         >
                           {active.conversationType==="group"&&message.direction==="in"&&<b className="group-message-sender">{message.senderName||participantLabel(message.senderJid)}</b>}
-                          {active.platform==="livechat"&&livechatRecipients.length>1&&<b className="group-message-sender">{message.direction==="out"?"发给 ":""}{livechatRecipients.find(item=>item.id===(message.sourceConversationId??active.id))?.name??"访客"}</b>}
+                          {conversationMode==="livechat"&&livechatRecipients.length>1&&<b className="group-message-sender">{message.direction==="out"?"发给 ":""}{livechatRecipients.find(item=>item.id===(message.sourceConversationId??active.id))?.name??"访客"}</b>}
                           <div className="message-actions">
                             <button
                               className="message-reply-action"
-                              disabled={cloudWindowClosed||Boolean(message.sourceConversationId&&message.sourceConversationId!==active.id&&(active.platform!=="livechat"||message.email))}
+                              disabled={cloudWindowClosed||modeBusy}
                               onClick={() => {
                                 if (message.email) {
-                                  setEmailMode(true);
+                                  setConversationMode("email");
                                   setEmailSubject(replyEmailSubject(message.email.subject));
                                 }
                                 setReplyTo({
@@ -2184,7 +2242,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                                 );
                               }}
                               aria-label="回复这条消息"
-                              title={message.sourceConversationId&&message.sourceConversationId!==active.id&&active.platform!=="livechat"?"不能跨原始会话引用回复，请直接发送新消息":"回复"}
+                              title="回复"
                             >
                               <Reply size={14} />
                             </button>
@@ -2296,7 +2354,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                             <div className="message-comment-compose"><textarea value={messageCommentDrafts[message.id]??""} onChange={event=>setMessageCommentDrafts(all=>({...all,[message.id]:event.target.value}))} maxLength={4000} placeholder="添加仅团队可见的评论"/><button type="button" disabled={!(messageCommentDrafts[message.id]??"").trim()||messageCommentBusy===`add:${message.id}`} onClick={()=>void addMessageComment(message.id)}>评论</button></div>
                           </section>}
                           <footer>
-                            <span className={`channel-badge message-channel ${active.platform}`}>{active.platform==="messenger"?<Facebook size={9}/>:<MessageCircle size={9}/>} {active.platform==="livechat"?`LiveChat · ${active.account}`:active.platform==="messenger"?`Facebook · ${active.account}`:`WhatsApp · ${active.account}`}</span>
+                            <span className={`channel-badge message-channel ${message.email?"email":message.platform}`}>{message.email?<Mail size={9}/>:message.platform==="messenger"?<Facebook size={9}/>:<MessageCircle size={9}/>} {message.email?"Email":message.platform==="livechat"?"Live Chat":message.platform==="messenger"?"Facebook":"WhatsApp"} · {members.find(item=>item.id===(message.sourceConversationId??active.id))?.account??active.account}</span>
                             <time dateTime={message.occurredAt} title={message.occurredAt?formatMessageTimeTitle(message.occurredAt):undefined}>{message.time}</time>
                             {message.direction === "out" && (
                               <MessageStatus status={message.status} />
@@ -2418,8 +2476,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                         </span>
                       </button>
                     </div>
-                    {active.platform==="livechat"&&!emailMode?<TimelineRecipientPicker members={livechatRecipients} value={replyConversationId} disabled={Boolean(selectedReply)||translatingDraft||composerImageBusy||quickReplyResolving||Boolean(translationPreview)} onChange={id=>{manualReplyRecipients.current.add(effectiveActiveId);setReplyRecipients(all=>({...all,[effectiveActiveId]:id}));}}/>:<span className="composer-recipient" title={`回复给 ${active.name}`}>
-                      回复给 <b>{active.name}</b>
+                    {conversationMode==="livechat"?<TimelineRecipientPicker members={livechatRecipients} value={replyConversationId} disabled={Boolean(selectedReply)||translatingDraft||composerImageBusy||quickReplyResolving||Boolean(translationPreview)} onChange={id=>{manualReplyRecipients.current.add(effectiveActiveId);setReplyRecipients(all=>({...all,[effectiveActiveId]:id}));}}/>:<span className="composer-recipient" title={`回复给 ${sendingConversation?.name??active.name}`}>
+                      回复给 <b>{sendingConversation?.name??active.name}</b>
                     </span>}
                   </div>
                   {translationMenuOpen && (
@@ -2455,10 +2513,10 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                       </button>
                     </div>
                   )}
-                  {active.conversationType==="group"&&!active.groupActive?<div className="messenger-window-closed"><Users size={15}/><span>此群已退出或不可访问，无法继续发送消息</span></div>:cloudWindowClosed&&active.platform==="whatsapp" ? (
+                  {active.conversationType==="group"&&!active.groupActive?<div className="messenger-window-closed"><Users size={15}/><span>此群已退出或不可访问，无法继续发送消息</span></div>:cloudWindowClosed&&sendingConversation?.platform==="whatsapp" ? (
                     <TemplateComposer
-                      accountId={active.accountId}
-                      conversationId={active.id}
+                      accountId={sendingConversation?.accountId??active.accountId}
+                      conversationId={replyConversationId}
                       token={apiToken}
                       onToken={setApiToken}
                       onSent={() => {
@@ -2504,7 +2562,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                           </span>
                         </div>
                       )}
-                      {emailMode&&<div className="email-composer-fields"><label>收件邮箱<input value={activePrimaryEmail} readOnly placeholder="联系人尚未配置邮箱"/></label><label>发件邮箱<select value={emailMailboxId} onChange={event=>setEmailMailboxId(event.target.value)}>{emailMailboxes.filter(item=>item.enabled).map(item=><option key={item.id} value={item.id}>{item.address}{item.is_primary?"（主邮箱）":""}</option>)}</select></label><label>邮件主题<input value={emailSubject} onChange={event=>setEmailSubject(event.target.value)} placeholder="邮件主题"/></label></div>}
+                      {emailMode&&<div className="email-composer-fields"><label>收件邮箱<input value={activePrimaryEmail} readOnly placeholder="联系人尚未配置邮箱"/></label><label>发件邮箱<select value={emailMailboxId} onChange={event=>setEmailMailboxId(event.target.value)}>{!emailMailboxes.some(item=>item.enabled)&&<option value="">渠道邮件 Provider</option>}{emailMailboxes.filter(item=>item.enabled).map(item=><option key={item.id} value={item.id}>{item.address}{item.is_primary?"（主邮箱）":""}</option>)}</select></label><label>邮件主题<input value={emailSubject} onChange={event=>setEmailSubject(event.target.value)} placeholder="邮件主题"/></label></div>}
                       {emailMode ? (
                         <>
                           <RichTextEditor ref={emailEditorRef} value={emailBodyHtml} onChange={value=>{setEmailBodyHtml(value);setDraft(htmlToPlainText(value));}} placeholder="输入邮件正文"/>
@@ -2551,7 +2609,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                         placeholder="输入消息；可粘贴或拖入图片发送"
                       />}
                       <div className="composer-icons">
-                        <button type="button" className={emailMode?"active":""} onClick={()=>setEmailMode(value=>!value)} disabled={emailOnlyConversation} aria-label="Email 模式" title={emailOnlyConversation?"此联系人只能发送邮件":"Email 模式"}><Mail size={18}/></button>
+                        <button type="button" className={emailMode?"active":""} onClick={()=>void switchConversationMode("email")} disabled={!emailAvailable||modeBusy} aria-label="Email 模式" title="Email 模式"><Mail size={18}/></button>
                         <button
                           className={emojiOpen ? "active" : ""}
                           onClick={() => {saveEmailSelection();setEmojiOpen((value) => !value);}}
@@ -2560,7 +2618,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                         >
                           <Smile size={18} />
                         </button>
-                        {!emailMode&&active.platform!=="livechat"&&<button
+                        {!emailMode&&sendingConversation?.platform!=="livechat"&&<button
                           onClick={() => setTtsOpen(true)}
                           aria-label="AI 文字转语音"
                           title="AI 文字转语音"
@@ -2867,8 +2925,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       )}
       {mediaOpen && active && (
         <MediaDialog
-          livechat={!emailMode&&active.platform==="livechat"}
-          accountId={active.accountId}
+          livechat={conversationMode==="livechat"}
+          accountId={sendingConversation?.accountId??active.accountId}
           conversationId={replyConversationId}
           token={apiToken}
           initialCaption={emailMode?"":draft}
@@ -2893,7 +2951,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       )}
       {materialLibraryOpen && active && (
         <MaterialLibrarySendDialog
-          accountId={active.accountId}
+          accountId={sendingConversation?.accountId??active.accountId}
           conversationId={replyConversationId}
           customerName={livechatRecipients.find(item=>item.id===replyConversationId)?.name??active.name}
           initialCaption={emailMode?"":draft}
@@ -2917,7 +2975,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       )}
       {productCardsOpen && active && (
         <ProductCardSendDialog
-          accountId={active.accountId}
+          accountId={sendingConversation?.accountId??active.accountId}
           conversationId={replyConversationId}
           contactId={livechatRecipients.find(item=>item.id===replyConversationId)?.contactId??active.contactId}
           translationEnabled={translationPreference.enabled}
@@ -2939,7 +2997,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       )}
       {ttsOpen && active && (
         <TextToSpeechDialog
-          accountId={active.accountId}
+          accountId={sendingConversation?.accountId??active.accountId}
           token={apiToken}
           initialText={draft}
           translationEnabled={translationPreference.enabled}
@@ -2955,7 +3013,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       )}
       {quickReplyEditor !== undefined && active && (
         <QuickReplyEditorDialog
-          accountId={active.accountId}
+          accountId={sendingConversation?.accountId??active.accountId}
           token={apiToken}
           item={quickReplyEditor}
           onToken={setApiToken}
@@ -3105,7 +3163,7 @@ function TimelineMergeDialog({conversations,token,onToken,onClose,onMerged}:{con
       await onMerged(target.id,result.token);
     }catch(cause){setError(cause instanceof Error?cause.message:"合并失败");setBusy(false);}
   }
-return <div className="modal-backdrop context-action-backdrop" role="presentation"><section className="login-dialog context-action-dialog timeline-merge-dialog" role="dialog" aria-modal="true" aria-labelledby="timeline-merge-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><Merge size={19}/></span><h2 id="timeline-merge-title">合并会话时间线</h2><p>所有消息都会保留并按时间显示。请选择主会话；客户资料和会话操作以主会话为准，LiveChat 消息按输入区选择的接收人发送，其他渠道仍发送给主会话。</p><div className="timeline-merge-options" role="radiogroup" aria-label="选择主会话">{conversations.map(item=><label key={item.id} className={targetId===item.id?"active":""}><input type="radio" name="timeline-merge-target" disabled={busy} checked={targetId===item.id} onChange={()=>setTargetId(item.id)}/><span><b>{item.name}</b><small>{item.account} · {item.preview||"暂无消息"}</small></span></label>)}</div><small className="timeline-merge-warning">此操作不会合并联系人身份，也不会删除或迁移原始消息。</small>{error&&<span className="login-error">{error}</span>}<footer><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void merge()} disabled={!target||busy}>{busy?"正在合并…":"确认合并"}</button></footer></section></div>;
+return <div className="modal-backdrop context-action-backdrop" role="presentation"><section className="login-dialog context-action-dialog timeline-merge-dialog" role="dialog" aria-modal="true" aria-labelledby="timeline-merge-title"><button className="login-close" onClick={onClose} disabled={busy} aria-label="关闭"><X size={17}/></button><span className="login-logo"><Merge size={19}/></span><h2 id="timeline-merge-title">合并会话时间线</h2><p>请选择主会话。同类型仅支持 Live Chat 合并；合并后按 Email、WhatsApp、Live Chat 分别查看与回复。</p><div className="timeline-merge-options" role="radiogroup" aria-label="选择主会话">{conversations.map(item=><label key={item.id} className={targetId===item.id?"active":""}><input type="radio" name="timeline-merge-target" disabled={busy} checked={targetId===item.id} onChange={()=>setTargetId(item.id)}/><span><b>{item.name}</b><small>{item.account} · {item.preview||"暂无消息"}</small></span></label>)}</div><small className="timeline-merge-warning">此操作不会合并联系人身份，也不会删除或迁移原始消息。</small>{error&&<span className="login-error">{error}</span>}<footer><button className="secondary-action" onClick={onClose} disabled={busy}>取消</button><button className="primary-action" onClick={()=>void merge()} disabled={!target||busy}>{busy?"正在合并…":"确认合并"}</button></footer></section></div>;
 }
 
 function SameAccountMergeDialog({conversation,token,onToken,onClose,onMerged}:{conversation:Conversation;token:string;onToken:(token:string)=>void;onClose:()=>void;onMerged:(targetId:string,token:string)=>Promise<void>}){
@@ -5229,7 +5287,7 @@ function MediaDialog({accountId,conversationId,token,initialCaption,translationE
 function mapMediaAsset(item:Record<string,unknown>):MediaAsset{return{id:String(item.id),fileName:String(item.file_name??"未命名文件"),mimeType:String(item.mime_type??"application/octet-stream"),size:Number(item.byte_size??0),sha256:String(item.sha256??""),createdAt:String(item.created_at??""),usageCount:Number(item.usage_count??0)};}
 function mediaKind(mime:string){return mime.startsWith("image/")?"image":mime.startsWith("video/")?"video":mime.startsWith("audio/")?"audio":"document";}
 
-function mapConversation(item:Record<string,unknown>,index:number):Conversation {const conversationType=item.conversation_type==="group"?"group":"direct",name=String(item.display_name??item.phone_e164??item.provider_user_id??"未知联系人"),methods=Array.isArray(item.contact_methods)?item.contact_methods.map(mapContactMethod):[],lastDirection=item.last_message_direction==="in"||item.last_message_direction==="out"?item.last_message_direction:null,lastMessageStatus:Conversation["lastMessageStatus"]=["received","queued","dispatching","sent","delivered","read","failed","uncertain"].includes(String(item.last_message_status))?item.last_message_status as NonNullable<Conversation["lastMessageStatus"]>:null,lastMessageAt=item.last_message_at?String(item.last_message_at):null,windowExpiresAt=(item.reply_window_expires_at??item.service_window_expires_at)?String(item.reply_window_expires_at??item.service_window_expires_at):null,lastMessage=String(item.last_message??kindText(String(item.last_message_kind??""))),preview=conversationType==="group"&&item.last_message_sender_name?`${String(item.last_message_sender_name)}: ${lastMessage}`:lastMessage;return{id:String(item.id),name,initials:name.slice(0,2).toUpperCase(),color:COLORS[index%COLORS.length],account:String(item.account_name??"未知账号"),accountId:String(item.account_id),phone:conversationType==="group"?"":String(item.phone_e164??""),providerUserId:String(item.provider_user_id??""),contactId:String(item.contact_id??""),alias:String(item.alias??""),contactName:String(item.contact_name??item.phone_e164??item.provider_user_id??""),primaryEmail:String(item.primary_email??""),contactMethods:methods,preview,lastDirection,lastMessageStatus,lastMessageAt,time:lastMessageAt?formatTime(new Date(lastMessageAt)):"",unread:Number(item.unread_count??0),accountStatus:String(item.account_status??"offline"),assignedUserId:item.assigned_user_id?String(item.assigned_user_id):null,favorite:Boolean(item.favorite),blocked:Boolean(item.blocked),conversationStatus:String(item.status??"open"),customerStage:String(item.customer_stage??"new"),tags:Array.isArray(item.tags)?item.tags.map(mapTag):[],remindAt:item.remind_at?String(item.remind_at):null,platform:item.platform==="livechat"?"livechat" as const:item.platform==="messenger"?"messenger":"whatsapp",pageId:item.page_id?String(item.page_id):null,transport:String(item.transport??"web") as "web"|"cloud",serviceWindowExpiresAt:windowExpiresAt,replyWindowExpiresAt:windowExpiresAt,conversationType,groupJid:item.group_jid?String(item.group_jid):null,groupParticipantCount:Number(item.group_participant_count??0),groupActive:item.group_active!==false};}
+function mapConversation(item:Record<string,unknown>,index:number):Conversation {const conversationType=item.conversation_type==="group"?"group":"direct",name=String(item.display_name??item.phone_e164??item.provider_user_id??"未知联系人"),methods=Array.isArray(item.contact_methods)?item.contact_methods.map(mapContactMethod):[],lastDirection=item.last_message_direction==="in"||item.last_message_direction==="out"?item.last_message_direction:null,lastMessageStatus:Conversation["lastMessageStatus"]=["received","queued","dispatching","sent","delivered","read","failed","uncertain"].includes(String(item.last_message_status))?item.last_message_status as NonNullable<Conversation["lastMessageStatus"]>:null,lastMessageAt=item.last_message_at?String(item.last_message_at):null,windowExpiresAt=(item.reply_window_expires_at??item.service_window_expires_at)?String(item.reply_window_expires_at??item.service_window_expires_at):null,lastMessage=String(item.last_message??kindText(String(item.last_message_kind??""))),preview=conversationType==="group"&&item.last_message_sender_name?`${String(item.last_message_sender_name)}: ${lastMessage}`:lastMessage;return{id:String(item.id),originMode:item.origin_mode as Conversation["originMode"],whatsappUsername:String(item.whatsapp_username??""),name,initials:name.slice(0,2).toUpperCase(),color:COLORS[index%COLORS.length],account:String(item.account_name??"未知账号"),accountId:String(item.account_id),phone:conversationType==="group"?"":String(item.phone_e164??""),providerUserId:String(item.provider_user_id??""),contactId:String(item.contact_id??""),alias:String(item.alias??""),contactName:String(item.contact_name??item.phone_e164??item.provider_user_id??""),primaryEmail:String(item.primary_email??""),contactMethods:methods,preview,lastDirection,lastMessageStatus,lastMessageAt,time:lastMessageAt?formatTime(new Date(lastMessageAt)):"",unread:Number(item.unread_count??0),accountStatus:String(item.account_status??"offline"),assignedUserId:item.assigned_user_id?String(item.assigned_user_id):null,favorite:Boolean(item.favorite),blocked:Boolean(item.blocked),conversationStatus:String(item.status??"open"),customerStage:String(item.customer_stage??"new"),tags:Array.isArray(item.tags)?item.tags.map(mapTag):[],remindAt:item.remind_at?String(item.remind_at):null,platform:item.platform==="livechat"?"livechat" as const:item.platform==="messenger"?"messenger":"whatsapp",pageId:item.page_id?String(item.page_id):null,transport:String(item.transport??"web") as "web"|"cloud",serviceWindowExpiresAt:windowExpiresAt,replyWindowExpiresAt:windowExpiresAt,conversationType,groupJid:item.group_jid?String(item.group_jid):null,groupParticipantCount:Number(item.group_participant_count??0),groupActive:item.group_active!==false};}
 function mapContactMethod(item:Record<string,unknown>):ContactMethod{return{id:item.id?String(item.id):undefined,type:String(item.type??"other") as ContactMethodType,label:String(item.label??""),value:String(item.value??"")};}
 function mapContactProfile(item:Record<string,unknown>):ContactProfile{const emails=Array.isArray(item.emails)?item.emails.map(email=>{const value=email as Record<string,unknown>;return{id:value.id?String(value.id):undefined,label:String(value.label??""),email:String(value.email??""),isPrimary:Boolean(value.isPrimary??value.is_primary)};}):[],methods=Array.isArray(item.methods)?item.methods.map(method=>mapContactMethod(method as Record<string,unknown>)):[],addresses=Array.isArray(item.addresses)?item.addresses.map(address=>mapCustomerAddress(address as Record<string,unknown>)):[],birthday=item.birthday&&typeof item.birthday==="object"?item.birthday as ContactDate:null,specialDates=Array.isArray(item.specialDates)?item.specialDates as ContactSpecialDate[]:[],conversationId=item.conversationId?String(item.conversationId):item.conversation_id?String(item.conversation_id):null,visitorValue=item.livechatVisitor&&typeof item.livechatVisitor==="object"?item.livechatVisitor as Record<string,unknown>:item.livechat_visitor&&typeof item.livechat_visitor==="object"?item.livechat_visitor as Record<string,unknown>:null,visitorContext=visitorValue?.context&&typeof visitorValue.context==="object"?visitorValue.context as Record<string,unknown>:{},livechatVisitor=visitorValue?{firstIp:visitorValue.firstIp?String(visitorValue.firstIp):visitorValue.first_ip?String(visitorValue.first_ip):null,lastIp:visitorValue.lastIp?String(visitorValue.lastIp):visitorValue.last_ip?String(visitorValue.last_ip):null,embedOrigin:String(visitorValue.embedOrigin??visitorValue.embed_origin??""),context:{browserLanguage:visitorContext.browserLanguage?String(visitorContext.browserLanguage):visitorContext.browser_language?String(visitorContext.browser_language):undefined,timeZone:visitorContext.timeZone?String(visitorContext.timeZone):visitorContext.time_zone?String(visitorContext.time_zone):undefined,pageUrl:visitorContext.pageUrl?String(visitorContext.pageUrl):visitorContext.page_url?String(visitorContext.page_url):undefined,userAgent:visitorContext.userAgent?String(visitorContext.userAgent):visitorContext.user_agent?String(visitorContext.user_agent):undefined},createdAt:String(visitorValue.createdAt??visitorValue.created_at??""),lastSeenAt:String(visitorValue.lastSeenAt??visitorValue.last_seen_at??"")} as LivechatVisitorInfo:null;return{id:String(item.id),accountId:String(item.accountId??item.account_id??""),accountName:String(item.accountName??item.account_name??""),platform:item.platform==="livechat"?"livechat" as const:item.platform==="messenger"?"messenger":"whatsapp",transport:item.transport==="cloud"?"cloud":"web",alias:String(item.alias??""),contactName:String(item.contactName??item.contact_name??""),firstName:String(item.firstName??item.first_name??""),middleName:String(item.middleName??item.middle_name??""),lastName:String(item.lastName??item.last_name??""),companyName:String(item.companyName??item.company_name??""),jobTitle:String(item.jobTitle??item.job_title??""),country:String(item.country??""),province:String(item.province??""),city:String(item.city??""),name:String(item.name??item.alias??item.contactName??item.phone??"未知联系人"),phone:String(item.phone??item.phone_e164??""),whatsappUsername:item.whatsappUsername?String(item.whatsappUsername):item.whatsapp_username?String(item.whatsapp_username):null,avatarUrl:item.avatarUrl?String(item.avatarUrl):item.avatar_url?String(item.avatar_url):null,note:String(item.note??""),timezone:item.timezone?String(item.timezone):null,preferredLanguage:item.preferredLanguage?String(item.preferredLanguage):item.preferred_language?String(item.preferred_language):null,effectiveTimezone:String(item.effectiveTimezone??item.effective_timezone??"UTC"),timezoneSource:(item.timezoneSource??item.timezone_source??"fallback") as ContactProfile["timezoneSource"],inferredCountry:item.inferredCountry?String(item.inferredCountry):item.inferred_country?String(item.inferred_country):null,birthday,specialDates,emails,primaryEmail:item.primaryEmail?String(item.primaryEmail):emails.find(email=>email.isPrimary)?.email??null,methods,addresses,conversationId,livechatVisitor,hasConversation:Boolean(item.hasConversation??conversationId),lastMessageAt:item.lastMessageAt?String(item.lastMessageAt):item.last_message_at?String(item.last_message_at):null,blockedAt:item.blockedAt?String(item.blockedAt):item.whatsapp_blocked_at?String(item.whatsapp_blocked_at):null,updatedAt:String(item.updatedAt??item.updated_at??"")};}
 
@@ -5277,7 +5335,7 @@ function mapAdReferral(value:unknown):ChatMessage["adReferral"]{
 }
 function mapTag(item:Record<string,unknown>):TagItem{return{id:String(item.id),name:String(item.name??"标签"),color:String(item.color??"#DFF5E8")};}
 function mapMessageComment(item:Record<string,unknown>):MessageComment{return{id:String(item.id),body:String(item.body??""),userId:String(item.user_id??""),authorName:String(item.author_name??"团队成员"),createdAt:String(item.created_at??""),updatedAt:String(item.updated_at??""),score:Number(item.score??0),viewerVote:Number(item.viewer_vote??0)};}
-function mapMessage(item:Record<string,unknown>):ChatMessage {const kind=String(item.kind??"text"),mediaId=String(item.media_id??""),occurredAt=String(item.occurred_at),quotedId=String(item.quoted_message_id??""),quotedMediaId=String(item.quoted_media_id??""),quotedKind=String(item.quoted_kind??"text"),commandId=String(item.command_id??""),adReferral=mapAdReferral(item.ad_referral);const emailSubject=item.email_subject?String(item.email_subject):"";const email=emailSubject?{subject:emailSubject,htmlBody:item.email_html_body?String(item.email_html_body):undefined,from:String(item.email_from??""),to:Array.isArray(item.email_to)?item.email_to.map(String):[],attachments:Array.isArray(item.email_attachments)?item.email_attachments.map(value=>{const v=value as Record<string,unknown>;return{id:String(v.id),name:String(v.name??"附件"),mime:String(v.mime??""),size:v.size==null?undefined:formatBytes(Number(v.size)),inline:Boolean(v.inline),contentId:v.contentId?String(v.contentId):undefined}}):[],warning:item.email_attachment_warning?String(item.email_attachment_warning):undefined,jobId:item.email_job_id?String(item.email_job_id):undefined,quotedBody:item.email_quoted_body?String(item.email_quoted_body):undefined}:undefined;return{id:String(item.id),sourceConversationId:item.conversation_id?String(item.conversation_id):undefined,direction:item.direction as "in"|"out",kind,text:String(item.text_content??(mediaId?"":kindText(kind))),senderJid:item.sender_jid?String(item.sender_jid):undefined,senderName:item.sender_name?String(item.sender_name):undefined,platform:item.platform==="livechat"?"livechat" as const:item.platform==="messenger"?"messenger":"whatsapp",providerMessageId:item.provider_message_id?String(item.provider_message_id):undefined,pageId:item.page_id?String(item.page_id):undefined,email,quoted:quotedId?{id:quotedId,direction:item.quoted_direction as "in"|"out",kind:quotedKind,text:String(item.quoted_text_content??""),senderName:item.quoted_sender_name?String(item.quoted_sender_name):undefined,attachment:quotedMediaId?{id:quotedMediaId,name:String(item.quoted_file_name??kindText(quotedKind)),mime:String(item.quoted_mime_type??"")}:undefined}:undefined,adReferral,translationSourceText:item.translation_source_text?String(item.translation_source_text):undefined,translationTargetLanguage:item.translation_target_language?String(item.translation_target_language):undefined,failureMessage:item.failure_message?String(item.failure_message):undefined,queueDiagnostic:item.direction==="out"&&!email?{commandId,state:String(item.command_state??""),attempt:Number(item.command_attempt??0),lastError:String(item.command_last_error??""),availableAt:String(item.command_available_at??""),claimedAt:String(item.command_claimed_at??""),createdAt:String(item.command_created_at??""),accountStatus:String(item.account_status??""),agentStatus:String(item.agent_status??""),agentLastSeenAt:String(item.agent_last_seen_at??"")}:undefined,cachedTranslationText:item.cached_translation_text?String(item.cached_translation_text):undefined,cachedTranslationLanguage:item.cached_translation_language?String(item.cached_translation_language):undefined,cachedTranslationSourceLanguage:item.cached_translation_source_language?String(item.cached_translation_source_language):undefined,cachedTranscriptionText:item.cached_transcription_text?String(item.cached_transcription_text):undefined,time:formatMessageTime(occurredAt),occurredAt,status:item.status as ChatMessage["status"],attachment:item.file_name&&mediaId?{id:mediaId,name:String(item.file_name),mime:String(item.mime_type??"文件"),size:formatBytes(Number(item.byte_size??0))}:undefined,comments:Array.isArray(item.comments)?item.comments.map(value=>mapMessageComment(value as Record<string,unknown>)):[]};}
+function mapMessage(item:Record<string,unknown>):ChatMessage {const kind=String(item.kind??"text"),mediaId=String(item.media_id??""),occurredAt=String(item.occurred_at),quotedId=String(item.quoted_message_id??""),quotedMediaId=String(item.quoted_media_id??""),quotedKind=String(item.quoted_kind??"text"),commandId=String(item.command_id??""),adReferral=mapAdReferral(item.ad_referral);const emailSubject=item.email_subject==null?undefined:String(item.email_subject);const email=emailSubject!==undefined?{subject:emailSubject,htmlBody:item.email_html_body?String(item.email_html_body):undefined,from:String(item.email_from??""),to:Array.isArray(item.email_to)?item.email_to.map(String):[],attachments:Array.isArray(item.email_attachments)?item.email_attachments.map(value=>{const v=value as Record<string,unknown>;return{id:String(v.id),name:String(v.name??"附件"),mime:String(v.mime??""),size:v.size==null?undefined:formatBytes(Number(v.size)),inline:Boolean(v.inline),contentId:v.contentId?String(v.contentId):undefined}}):[],warning:item.email_attachment_warning?String(item.email_attachment_warning):undefined,jobId:item.email_job_id?String(item.email_job_id):undefined,quotedBody:item.email_quoted_body?String(item.email_quoted_body):undefined}:undefined;return{id:String(item.id),sourceConversationId:item.conversation_id?String(item.conversation_id):undefined,direction:item.direction as "in"|"out",kind,text:String(item.text_content??(mediaId?"":kindText(kind))),senderJid:item.sender_jid?String(item.sender_jid):undefined,senderName:item.sender_name?String(item.sender_name):undefined,platform:item.platform==="livechat"?"livechat" as const:item.platform==="messenger"?"messenger":"whatsapp",providerMessageId:item.provider_message_id?String(item.provider_message_id):undefined,pageId:item.page_id?String(item.page_id):undefined,email,quoted:quotedId?{id:quotedId,direction:item.quoted_direction as "in"|"out",kind:quotedKind,text:String(item.quoted_text_content??""),senderName:item.quoted_sender_name?String(item.quoted_sender_name):undefined,attachment:quotedMediaId?{id:quotedMediaId,name:String(item.quoted_file_name??kindText(quotedKind)),mime:String(item.quoted_mime_type??"")}:undefined}:undefined,adReferral,translationSourceText:item.translation_source_text?String(item.translation_source_text):undefined,translationTargetLanguage:item.translation_target_language?String(item.translation_target_language):undefined,failureMessage:item.failure_message?String(item.failure_message):undefined,queueDiagnostic:item.direction==="out"&&!email?{commandId,state:String(item.command_state??""),attempt:Number(item.command_attempt??0),lastError:String(item.command_last_error??""),availableAt:String(item.command_available_at??""),claimedAt:String(item.command_claimed_at??""),createdAt:String(item.command_created_at??""),accountStatus:String(item.account_status??""),agentStatus:String(item.agent_status??""),agentLastSeenAt:String(item.agent_last_seen_at??"")}:undefined,cachedTranslationText:item.cached_translation_text?String(item.cached_translation_text):undefined,cachedTranslationLanguage:item.cached_translation_language?String(item.cached_translation_language):undefined,cachedTranslationSourceLanguage:item.cached_translation_source_language?String(item.cached_translation_source_language):undefined,cachedTranscriptionText:item.cached_transcription_text?String(item.cached_transcription_text):undefined,time:formatMessageTime(occurredAt),occurredAt,status:item.status as ChatMessage["status"],attachment:item.file_name&&mediaId?{id:mediaId,name:String(item.file_name),mime:String(item.mime_type??"文件"),size:formatBytes(Number(item.byte_size??0))}:undefined,comments:Array.isArray(item.comments)?item.comments.map(value=>mapMessageComment(value as Record<string,unknown>)):[]};}
 
 function messageQuote(message:ChatMessage):NonNullable<ChatMessage["quoted"]>{return{id:message.id,direction:message.direction,kind:message.kind,text:message.text||message.attachment?.name||kindText(message.kind)};}
 function mapEmailActivity(item:Record<string,unknown>):EmailActivity{return{id:String(item.id),subject:String(item.subject),recipients:Array.isArray(item.recipients)?item.recipients.map(value=>{const recipient=value as Record<string,unknown>;return{email:String(recipient.email),label:String(recipient.label??"")};}):[],contentType:String(item.content_type),status:String(item.status) as EmailActivity["status"],attempt:Number(item.attempt??0),lastError:String(item.last_error??""),createdAt:String(item.created_at),senderName:String(item.sender_name??""),attachmentCount:Number(item.attachment_count??0)};}

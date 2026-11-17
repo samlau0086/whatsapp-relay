@@ -86,7 +86,7 @@ test("Microsoft mailbox migration and queue keep OAuth secrets outside queued me
   assert.match(email,/await microsoftMailboxToken\(cfg.oauthMailboxId\)/);
   assert.match(email,/type:"OAuth2"/);
   const routing=await readFile(new URL("../src/email-provider-routing.ts",import.meta.url),"utf8");
-  assert.match(routes,/mailboxEmailTransport\(row,selectedProvider\)/);
+  assert.match(routes,/mailboxEmailTransport\(mailboxRow,selectedProvider\)/);
   assert.match(routing,/config.oauthMailboxId=String\(row.id\)/);
   assert.match(routes,/\$9,\$10,\$10,\$11,'text'/);
 });

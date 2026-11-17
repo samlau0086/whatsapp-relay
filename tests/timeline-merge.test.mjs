@@ -23,6 +23,7 @@ function deliveryFixture(overrides={}){
   const sent=[],refreshed=[];let messages={sean:[]};
   const noop=()=>{};
   const context={exports:{},crypto:{randomUUID:()=>"client-id"},active:{id:"sean",accountId:"channel",platform:"livechat",accountStatus:"online"},conversations:[],effectiveActiveId:"sean",replyConversationId:"sam",apiToken:"token",selectedReply:null,
+    members:[{id:"sam",accountId:"channel",platform:"livechat"}],sendingConversation:{id:"sam",accountId:"channel",platform:"livechat"},
     setDraft:noop,setReplyTo:noop,setTranslationPreview:noop,setTranslationError:noop,setApiToken:noop,setToast:noop,setMediaOpen:noop,setMaterialLibraryOpen:noop,
     setMessages:update=>{messages=update(messages)},loadMessages:async(token,id)=>refreshed.push(id),messageQuote:message=>({id:message.id}),
     formatTime:()=>"12:00",formatBytes:()=>"1 KB",mediaKind:()=>"image",retryingMessageId:"",setRetryingMessageId:noop,
@@ -110,9 +111,9 @@ test("后台接收人信息经过账号权限检查且最新来信不受历史�
   const response=await context.exports.handler(request,{});
   assert.equal(response.recipients,members);
   const query=queries.find(item=>item.sql.includes('c.contact_id "contactId"'));
-  assert.match(query.sql,/relay_conversation_members\(\$1\)/);assert.match(query.sql,/c.account_id=\$2 AND a.platform='livechat'/);
+  assert.match(query.sql,/relay_conversation_members\(\$1\)/);assert.doesNotMatch(query.sql,/c.account_id=\$2 AND a.platform='livechat'/);
   assert.match(query.sql,/ORDER BY m.occurred_at DESC,m.id DESC LIMIT 1/);
-  assert.deepEqual(Array.from(query.params),["sean","channel"]);
+  assert.deepEqual(Array.from(query.params),["sean"]);
   queries.length=0;context.canAccessAccount=()=>false;
   let status;
   await context.exports.handler(request,{code:value=>{status=value;return{send:body=>body}}});
@@ -120,7 +121,7 @@ test("后台接收人信息经过账号权限检查且最新来信不受历史�
 });
 const javascript=ts.transpileModule(`const select=${callback};exports.select=select;`,{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;
 
-test("Shift 点击进入多选，普通点击继续选择，再次点击取消；不同 channel 和群会话不可选",()=>{
+test("Shift 点击进入多选，允许不同 channel，拒绝群会话",()=>{
   const visible=[{id:"a",accountId:"one"},{id:"b",accountId:"one"},{id:"c",accountId:"two"},{id:"g",accountId:"one",conversationType:"group"}];
   let selected=new Map(),active="",toast="";
   const select=(id,shift=false)=>{
@@ -130,9 +131,9 @@ test("Shift 点击进入多选，普通点击继续选择，再次点击取消�
   select("a");assert.equal(active,"a");assert.equal(selected.size,0);
   select("a",true);assert.deepEqual([...selected.keys()],["a"]);
   select("b");assert.deepEqual([...selected.keys()],["a","b"]);
-  select("c");assert.equal(selected.size,2);assert.match(toast,/同一个 channel/);
-  select("g");assert.equal(selected.size,2);assert.match(toast,/群会话/);
-  select("a");select("b");assert.equal(selected.size,0);
+  select("c");assert.equal(selected.size,3);
+  select("g");assert.equal(selected.size,3);assert.match(toast,/群会话/);
+  select("a");select("b");select("c");assert.equal(selected.size,0);
   select("c");assert.equal(active,"c");
 });
 

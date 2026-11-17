@@ -95,14 +95,14 @@ export function registerMailboxRoutes(app:FastifyInstance):void{
     if(!contact.rowCount||contact.rows[0].entity_type==="group"||!canAccessAccount(request.principal,contact.rows[0].account_id))return reply.code(404).send({error:"not_found"});
     const accountId=String(contact.rows[0].account_id),contactId=String(contact.rows[0].id);
     const [mailbox,recipient,media,selectedProvider]=await Promise.all([
-      pool.query("SELECT * FROM account_email_mailboxes WHERE id=$1 AND account_id=$2 AND enabled",[value.mailboxId,accountId]),
+      pool.query("SELECT * FROM account_email_mailboxes WHERE ($1::uuid IS NULL OR id=$1) AND account_id=$2 AND enabled ORDER BY is_primary DESC,address LIMIT 1",[value.mailboxId??null,accountId]),
       value.recipientEmailId?pool.query("SELECT email FROM contact_emails WHERE id=$1 AND contact_id=$2",[value.recipientEmailId,contactId]):pool.query("SELECT email FROM contact_emails WHERE contact_id=$1 AND lower(email)=lower($2) LIMIT 1",[contactId,value.recipientEmail]),
       pool.query("SELECT id,file_name,mime_type,byte_size FROM media WHERE id=ANY($1::uuid[]) AND account_id=$2 AND status='ready'",[value.attachmentIds,accountId]),
       resolveEmailProvider(pool,accountId),
     ]);
-    if(!mailbox.rowCount||!recipient.rowCount)return reply.code(409).send({error:"email_address_unavailable"});
+    if((value.mailboxId&&!mailbox.rowCount)||(!mailbox.rowCount&&!selectedProvider)||!recipient.rowCount)return reply.code(409).send({error:"email_address_unavailable"});
     if(media.rowCount!==new Set(value.attachmentIds).size||value.attachmentIds.reduce((sum,id)=>sum+Number(media.rows.find(row=>row.id===id)?.byte_size??0),0)>25*1024*1024||media.rows.some(row=>Number(row.byte_size)>20*1024*1024))return reply.code(413).send({error:"email_attachments_invalid"});
-    const row=mailbox.rows[0],{provider,config:providerConfig,secret:providerSecret}=mailboxEmailTransport(row,selectedProvider);
+    const mailboxRow=mailbox.rows[0],row=mailboxRow??{id:null}, {provider,config:providerConfig,secret:providerSecret}=mailboxRow?mailboxEmailTransport(mailboxRow,selectedProvider):{provider:selectedProvider!.provider,config:selectedProvider!.config,secret:selectedProvider!.secret_encrypted};
     const result=await transaction(async client=>{
       const existing=await client.query("SELECT e.id,e.conversation_id FROM email_messages e WHERE e.client_send_id=$1",[value.clientSendId]);if(existing.rowCount){const belongs=await client.query("SELECT 1 FROM conversations WHERE id=$1 AND contact_id=$2",[existing.rows[0].conversation_id,contactId]);if(!belongs.rowCount)throw Object.assign(new Error("idempotency_conflict"),{statusCode:409});return {emailId:existing.rows[0].id,conversationId:existing.rows[0].conversation_id,deduplicated:true};}
       const conversation=await client.query("INSERT INTO conversations(account_id,contact_id,status) VALUES($1,$2,'open') ON CONFLICT(account_id,contact_id) DO UPDATE SET status='open',closed_at=NULL RETURNING id",[accountId,contactId]);const conversationId=String(conversation.rows[0].id);

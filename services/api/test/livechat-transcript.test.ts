@@ -15,7 +15,7 @@ test("后台 transcript：授权、访客隔离、Provider 快照、去重及事
   const query=async(sql:string,values:unknown[]=[])=>{
     calls.push({sql,values});
     if(sql.includes("FROM conversations root"))return result(found?[{conversation_id:values[1],account_id:accountId,contact_id:values[1],recipient_email:recipient}]:[]);
-    if(sql.includes("FROM account_permissions"))return result(permission?[{}]:[]);
+    if(sql.includes("FROM account_permissions"))return result(permission?[{account_id:accountId}]:[]);
     if(sql.startsWith("SELECT id,status,conversation_id"))return result(existing?[existing]:[]);
     if(sql.includes("JOIN email_provider_instances"))return result(provider?[{provider:"resend",config:{fromEmail:"bound@example.com"},secret_encrypted:"bound-secret",explicit:true}]:[]);
     if(sql.includes("FROM account_email_providers"))return result(boundUnavailable?[{provider_id:emailId}]:[]);
@@ -29,10 +29,10 @@ test("后台 transcript：授权、访客隔离、Provider 快照、去重及事
   const send=(role="admin",payload:Record<string,unknown>={clientSendId:sendId,targetConversationId:targetId})=>app.inject({method:"POST",url:`/api/v1/conversations/${rootId}/transcript`,headers:{authorization:`Bearer ${signToken({sub:userId,role},config.JWT_SECRET,3600)}`},payload});
   assert.equal((await app.inject({method:"POST",url:`/api/v1/conversations/${rootId}/transcript`,payload:{}})).statusCode,401);
   assert.equal((await send("admin",{clientSendId:"bad"})).statusCode,400);
-  assert.equal(calls.length,0);
+  assert.ok(!calls.some(c=>/^(INSERT|UPDATE|DELETE)/.test(c.sql)));
   const response=await send();assert.equal(response.statusCode,202,response.body);assert.equal(response.json().queued,true);
   const context=calls.find(c=>c.sql.includes("FROM conversations root"))!;
-  assert.deepEqual(context.values,[rootId,targetId]);assert.match(context.sql,/cv.account_id=root.account_id/);assert.match(context.sql,/relay_conversation_members\(root.id\)/);assert.match(context.sql,/channel.enabled AND channel.archived_at IS NULL/);
+  assert.deepEqual(context.values,[rootId,targetId]);assert.doesNotMatch(context.sql,/cv.account_id=root.account_id/);assert.match(context.sql,/relay_conversation_members\(root.id\)/);assert.match(context.sql,/channel.enabled AND channel.archived_at IS NULL/);
   const history=calls.find(c=>c.sql.includes("FROM messages m"))!;
   assert.deepEqual(history.values,[targetId]);assert.match(history.sql,/m.conversation_id=\$1/);assert.match(history.sql,/NOT EXISTS\(SELECT 1 FROM message_email_details/);assert.match(history.sql,/m.status IN \('sent','delivered','read'\)/);assert.match(history.sql,/ORDER BY m.occurred_at,m.id/);
   const job=calls.find(c=>c.sql.startsWith("INSERT INTO email_messages"))!;
@@ -48,7 +48,7 @@ test("后台 transcript：授权、访客隔离、Provider 快照、去重及事
   assert.equal((await send()).json().error,"visitor_email_required");
   recipient="visitor@example.com";assert.equal((await send()).json().error,"email_provider_not_configured");
   boundUnavailable=true;assert.equal((await send()).json().error,"channel_email_provider_unavailable");boundUnavailable=false;provider=true;
-  permission=false;calls.length=0;assert.equal((await send("agent")).statusCode,403);assert.ok(!calls.some(c=>c.sql.startsWith("INSERT")));
+  permission=false;calls.length=0;assert.equal((await send("agent")).statusCode,404);assert.ok(!calls.some(c=>c.sql.startsWith("INSERT")));
   permission=true;assert.equal((await send("agent")).statusCode,202);
   calls.length=0;assert.equal((await send("admin",{clientSendId:sendId})).statusCode,202);
   assert.deepEqual(calls.find(c=>c.sql.includes("FROM conversations root"))?.values,[rootId,rootId]);

@@ -12,21 +12,27 @@ API 和 Worker 启动时自动执行 `103_email_provider_instances.sql`，将旧
 
 验证：在 `services/api` 运行 `npm test`、`npm run build`；根目录运行 `npm run lint`、`npm test`，与 CI 的工作台校验保持一致。浏览器回归运行 `node scripts/test-email-provider-settings-browser.mjs`，使用模拟 API，不向真实邮箱发信。可选临时数据库验证设置 `EMAIL_PROVIDER_PG_BIN` 为 PostgreSQL bin 目录后，在 `services/api` 运行 `node --import tsx --test test/email-provider-routing.postgres.test.ts`，不连接业务数据库。
 
-## 会话时间线合并
+## 会话模式与时间线合并
+
+后台单人会话提供 Email、WhatsApp、Live Chat 三种消息模式。各模式仅显示本类型的历史和后续消息，并使用对应发送区域；同一渠道产生的邮件不会混入 WhatsApp 或 Live Chat 模式。切换时文字草稿按会话及模式分别保留，引用与分页重置；正在上传、翻译或确认附件时需先完成或取消操作。
+
+Email 模式要求成员客户资料中存在邮箱，且其 channel 配置了可用的邮件发送 Provider（含工作区默认）或启用的会话邮箱。仅配置 Provider 也可发送邮件，无需虚构会话收信邮箱；收信仍需要实际会话邮箱及既有收信配置。显式绑定的 Provider 停用或不可用时仍拒绝入队。多个成员满足条件时可选择邮件接收人，邮件及附件使用对应成员的渠道。
+
+WhatsApp 模式要求已有原始／合并的 WhatsApp 成员，或客户资料中设置 WhatsApp 国际号码或用户名。只有资料、尚无 WhatsApp 成员时，首次切换会选择可发送的 WhatsApp 渠道，查找或创建对应会话并关联到当前时间线；存在多个渠道时需手动选择。Live Chat 模式要求已有原始／合并的 Live Chat 成员，不根据邮箱或电话号码创建网站访客身份。WhatsApp 的模板及回复窗口限制保持不变。
 
 在统一收件箱按住 Shift 点击单人会话即可进入多选，之后直接点击其他会话切换选中状态。选中至少两个会话后，点击列表上方的“合并”，选择主会话并确认；“取消”可退出多选。每次最多选择 50 个会话。
 
-仅允许同一个 channel（严格相同的渠道账号 `account_id`）内的单人会话合并，前后端都会校验；群会话不支持。合并后列表仅显示主会话，所有成员消息按原始消息时间排列，相同时间用消息 ID 稳定排序并分页。源会话后续收到的消息及未读数也会汇总到主会话。
+支持 Email、WhatsApp、Live Chat 单人会话跨类型、跨 channel 合并；同类型仅支持 Live Chat，不支持 Email 与 Email、WhatsApp 与 WhatsApp，也不支持群会话及 Messenger。服务端会展开已有成员后再次校验，避免通过连续合并绕过限制。合并后列表仅显示主会话，每种模式内按原始消息时间排列，相同时间用消息 ID 稳定排序并分页。源会话后续收到的消息及未读数也会汇总到主会话。非管理员需拥有全部成员 channel 的读取权限；权限收回后不能继续读取整组时间线及列表摘要。
 
-此功能建立独立的时间线关联，不删除、搬移或改写原消息，也不合并联系人身份、访客凭证和发送队列。客户资料及会话操作仍以主会话为准。LiveChat 人工回复默认选择最近来信的原访客（按原始时间及消息 ID 判断，不受历史分页影响），输入区“回复给”可手动切换合并成员；编辑文字、准备图片或确认翻译期间不会自动切换，手动选择在当前页面保持。引用消息时回复其原访客，文字、图片、附件和重试均使用对应原会话，消息气泡标明原访客或发送对象。带客户变量的快捷回复使用接收人的资料。其他渠道的人工新消息仍发送给主会话，不支持跨原会话引用。LiveChat 访客仍只能读取自身会话，不会获得其他访客的历史，也不会收到向其他成员发送的消息。
+此功能建立独立的时间线关联，不删除、搬移或改写原消息，也不合并联系人身份、访客凭证和发送队列。客户资料及会话操作仍以主会话为准。LiveChat 人工回复默认选择最近来信的原访客（按原始时间及消息 ID 判断，不受历史分页影响），输入区“回复给”可手动切换合并成员；编辑文字、准备图片或确认翻译期间不会自动切换，手动选择在当前页面保持。引用消息时回复其原成员，文字、邮件、图片、附件和重试均使用对应原会话及渠道，不因主会话类型不同而改发给主联系人。带客户变量的快捷回复使用接收人的资料。LiveChat 访客仍只能读取自身会话，不会获得其他访客的历史，也不会收到向其他成员发送的消息。
 
-LiveChat 合并回复修复需要同时更新工作台和 API，并重启 API；不需要重新合并，不新增数据库迁移，也不自动转发或补发此前已发给其他成员的消息。可运行 `node scripts/test-timeline-reply-browser.mjs` 检查桌面和手机上的接收人选择、编辑期间目标冻结及隔离收信（模拟 API，不连接业务数据库）；需要 Playwright 及 Chromium，截图位于 `outputs/timeline-merge/reply-*.png`。
+此次模式升级需要同步更新工作台、API 和 Worker 并重启。API／Worker 启动时自动执行 `106_conversation_origin_mode.sql`，回填并固定原始会话类型，之后编辑客户邮箱或 WhatsApp 资料不会改变合并规则；已有合并关系不需要重建，不自动转发或补发历史消息。可运行 `node scripts/test-conversation-modes-browser.mjs` 验证桌面和手机的模式隔离、发送函数、草稿恢复及切换条件；`node scripts/test-timeline-reply-browser.mjs` 检查接收人选择、编辑期间目标冻结及隔离收信。均使用模拟 API，需要 Playwright 及 Chromium，截图分别位于 `outputs/conversation-modes/` 和 `outputs/timeline-merge/`。
 
 合并后的 AI 接管模式和“回复时切换为”设置统一由主会话控制，成员的新入站消息按主会话模式触发 AI；自动回复及审批草稿仍发送给该消息所属的原联系人，不会发送给其他成员。AI 聊天上下文、记忆、任务归属和身份保持独立；主会话的 AI 面板汇总成员草稿与运行记录。人工发送消息或暂停 AI 会暂停整组的自动回复，并取消成员待执行的回复与跟进任务。已有合并关系无需重新合并，部署并重启 API 和 Worker 后生效，不自动补发历史消息。原有完全接管后的模式切换规则保持不变；需要持续完全接管时，将“回复时切换为”也设为完全接管。
 
 已有主会话可以继续参与时间线合并。已参与时间线合并的会话可以由管理员或主管删除；删除事务会先解除 `conversation_timeline_merges` 关联，再删除指定原会话及其可安全清理的媒体文件，不会连带删除其他成员的消息。删除主会话后，其余成员恢复独立展示；删除源会话后，主会话保留其他成员，摘要同步刷新。付款请求、待发送消息或邮件的删除保护保持不变，失败时关联清理与删除一并回滚。已参与时间线合并的会话仍不能转移账号或通过旧入口合并联系人身份；本功能暂不提供拆分入口。API 和 Worker 启动时自动执行 `102_conversation_timeline_merges.sql` 和 `104_allow_timeline_conversation_delete.sql`；删除接口修复需更新并重启 API，迁移规则变更需同步更新并重启 Worker，不应仅更新前端。新部署仍需按现有流程初始化完整数据库。
 
-验证：根目录 `npm test` 包含多选交互及查询边界回归测试；`services/api` 下运行 `npm test` 和 `npm run build`。可选浏览器检查 `node scripts/test-timeline-merge-browser.mjs` 需要本机可解析 Playwright 及 Chromium，使用模拟 API 验证桌面和手机布局，截图位于 `outputs/timeline-merge/`。可选真实数据库测试在 `services/api` 下设置 `TIMELINE_PG_BIN` 为 PostgreSQL 的 bin 目录，再运行 `node --import tsx --test test/timeline-merge.postgres.test.ts`；测试仅创建临时数据库实例并自动清理，不连接业务数据库。以上不能替代真实账号收发联调。
+验证：根目录 `npm test` 包含模式条件、消息过滤、多选交互及查询边界回归测试；`services/api` 下运行 `npm test` 和 `npm run build`，模式接口与 Provider-only 发信测试为 `test/conversation-modes.test.ts`。可选浏览器检查 `node scripts/test-timeline-merge-browser.mjs` 使用模拟 API 验证桌面和手机布局。可选真实数据库测试在 `services/api` 下设置 `TIMELINE_PG_BIN` 为 PostgreSQL 的 bin 目录，再运行 `node --import tsx --test test/timeline-merge.postgres.test.ts test/conversation-modes.postgres.test.ts`；仅创建临时实例并自动清理，验证合并、原始类型迁移幂等及模式过滤，不连接业务数据库。以上不能替代真实账号收发联调。
 
 ## LiveChat 网站渠道
 
@@ -71,7 +77,7 @@ LiveChat 与 WhatsApp、Messenger 共用账号权限、统一收件箱、客户�
 - 访客发送立即请求 API，不等待上述 4 秒轮询。工作台通过现有 WebSocket 接收入站会话更新，当前会话消息与列表摘要并行加载；连接不可用时每 5 秒兜底校准（正常连接下仍每 60 秒校准），连接建立或页面恢复可见时立即补齐，且不会重叠执行校准请求。此间隔不是实际送达时间保证；若仍有明显延迟，应检查 `/api/v1/events/ws` 的代理升级、API 请求耗时、数据库锁与连接池以及 Worker/AI Provider 状态，区分收件箱显示和 AI 回复耗时。
 - 访客可分别选择“结束会话”或“结束会话并发送记录”。前者直接关闭当前会话，不依赖邮件配置；后者确认后由服务端按时间生成安全的纯文本/HTML transcript（包含已接收及已发布的聊天消息、附件文件名，不附带文件或重复收入邮件记录），通过已启用的邮件 Provider 异步发送到客户当前主邮箱，并在邮件成功入队后关闭会话。窗口提示“已入队”而非“已送达”，实际结果以后台邮件发送状态为准；邮件 Provider 未配置或入队失败时不会关闭。普通消息发送不依赖邮件配置。有待重试消息或正在上传附件时不能结束会话。两个动作都使用按访客和模式隔离的幂等请求 ID，网络确认丢失或刷新后重试不会重复关会话或重复入队；结束状态及模式在当前浏览器保存，刷新仍可查看原记录。关闭后可通过“开始新会话”重新接入，客服保留原历史。
 - 后台 LiveChat 对话顶部的邮件图标可主动“发送会话记录”，弹窗显示访客和当前主邮箱，发送不会关闭或重新打开会话。管理员及拥有该渠道读取、发送权限的坐席可操作；无需配置会话收信邮箱。沿用渠道绑定的邮件 Provider，未绑定时使用工作区默认，绑定不可用时拒绝入队。合并时间线可在弹窗选择原访客，只导出该原会话的记录，不包含其他访客内容、内部备注或邮件气泡。成功入队后在时间线生成邮件记录，实际发送状态由现有 Worker 更新；入队不代表送达。网络失败可重试，浏览器允许 sessionStorage 时关闭弹窗或刷新后仍沿用原请求 ID，避免重复入队；清理存储、换标签页或换设备不保证复用该 ID。
-- 后台发送接口为 `POST /api/v1/conversations/:id/transcript`，请求包含 UUID `clientSendId` 和可选的 `targetConversationId`（必须属于当前同渠道时间线），仅接受已登录用户。复用现有邮件表和 Worker，不新增数据库迁移；部署需更新工作台和 API 并重启 API。API 回归在 `services/api` 运行 `node --import tsx --test test/livechat-transcript.test.ts test/livechat.test.ts test/email-provider-routing.test.ts`；浏览器回归运行 `node scripts/test-livechat-transcript-browser.mjs`，使用模拟 API，不向真实邮箱发信。
+- 后台发送接口为 `POST /api/v1/conversations/:id/transcript`，请求包含 UUID `clientSendId` 和可选的 `targetConversationId`（必须为当前时间线中可访问的 Live Chat 成员，可以属于其他 channel），仅接受已登录用户。复用现有邮件表和 Worker，记录及发件配置均来自指定原访客；部署需更新工作台和 API 并重启 API。API 回归在 `services/api` 运行 `node --import tsx --test test/livechat-transcript.test.ts test/livechat.test.ts test/email-provider-routing.test.ts`；浏览器回归运行 `node scripts/test-livechat-transcript-browser.mjs`，使用模拟 API，不向真实邮箱发信。
 - 坐席和 AI 回复都进入持久出站队列，由 API Worker 发布到访客消息流；“已发送”表示已发布，不代表访客已读。访客发新消息会重新打开已关闭会话；LiveChat 没有 WhatsApp/Messenger 的 24 小时回复窗口限制。
 - 双向附件限定 PNG、JPEG、WebP、PDF 和纯文本，单文件不超过 10 MB。访客上传还检查文件签名；文件读取要求有效访客凭证及当前会话中的消息引用，不提供公开对象存储地址。未发送附件仍占对象存储空间，运维需监控并安排孤立对象清理；`delete_after` 标记本身不会删除对象。
 - 停用渠道立即阻止公开接入和新消息，重新启用后原凭证仍受有效期约束。归档需要二次确认，归档后不能通过设置界面恢复；保留原账号、历史客户、会话和审计记录，但停止嵌入访问及发送，已有待发消息由 Worker 标为失败。

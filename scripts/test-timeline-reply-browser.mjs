@@ -28,6 +28,7 @@ function App(){
  const [draft,setDraft]=useState(''),[replyRecipients,setReplyRecipients]=useState({}),[messages,setMessages]=useState({sean:[]}),[streams,setStreams]=useState({sean:[],sam:[]});
  const manualReplyRecipients=useRef(new Set()),effectiveActiveId='sean',active={id:'sean',accountId:'channel',platform:'livechat',accountStatus:'online'},apiToken='test';
  const recommendedRecipient=defaultTimelineRecipient(members,effectiveActiveId),replyConversationId=replyRecipients.sean??recommendedRecipient;
+ const conversationMode='livechat',sendingConversation=active;
  const pendingComposerImages=[],selectedReply=null,translationPreview=null,translatingDraft=false,composerImageBusy=false,quickReplyResolving=false,mediaOpen=false,materialLibraryOpen=false,productCardsOpen=false;
  const noop=()=>{},setReplyTo=noop,setTranslationPreview=noop,setTranslationError=noop,setApiToken=noop,setToast=noop,loadMessages=async()=>{},formatTime=()=>'',messageQuote=message=>message;
  const authorizedFetch=async(path,token,init)=>{const body=JSON.parse(init.body);window.lastDelivery=body;setStreams(all=>({...all,[body.conversationId]:[...all[body.conversationId],body.text]}));return{token,response:{ok:true}}};

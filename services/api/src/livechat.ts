@@ -69,7 +69,7 @@ export async function registerLivechatRoutes(app:FastifyInstance):Promise<void>{
         await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[`livechat-end:${parsed.data.clientSendId}`]);
         const context=await client.query(`SELECT cv.id conversation_id,cv.account_id,cv.contact_id,
           (SELECT email FROM contact_emails WHERE contact_id=cv.contact_id AND is_primary LIMIT 1) recipient_email
-          FROM conversations root JOIN conversations cv ON cv.account_id=root.account_id
+          FROM conversations root JOIN conversations cv ON cv.id=$2
           JOIN livechat_channels channel ON channel.account_id=cv.account_id
           WHERE root.id=$1 AND cv.id=$2 AND cv.id IN (SELECT relay_conversation_members(root.id))
           AND channel.enabled AND channel.archived_at IS NULL FOR UPDATE OF cv`,[rootId,targetId]);

@@ -52,7 +52,7 @@ try{
     const first=page.locator('.conversation').nth(0),second=page.locator('.conversation').nth(1),other=page.locator('.conversation').nth(2);
     await first.click({modifiers:["Shift"]});assert.equal(await first.getAttribute("aria-pressed"),"true");
     const merge=page.getByRole("button",{name:"合并",exact:true});assert.equal(await merge.isDisabled(),true);
-    assert.equal(await other.getAttribute("aria-disabled"),"true");await other.click({force:true});assert.equal(await merge.isDisabled(),true);
+    assert.notEqual(await other.getAttribute("aria-disabled"),"true");await other.click();assert.equal(await merge.isEnabled(),true);await other.click();assert.equal(await merge.isDisabled(),true);
     await second.click();assert.equal(await merge.isEnabled(),true);
     await page.screenshot({path:resolve(output,`selection-${viewport.width}.png`)});
     await page.getByRole("button",{name:"取消",exact:true}).click();assert.equal(await merge.count(),0);
@@ -66,5 +66,5 @@ try{
     const request=await page.evaluate(()=>window.mergeRequest);assert.equal(request.path,"/api/v1/conversations/merge-timelines");assert.deepEqual(request.body,{conversationIds:["0","1"],targetConversationId:"1"});
     assert.equal(await page.getByLabel("操作结果").textContent(),"合并成功");assert.deepEqual(errors,[]);await page.close();
   }
-  console.log("桌面和移动端：Shift 多选、跨 channel 限制、取消、主会话选择、合并请求和布局检查全部通过。");
+  console.log("桌面和移动端：Shift 多选、跨 channel 选择、取消、主会话选择、合并请求和布局检查全部通过。");
 }finally{await browser.close();await new Promise(done=>server.close(done));}

@@ -5,11 +5,12 @@ import {Mail,RefreshCw,Send,X} from "lucide-react";
 import {authorizedFetch} from "./auth-session";
 import type {TimelineRecipient} from "./timeline-recipient";
 
-export function LivechatTranscriptDialog({conversationId,accountId,members,initialRecipientId,token,onToken,onClose,onSent}:{conversationId:string;accountId:string;members:TimelineRecipient[];initialRecipientId:string;token:string;onToken:(token:string)=>void;onClose:()=>void;onSent:(text:string)=>void}){
+export function LivechatTranscriptDialog({conversationId,accountId:fallbackAccountId,members,initialRecipientId,token,onToken,onClose,onSent}:{conversationId:string;accountId:string;members:TimelineRecipient[];initialRecipientId:string;token:string;onToken:(token:string)=>void;onClose:()=>void;onSent:(text:string)=>void}){
   const [targetId,setTargetId]=useState(()=>members.some(item=>item.id===initialRecipientId)?initialRecipientId:members[0]?.id??"");
   const [recipient,setRecipient]=useState({key:"",email:"",error:""}),[busy,setBusy]=useState(false),[error,setError]=useState("");
   const dialogRef=useRef<HTMLElement>(null),sending=useRef(false),requestIds=useRef(new Map<string,string>());
   const member=members.find(item=>item.id===targetId),contactId=member?.contactId??"";
+  const accountId=member?.accountId??fallbackAccountId;
   const recipientKey=`${accountId}:${contactId}`,loading=recipient.key!==recipientKey;
   useEffect(()=>{
     let cancelled=false;

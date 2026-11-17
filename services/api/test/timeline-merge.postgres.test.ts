@@ -27,7 +27,7 @@ test("PostgreSQL：合并保留全部消息、稳定分页、连续合并、入�
     run("initdb",["-D",directory,"-A","trust","-U","postgres","--encoding=UTF8","--no-locale"]);
     run("pg_ctl",["-D",directory,"-l",join(directory,"postgres.log"),"-o",`-h 127.0.0.1 -p ${port}`,"-w","start"]);
     started=true;await client.connect();
-    await client.query(`CREATE TABLE users(id uuid PRIMARY KEY);
+    await client.query(`CREATE TABLE users(id uuid PRIMARY KEY,role text DEFAULT 'admin');
       CREATE TABLE contacts(id uuid PRIMARY KEY,entity_type text,provider_user_id text);
       CREATE TABLE channel_accounts(id uuid PRIMARY KEY,agent_id uuid,transport text);
       CREATE TABLE account_agent_settings(account_id uuid PRIMARY KEY,enabled boolean);
@@ -35,7 +35,7 @@ test("PostgreSQL：合并保留全部消息、稳定分页、连续合并、入�
       CREATE TABLE agent_jobs(conversation_id uuid,source_message_id uuid,kind text,available_at timestamptz,state text DEFAULT 'pending',completed_at timestamptz,last_error text);
       CREATE TABLE ai_drafts(id uuid PRIMARY KEY,conversation_id uuid,status text DEFAULT 'pending',resolved_at timestamptz,resolved_by uuid);
       CREATE TABLE proactive_outreach_jobs(conversation_id uuid,state text,payload jsonb,completed_at timestamptz,last_error text,updated_at timestamptz);
-      CREATE TABLE conversations(id uuid PRIMARY KEY,account_id uuid,contact_id uuid,unread_count int DEFAULT 0,status text DEFAULT 'open',closed_at timestamptz,
+      CREATE TABLE conversations(id uuid PRIMARY KEY,account_id uuid,contact_id uuid,origin_mode text DEFAULT 'livechat',unread_count int DEFAULT 0,status text DEFAULT 'open',closed_at timestamptz,
         last_message_id uuid,last_message_text text,last_message_kind text,last_message_direction text,last_message_status text,last_message_at timestamptz,
         last_message_sender_provider_user_id text,last_message_sender_name text,summary_updated_at timestamptz);
       CREATE TABLE messages(id uuid PRIMARY KEY,conversation_id uuid REFERENCES conversations(id) ON DELETE CASCADE,media_id uuid,text_content text,kind text DEFAULT 'text',direction text DEFAULT 'in',status text DEFAULT 'sent',occurred_at timestamptz,sender_provider_user_id text,sender_display_name text);
@@ -52,7 +52,7 @@ test("PostgreSQL：合并保留全部消息、稳定分页、连续合并、入�
     await client.query(migration);await client.query(deleteMigration);
     await client.query("CREATE TRIGGER conversations_change_notify AFTER INSERT OR UPDATE OR DELETE ON conversations FOR EACH ROW EXECUTE FUNCTION relay_notify_conversation_row()");
     const account=randomUUID(),actor=randomUUID(),ids=[randomUUID(),randomUUID(),randomUUID()];
-    await client.query("INSERT INTO users VALUES($1)",[actor]);
+    await client.query("INSERT INTO users(id) VALUES($1)",[actor]);
     await client.query("INSERT INTO channel_accounts VALUES($1,NULL,'livechat')",[account]);
     await client.query("INSERT INTO account_agent_settings VALUES($1,true)",[account]);
     for(const id of ids){await client.query("INSERT INTO contacts VALUES($1::uuid,'person',$2)",[id,id]);await client.query("INSERT INTO conversations(id,account_id,contact_id) VALUES($1,$2,$1)",[id,account]);}
