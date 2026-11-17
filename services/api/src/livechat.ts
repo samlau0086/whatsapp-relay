@@ -72,6 +72,8 @@ export async function registerLivechatRoutes(app:FastifyInstance):Promise<void>{
           FROM conversations root JOIN conversations cv ON cv.id=$2
           JOIN livechat_channels channel ON channel.account_id=cv.account_id
           WHERE root.id=$1 AND cv.id=$2 AND cv.id IN (SELECT relay_conversation_members(root.id))
+          AND cv.origin_mode='livechat'
+          AND EXISTS(SELECT 1 FROM livechat_visitors v WHERE v.account_id=cv.account_id AND v.contact_id=cv.contact_id)
           AND channel.enabled AND channel.archived_at IS NULL FOR UPDATE OF cv`,[rootId,targetId]);
         const row=context.rows[0];
         if(!row||!canAccessAccount(principal,row.account_id))throw fail(404,"conversation_not_found");

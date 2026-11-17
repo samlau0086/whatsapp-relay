@@ -27,3 +27,13 @@ test("同一渠道产生的 Email 不出现在 WhatsApp 或 Live Chat 模式中"
   assert.deepEqual(messages.filter(item=>matchesMessageMode(item,"whatsapp")).map(item=>item.id),["wa"]);
   assert.deepEqual(messages.filter(item=>matchesMessageMode(item,"livechat")).map(item=>item.id),["lc"]);
 });
+
+test("Live Chat 映射的邮件仅启用 Email，合并真实访客后才可回复 Live Chat",()=>{
+  const email={id:"mail",originMode:"email",platform:"livechat",primaryEmail:"a@example.com",hasEmailProvider:true};
+  const member={...email,mode:initialConversationMode(email)};
+  assert.equal(member.mode,"email");
+  assert.deepEqual(modeMembers([member],"livechat"),[]);
+  assert.deepEqual(modeMembers([member],"email").map(item=>item.id),["mail"]);
+  const visitor={id:"visitor",mode:"livechat",platform:"livechat"};
+  assert.deepEqual(modeMembers([member,visitor],"livechat").map(item=>item.id),["visitor"]);
+});

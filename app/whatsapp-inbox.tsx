@@ -500,11 +500,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     }
     return data;
   },[apiToken]);
-  const visitorPresence=useLivechatPresence([...conversations.filter(item=>item.platform==="livechat").map(item=>item.contactId),...(selectedConversationRef.current?.platform==="livechat"?[selectedConversationRef.current.contactId]:[])],view==="inbox"&&Boolean(apiToken),requestPresence);
-  const visible=useMemo(()=>conversations.map(item=>item.platform==="livechat"?{...item,visitorPresence:visitorPresence[item.contactId]}:item),[conversations,visitorPresence]);
+  const visitorPresence=useLivechatPresence([...conversations.filter(item=>initialConversationMode(item)==="livechat").map(item=>item.contactId),...(selectedConversationRef.current&&initialConversationMode(selectedConversationRef.current)==="livechat"?[selectedConversationRef.current.contactId]:[])],view==="inbox"&&Boolean(apiToken),requestPresence);
+  const visible=useMemo(()=>conversations.map(item=>initialConversationMode(item)==="livechat"?{...item,visitorPresence:visitorPresence[item.contactId]}:item),[conversations,visitorPresence]);
   const effectiveActiveId=activeId||visible[0]?.id||"";
   const selectedActive=visible.find(item=>item.id===effectiveActiveId)??(selectedConversationRef.current?.id===effectiveActiveId?selectedConversationRef.current:null);
-  const active=useMemo(()=>selectedActive?.platform==="livechat"?{...selectedActive,visitorPresence:visitorPresence[selectedActive.contactId]}:selectedActive,[selectedActive,visitorPresence]);
+  const active=useMemo(()=>selectedActive&&initialConversationMode(selectedActive)==="livechat"?{...selectedActive,visitorPresence:visitorPresence[selectedActive.contactId]}:selectedActive,[selectedActive,visitorPresence]);
+  const activeOriginMode=active?initialConversationMode(active):null;
   const members=modeMembersById[effectiveActiveId]??[];
   const availableModeMembers=modeMembers(members,conversationMode);
   const sender=availableModeMembers.find(item=>item.id===replyRecipients[`${effectiveActiveId}:${conversationMode}`])??availableModeMembers[0];
@@ -523,7 +524,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   ]),[currentMessages]);
   const failedMessageCount=active?Math.max(failedMessageCounts[active.id]??0,currentMessages.filter(message=>message.direction==="out"&&(message.status==="failed"||message.status==="uncertain")).length):0;
   const selectedReply=replyTo?.conversationId===effectiveActiveId?replyTo.message:null;
-  const livechatRecipients=(timelineRecipients[effectiveActiveId]??[]).filter(item=>members.find(member=>member.id===item.id)?.platform==="livechat").map(item=>({...item,accountId:members.find(member=>member.id===item.id)?.accountId}));
+  const livechatRecipients=(timelineRecipients[effectiveActiveId]??[]).filter(item=>members.find(member=>member.id===item.id)?.mode==="livechat").map(item=>({...item,accountId:members.find(member=>member.id===item.id)?.accountId}));
   const recommendedRecipient=defaultTimelineRecipient(livechatRecipients,effectiveActiveId);
   const replyConversationId=conversationMode==="livechat"
     ?selectedReply?.sourceConversationId??(livechatRecipients.some(item=>item.id===replyRecipients[effectiveActiveId])?replyRecipients[effectiveActiveId]:recommendedRecipient)
@@ -2092,13 +2093,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                     <span>
                       <b>{active.name}</b>
                       <small>
-                        <i
+                        {activeOriginMode!=="email"&&<i
                           className={`status-dot ${visitorStatus(active) === "online" ? "online" : ""}`}
-                        />
-                        <span className={`channel-badge ${active.platform}`}>{active.platform==="messenger"?<Facebook size={10}/>:active.conversationType==="group"?<Users size={10}/>:<MessageCircle size={10}/>} {active.conversationType==="group"?"WhatsApp 群聊":active.platform==="livechat"?"LiveChat":active.platform==="messenger"?"Facebook":"WhatsApp"}</span>{" · "}
-                        {(active.conversationType==="group"||active.platform==="livechat")?active.account:<button type="button" className="conversation-account-transfer" onClick={()=>setTransferConversation(active)} title="转移到其他账号">{active.account}<ArrowRightLeft size={11}/></button>}{active.conversationType==="group"?` · ${active.groupParticipantCount} 位成员`:""} ·{" "}
-                        {active.platform==="livechat"?"网站访客":active.platform==="messenger"?"Page":active.transport === "cloud" ? "Cloud API" : "Web"} ·{" "}
-                        {active.platform==="livechat"?visitorStatusLabel(active):statusText(active.accountStatus)}
+                        />}
+                        <span className={`channel-badge ${activeOriginMode}`}>{activeOriginMode==="email"?<Mail size={10}/>:activeOriginMode==="messenger"?<Facebook size={10}/>:active.conversationType==="group"?<Users size={10}/>:<MessageCircle size={10}/>} {active.conversationType==="group"?"WhatsApp 群聊":activeOriginMode==="email"?"Email":activeOriginMode==="livechat"?"LiveChat":activeOriginMode==="messenger"?"Facebook":"WhatsApp"}</span>{" · "}
+                        {(active.conversationType==="group"||active.platform==="livechat"||activeOriginMode==="email")?active.account:<button type="button" className="conversation-account-transfer" onClick={()=>setTransferConversation(active)} title="转移到其他账号">{active.account}<ArrowRightLeft size={11}/></button>}{active.conversationType==="group"?` · ${active.groupParticipantCount} 位成员`:""}
+                        {activeOriginMode!=="email"&&<> · {activeOriginMode==="livechat"?"网站访客":activeOriginMode==="messenger"?"Page":active.transport === "cloud" ? "Cloud API" : "Web"} · {activeOriginMode==="livechat"?visitorStatusLabel(active):statusText(active.accountStatus)}</>}
                       </small>
                     </span>
                   </div>
@@ -3788,13 +3788,13 @@ function CrmDetailsPanel({
             <button type="submit" disabled={aliasBusy} aria-label="保存别名"><Check size={14}/></button>
             <button type="button" disabled={aliasBusy} onClick={()=>{setAliasDraft(active.alias);setAliasEditing(false);}} aria-label="取消编辑"><X size={14}/></button>
           </form>:<div className="contact-name"><h2>{active.name}</h2><button className="contact-alias-edit" onClick={beginAliasEdit} aria-label="编辑联系人别名" title="编辑别名"><Pencil size={13}/></button></div>}
-          <p>{active.platform==="livechat"?"网站访客":active.platform==="messenger"?`Messenger 用户 · ${active.providerUserId}`:(active.phone || "号码待同步")}</p>
-          <span className="contact-online">
+          <p>{initialConversationMode(active)==="email"?"邮件联系人":initialConversationMode(active)==="livechat"?"网站访客":active.platform==="messenger"?`Messenger 用户 · ${active.providerUserId}`:(active.phone || "号码待同步")}</p>
+          {initialConversationMode(active)!=="email"&&<span className="contact-online">
             <i
               className={`status-dot ${visitorStatus(active) === "online" ? "online" : ""}`}
             />
             {active.platform==="livechat"?visitorStatusLabel(active):statusText(active.accountStatus)}
-          </span>
+          </span>}
           {details?.contact&&<ContactLocalTime contact={details.contact}/>}
           {details?.contact?.preferredLanguage&&<div className="contact-preferred-language"><LanguageFlagIcon code={details.contact.preferredLanguage} countryCode={details.contact.country} title={details.contact.country?countryLabel(details.contact.country):undefined}/><b>{languageShortCode(details.contact.preferredLanguage)}</b></div>}
           {details?.contact?.whatsappUsername&&<p className="contact-method-summary">WhatsApp 用户名：@{details.contact.whatsappUsername}</p>}{details?.contact?.primaryEmail&&<p className="contact-primary-email"><Mail size={12}/>{details.contact.primaryEmail}</p>}
@@ -3802,7 +3802,7 @@ function CrmDetailsPanel({
           {details?.contact&&<ContactSocialLinks methods={details.contact.methods}/>}
           <div className="contact-profile-actions"><button className="contact-profile-edit" onClick={()=>setContactEditing(true)}><Pencil size={13}/>编辑资料</button><button className="contact-profile-edit" onClick={()=>setAddressEditing(true)}><MapPin size={13}/>收货地址{details?.contact?.addresses.length?` (${details.contact.addresses.length})`:""}</button>{active.platform==="whatsapp"&&active.transport==="web"&&<button className={`contact-profile-edit contact-block-button ${(blockOverride??Boolean(details?.contact?.blockedAt??active.blocked))?"blocked":""}`} disabled={busy} onClick={()=>void toggleContactBlock()}><Ban size={13}/>{(blockOverride??Boolean(details?.contact?.blockedAt??active.blocked))?"解除拉黑":"拉黑"}</button>}</div>
         </div>
-        {active.platform==="livechat"&&<LivechatVisitorDetails visitor={details?.contact?.livechatVisitor} companyName={details?.contact?.companyName} presence={active.visitorPresence}/>}
+        {initialConversationMode(active)==="livechat"&&<LivechatVisitorDetails visitor={details?.contact?.livechatVisitor} companyName={details?.contact?.companyName} presence={active.visitorPresence}/>}
         <AgentMemoryPanel conversationId={active.id} token={token} onToken={onToken} onToast={onToast}/>
         {loading ? (
           <div className="crm-loading">

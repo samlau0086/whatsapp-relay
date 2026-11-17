@@ -33,6 +33,8 @@ test("后台 transcript：授权、访客隔离、Provider 快照、去重及事
   const response=await send();assert.equal(response.statusCode,202,response.body);assert.equal(response.json().queued,true);
   const context=calls.find(c=>c.sql.includes("FROM conversations root"))!;
   assert.deepEqual(context.values,[rootId,targetId]);assert.doesNotMatch(context.sql,/cv.account_id=root.account_id/);assert.match(context.sql,/relay_conversation_members\(root.id\)/);assert.match(context.sql,/channel.enabled AND channel.archived_at IS NULL/);
+  assert.match(context.sql,/cv.origin_mode='livechat'/);
+  assert.match(context.sql,/EXISTS\(SELECT 1 FROM livechat_visitors v WHERE v.account_id=cv.account_id AND v.contact_id=cv.contact_id\)/);
   const history=calls.find(c=>c.sql.includes("FROM messages m"))!;
   assert.deepEqual(history.values,[targetId]);assert.match(history.sql,/m.conversation_id=\$1/);assert.match(history.sql,/NOT EXISTS\(SELECT 1 FROM message_email_details/);assert.match(history.sql,/m.status IN \('sent','delivered','read'\)/);assert.match(history.sql,/ORDER BY m.occurred_at,m.id/);
   const job=calls.find(c=>c.sql.startsWith("INSERT INTO email_messages"))!;

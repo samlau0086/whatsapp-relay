@@ -2,11 +2,13 @@
 
 import {useEffect,useState} from "react";
 import type {Conversation} from "./conversation-types";
+import {initialConversationMode} from "./conversation-modes";
 
 export type LivechatPresence={status:"online"|"away"|"offline";pageUrl:string|null};
 const emptyPresence:Record<string,LivechatPresence>={};
 export function visitorStatus(item:Conversation):string{
-  return item.platform==="livechat"?item.visitorPresence?.status??"unknown":item.accountStatus;
+  const mode=initialConversationMode(item);
+  return mode==="email"?"unknown":mode==="livechat"?item.visitorPresence?.status??"unknown":item.accountStatus;
 }
 export function visitorStatusLabel(item:Conversation):string{
   return ({online:"在线",away:"离开",offline:"离线",unknown:"状态未知"} as Record<string,string>)[visitorStatus(item)]??"状态未知";

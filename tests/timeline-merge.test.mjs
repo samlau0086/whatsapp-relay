@@ -141,9 +141,13 @@ test("列表行传递鼠标和键盘的 Shift 状态并展示选择状态",async
   const row=await readFile(new URL("../app/conversation-list-row.tsx",import.meta.url),"utf8");
   const output={};
   const presence={};
+  const modes={};
+  const modeSource=await readFile(new URL("../app/conversation-modes.ts",import.meta.url),"utf8");
+  runInNewContext(ts.transpileModule(modeSource,{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:modes,require});
+  const modeRequire=name=>name==="./conversation-modes"?modes:require(name);
   const presenceSource=await readFile(new URL("../app/livechat-presence.ts",import.meta.url),"utf8");
-  runInNewContext(ts.transpileModule(presenceSource,{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:presence,require});
-  runInNewContext(ts.transpileModule(row,{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,{exports:output,require:name=>name==="./message-time"?{formatMessageTime:()=>"",formatMessageTimeTitle:()=>""}:name==="./livechat-presence"?presence:require(name)});
+  runInNewContext(ts.transpileModule(presenceSource,{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:presence,require:modeRequire});
+  runInNewContext(ts.transpileModule(row,{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,{exports:output,require:name=>name==="./message-time"?{formatMessageTime:()=>"",formatMessageTimeTitle:()=>""}:name==="./livechat-presence"?presence:modeRequire(name)});
   const events=[];
   const element=output.ConversationListRow({item:{name:"客户",tags:[],conversationType:"direct",platform:"livechat",unread:0},multiSelect:true,selected:true,selectionDisabled:false,onSelect:shift=>events.push(shift)});
   element.props.onClick({shiftKey:true});element.props.onClick({shiftKey:false});
@@ -153,6 +157,11 @@ test("列表行传递鼠标和键盘的 Shift 状态并展示选择状态",async
   assert.equal(presence.visitorStatus({platform:"livechat",accountStatus:"online",visitorPresence:{status:"offline"}}),"offline");
   assert.equal(presence.visitorStatus({platform:"livechat",accountStatus:"offline",visitorPresence:{status:"online"}}),"online");
   assert.equal(presence.visitorStatus({platform:"whatsapp",accountStatus:"online"}),"online");
+  assert.equal(presence.visitorStatus({originMode:"email",platform:"livechat",accountStatus:"online",visitorPresence:{status:"online"}}),"unknown");
+  const emailRow=output.ConversationListRow({item:{name:"邮件客户",originMode:"email",platform:"livechat",account:"网站",tags:[],unread:0},onSelect(){}});
+  const {renderToStaticMarkup}=await import("react-dom/server");
+  const emailHtml=renderToStaticMarkup(emailRow);
+  assert.match(emailHtml,/Email · 网站/);assert.doesNotMatch(emailHtml,/class="presence|LiveChat ·/);
 });
 
 test("时间线查询按原始时间及 id 分页，公开访客接口不扩大读取范围",async()=>{

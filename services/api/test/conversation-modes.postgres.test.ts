@@ -45,6 +45,28 @@ test("PostgreSQL：原始类型迁移幂等、资料变更不改类型、模式�
     const query=`SELECT msg.id FROM messages msg JOIN channel_accounts account ON account.id=msg.account_id LEFT JOIN message_email_details email_detail ON email_detail.message_id=msg.id WHERE ${filter!.replaceAll("$9","$1")} ORDER BY msg.id`;
     const selected=async(mode:string|null)=>(await client.query(query,[mode])).rows.map(row=>row.id).sort();
     assert.deepEqual(await selected("email"),ids.slice(2).sort());assert.deepEqual(await selected("whatsapp"),[ids[0]]);assert.deepEqual(await selected("livechat"),[ids[1]]);assert.equal((await selected(null)).length,4);
+    await client.query("CREATE TABLE livechat_visitors(account_id uuid,contact_id uuid)");
+    const pureEmail=randomUUID(),visitor=randomUUID(),empty=randomUUID();
+    const visitorContact=randomUUID();
+    await client.query("INSERT INTO contacts(id) VALUES($1)",[visitorContact]);
+    await client.query("INSERT INTO livechat_visitors VALUES($1,$2)",[lc,visitorContact]);
+    await client.query("INSERT INTO conversations VALUES($1,$2,$3,'livechat'),($4,$2,$5,'livechat'),($6,$2,$3,'livechat')",[pureEmail,lc,contact,visitor,visitorContact,empty]);
+    const emailMessages=[randomUUID(),randomUUID()];
+    await client.query("INSERT INTO messages VALUES($1,$2,$3),($4,$5,$3)",[emailMessages[0],pureEmail,lc,emailMessages[1],visitor]);
+    await client.query("INSERT INTO message_email_details VALUES($1),($2)",emailMessages);
+    const fix=await readFile(new URL("../../../infra/postgres/migrations/109_livechat_email_identity.sql",import.meta.url),"utf8");
+    await client.query(fix);await client.query(fix);
+    const mode=async(id:string)=>(await client.query("SELECT origin_mode FROM conversations WHERE id=$1",[id])).rows[0].origin_mode;
+    assert.equal(await mode(pureEmail),"email");
+    assert.equal(await mode(visitor),"livechat","真实访客即使只有邮件也不能降级");
+    assert.equal(await mode(chat),"livechat","保留混合消息历史");
+    assert.equal(await mode(empty),"livechat","不改写无邮件证据的旧会话");
+    const newEmail=randomUUID(),newVisitor=randomUUID();
+    await client.query("INSERT INTO conversations VALUES($1,$2,$3,NULL),($4,$2,$5,NULL)",[newEmail,lc,contact,newVisitor,visitorContact]);
+    assert.equal(await mode(newEmail),"email");assert.equal(await mode(newVisitor),"livechat");
+    await client.query(migration);await client.query(fix);
+    assert.equal(await mode(pureEmail),"email","完整启动迁移重复执行不覆盖修正");
+    assert.equal(await mode(whatsapp),"whatsapp");
   }finally{
     await client.end().catch(()=>{});if(started)run("pg_ctl",["-D",directory,"-m","fast","-w","stop"]);
     const target=resolve(directory),prefix=resolve(tmpdir())+(process.platform==="win32"?"\\":"/")+"relay-modes-test-";
