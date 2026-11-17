@@ -936,6 +936,36 @@ CORS_ORIGIN=https://wsdesk.geekmt.com
 
 不要把 Client Secret 提交到仓库、放入 `NEXT_PUBLIC_*` 前端变量、粘贴到聊天或写入 README。已有授权的刷新令牌使用 `DATA_ENCRYPTION_KEY` 加密，配置 Google 凭据时不要更换该加密密钥。
 
+#### 给指定域名的来信自动加 Gmail 标签
+
+以下示例假设 Cloudflare 已将 `support@example.com`、`sales@example.com` 的来信转发到 `yourname@gmail.com`，希望统一添加 `RelayDesk-example` 标签。请替换成自己的真实地址；这里匹配的是客户**发给你的域名邮箱**的邮件，不是客户的发件域名。
+
+1. 在电脑浏览器登录实际接收转发邮件的 Gmail（本例为 `yourname@gmail.com`）。先从另一个邮箱向 `support@example.com` 发一封测试邮件，确认 Cloudflare 转发正常；如需整个域名的任意地址都接收，还必须在 Cloudflare 配置相应地址或 Catch-all，Gmail 过滤器不会创建 Cloudflare 转发规则。
+2. 在 Gmail 搜索框按所需范围输入以下一种查询，先搜索并检查结果。多个地址时优先显式列举地址，便于核查：
+
+   | 收件范围 | Gmail 搜索条件 |
+   | --- | --- |
+   | 指定一个收件地址 | `to:support@example.com` |
+   | 指定多个收件地址，包含抄送 | `{to:support@example.com to:sales@example.com cc:support@example.com cc:sales@example.com}` |
+   | 按收件域名初步筛选，包含抄送 | `{to:(@example.com) cc:(@example.com)}` |
+
+   整域示例是 Gmail 搜索条件，不是正则表达式或严格的邮箱域名边界校验；必须用实际邮件检查有无漏选或误选，要求精确范围时使用明确的地址列表。不要写 `from:example.com`（那是筛选发件人），也不要把 `to:*@example.com` 当作可靠的通配符规则。不要仅按 `to:yourname@gmail.com` 筛选，否则可能把个人 Gmail 来信也归入业务标签。
+
+3. 点击搜索框右侧的 **显示搜索选项**；可将完整查询粘贴到 **包含字词**，其他条件留空，点击 **创建过滤器**。也可通过 **设置 → 查看所有设置 → 过滤器和屏蔽的地址 → 创建新的过滤器** 进入。
+4. 勾选 **应用标签**，选择 **新建标签** 并填写 `RelayDesk-example`（或选择已有标签）。如果希望搜索结果中的已有邮件也出现在该标签下，必须同时勾选底部的 **同时将此过滤器应用于匹配的会话**，再点击 **创建过滤器**；如果只希望给今后收到的新邮件加标签，则不勾选该项。是否勾选“跳过收件箱（归档）”按个人习惯决定；本系统按所选标签而不是收件箱筛选。不要勾选“删除”，也不必为了业务标签关闭 Gmail 的垃圾邮件防护。
+5. 在 RelayDesk 完成下方 Google 授权，并从邮箱列表选择同名的 `RelayDesk-example` 标签。界面显示标签名称，服务端保存 Gmail 返回的标签 ID；只创建 Gmail 过滤器而未在 RelayDesk 选择标签，不会启用该标签的收件同步。
+6. 在选好标签**之后**，从其他邮箱发送一封新的测试邮件到域名地址，确认 Gmail 自动显示目标标签，再在 RelayDesk 点击“立即同步”检查会话。另向个人 Gmail 地址或不在规则中的地址发送对照邮件，确认没有误加标签。首次连接或切换标签不回填历史邮件，因此不要仅用选择标签之前的旧测试邮件判断同步是否正常。
+
+**密送或转发后匹配不到时：** `to:` / `cc:` 基于邮件的收件人字段，并非 SMTP 信封收件人的完整记录；密送等场景可能没有原始域名地址。打开该封邮件右上角 **更多 → 显示原始邮件** 检查实际投递信息，可先搜索 `deliveredto:support@example.com` 验证是否匹配；只有实际匹配时才将它加入过滤器（例如 `{to:support@example.com deliveredto:support@example.com}`）。不要假设 Cloudflare 转发后一定保留该地址供 `deliveredto:` 搜索，也不要直接用最终 Gmail 地址替代而扩大范围。若原始地址未保留，应先调整可区分业务邮件的转发方案，再建立规则。
+
+**搜索有结果，但点击标签没有相同的旧邮件：** 搜索匹配不等于邮件已被加标签。创建过滤器时若没有勾选 **同时将此过滤器应用于匹配的会话**，已有邮件不会因此自动补上标签。可进入 Gmail **设置 → 查看所有设置 → 过滤器和屏蔽的地址**，找到对应规则，点击 **修改 → 继续**，确认勾选 **应用标签** 并选择目标标签，再勾选 **同时将此过滤器应用于匹配的会话**，点击 **更新过滤器**。完成后重新打开标签检查已有邮件。
+
+给 Gmail 历史邮件补标签与 RelayDesk 首次连接时的历史回填是两回事；不要把补标签当作历史导入方式。若只想整理 Gmail 中的旧邮件，建议先补标签，再在 RelayDesk 连接邮箱或选择收件标签，之后使用新发的测试邮件验证同步。
+
+修改规则可进入 Gmail **设置 → 查看所有设置 → 过滤器和屏蔽的地址 → 修改**。多个域名需要分流到不同渠道时，建议使用各自独立的标签并分别验证；当前一个会话邮箱配置只选择一个收件标签，不会根据 Gmail 标签自动创建或切换渠道。
+
+官方参考：[创建 Gmail 过滤器](https://support.google.com/mail/answer/6579?hl=zh-Hans)、[Gmail 搜索运算符](https://support.google.com/mail/answer/7190?hl=zh-Hans)。
+
 #### 授权与常见问题
 
 1. 完成部署后，在 **系统设置 → 邮件发送 → 会话邮箱配置 → 新增邮箱** 选择 **Google OAuth (Gmail API 收件)**，填写转发目标 Gmail 地址及 WhatsApp 或 Live Chat 渠道，然后登录对应 Google 账号授权。
