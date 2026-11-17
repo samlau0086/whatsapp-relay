@@ -7,7 +7,7 @@ export type OutreachEmailDestination={mailbox_id:string;from_email:string;to_ema
 export async function outreachEmailDestination(client:PoolClient,accountId:string,contactId:string):Promise<OutreachEmailDestination|null>{
   const result=await client.query(`SELECT mb.id mailbox_id,mb.address from_email,ce.email to_email
     FROM account_email_mailboxes mb CROSS JOIN contact_emails ce
-    WHERE mb.account_id=$1 AND mb.is_primary AND mb.enabled AND ce.contact_id=$2 AND ce.is_primary
+    WHERE mb.account_id=$1 AND mb.is_primary AND mb.enabled AND mb.send_enabled AND ce.contact_id=$2 AND ce.is_primary
     ORDER BY ce.position LIMIT 1`,[accountId,contactId]);
   return result.rows[0]??null;
 }
@@ -23,7 +23,7 @@ export async function queueProactiveEmail(client:PoolClient,input:{jobId:string;
   if(!value?.proactive_email_allowed||value.proactive_suppressed_at||!value.enabled||!value.email_enabled||value.status!=="open"||value.mode==="human_paused"||value.provider_user_id||value.phone_e164||value.whatsapp_username)throw new Error("email_outreach_not_permitted");
   const destination=await outreachEmailDestination(client,accountId,contactId);
   if(!destination)throw new Error("primary_email_unavailable");
-  const mailbox=await client.query("SELECT * FROM account_email_mailboxes WHERE id=$1 AND enabled AND is_primary",[destination.mailbox_id]);
+  const mailbox=await client.query("SELECT * FROM account_email_mailboxes WHERE id=$1 AND enabled AND send_enabled AND is_primary",[destination.mailbox_id]);
   if(!mailbox.rowCount)throw new Error("primary_mailbox_unavailable");
   const row=mailbox.rows[0];
   const selected=await resolveEmailProvider(client,accountId);

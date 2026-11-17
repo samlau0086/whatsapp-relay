@@ -14,7 +14,7 @@ import {cancelProactiveForConversation,isProactiveOptOut,suppressProactiveForCon
 import { sanitizeEmailDisplayHtml, normalizeEmailCid } from "./email-display.js";
 
 export type MailboxSettings={
-  accountId:string;address:string;displayName:string;isPrimary:boolean;enabled:boolean;
+  accountId:string;address:string;displayName:string;isPrimary:boolean;enabled:boolean;receiveEnabled?:boolean;sendEnabled?:boolean;
   imapHost:string;imapPort:number;imapUsername:string;imapPassword:string;
   smtpHost:string;smtpPort:number;smtpTls:"tls"|"starttls";smtpUsername:string;smtpPassword:string;
 };
@@ -62,14 +62,20 @@ function imapClient(settings:{imap_host:string;imap_port:number;imap_username:st
 }
 
 export async function verifyMailbox(settings:MailboxSettings,accessToken?:string):Promise<{uidValidity:string;lastUid:number}>{
-  const client=imapClient({imap_host:settings.imapHost,imap_port:settings.imapPort,imap_username:settings.imapUsername,imap_secret_encrypted:""},settings.imapPassword,accessToken);
-  try{
-    await client.connect();
-    const box=await client.mailboxOpen("INBOX",{readOnly:true});
+  let uidValidity="",lastUid=0;
+  if(settings.receiveEnabled??settings.enabled){
+    const client=imapClient({imap_host:settings.imapHost,imap_port:settings.imapPort,imap_username:settings.imapUsername,imap_secret_encrypted:""},settings.imapPassword,accessToken);
+    try{
+      await client.connect();
+      const box=await client.mailboxOpen("INBOX",{readOnly:true});
+      uidValidity=String(box.uidValidity);lastUid=Math.max(0,Number(box.uidNext)-1);
+    }finally{await client.logout().catch(()=>{});}
+  }
+  if(settings.sendEnabled??settings.enabled){
     const transport=nodemailer.createTransport({host:settings.smtpHost,port:settings.smtpPort,secure:settings.smtpTls==="tls",requireTLS:settings.smtpTls==="starttls",auth:accessToken?{type:"OAuth2",user:settings.smtpUsername,accessToken}:{user:settings.smtpUsername,pass:settings.smtpPassword},connectionTimeout:15000,greetingTimeout:15000,disableFileAccess:true,disableUrlAccess:true});
     await transport.verify();
-    return {uidValidity:String(box.uidValidity),lastUid:Math.max(0,Number(box.uidNext)-1)};
-  }finally{await client.logout().catch(()=>{});}
+  }
+  return {uidValidity,lastUid};
 }
 
 async function storeAttachment(accountId:string,filename:string,mime:string,content:Buffer){
@@ -162,7 +168,7 @@ export async function restoreArchivedEmailHtml(client:ImapFlow,row:Pick<MailboxR
 }
 
 export async function syncOneMailbox(mailboxId?:string):Promise<boolean>{
-  const claimed=await pool.query(`UPDATE account_email_mailboxes SET claimed_until=now()+interval '2 minutes',next_sync_at=now()+interval '30 seconds' WHERE id=(SELECT id FROM account_email_mailboxes WHERE ($1::uuid IS NULL OR id=$1) AND enabled AND (next_sync_at<=now() OR $1::uuid IS NOT NULL) AND (claimed_until IS NULL OR claimed_until<now()) ORDER BY next_sync_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`,[mailboxId??null]);
+  const claimed=await pool.query(`UPDATE account_email_mailboxes SET claimed_until=now()+interval '2 minutes',next_sync_at=now()+interval '30 seconds' WHERE id=(SELECT id FROM account_email_mailboxes WHERE ($1::uuid IS NULL OR id=$1) AND enabled AND receive_enabled AND (next_sync_at<=now() OR $1::uuid IS NOT NULL) AND (claimed_until IS NULL OR claimed_until<now()) ORDER BY next_sync_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`,[mailboxId??null]);
   if(!claimed.rowCount)return false;
   const row=claimed.rows[0] as MailboxRow;
   if(row.auth_type==="google")return syncGoogleMailbox(row);

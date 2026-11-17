@@ -15,7 +15,7 @@ export function registerConversationModeRoutes(app:FastifyInstance){
       COALESCE(NULLIF(co.alias,''),co.display_name,co.phone_e164,'客户') display_name,a.display_name account_name,a.platform,a.transport,a.status account_status,
       (SELECT email FROM contact_emails WHERE contact_id=co.id ORDER BY is_primary DESC,id LIMIT 1) primary_email,
       ${conversationModeSql} conversation_mode,
-      EXISTS(SELECT 1 FROM account_email_mailboxes WHERE account_id=c.account_id AND enabled) has_mailbox,
+      EXISTS(SELECT 1 FROM account_email_mailboxes WHERE account_id=c.account_id AND enabled AND send_enabled) has_mailbox,
       EXISTS(SELECT 1 FROM email_provider_instances p WHERE p.enabled AND p.secret_encrypted IS NOT NULL AND
         (p.id=(SELECT provider_id FROM account_email_providers WHERE account_id=c.account_id) OR
         (p.is_default AND NOT EXISTS(SELECT 1 FROM account_email_providers WHERE account_id=c.account_id)))) has_email_provider

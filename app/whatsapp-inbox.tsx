@@ -12,7 +12,7 @@ import {
   Users, Wifi, WifiOff, X, ClipboardList, ExternalLink, Bot, Brain, BookOpen, MapPin, Copy, CreditCard, LayoutGrid, List, Eye, EyeOff, ReceiptText, Reply, Zap, Tag,
   Facebook, Instagram, Linkedin, Building2, ArrowRightLeft, Merge, PanelLeftClose, PanelLeftOpen, ChevronLeft, ChevronRight, MessageSquare, ThumbsDown, ThumbsUp, Bold, Italic, ListOrdered, Link2,
 } from "lucide-react";
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { Fragment, forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { getCountry as getCountryTimezones } from "countries-and-timezones";
 import { countries as COUNTRIES } from "countries-list";
@@ -542,7 +542,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     emailAttachmentsRef.current=[];setEmailAttachments([]);setEmailBodyHtml("");setEmailSubject("");
   },[effectiveActiveId]);
   const currentEmailActivities=useMemo(()=>active?emailActivities[active.id]??[]:[],[active,emailActivities]);
-  useEffect(()=>{if(!apiToken||!sendingConversation?.accountId)return;setEmailMailboxes([]);setEmailMailboxId("");setEmailProviderSender(null);let cancelled=false;void authorizedFetch("/api/v1/mailboxes",apiToken).then(async result=>{if(result.token!==apiToken)setApiToken(result.token);if(!result.response.ok)return;const body=await result.response.json().catch(()=>({})) as {data?:Array<Record<string,unknown>>;senders?:Array<{account_id:string;name:string;address:string}>};if(cancelled)return;const sender=body.senders?.find(item=>item.account_id===sendingConversation.accountId)??null;setEmailProviderSender(sender);const items=(body.data??[]).filter(item=>String(item.account_id)===sendingConversation.accountId).map(item=>({id:String(item.id),account_id:String(item.account_id),address:String(item.address),display_name:String(item.display_name??""),is_primary:Boolean(item.is_primary),enabled:Boolean(item.enabled)}));setEmailMailboxes(items);setEmailMailboxId(current=>sender?"":current&&items.some(item=>item.id===current)?current:(items.find(item=>item.is_primary&&item.enabled)?.id??items.find(item=>item.enabled)?.id??""));}).catch(()=>{});return()=>{cancelled=true};},[apiToken,sendingConversation?.accountId]);
+  useEffect(()=>{if(!apiToken||!sendingConversation?.accountId)return;setEmailMailboxes([]);setEmailMailboxId("");setEmailProviderSender(null);let cancelled=false;void authorizedFetch("/api/v1/mailboxes",apiToken).then(async result=>{if(result.token!==apiToken)setApiToken(result.token);if(!result.response.ok)return;const body=await result.response.json().catch(()=>({})) as {data?:Array<Record<string,unknown>>;senders?:Array<{account_id:string;name:string;address:string}>};if(cancelled)return;const sender=body.senders?.find(item=>item.account_id===sendingConversation.accountId)??null;setEmailProviderSender(sender);const items=(body.data??[]).filter(item=>String(item.account_id)===sendingConversation.accountId).map(item=>({id:String(item.id),account_id:String(item.account_id),address:String(item.address),display_name:String(item.display_name??""),is_primary:Boolean(item.is_primary),enabled:Boolean(item.send_enabled??item.enabled)}));setEmailMailboxes(items);setEmailMailboxId(current=>sender?"":current&&items.some(item=>item.id===current)?current:(items.find(item=>item.is_primary&&item.enabled)?.id??items.find(item=>item.enabled)?.id??""));}).catch(()=>{});return()=>{cancelled=true};},[apiToken,sendingConversation?.accountId]);
   const latestMessageId=currentMessages.at(-1)?.id??"";
   useEffect(()=>{setTranscriptConversationId("");},[effectiveActiveId]);
   const selectConversation=useCallback((conversationId:string,shiftKey=false)=>{
@@ -6090,7 +6090,7 @@ function MailboxSettingsPanel({token,onToken,onToast,accounts}:{token:string;onT
   const [gmailLabelErrors,setGmailLabelErrors]=useState<Record<string,string>>({});
   const googleMailboxIds=JSON.stringify(items.filter(item=>item.auth_type==="google").map(item=>String(item.id)).sort());
   const mailboxChannels=accounts.filter(account=>account.platform==="whatsapp"||account.platform==="livechat");
-  const blank=()=>({accountId:mailboxChannels[0]?.id??"",address:"",displayName:"",isPrimary:false,enabled:true,authType:"password",imapHost:"",imapPort:993,imapUsername:"",imapPassword:"",smtpHost:"",smtpPort:465,smtpTls:"tls",smtpUsername:"",smtpPassword:""});
+  const blank=()=>({accountId:mailboxChannels[0]?.id??"",address:"",displayName:"",isPrimary:false,enabled:true,receiveEnabled:true,sendEnabled:true,authType:"password",imapHost:"",imapPort:993,imapUsername:"",imapPassword:"",smtpHost:"",smtpPort:465,smtpTls:"tls",smtpUsername:"",smtpPassword:""});
   const load=useCallback(async()=>{const result=await authorizedFetch("/api/v1/mailboxes",token);if(result.token!==token)onToken(result.token);const body=await result.response.json().catch(()=>({})) as {data?:Array<Record<string,unknown>>};if(result.response.ok)setItems(body.data??[]);},[token,onToken]);
   useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer);},[load]);
   async function save(){if(!editing)return;setBusy(true);setError("");const id=editing.id?String(editing.id):"";const result=await authorizedFetch(id?`/api/v1/admin/mailboxes/${id}`:"/api/v1/admin/mailboxes",token,{method:id?"PUT":"POST",headers:{"content-type":"application/json"},body:JSON.stringify(editing)});if(result.token!==token)onToken(result.token);if(!result.response.ok){const body=await result.response.json().catch(()=>({}));setError(String(body.message??body.error??"保存失败"));}else{setEditing(null);onToast("邮箱配置已保存");await load();}setBusy(false);}
@@ -6103,7 +6103,7 @@ function MailboxSettingsPanel({token,onToken,onToast,accounts}:{token:string;onT
       if(result.token!==token)onToken(result.token);
       const body=await result.response.json().catch(()=>({})) as {status?:string;error?:string;message?:string};
       if(result.response.ok)onToast(body.status==="busy"?"该邮箱正在同步，请稍后查看":"邮箱同步已完成");
-      else onToast(body.error==="mailbox_disabled"?"请先启用该邮箱":body.message??"邮箱同步失败");
+      else onToast(body.error==="mailbox_disabled"?"请先启用收件":body.message??"邮箱同步失败");
       await load();
     }catch{onToast("邮箱同步失败，请稍后重试");}
     finally{setSyncingId("");}
@@ -6147,39 +6147,13 @@ function MailboxSettingsPanel({token,onToken,onToast,accounts}:{token:string;onT
   async function saveMicrosoftPreferences(){
     if(!editing)return;setBusy(true);setError("");
     try{
-      const result=await authorizedFetch(`/api/v1/admin/mailboxes/${String(editing.id)}/preferences`,token,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({displayName:String(editing.displayName??""),isPrimary:Boolean(editing.isPrimary),enabled:editing.enabled!==false})});
+      const result=await authorizedFetch(`/api/v1/admin/mailboxes/${String(editing.id)}/preferences`,token,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({displayName:String(editing.displayName??""),isPrimary:Boolean(editing.isPrimary),receiveEnabled:editing.receiveEnabled!==false,sendEnabled:editing.sendEnabled!==false})});
       if(result.token!==token)onToken(result.token);
       if(!result.response.ok)throw new Error("保存邮箱设置失败");
       setEditing(null);await load();onToast("邮箱配置已保存");
     }catch(error){setError(error instanceof Error?error.message:"保存失败");}finally{setBusy(false);}
   }
-  return (
-    <section className="provider-form agent-card mailbox-settings-panel">
-      <header>
-        <div>
-          <h2>会话邮箱配置</h2>
-          <p>邮箱归属于 WhatsApp 或 Live Chat 渠道；收件使用 IMAP，发件使用渠道指定或工作区默认 Provider，未配置时使用邮箱 SMTP。</p>
-        </div>
-        <button className="primary-action" onClick={() => setEditing(blank())}><Plus size={14}/>新增邮箱</button>
-      </header>
-      {items.map(item => (
-        <article key={String(item.id)} className="api-key-list">
-          <div>
-            <b>{String(item.address)}</b>
-            <small>{accounts.find(account => account.id === String(item.account_id))?.name ?? String(item.account_id)} · {Boolean(item.is_primary) ? "主邮箱" : "备用邮箱"} · {Boolean(item.enabled) ? "已启用" : "已停用"}</small>
-            {item.last_error && <small className="login-error">{String(item.last_error)}</small>}
-          </div>
-          <span>
-            <button className="secondary-action" onClick={() => void syncNow(String(item.id))} disabled={Boolean(syncingId)||!item.enabled}>{syncingId===String(item.id)?"正在同步…":"立即同步"}</button><button className="secondary-action" onClick={() => void test(String(item.id))}>测试连接</button>
-            {item.auth_type==="microsoft"&&<><span>Microsoft OAuth</span><button className="secondary-action" disabled={busy} onClick={()=>void authorizeMicrosoft(String(item.account_id),String(item.address))}>重新授权</button></>}
-            {item.auth_type==="google"&&<><span>Google API</span><select aria-label={`${String(item.address)} Gmail 收件标签`} value={String(item.gmail_label_id??"")} disabled={busy} onFocus={()=>void loadGoogleLabels(String(item.id))} onChange={event=>void chooseGoogleLabel(String(item.id),event.target.value)}><option value="" disabled>选择收件标签</option>{Boolean(item.gmail_label_id)&&!(gmailLabels[String(item.id)]??[]).some(label=>label.id===item.gmail_label_id)&&<option value={String(item.gmail_label_id)}>已保存标签（{String(item.gmail_label_id)}）</option>}{(gmailLabels[String(item.id)]??[]).map(label=><option key={label.id} value={label.id}>{label.name}</option>)}</select>{gmailLabelErrors[String(item.id)]&&<small role="alert" className="login-error">{gmailLabelErrors[String(item.id)]}</small>}<button className="secondary-action" disabled={busy} onClick={()=>void authorizeGoogle(String(item.account_id),String(item.address))}>重新授权</button></>}
-            <button className="secondary-action" onClick={() => setEditing({...item, accountId: String(item.account_id),displayName:String(item.display_name??""),isPrimary:Boolean(item.is_primary),smtpUsername:String(item.smtp_username??""), authType:item.auth_type==="microsoft"?"microsoft":item.auth_type==="google"?"google":"password",imapHost: String(item.imap_host ?? ""), imapPort: Number(item.imap_port ?? 993), imapUsername: String(item.imap_username ?? ""), smtpHost: String(item.smtp_host ?? ""), smtpPort: Number(item.smtp_port ?? 465), smtpTls: String(item.smtp_tls ?? "tls")})}>编辑</button>
-            <button className="danger-text" onClick={() => void remove(String(item.id))}><Trash2 size={13}/>删除</button>
-          </span>
-        </article>
-      ))}
-      {!items.length && <p className="empty-note">尚未配置会话邮箱</p>}
-      {editing && (
+  const editor=editing?(
         <div className="provider-form mailbox-editor">
           {!editing.id&&<label>验证方式<select value={String(editing.authType??"password")} onChange={event=>setEditing({...editing,authType:event.target.value})}><option value="password">邮箱密码 / 应用密码</option><option value="microsoft">Microsoft OAuth (Outlook / Live / Hotmail)</option><option value="google">Google OAuth (Gmail API 收件)</option></select></label>}
           <div className="provider-form-grid">
@@ -6207,12 +6181,43 @@ function MailboxSettingsPanel({token,onToken,onToast,accounts}:{token:string;onT
           {editing.id&&(editing.authType==="microsoft"||editing.authType==="google")&&<label>发件人名称<input value={String(editing.displayName??"")} onChange={event=>setEditing({...editing,displayName:event.target.value})}/></label>}
           {(editing.authType!=="microsoft"&&editing.authType!=="google"||editing.id)&&<div className="mailbox-editor-options">
             <label><input type="checkbox" checked={Boolean(editing.isPrimary)} onChange={e => setEditing({...editing, isPrimary: e.target.checked})}/>设为主发件邮箱</label>
-            <label><input type="checkbox" checked={editing.enabled !== false} onChange={e => setEditing({...editing, enabled: e.target.checked})}/>启用收发</label>
+            <label><input type="checkbox" checked={editing.receiveEnabled !== false} onChange={e => setEditing({...editing, receiveEnabled: e.target.checked})}/>启用收件</label>
+            <label><input type="checkbox" checked={editing.sendEnabled !== false} onChange={e => setEditing({...editing, sendEnabled: e.target.checked})}/>启用发件</label>
           </div>}
           {error && <span className="login-error">{error}</span>}
           <footer><button className="secondary-action" onClick={() => setEditing(null)}>取消</button><button className="primary-action" disabled={busy || !String(editing.address ?? "").trim()||!editing.accountId} onClick={() => editing.authType==="microsoft"?(editing.id?void saveMicrosoftPreferences():void authorizeMicrosoft(String(editing.accountId),String(editing.address))):editing.authType==="google"?(editing.id?void saveMicrosoftPreferences():void authorizeGoogle(String(editing.accountId),String(editing.address))):void save()}>{busy ? "处理中…" : editing.authType==="microsoft"&&!editing.id?"登录 Microsoft 并授权":editing.authType==="google"&&!editing.id?"登录 Google 并授权":"保存邮箱配置"}</button></footer>
         </div>
-      )}
+  ):null;
+  return (
+    <section className="provider-form agent-card mailbox-settings-panel">
+      <header>
+        <div>
+          <h2>会话邮箱配置</h2>
+          <p>邮箱归属于 WhatsApp 或 Live Chat 渠道；收件使用 IMAP，发件使用渠道指定或工作区默认 Provider，未配置时使用邮箱 SMTP。</p>
+        </div>
+        <button className="primary-action" onClick={() => setEditing(blank())}><Plus size={14}/>新增邮箱</button>
+      </header>
+      {items.map(item => (
+        <Fragment key={String(item.id)}>
+        <article className="api-key-list">
+          <div>
+            <b>{String(item.address)}</b>
+            <small>{accounts.find(account => account.id === String(item.account_id))?.name ?? String(item.account_id)} · {Boolean(item.is_primary) ? "主邮箱" : "备用邮箱"} · 收件{Boolean(item.receive_enabled??item.enabled) ? "已启用" : "已停用"} · 发件{Boolean(item.send_enabled??item.enabled) ? "已启用" : "已停用"}</small>
+            {item.last_error && <small className="login-error">{String(item.last_error)}</small>}
+          </div>
+          <span>
+            <button className="secondary-action" onClick={() => void syncNow(String(item.id))} disabled={Boolean(syncingId)||!Boolean(item.receive_enabled??item.enabled)}>{syncingId===String(item.id)?"正在同步…":"立即同步"}</button><button className="secondary-action" onClick={() => void test(String(item.id))}>测试连接</button>
+            {item.auth_type==="microsoft"&&<><span>Microsoft OAuth</span><button className="secondary-action" disabled={busy} onClick={()=>void authorizeMicrosoft(String(item.account_id),String(item.address))}>重新授权</button></>}
+            {item.auth_type==="google"&&<><span>Google API</span><select aria-label={`${String(item.address)} Gmail 收件标签`} value={String(item.gmail_label_id??"")} disabled={busy} onFocus={()=>void loadGoogleLabels(String(item.id))} onChange={event=>void chooseGoogleLabel(String(item.id),event.target.value)}><option value="" disabled>选择收件标签</option>{Boolean(item.gmail_label_id)&&!(gmailLabels[String(item.id)]??[]).some(label=>label.id===item.gmail_label_id)&&<option value={String(item.gmail_label_id)}>已保存标签（{String(item.gmail_label_id)}）</option>}{(gmailLabels[String(item.id)]??[]).map(label=><option key={label.id} value={label.id}>{label.name}</option>)}</select>{gmailLabelErrors[String(item.id)]&&<small role="alert" className="login-error">{gmailLabelErrors[String(item.id)]}</small>}<button className="secondary-action" disabled={busy} onClick={()=>void authorizeGoogle(String(item.account_id),String(item.address))}>重新授权</button></>}
+            <button className="secondary-action" onClick={() => setEditing({...item, accountId: String(item.account_id),displayName:String(item.display_name??""),isPrimary:Boolean(item.is_primary),receiveEnabled:Boolean(item.receive_enabled??item.enabled),sendEnabled:Boolean(item.send_enabled??item.enabled),smtpUsername:String(item.smtp_username??""), authType:item.auth_type==="microsoft"?"microsoft":item.auth_type==="google"?"google":"password",imapHost: String(item.imap_host ?? ""), imapPort: Number(item.imap_port ?? 993), imapUsername: String(item.imap_username ?? ""), smtpHost: String(item.smtp_host ?? ""), smtpPort: Number(item.smtp_port ?? 465), smtpTls: String(item.smtp_tls ?? "tls")})}>编辑</button>
+            <button className="danger-text" onClick={() => void remove(String(item.id))}><Trash2 size={13}/>删除</button>
+          </span>
+        </article>
+        {editing?.id===item.id&&editor}
+        </Fragment>
+      ))}
+      {!items.length && <p className="empty-note">尚未配置会话邮箱</p>}
+      {editing&&!editing.id&&editor}
     </section>
   );
 }

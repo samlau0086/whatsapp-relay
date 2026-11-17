@@ -19,7 +19,7 @@ export function registerMailboxRoutes(app:FastifyInstance):void{
   registerGoogleMailboxOAuth(app);
   app.get("/api/v1/mailboxes",{preHandler:authenticate},async(request,reply)=>{
     if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
-    const result=await pool.query("SELECT id,account_id,address,display_name,is_primary,enabled,auth_type,gmail_label_id,imap_host,imap_port,imap_username,smtp_host,smtp_port,smtp_tls,smtp_username,last_error,last_synced_at,created_at FROM account_email_mailboxes WHERE ($1::uuid[] IS NULL OR account_id=ANY($1)) ORDER BY account_id,is_primary DESC,address",[request.principal.accountIds]);
+    const result=await pool.query("SELECT id,account_id,address,display_name,is_primary,enabled,receive_enabled,send_enabled,auth_type,gmail_label_id,imap_host,imap_port,imap_username,smtp_host,smtp_port,smtp_tls,smtp_username,last_error,last_synced_at,created_at FROM account_email_mailboxes WHERE ($1::uuid[] IS NULL OR account_id=ANY($1)) ORDER BY account_id,is_primary DESC,address",[request.principal.accountIds]);
     const senders=await pool.query(`SELECT a.id account_id,p.name,p.config->>'fromEmail' address,p.config->>'fromName' display_name
       FROM channel_accounts a LEFT JOIN account_email_providers binding ON binding.account_id=a.id
       JOIN email_provider_instances p ON p.id=binding.provider_id OR (binding.provider_id IS NULL AND p.is_default)
@@ -29,12 +29,12 @@ export function registerMailboxRoutes(app:FastifyInstance):void{
   app.post("/api/v1/admin/mailboxes",{preHandler:authenticate},async(request,reply)=>{
     if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
     const parsed=mailboxSettingsSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
-    const value=parsed.data;
+    const value=parsed.data,receiveEnabled=value.receiveEnabled??value.enabled,sendEnabled=value.sendEnabled??value.enabled;
     const account=await pool.query("SELECT 1 FROM channel_accounts WHERE id=$1 AND platform IN ('whatsapp','livechat')",[value.accountId]);if(!account.rowCount)return reply.code(404).send({error:"account_not_found"});
     try{await verifyMailbox(value);}catch(error){return reply.code(400).send({error:"mailbox_connection_failed",message:String(error)});}
     try{const result=await transaction(async client=>{
       if(value.isPrimary)await client.query("UPDATE account_email_mailboxes SET is_primary=false WHERE account_id=$1",[value.accountId]);
-      return client.query("INSERT INTO account_email_mailboxes(account_id,address,display_name,is_primary,enabled,imap_host,imap_port,imap_username,imap_secret_encrypted,smtp_host,smtp_port,smtp_tls,smtp_username,smtp_secret_encrypted,uid_validity,last_uid) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NULL,NULL) RETURNING id",[value.accountId,value.address,value.displayName,value.isPrimary,value.enabled,value.imapHost,value.imapPort,value.imapUsername,encryptAtRest(value.imapPassword,config.DATA_ENCRYPTION_KEY),value.smtpHost,value.smtpPort,value.smtpTls,value.smtpUsername,encryptAtRest(value.smtpPassword,config.DATA_ENCRYPTION_KEY)]);
+      return client.query("INSERT INTO account_email_mailboxes(account_id,address,display_name,is_primary,enabled,imap_host,imap_port,imap_username,imap_secret_encrypted,smtp_host,smtp_port,smtp_tls,smtp_username,smtp_secret_encrypted,uid_validity,last_uid,receive_enabled,send_enabled) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NULL,NULL,$15,$16) RETURNING id",[value.accountId,value.address,value.displayName,value.isPrimary,receiveEnabled||sendEnabled,value.imapHost,value.imapPort,value.imapUsername,encryptAtRest(value.imapPassword,config.DATA_ENCRYPTION_KEY),value.smtpHost,value.smtpPort,value.smtpTls,value.smtpUsername,encryptAtRest(value.smtpPassword,config.DATA_ENCRYPTION_KEY),receiveEnabled,sendEnabled]);
     });return reply.code(201).send({id:result.rows[0].id});}catch(error){if((error as {code?:string}).code==="23505")return reply.code(409).send({error:"mailbox_exists"});throw error;}
   });
   app.put("/api/v1/admin/mailboxes/:id",{preHandler:authenticate},async(request,reply)=>{
@@ -43,25 +43,25 @@ export function registerMailboxRoutes(app:FastifyInstance):void{
     const oauth=await pool.query("SELECT auth_type FROM account_email_mailboxes WHERE id=$1",[id]);
     if(oauth.rows[0]?.auth_type==='microsoft'||oauth.rows[0]?.auth_type==='google')return reply.code(409).send({error:"oauth_mailbox_requires_reauthorization",message:"OAuth 邮箱请使用重新授权或专用设置更新连接"});
     const current=await pool.query("SELECT imap_secret_encrypted,smtp_secret_encrypted FROM account_email_mailboxes WHERE id=$1",[id]);if(!current.rowCount)return reply.code(404).send({error:"not_found"});
-    const value=parsed.data,imapPassword=value.imapPassword||decryptAtRest(current.rows[0].imap_secret_encrypted,config.DATA_ENCRYPTION_KEY),smtpPassword=value.smtpPassword||decryptAtRest(current.rows[0].smtp_secret_encrypted,config.DATA_ENCRYPTION_KEY);
+    const value=parsed.data,receiveEnabled=value.receiveEnabled??value.enabled,sendEnabled=value.sendEnabled??value.enabled,imapPassword=value.imapPassword||decryptAtRest(current.rows[0].imap_secret_encrypted,config.DATA_ENCRYPTION_KEY),smtpPassword=value.smtpPassword||decryptAtRest(current.rows[0].smtp_secret_encrypted,config.DATA_ENCRYPTION_KEY);
     const account=await pool.query("SELECT 1 FROM channel_accounts WHERE id=$1 AND platform IN ('whatsapp','livechat')",[value.accountId]);if(!account.rowCount)return reply.code(404).send({error:"account_not_found"});
     try{await verifyMailbox({...value,imapPassword,smtpPassword});}catch(error){return reply.code(400).send({error:"mailbox_connection_failed",message:String(error)});}
     try{await transaction(async client=>{
       if(value.isPrimary)await client.query("UPDATE account_email_mailboxes SET is_primary=false WHERE account_id=$1 AND id<>$2",[value.accountId,id]);
-      await client.query("UPDATE account_email_mailboxes SET account_id=$2,address=$3,display_name=$4,is_primary=$5,enabled=$6,imap_host=$7,imap_port=$8,imap_username=$9,imap_secret_encrypted=$10,smtp_host=$11,smtp_port=$12,smtp_tls=$13,smtp_username=$14,smtp_secret_encrypted=$15,uid_validity=NULL,last_uid=NULL,next_sync_at=now(),updated_at=now() WHERE id=$1",[id,value.accountId,value.address,value.displayName,value.isPrimary,value.enabled,value.imapHost,value.imapPort,value.imapUsername,encryptAtRest(imapPassword,config.DATA_ENCRYPTION_KEY),value.smtpHost,value.smtpPort,value.smtpTls,value.smtpUsername,encryptAtRest(smtpPassword,config.DATA_ENCRYPTION_KEY)]);
+      await client.query("UPDATE account_email_mailboxes SET account_id=$2,address=$3,display_name=$4,is_primary=$5,enabled=$6,imap_host=$7,imap_port=$8,imap_username=$9,imap_secret_encrypted=$10,smtp_host=$11,smtp_port=$12,smtp_tls=$13,smtp_username=$14,smtp_secret_encrypted=$15,receive_enabled=$16,send_enabled=$17,uid_validity=CASE WHEN account_id IS DISTINCT FROM $2::uuid OR address IS DISTINCT FROM $3 OR imap_host IS DISTINCT FROM $7 OR imap_port IS DISTINCT FROM $8 OR imap_username IS DISTINCT FROM $9 OR $18::boolean THEN NULL ELSE uid_validity END,last_uid=CASE WHEN account_id IS DISTINCT FROM $2::uuid OR address IS DISTINCT FROM $3 OR imap_host IS DISTINCT FROM $7 OR imap_port IS DISTINCT FROM $8 OR imap_username IS DISTINCT FROM $9 OR $18::boolean THEN NULL ELSE last_uid END,next_sync_at=now(),updated_at=now() WHERE id=$1",[id,value.accountId,value.address,value.displayName,value.isPrimary,receiveEnabled||sendEnabled,value.imapHost,value.imapPort,value.imapUsername,encryptAtRest(imapPassword,config.DATA_ENCRYPTION_KEY),value.smtpHost,value.smtpPort,value.smtpTls,value.smtpUsername,encryptAtRest(smtpPassword,config.DATA_ENCRYPTION_KEY),receiveEnabled,sendEnabled,Boolean(value.imapPassword)]);
     });return {id};}catch(error){if((error as {code?:string}).code==="23505")return reply.code(409).send({error:"mailbox_exists"});throw error;}
   });
   app.put("/api/v1/admin/mailboxes/:id/preferences",{preHandler:authenticate},async(request,reply)=>{
     if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
     const params=z.object({id:z.string().uuid()}).safeParse(request.params);
-    const parsed=z.object({displayName:z.string().trim().max(120),isPrimary:z.boolean(),enabled:z.boolean()}).safeParse(request.body);
+    const parsed=z.object({displayName:z.string().trim().max(120),isPrimary:z.boolean(),enabled:z.boolean().default(true),receiveEnabled:z.boolean().optional(),sendEnabled:z.boolean().optional()}).safeParse(request.body);
     if(!params.success||!parsed.success)return reply.code(400).send({error:"invalid_request"});
-    const {id}=params.data,value=parsed.data;
+    const {id}=params.data,value=parsed.data,receiveEnabled=value.receiveEnabled??value.enabled,sendEnabled=value.sendEnabled??value.enabled;
     const updated=await transaction(async client=>{
       const found=await client.query("SELECT account_id FROM account_email_mailboxes WHERE id=$1 FOR UPDATE",[id]);
       if(!found.rowCount)return false;
       if(value.isPrimary)await client.query("UPDATE account_email_mailboxes SET is_primary=false WHERE account_id=$1 AND id<>$2",[found.rows[0].account_id,id]);
-      await client.query("UPDATE account_email_mailboxes SET display_name=$2,is_primary=$3,enabled=$4,updated_at=now() WHERE id=$1",[id,value.displayName,value.isPrimary,value.enabled]);return true;
+      await client.query("UPDATE account_email_mailboxes SET display_name=$2,is_primary=$3,enabled=$4,receive_enabled=$5,send_enabled=$6,updated_at=now() WHERE id=$1",[id,value.displayName,value.isPrimary,receiveEnabled||sendEnabled,receiveEnabled,sendEnabled]);return true;
     });return updated?{id}:reply.code(404).send({error:"not_found"});
   });
   app.delete("/api/v1/admin/mailboxes/:id",{preHandler:authenticate},async(request,reply)=>{
@@ -76,9 +76,9 @@ export function registerMailboxRoutes(app:FastifyInstance):void{
       catch{return reply.code(400).send({error:"mailbox_connection_failed",message:"无法连接 Gmail API，请重新授权或检查 Google 应用权限。"});}
     }
     if(row.auth_type==='microsoft'){
-      try{const accessToken=await microsoftMailboxToken(id);return await verifyMailbox({accountId:row.account_id,address:row.address,displayName:row.display_name,isPrimary:row.is_primary,enabled:row.enabled,imapHost:row.imap_host,imapPort:row.imap_port,imapUsername:row.imap_username,imapPassword:'',smtpHost:row.smtp_host,smtpPort:row.smtp_port,smtpTls:row.smtp_tls,smtpUsername:row.smtp_username,smtpPassword:''},accessToken);}catch{return reply.code(400).send({error:"mailbox_connection_failed",message:"请重新授权或检查 Microsoft 邮箱 IMAP/SMTP 设置"});}
+      try{const accessToken=await microsoftMailboxToken(id);return await verifyMailbox({accountId:row.account_id,address:row.address,displayName:row.display_name,isPrimary:row.is_primary,enabled:row.enabled,receiveEnabled:row.receive_enabled,sendEnabled:row.send_enabled,imapHost:row.imap_host,imapPort:row.imap_port,imapUsername:row.imap_username,imapPassword:'',smtpHost:row.smtp_host,smtpPort:row.smtp_port,smtpTls:row.smtp_tls,smtpUsername:row.smtp_username,smtpPassword:''},accessToken);}catch{return reply.code(400).send({error:"mailbox_connection_failed",message:"请重新授权或检查 Microsoft 邮箱 IMAP/SMTP 设置"});}
     }
-    try{return await verifyMailbox({accountId:row.account_id,address:row.address,displayName:row.display_name,isPrimary:row.is_primary,enabled:row.enabled,imapHost:row.imap_host,imapPort:row.imap_port,imapUsername:row.imap_username,imapPassword:decryptAtRest(row.imap_secret_encrypted,config.DATA_ENCRYPTION_KEY),smtpHost:row.smtp_host,smtpPort:row.smtp_port,smtpTls:row.smtp_tls,smtpUsername:row.smtp_username,smtpPassword:decryptAtRest(row.smtp_secret_encrypted,config.DATA_ENCRYPTION_KEY)});}catch(error){return reply.code(400).send({error:"mailbox_connection_failed",message:String(error)});}
+    try{return await verifyMailbox({accountId:row.account_id,address:row.address,displayName:row.display_name,isPrimary:row.is_primary,enabled:row.enabled,receiveEnabled:row.receive_enabled,sendEnabled:row.send_enabled,imapHost:row.imap_host,imapPort:row.imap_port,imapUsername:row.imap_username,imapPassword:decryptAtRest(row.imap_secret_encrypted,config.DATA_ENCRYPTION_KEY),smtpHost:row.smtp_host,smtpPort:row.smtp_port,smtpTls:row.smtp_tls,smtpUsername:row.smtp_username,smtpPassword:decryptAtRest(row.smtp_secret_encrypted,config.DATA_ENCRYPTION_KEY)});}catch(error){return reply.code(400).send({error:"mailbox_connection_failed",message:String(error)});}
   });
   app.post("/api/v1/admin/mailboxes/:id/retry-errors",{preHandler:authenticate},async(request,reply)=>{
     if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
@@ -89,9 +89,9 @@ export function registerMailboxRoutes(app:FastifyInstance):void{
     const params=z.object({id:z.string().uuid()}).safeParse(request.params);
     if(!params.success)return reply.code(400).send({error:"invalid_request"});
     const {id}=params.data;
-    const mailbox=await pool.query("SELECT id,enabled FROM account_email_mailboxes WHERE id=$1",[id]);
+    const mailbox=await pool.query("SELECT id,enabled,receive_enabled FROM account_email_mailboxes WHERE id=$1",[id]);
     if(!mailbox.rowCount)return reply.code(404).send({error:"not_found"});
-    if(!mailbox.rows[0].enabled)return reply.code(409).send({error:"mailbox_disabled"});
+    if(!mailbox.rows[0].enabled||!(mailbox.rows[0].receive_enabled??mailbox.rows[0].enabled))return reply.code(409).send({error:"mailbox_disabled"});
     const started=await syncOneMailbox(id);
     if(!started)return {id,status:"busy"};
     const result=await pool.query("SELECT last_error FROM account_email_mailboxes WHERE id=$1",[id]);
@@ -106,7 +106,7 @@ export function registerMailboxRoutes(app:FastifyInstance):void{
     if(!contact.rowCount||contact.rows[0].entity_type==="group"||!canAccessAccount(request.principal,contact.rows[0].account_id))return reply.code(404).send({error:"not_found"});
     const accountId=String(contact.rows[0].account_id),contactId=String(contact.rows[0].id);
     const [mailbox,recipient,media,selectedProvider]=await Promise.all([
-      pool.query("SELECT * FROM account_email_mailboxes WHERE ($1::uuid IS NULL OR id=$1) AND account_id=$2 AND enabled ORDER BY is_primary DESC,address LIMIT 1",[value.mailboxId??null,accountId]),
+      pool.query("SELECT * FROM account_email_mailboxes WHERE ($1::uuid IS NULL OR id=$1) AND account_id=$2 AND enabled AND send_enabled ORDER BY is_primary DESC,address LIMIT 1",[value.mailboxId??null,accountId]),
       value.recipientEmailId?pool.query("SELECT email FROM contact_emails WHERE id=$1 AND contact_id=$2",[value.recipientEmailId,contactId]):pool.query("SELECT email FROM contact_emails WHERE contact_id=$1 AND lower(email)=lower($2) LIMIT 1",[contactId,value.recipientEmail]),
       pool.query("SELECT id,file_name,mime_type,byte_size FROM media WHERE id=ANY($1::uuid[]) AND account_id=$2 AND status='ready'",[value.attachmentIds,accountId]),
       resolveEmailProvider(pool,accountId),
