@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type {ReactNode} from "react";
-import {ArrowLeft,ShieldCheck} from "lucide-react";
+import {ArrowLeft} from "lucide-react";
 
 type LegalDocumentProps={eyebrow:string;title:string;summary:string;updated:string;children:ReactNode};
 
@@ -8,7 +8,7 @@ export function LegalDocument({eyebrow,title,summary,updated,children}:LegalDocu
   return <div className="policy-shell">
     <header className="policy-header">
       <Link className="policy-brand" href="/" aria-label="返回 RelayDesk 首页">
-        <span><ShieldCheck size={20}/></span><span><b>RelayDesk</b><small>by GeekMT</small></span>
+        <span><img src="/relaydesk-icon-64.png" width={38} height={38} alt=""/></span><span><b>RelayDesk</b><small>by GeekMT</small></span>
       </Link>
       <nav aria-label="公共政策页面">
         <Link href="/privacy">隐私政策</Link><Link href="/terms">服务条款</Link><Link href="/data-deletion">数据删除</Link>

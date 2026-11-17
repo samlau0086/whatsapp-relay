@@ -33,6 +33,8 @@ button { color:inherit; }
 .brand-mark,.rail-button { border:0; display:grid; place-items:center; cursor:pointer; }
 .brand-mark { width:36px; height:36px; background:linear-gradient(145deg,#36d486,#12a762); color:white; border-radius:12px; box-shadow:0 7px 20px #0aa65c55; }
 .brand-mark,.rail-nav,.rail-bottom { flex:0 0 auto; }
+.brand-mark,.access-brand>span,.policy-brand>span:first-child { overflow:hidden; }
+.brand-mark img,.access-brand>span img,.policy-brand>span:first-child img { display:block; width:100%; height:100%; object-fit:cover; }
 .rail-nav,.rail-bottom { display:flex; flex-direction:column; gap:8px; align-items:center; }
 .rail-bottom { margin-top:auto; }
 .profile-button { border:0; background:transparent; padding:0; border-radius:50%; cursor:pointer; }

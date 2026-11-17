@@ -24,7 +24,7 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title,
     description,
-    icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
+    icons: { icon: [{ url: "/relaydesk-icon-32.png", sizes: "32x32", type: "image/png" }, { url: "/relaydesk-icon-192.png", sizes: "192x192", type: "image/png" }], shortcut: "/relaydesk-icon-32.png", apple: "/relaydesk-icon-180.png" },
     robots: { index: false, follow: false, noarchive: true },
     referrer: "no-referrer",
     openGraph: { title, description, type: "website", images: [{ url: `${origin}/og.png`, width: 1200, height: 630, alt: "RelayDesk by GeekMT private messaging workspace" }] },

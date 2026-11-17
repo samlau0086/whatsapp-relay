@@ -1,5 +1,7 @@
 # RelayDesk
 
+网站品牌图使用根目录的 `relaydesk-logo.png`：`public/relaydesk-logo-512.png` 保留完整图案和文字，`public/relaydesk-icon-{32,64,180,192,512}.png` 为从原图裁出的标志，分别用于浏览器图标、页面、Apple 图标及其他图标用途。工作台、公开页面与浏览器标签共用该标志；更新源图后需重新生成这些尺寸并重新构建部署。
+
 ## 多实例邮件 Provider 与渠道配置
 
 “系统设置 → 邮件发送 → 会话邮箱配置”的“映射渠道”支持选择 WhatsApp 或 Live Chat 渠道，密码／应用密码和 Microsoft OAuth 两种验证方式均适用。渠道选项显示类型及名称，仅有 Live Chat 渠道时也可直接新增邮箱。Microsoft OAuth 邮箱编辑时仍不可变更映射渠道或邮箱地址；重新授权沿用原渠道。此调整需要更新工作台和 API，不需要新增数据库迁移。
@@ -908,6 +910,79 @@ CORS_ORIGIN=https://wsdesk.geekmt.com
 
 8. 创建后复制 **Client ID（客户端 ID）** 和 **Client Secret（客户端密钥）**，安全保存；Client ID 通常以 `.apps.googleusercontent.com` 结尾。若下载客户端 JSON，对应字段分别为 `web.client_id` 和 `web.client_secret`；本项目只需配置这两个值，不需要上传 JSON 文件。
 
+#### 长期使用：发布到生产环境与 Google 验证
+
+**Publish app（发布应用）不等于通过 Google 验证，也不等于发布 RelayDesk 代码。** Google Auth platform 的 Audience 控制 Testing / In production；Branding 的品牌验证及发布、Data Access 的权限验证是另外的流程。控制台按钮和审核要求可能调整，请以同一 Google Cloud 项目的实际提示和下方官方文档为准。
+
+先根据使用范围选择路径：
+
+| 使用场景 | 发布与验证注意事项 |
+| --- | --- |
+| 短期开发联调 | External + Testing，并添加 Test users；本项目请求 Gmail 权限，测试状态下签发的刷新令牌在 7 天后过期，每天同步不会延长该期限。 |
+| 仅本人或少量本人认识的用户自用 | 可将 External 应用切换到 In production，以避免后续令牌受到 Testing 的固定 7 天限制。符合 Google 个人使用例外时可能无需提交完整验证，但仍可能显示未验证应用警告并受未验证用户上限等限制；不是面向公众开放的替代方案。 |
+| 仅同一 Google Workspace / Cloud Identity 组织内部使用 | 符合条件时可选 Internal，按组织管理员策略授权；个人 Gmail 和组织外账号不属于 Internal。是否适用验证例外需核对 Google 规则，不能仅因邮箱使用自有域名就认为是组织内部应用。 |
+| 向外部客户、公众或不符合例外的用户提供服务 | 需要完成适用的品牌验证及受限权限验证；本项目服务端读取并归档 Gmail 邮件，若不符合例外，还应按 Google 要求完成安全评估及后续定期复核。不能仅点击 Publish app 就当作正式审核通过。 |
+
+`https://www.googleapis.com/auth/gmail.readonly` 是 **Restricted scope（受限权限）**，不是普通登录权限。Google 授权允许应用读取该 Gmail 邮箱中的邮件，不提供“仅授权一个标签”的权限边界；所选标签只是 RelayDesk 的同步筛选规则。不要向用户宣称 Google 从权限层面只允许读取某个标签。当前需要读取邮件原文及附件，不能为了避开审核直接改成 `gmail.metadata`，也不应扩大到 `mail.google.com` 或增加发信权限。
+
+##### 发布前准备清单：名称、Logo、域名与页面
+
+以下是部署方需要准备的材料，不表示本仓库已经提供对应公开页面。页面路径是规划示例，必须实际创建、部署并用未登录浏览器验证后再填入 Google；不能把不存在的地址或后台登录页作为公开应用首页。
+
+| 材料 | 需要准备的内容与注意事项 |
+| --- | --- |
+| 应用名称 | 例如 `RelayDesk` 或实际运营品牌；与首页、Logo、授权界面及审核材料一致，不冒充 Google 官方产品。 |
+| App logo | 使用有权使用的独立品牌图形，不使用 Gmail / Google 图标或其修改版。建议先准备正方形 512 × 512 PNG 母版（这是制作建议，不是 Google 强制尺寸），缩小后仍可辨识，避免细小文字；上传格式、大小和尺寸按 Branding 当前提示导出。上传 Logo 不代表品牌已验证；如需在同意屏幕展示品牌，应按控制台完成品牌验证及发布。 |
+| 用户支持邮箱 | 有人维护且可接收外部邮件的地址，用于授权和产品支持；不要填写无人处理的地址。 |
+| 开发者联系邮箱 | 可持续接收 Google 审核、安全和复核通知，建议团队共同维护，人员离职后仍可处理。 |
+| 公开应用首页 | 例如 `https://relay.example.com/about`；无需登录即可访问，清晰展示应用名称、运营方、产品用途、Gmail 收件功能、支持联系方式，以及隐私政策链接；有服务条款时也链接到条款。不能仅有登录按钮、空白页或与应用无关的公司介绍。 |
+| 隐私政策 | 例如 `https://relay.example.com/privacy`；与应用首页使用同一域名，公开可访问，并在首页和 OAuth Branding 中链接。必须说明实际访问、使用、存储、共享和删除 Google 用户数据的方式，详见下方内容清单。 |
+| 服务条款 | 例如 `https://relay.example.com/terms`；品牌验证中的条款链接为可选项，但对外运营建议准备，说明运营主体、授权使用、用户责任、服务限制、终止及联系渠道；如填写则必须可访问且内容真实。 |
+| 数据删除与撤销指引 | 可放在隐私政策或独立帮助页；列明如何撤销 Google 授权、停止同步，以及如何申请删除已归档邮件和附件。提供实际可用的联系或操作渠道，不虚构自动删除按钮。 |
+| 域名所有权 | 在 Google Search Console 验证相关域名，验证账号应具备该 Cloud 项目的 Owner / Editor 权限；将首页、隐私政策、条款和 OAuth 回调等使用的相关顶级私有域名登记到 Authorized domains，例如 `example.com`，不是完整 URL 或路径。子域名、跨域 API 和页面地址需一起核对。 |
+| 权限用途说明及演示 | 说明为什么需要 `gmail.readonly`、为何更小权限不能完成原文和附件归档；准备不含真实客户数据的授权、选标签及新邮件进入会话的完整演示。需要审核时提供审核团队可访问的录屏及按要求提供的测试方式。 |
+
+公开首页可按以下顺序编写内容，不需要修改现有工作台的首屏或放开后台权限：
+
+1. 应用名称、Logo、实际运营主体及客服工作台的简短介绍。
+2. Gmail 集成用途：管理员连接转发目标 Gmail，选择业务标签，将新邮件归档到有权限的客服渠道；Cloudflare 转发和 Gmail 过滤器由用户另行配置。
+3. 权限与限制：请求 Gmail 只读权限，标签为应用筛选规则，不通过 Gmail API 发信；不自动修改 Gmail 标签，不删除 Gmail 原邮件。
+4. 数据流：Google Gmail → 自托管 API / Worker → 数据库及附件对象存储 → 经授权的工作台坐席；另行配置的发信 Provider 不等于 Gmail 授权。
+5. 隐私政策、可选服务条款、支持邮箱和撤销授权／删除数据指引链接。
+
+隐私政策至少应按实际部署情况说明以下内容，不能仅复制通用“我们重视隐私”模板：
+
+- 运营主体、适用服务、联系邮箱和政策更新日期。
+- 访问的数据类型：授权邮箱身份、标签列表、同步记录，以及被导入邮件的发件人／收件人、主题、正文、附件等；区分 Google 权限可访问范围与应用实际同步范围。
+- 数据用途：业务邮件归档、联系人匹配、线程关联及客服处理；如实际启用 AI 翻译、摘要、Agent 等功能，应单独说明其处理范围，不能一概声称邮件永不交给第三方。
+- 存储与安全：实际部署区域、数据库、对象存储、备份、刷新令牌加密及坐席权限；不要声称所有邮件正文都已加密，除非部署方确实实施并验证。
+- 第三方与访问者：实际使用的主机／存储服务商、AI Provider、可访问数据的授权人员，以及用途和必要限制；是否向发信 Provider 传递内容按实际启用功能披露。
+- 保留与删除：明确业务数据和备份各自的实际保留期限、删除申请渠道和处理方式；撤销 Google 授权不会自动删除 RelayDesk 中已经归档的邮件，停止同步与删除存档是不同操作。没有自动清理机制时不得承诺自动定期删除。
+- 撤销方式：在 Google 账号的第三方应用连接管理中撤销授权，并联系部署管理员停止同步或处理存档删除；重新连接需再次授权。
+- Google User Data Policy 及 Limited Use：在实际合规的前提下明确声明遵守相关要求；不得将 Gmail 数据用于广告定向、出售，或用于超出政策允许范围的通用 AI／机器学习模型训练或改进。启用 AI 前核查供应商的数据使用、保留及训练条款，不得仅凭“兼容 API”就视为满足 Google 要求。
+
+##### 从 Testing 切换到 In production
+
+1. 打开创建 Client ID 的同一 Google Cloud 项目，确认 Gmail API 已启用。长期生产建议与开发／测试使用不同项目，避免测试期间的品牌、权限或回调修改影响正式授权。
+2. 检查 **Google Auth platform → Branding** 的名称、支持邮箱、开发者联系邮箱和相关页面；按适用要求准备及验证 Authorized domains，公开页面必须能直接通过 HTTPS 打开。
+3. 在 **Data Access** 中核对只申请实际需要的 `gmail.readonly`；在 **Clients → Web application** 核对正式回调 `${PUBLIC_API_URL}/api/v1/mailboxes/google/callback`。公开应用首页可以与后台路径分开，不能把首页地址填成回调地址。
+4. 进入 **Audience → Publishing status**，点击 **Publish app（发布应用）** 并确认，核对最终状态为 **In production**。这一步改变 OAuth 发布状态，不会自动创建公开网页，也不会替你部署 API / Worker。
+5. 如需验证，在 **Branding** 按当前界面完成 **Verify Branding** 和 **Publish branding**；品牌修改可能先保存为 Draft Branding，不代表用户已看到更新。再到 **Verification Center / Data Access** 按提示提交受限权限验证、用途说明、演示及其他材料。若符合个人或组织内部使用例外，按例外规则执行，而不是提交虚假的公众产品信息。
+6. 不符合验证例外且服务端存储或传输受限数据时，安排 Google 认可评估方的安全评估（CASA）及后续要求的定期复核；可能涉及费用和较长周期，不预设点击发布即可免费通过或固定审核完成时间。
+7. 保持原 Client ID / Client Secret 时，仅修改 Google 发布状态通常不需要改服务器环境变量。若实际更换项目或客户端，按下方部署步骤更新 API 和 Worker 配置，重新部署，并为各会话邮箱重新授权；不要为了发布随意轮换客户端或 `DATA_ENCRYPTION_KEY`。
+8. 发布后在 RelayDesk 对测试阶段已连接的每个 Gmail 会话邮箱执行一次 **重新授权**，确保使用生产状态下新签发的刷新令牌；不要假设旧测试令牌会自动获得新的有效期。核对原标签，再发一封新邮件，验证“立即同步”和后续 Worker 自动收件。重新授权会重置同步起点，原归档保留，但授权中断期间的邮件不保证自动补入，需另行核查处理。
+
+##### 生产注意事项与验收
+
+- 7 天过期指的是测试状态签发的 OAuth 刷新令牌，不是 Gmail 邮箱、Cloudflare 转发或 Gmail 标签失效；令牌失效会中断 RelayDesk 收件，需要重新授权，已归档消息不会因此自动删除。
+- In production 不代表令牌永久有效。用户撤销授权、涉及 Gmail 权限的账号密码变化、长期未使用、令牌数量限制或管理员策略等仍可能使令牌失效。监控邮箱同步错误，并保留重新授权的运维流程。
+- 未验证的外部应用可能存在警告和用户上限；不要要求普通客户绕过安全警告，也不要通过反复创建项目规避验证或上限。只有确认应用及域名确实由本人控制时，才评估个人自用例外。
+- 标签规则不隔离 Gmail 授权范围，建议使用专用业务 Gmail 而非混有私人邮件的主邮箱；谨慎分配渠道权限，并检查误打标签是否会把私人邮件归档给坐席。
+- 对外发布前确认隐私政策与真实的数据流、AI 功能、第三方处理及删除能力一致。当前功能实现不等于已获得 Google 认证，也不保证自动满足全部合规要求；新增权限、修改品牌／域名或数据用途后需按 Google 要求重新检查或验证。
+- 验收时用未登录窗口打开首页、隐私政策及填写的条款链接；核对域名所有权、生产状态和适用的验证状态；逐邮箱检查重新授权、标签选择、新业务邮件导入、标签外对照邮件不导入及已有存档仍可访问。不要仅以第一次授权成功作为长期稳定的证明。
+
+官方参考：[品牌验证、公开页面及验证例外](https://developers.google.com/identity/protocols/oauth2/production-readiness/brand-verification)、[受限权限验证与安全评估](https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification)、[Gmail 权限分类](https://developers.google.com/workspace/gmail/api/auth/scopes)、[刷新令牌有效期](https://developers.google.com/identity/protocols/oauth2#expiration)、[Google Workspace 用户数据与 Limited Use 政策](https://developers.google.com/workspace/workspace-api-user-data-developer-policy)。
+
 #### 配置到 RelayDesk 部署环境
 
 使用本仓库 GitHub Actions VPS 部署时，在仓库 **Settings → Environments → production** 中设置：
@@ -976,7 +1051,7 @@ Google 账号必须与配置的邮箱地址一致。授权只请求 `gmail.reado
 - 提示“请先配置 Google OAuth Client ID 和 Client Secret”：API 进程读取到的两个变量至少有一个为空，检查配置位置与部署环境，重新部署或重建 API 和 Worker 容器；仅修改 `.env.example` 无效。
 - Google 提示 `redirect_uri_mismatch`：核对 Web 应用客户端的重定向 URI 与 `PUBLIC_API_URL` 生成的完整回调地址。
 - 提示应用处于测试阶段或账号无权访问：检查 Audience 的用户类型，并将实际 Gmail 地址加入测试用户。
-- 外部应用处于 Testing 且请求 Gmail 权限时，刷新令牌通常在 7 天后过期，适合短期联调；长期运行需按 Google 要求配置生产发布，并根据适用规则完成验证。发布不等于自动通过验证；不要通过扩大权限解决授权问题。
+- 外部应用处于 Testing 且请求 Gmail 权限时，测试状态签发的刷新令牌在 7 天后过期；每天同步不会延长该期限。长期使用请按上方“长期使用：发布到生产环境与 Google 验证”操作，区分个人自用例外和对外服务审核；发布后为已有会话邮箱重新授权。生产状态不是令牌永久有效或已通过验证的保证，不要通过扩大权限解决授权问题。
 
 官方参考：[配置 OAuth 同意屏幕](https://developers.google.com/workspace/guides/configure-oauth-consent)、[Web 服务端 OAuth 凭据及回调](https://developers.google.com/identity/protocols/oauth2/web-server)、[刷新令牌有效期](https://developers.google.com/identity/protocols/oauth2#expiration)。
 

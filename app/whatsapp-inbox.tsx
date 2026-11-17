@@ -1810,7 +1810,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
           onClick={() => openMobileInbox()}
           aria-label="RelayDesk 消息中心"
         >
-          <Sparkles size={19} />
+          <img src="/relaydesk-icon-64.png" width={36} height={36} alt="" />
         </button>
         <div className="rail-nav">
           <button
@@ -5067,7 +5067,7 @@ function deliveryText(status:string){return({queued:"排队中",dispatching:"发
 
 function AccessPortal({loading,onLogin}:{loading:boolean;onLogin:()=>void}){
   return <main className="access-shell">
-    <header className="access-header"><Link className="access-brand" href="/" aria-label="RelayDesk 主页"><span><Sparkles size={19}/></span><b>RelayDesk</b></Link><span className="operator-badge">由 GeekMT 运营</span></header>
+    <header className="access-header"><Link className="access-brand" href="/" aria-label="RelayDesk 主页"><span><img src="/relaydesk-icon-64.png" width={36} height={36} alt=""/></span><b>RelayDesk</b></Link><span className="operator-badge">由 GeekMT 运营</span></header>
     <section className="access-hero" aria-labelledby="access-title">
       <div className="access-copy"><span className="access-eyebrow">私有消息工作台</span><h1 id="access-title">清楚身份，再安全登录。</h1><p>RelayDesk 是 GeekMT 为获授权团队成员运营的内部消息工作台。这里使用的是 RelayDesk 坐席账号，不是 WhatsApp 或 Meta 账号。</p><button className="access-login" onClick={onLogin} disabled={loading}><ShieldCheck size={18}/>{loading?"正在检查会话…":"使用 RelayDesk 账号登录"}</button><small>没有账号？请联系你的 GeekMT 管理员。本站不会要求安装浏览器更新或远程控制软件。</small></div>
       <aside className="trust-card" aria-label="身份与安全说明"><div className="trust-card-head"><ShieldCheck size={24}/><span><b>登录前请确认</b><small>保护你的账号和个人信息</small></span></div><ul><li><b>独立服务</b><span>RelayDesk 不属于 WhatsApp LLC 或 Meta Platforms，也未获其赞助或背书。</span></li><li><b>专用凭据</b><span>只输入管理员发放的 RelayDesk 邮箱与密码。不要输入 WhatsApp / Meta 密码、短信验证码或两步验证 PIN。</span></li><li><b>授权访问</b><span>此工作台仅供获授权的 GeekMT 团队成员处理已许可的业务会话。</span></li></ul></aside>
