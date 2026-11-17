@@ -3,6 +3,13 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 
+test("会话发件选项展示渠道 Provider 的名称和实际发件地址",async()=>{
+  const inbox=await readFile(new URL("../app/whatsapp-inbox.tsx",import.meta.url),"utf8");
+  assert.match(inbox,/body\.senders\?\.find\(item=>item\.account_id===sendingConversation\.accountId\)/);
+  assert.match(inbox,/emailProviderSender\?<option value="">\{emailProviderSender\.name\} · \{emailProviderSender\.address\}<\/option>/);
+  assert.match(inbox,/setEmailMailboxId\(current=>sender\?"":/);
+});
+
 test("email reply subjects increment and are prefilled from the selected message", async () => {
   const source = await readFile(new URL("../app/email-reply-subject.ts", import.meta.url), "utf8");
   const javascript = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;

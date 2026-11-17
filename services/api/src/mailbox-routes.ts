@@ -17,7 +17,11 @@ export function registerMailboxRoutes(app:FastifyInstance):void{
   app.get("/api/v1/mailboxes",{preHandler:authenticate},async(request,reply)=>{
     if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
     const result=await pool.query("SELECT id,account_id,address,display_name,is_primary,enabled,auth_type,imap_host,imap_port,imap_username,smtp_host,smtp_port,smtp_tls,smtp_username,last_error,last_synced_at,created_at FROM account_email_mailboxes WHERE ($1::uuid[] IS NULL OR account_id=ANY($1)) ORDER BY account_id,is_primary DESC,address",[request.principal.accountIds]);
-    return {data:result.rows};
+    const senders=await pool.query(`SELECT a.id account_id,p.name,p.config->>'fromEmail' address,p.config->>'fromName' display_name
+      FROM channel_accounts a LEFT JOIN account_email_providers binding ON binding.account_id=a.id
+      JOIN email_provider_instances p ON p.id=binding.provider_id OR (binding.provider_id IS NULL AND p.is_default)
+      WHERE ($1::uuid[] IS NULL OR a.id=ANY($1)) AND p.enabled AND p.secret_encrypted IS NOT NULL`,[request.principal.accountIds]);
+    return {data:result.rows,senders:senders.rows};
   });
   app.post("/api/v1/admin/mailboxes",{preHandler:authenticate},async(request,reply)=>{
     if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
