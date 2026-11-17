@@ -85,7 +85,7 @@ async function storeAttachment(accountId:string,filename:string,mime:string,cont
   return String(result.rows[0].id);
 }
 
-async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,source:Buffer,receivedAt?:Date,gmailMessageId?:string):Promise<void>{
+export async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,source:Buffer,receivedAt?:Date,gmailMessageId?:string):Promise<void>{
   const parsed=await simpleParser(source,{skipImageLinks:true});
   const sender=parsed.from?.value[0]?.address?.trim().toLowerCase();
   if(!sender||sender===row.address.toLowerCase())return;
@@ -103,8 +103,7 @@ async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,sourc
       :await client.query("SELECT message_id FROM email_inbound_receipts WHERE mailbox_id=$1 AND uid_validity=$2 AND uid=$3",[row.id,uidValidity,uid]);
     if(receipt.rows[0]?.message_id)return;
     if(parsed.messageId){const existing=await client.query("SELECT 1 FROM message_email_details WHERE mailbox_id=$1 AND rfc_message_id=$2",[row.id,parsed.messageId]);if(existing.rowCount)return;}
-    const found=await client.query("SELECT DISTINCT co.id FROM contacts co JOIN contact_emails e ON e.contact_id=co.id WHERE co.account_id=$1 AND lower(e.email)=$2 AND co.entity_type='person'",[row.account_id,sender]);
-    if(found.rowCount&&found.rowCount>1)throw new Error(`ambiguous_contact_email:${sender}`);
+    const found=await client.query("SELECT DISTINCT co.id FROM contacts co JOIN contact_emails e ON e.contact_id=co.id WHERE co.account_id=$1 AND lower(btrim(e.email))=$2 AND co.entity_type='person'",[row.account_id,sender]);
     let contactId=found.rows[0]?.id as string|undefined;
     if(!contactId){
       const displayName=(parsed.from?.value[0]?.name||sender).slice(0,240);
@@ -112,21 +111,20 @@ async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,sourc
       contactId=String(created.rows[0].id);
       await client.query("INSERT INTO contact_emails(contact_id,label,email,is_primary,position) VALUES($1,'', $2,true,0)",[contactId,sender]);
     }
-    const conversation=await client.query("INSERT INTO conversations(account_id,contact_id) VALUES($1,$2) ON CONFLICT(account_id,contact_id) DO UPDATE SET status='open',closed_at=NULL RETURNING id",[row.account_id,contactId]);
-    const conversationId=conversation.rows[0].id;
+    // 只为尚无会话的邮箱客户建立入口；邮件本身不归属某个访客。
+    const contactIds=found.rows.length?found.rows.map(item=>String(item.id)):[contactId!];
+    await client.query("INSERT INTO conversations(account_id,contact_id) SELECT $1,unnest($2::uuid[]) ON CONFLICT(account_id,contact_id) DO NOTHING",[row.account_id,contactIds]);
     const replyIds=[parsed.inReplyTo,...(Array.isArray(parsed.references)?[...parsed.references].reverse():[])].filter((id):id is string=>Boolean(id));
-    let parent=replyIds.length?await client.query("SELECT m.occurred_at FROM message_email_details d JOIN messages m ON m.id=d.message_id WHERE m.conversation_id=$1 AND d.rfc_message_id=ANY($2::text[]) ORDER BY array_position($2::text[],d.rfc_message_id) LIMIT 1",[conversationId,replyIds]):null;
-    // Resend and some SMTP relays replace Message-ID. When that loses the RFC
-    // thread reference, use the quoted original only when it uniquely confirms
-    // an outbound email in this same conversation and subject thread.
+    let parent=replyIds.length?await client.query("SELECT m.occurred_at FROM message_email_details d JOIN messages m ON m.id=d.message_id JOIN email_archive_addresses a ON a.message_id=m.id WHERE a.account_id=$1 AND a.email=$2 AND d.rfc_message_id=ANY($3::text[]) ORDER BY array_position($3::text[],d.rfc_message_id) LIMIT 1",[row.account_id,sender,replyIds]):null;
+    // 部分中继会改写 Message-ID，仅用同渠道、同邮箱且唯一的引用正文回退。
     if(!parent?.rowCount&&quotedBody){
-      const fallback=await client.query("SELECT m.occurred_at FROM message_email_details d JOIN messages m ON m.id=d.message_id WHERE m.conversation_id=$1 AND m.direction='out' AND lower(regexp_replace(d.subject,'^(?:(?:re(?:\\([0-9]+\\))?|fwd?|aw|sv)\\s*:\\s*)+','','i'))=$2 AND length(btrim(COALESCE(m.text_content,'')))>0 AND position(lower(m.text_content) IN lower($3))>0 ORDER BY m.occurred_at DESC LIMIT 2",[conversationId,emailSubjectKey(subject),quotedBody]);
+      const fallback=await client.query("SELECT m.occurred_at FROM message_email_details d JOIN messages m ON m.id=d.message_id WHERE m.account_id=$1 AND EXISTS(SELECT 1 FROM email_archive_addresses a WHERE a.message_id=m.id AND a.account_id=$1 AND a.email=$4) AND m.direction='out' AND lower(regexp_replace(d.subject,'^(?:(?:re(?:\\([0-9]+\\))?|fwd?|aw|sv)\\s*:\\s*)+','','i'))=$2 AND length(btrim(COALESCE(m.text_content,'')))>0 AND position(lower(m.text_content) IN lower($3))>0 ORDER BY m.occurred_at DESC LIMIT 2",[row.account_id,emailSubjectKey(subject),quotedBody,sender]);
       if(fallback.rowCount===1)parent=fallback;
     }
     const attachments:Array<{id:string;name:string;mime:string;size:number;contentId:string}>=[];
     for(const item of attachmentCandidates)try{attachments.push({id:await storeAttachment(row.account_id,item.filename||"附件",item.contentType||"application/octet-stream",item.content),name:item.filename||"附件",mime:item.contentType||"application/octet-stream",size:item.size,contentId:normalizeEmailCid(item.contentId||"")});}catch{warning="部分附件归档失败，请检查媒体存储";}
     const occurredAt=inboundEmailTimelineTime(parsed.date,parent?.rows[0]?.occurred_at?new Date(parent.rows[0].occurred_at):undefined,receivedAt);
-    const message=await client.query("INSERT INTO messages(conversation_id,account_id,sender_contact_id,direction,kind,text_content,status,occurred_at) VALUES($1,$2,$3,'in','text',$4,'received',$5) RETURNING id",[conversationId,row.account_id,contactId,body|| (attachments.length?"[附件]":"[无新正文]"),occurredAt]);
+    const message=await client.query("INSERT INTO messages(account_id,direction,kind,text_content,status,occurred_at) VALUES($1,'in','text',$2,'received',$3) RETURNING id",[row.account_id,body|| (attachments.length?"[附件]":"[无新正文]"),occurredAt]);
     const messageId=String(message.rows[0].id);
     const toAddresses=(Array.isArray(parsed.to)?parsed.to:[parsed.to]).flatMap(value=>value?.value??[]).map(value=>value.address).filter(Boolean);
     const safeHtml=htmlSource?sanitizeEmailDisplayHtml(htmlSource):"";
@@ -134,8 +132,11 @@ async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,sourc
     for(const [position,item] of attachments.entries()){const contentId=item.contentId||`attachment-${position}`,isInline=Boolean(item.contentId)&&safeHtml.toLowerCase().includes(`cid:${contentId}`);await client.query("INSERT INTO message_email_attachments(message_id,media_id,position,file_name,mime_type,byte_size,content_id,is_inline) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",[messageId,item.id,position,item.name,item.mime,item.size,contentId,isInline]);}
     if(gmailMessageId)await client.query("INSERT INTO gmail_inbound_receipts(mailbox_id,gmail_message_id,message_id,error) VALUES($1,$2,$3,NULL) ON CONFLICT(mailbox_id,gmail_message_id) DO UPDATE SET message_id=$3,error=NULL",[row.id,gmailMessageId,messageId]);
     else await client.query("INSERT INTO email_inbound_receipts(mailbox_id,uid_validity,uid,message_id,error) VALUES($1,$2,$3,$4,NULL) ON CONFLICT(mailbox_id,uid_validity,uid) DO UPDATE SET message_id=$4,error=NULL",[row.id,uidValidity,uid,messageId]);
-    if(isProactiveOptOut(body))await suppressProactiveForContact(client,contactId,"email_unsubscribe");
-    else await cancelProactiveForConversation(client,conversationId,"email_customer_replied");
+    const readers=await client.query("UPDATE conversations SET status='open',closed_at=NULL,unread_count=unread_count+1 WHERE account_id=$1 AND contact_id=ANY($2::uuid[]) RETURNING id,contact_id",[row.account_id,contactIds]);
+    for(const reader of readers.rows){
+      if(isProactiveOptOut(body))await suppressProactiveForContact(client,reader.contact_id,"email_unsubscribe");
+      else await cancelProactiveForConversation(client,reader.id,"email_customer_replied");
+    }
   });
 }
 

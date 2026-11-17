@@ -50,7 +50,7 @@ async function claimEmail(client:PoolClient):Promise<EmailJob|null>{
   const result=await client.query("SELECT id,provider,provider_config,provider_secret_encrypted,recipients,subject,text_body,html_body,attempt,in_reply_to,references_header FROM email_messages WHERE status IN ('queued','retrying') AND available_at<=now() ORDER BY available_at,created_at FOR UPDATE SKIP LOCKED LIMIT 1");
   if(!result.rowCount)return null;
   const outreach=await client.query(`SELECT j.id,j.state,j.account_id,j.contact_id,co.proactive_email_allowed,co.proactive_suppressed_at,co.provider_user_id,co.phone_e164,co.whatsapp_username,s.enabled,s.email_enabled,e.mailbox_id,e.recipients,cv.status conversation_status,COALESCE(st.mode,'cautious') mode,
-    EXISTS(SELECT 1 FROM messages received WHERE received.conversation_id=e.conversation_id AND received.direction='in' AND received.created_at>e.created_at) customer_replied,
+    EXISTS(SELECT 1 FROM messages received WHERE received.id IN (SELECT message_id FROM relay_conversation_messages(e.conversation_id)) AND received.direction='in' AND received.created_at>e.created_at) customer_replied,
     (SELECT email FROM contact_emails WHERE contact_id=co.id AND is_primary LIMIT 1) primary_email
     FROM proactive_outreach_jobs j JOIN message_email_details d ON d.message_id=j.message_id
     JOIN contacts co ON co.id=j.contact_id JOIN proactive_outreach_settings s ON s.account_id=j.account_id

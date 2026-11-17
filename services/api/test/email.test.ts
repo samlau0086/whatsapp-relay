@@ -117,7 +117,7 @@ test("email reply subject matching accepts localized and numbered reply prefixes
   assert.equal(emailSubjectKey("Test again"),"test again");
 });
 
-test("archived email replies are corrected only for matching messages in the same conversation",async()=>{
+test("历史修正保留原规则，新收件按同渠道同邮箱关联邮件线程",async()=>{
   const [migration,migrator,mailboxes]=await Promise.all([
     readFile(new URL("../../../infra/postgres/migrations/092_email_reply_timeline.sql",import.meta.url),"utf8"),
     readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
@@ -128,7 +128,7 @@ test("archived email replies are corrected only for matching messages in the sam
   assert.match(migration,/detail\.in_reply_to=parent_detail\.rfc_message_id/);
   assert.match(migration,/position\(lower\(parent\.text_content\) IN lower\(COALESCE\(detail\.quoted_body,''\)\)\)>0/);
   assert.match(migration,/reply\.occurred_at<=all_reply_parents\.parent_time/);
-  assert.match(mailboxes,/m\.conversation_id=\$1 AND d\.rfc_message_id=ANY/);
+  assert.match(mailboxes,/a\.account_id=\$1 AND a\.email=\$2 AND d\.rfc_message_id=ANY/);
   assert.match(mailboxes,/position\(lower\(m\.text_content\) IN lower\(\$3\)\)>0/);
   assert.match(mailboxes,/internalDate:true/);
 });
