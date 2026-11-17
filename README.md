@@ -886,6 +886,23 @@ CORS_ORIGIN=https://wsdesk.geekmt.com
 生产环境必须使用公网 HTTPS 回调地址，且 Microsoft Entra 中登记的地址必须与 `PUBLIC_API_URL` 生成的回调地址完全一致：
 `https://你的域名/api/v1/mailboxes/microsoft/callback`。修改这些变量后需要重新部署或重启 API 和 Worker。不要把 Client Secret 提交到代码仓库或前端环境变量中。
 
+### Gmail 标签收件配置
+
+会话邮箱也支持通过 Google OAuth 和 Gmail API 只读收件。此方式适用于 Cloudflare Email Routing 将域名邮件转发至 Gmail，并由 Gmail 过滤器自动加标签的场景。Gmail API 仅负责读取来信；发件仍使用渠道邮件 Provider，未配置 Provider 时 Gmail OAuth 邮箱不能发信。
+
+1. 在 [Google Cloud Console](https://console.cloud.google.com/) 创建或选择项目，并启用 **Gmail API**。
+2. 配置 OAuth 同意屏幕及测试/生产用户范围，然后创建 **Web application** OAuth 客户端。添加授权重定向 URI：
+
+   ```text
+   https://你的域名/api/v1/mailboxes/google/callback
+   ```
+
+3. 将客户端 ID 和客户端密钥配置到 API 与 Worker 环境：`GOOGLE_MAIL_CLIENT_ID`、`GOOGLE_MAIL_CLIENT_SECRET`。公网回调由 `PUBLIC_API_URL` 生成，必须与 Google Cloud 中的地址完全一致；不要将密钥放入浏览器配置。
+4. 完成部署并重启 API 和 Worker。在 **系统设置 → 邮件发送 → 会话邮箱配置 → 新增邮箱** 选择 **Google OAuth (Gmail API 收件)**，填写转发目标 Gmail 地址及 WhatsApp 或 Live Chat 渠道，然后登录对应 Google 账号授权。
+5. 授权完成后，在邮箱列表的标签下拉框中选择 Gmail 自动过滤器使用的标签。保存后只同步此时之后新进入所选标签的邮件；切换标签也会从切换时开始，不回填标签中的历史邮件。
+
+Google 账号必须与配置的邮箱地址一致。授权只请求 `gmail.readonly`；如果 Google OAuth 同意屏幕仍处于测试状态，需将授权 Gmail 地址加入测试用户。若授权被撤销或刷新令牌失效，可在邮箱列表点击“重新授权”。
+
 1. 首次部署时替换 `.env` 的示例数据库、JWT、数据加密、管理员和对象存储密钥；恢复或迁移时保留备份对应的原密钥。
 2. 使用 HTTPS 反向代理暴露 Web/API，并限制 MinIO 与 PostgreSQL 只在内部网络访问。
 3. 按“备份、恢复与更换宿主机”备份数据库、媒体、Agent 数据及配置，完成一次恢复演练，并按“磁盘占用排查与清理”检查容量。

@@ -9,6 +9,7 @@ import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { decryptAtRest } from "./security.js";
 import { microsoftMailboxToken } from "./mailbox-oauth.js";
+import { gmailApiRequest, gmailRequestWithToken, googleMailboxToken } from "./google-mailbox-oauth.js";
 import {cancelProactiveForConversation,isProactiveOptOut,suppressProactiveForContact} from "./proactive-outreach.js";
 import { sanitizeEmailDisplayHtml, normalizeEmailCid } from "./email-display.js";
 
@@ -17,7 +18,7 @@ export type MailboxSettings={
   imapHost:string;imapPort:number;imapUsername:string;imapPassword:string;
   smtpHost:string;smtpPort:number;smtpTls:"tls"|"starttls";smtpUsername:string;smtpPassword:string;
 };
-type MailboxRow={id:string;account_id:string;address:string;display_name:string;imap_host:string;imap_port:number;imap_username:string;imap_secret_encrypted:string;smtp_host:string;smtp_port:number;smtp_username:string;smtp_secret_encrypted:string;smtp_tls:"tls"|"starttls";uid_validity:string|null;last_uid:string|null};
+type MailboxRow={id:string;account_id:string;address:string;display_name:string;imap_host:string;imap_port:number;imap_username:string;imap_secret_encrypted:string;smtp_host:string;smtp_port:number;smtp_username:string;smtp_secret_encrypted:string;smtp_tls:"tls"|"starttls";uid_validity:string|null;last_uid:string|null;auth_type?:string;gmail_label_id?:string|null;gmail_history_id?:string|null};
 
 const s3=new S3Client({region:config.S3_REGION,endpoint:config.S3_ENDPOINT,forcePathStyle:true,credentials:{accessKeyId:config.S3_ACCESS_KEY,secretAccessKey:config.S3_SECRET_KEY}});
 const MAX_ATTACHMENT=20*1024*1024,MAX_TOTAL=25*1024*1024;
@@ -78,7 +79,7 @@ async function storeAttachment(accountId:string,filename:string,mime:string,cont
   return String(result.rows[0].id);
 }
 
-async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,source:Buffer,receivedAt?:Date):Promise<void>{
+async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,source:Buffer,receivedAt?:Date,gmailMessageId?:string):Promise<void>{
   const parsed=await simpleParser(source,{skipImageLinks:true});
   const sender=parsed.from?.value[0]?.address?.trim().toLowerCase();
   if(!sender||sender===row.address.toLowerCase())return;
@@ -91,7 +92,9 @@ async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,sourc
   const attachmentCandidates=parsed.attachments.filter(item=>{if(item.size>MAX_ATTACHMENT||total+item.size>MAX_TOTAL){warning="部分附件超过邮件归档大小限制，未保存";return false;}total+=item.size;return true;});
   await transaction(async(client:PoolClient)=>{
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1),hashtext($2))",[row.account_id,sender]);
-    const receipt=await client.query("SELECT message_id FROM email_inbound_receipts WHERE mailbox_id=$1 AND uid_validity=$2 AND uid=$3",[row.id,uidValidity,uid]);
+    const receipt=gmailMessageId
+      ?await client.query("SELECT message_id FROM gmail_inbound_receipts WHERE mailbox_id=$1 AND gmail_message_id=$2",[row.id,gmailMessageId])
+      :await client.query("SELECT message_id FROM email_inbound_receipts WHERE mailbox_id=$1 AND uid_validity=$2 AND uid=$3",[row.id,uidValidity,uid]);
     if(receipt.rows[0]?.message_id)return;
     if(parsed.messageId){const existing=await client.query("SELECT 1 FROM message_email_details WHERE mailbox_id=$1 AND rfc_message_id=$2",[row.id,parsed.messageId]);if(existing.rowCount)return;}
     const found=await client.query("SELECT DISTINCT co.id FROM contacts co JOIN contact_emails e ON e.contact_id=co.id WHERE co.account_id=$1 AND lower(e.email)=$2 AND co.entity_type='person'",[row.account_id,sender]);
@@ -123,7 +126,8 @@ async function archiveInbound(row:MailboxRow,uidValidity:string,uid:number,sourc
     const safeHtml=htmlSource?sanitizeEmailDisplayHtml(htmlSource):"";
     await client.query("INSERT INTO message_email_details(message_id,mailbox_id,subject,from_email,to_emails,rfc_message_id,in_reply_to,references_header,attachment_warning,quoted_body,html_body,html_render_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,1)",[messageId,row.id,subject,sender,JSON.stringify(toAddresses.length?toAddresses:[row.address]),parsed.messageId??null,parsed.inReplyTo??null,Array.isArray(parsed.references)?parsed.references.join(" "):parsed.references??null,warning||null,quotedBody||null,safeHtml||null]);
     for(const [position,item] of attachments.entries()){const contentId=item.contentId||`attachment-${position}`,isInline=Boolean(item.contentId)&&safeHtml.toLowerCase().includes(`cid:${contentId}`);await client.query("INSERT INTO message_email_attachments(message_id,media_id,position,file_name,mime_type,byte_size,content_id,is_inline) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",[messageId,item.id,position,item.name,item.mime,item.size,contentId,isInline]);}
-    await client.query("INSERT INTO email_inbound_receipts(mailbox_id,uid_validity,uid,message_id,error) VALUES($1,$2,$3,$4,NULL) ON CONFLICT(mailbox_id,uid_validity,uid) DO UPDATE SET message_id=$4,error=NULL",[row.id,uidValidity,uid,messageId]);
+    if(gmailMessageId)await client.query("INSERT INTO gmail_inbound_receipts(mailbox_id,gmail_message_id,message_id,error) VALUES($1,$2,$3,NULL) ON CONFLICT(mailbox_id,gmail_message_id) DO UPDATE SET message_id=$3,error=NULL",[row.id,gmailMessageId,messageId]);
+    else await client.query("INSERT INTO email_inbound_receipts(mailbox_id,uid_validity,uid,message_id,error) VALUES($1,$2,$3,$4,NULL) ON CONFLICT(mailbox_id,uid_validity,uid) DO UPDATE SET message_id=$4,error=NULL",[row.id,uidValidity,uid,messageId]);
     if(isProactiveOptOut(body))await suppressProactiveForContact(client,contactId,"email_unsubscribe");
     else await cancelProactiveForConversation(client,conversationId,"email_customer_replied");
   });
@@ -160,7 +164,9 @@ export async function restoreArchivedEmailHtml(client:ImapFlow,row:Pick<MailboxR
 export async function syncOneMailbox(mailboxId?:string):Promise<boolean>{
   const claimed=await pool.query(`UPDATE account_email_mailboxes SET claimed_until=now()+interval '2 minutes',next_sync_at=now()+interval '30 seconds' WHERE id=(SELECT id FROM account_email_mailboxes WHERE ($1::uuid IS NULL OR id=$1) AND enabled AND (next_sync_at<=now() OR $1::uuid IS NOT NULL) AND (claimed_until IS NULL OR claimed_until<now()) ORDER BY next_sync_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`,[mailboxId??null]);
   if(!claimed.rowCount)return false;
-  const row=claimed.rows[0] as MailboxRow;let client:ImapFlow|undefined;
+  const row=claimed.rows[0] as MailboxRow;
+  if(row.auth_type==="google")return syncGoogleMailbox(row);
+  let client:ImapFlow|undefined;
   try{
     const accessToken=claimed.rows[0].auth_type==='microsoft'?await microsoftMailboxToken(row.id):undefined;
     client=imapClient(row,undefined,accessToken);
@@ -193,6 +199,55 @@ export async function syncOneMailbox(mailboxId?:string):Promise<boolean>{
     await pool.query("UPDATE account_email_mailboxes SET last_error=$2,next_sync_at=now()+interval '2 minutes' WHERE id=$1",[row.id,(error instanceof Error?error.message:String(error)).slice(0,1000)]);
   }finally{
     await client?.logout().catch(()=>{});
+    await pool.query("UPDATE account_email_mailboxes SET claimed_until=NULL WHERE id=$1",[row.id]);
+  }
+  return true;
+}
+
+type GmailHistory={id:string;messagesAdded?:Array<{message:{id:string;internalDate?:string;labelIds?:string[]}}> ;labelsAdded?:Array<{message:{id:string;internalDate?:string;labelIds?:string[]}}>};
+type GmailMessage={id:string;threadId:string;internalDate?:string;labelIds?:string[];raw?:string};
+
+async function syncGoogleMailbox(row:MailboxRow):Promise<boolean>{
+  try{
+    if(!row.gmail_label_id){await pool.query("UPDATE account_email_mailboxes SET last_error='Gmail 收件标签尚未配置' WHERE id=$1",[row.id]);return true;}
+    if(!row.gmail_history_id){
+      const profile=await gmailApiRequest<{historyId:string}>(row.id,"/profile");
+      await pool.query("UPDATE account_email_mailboxes SET gmail_history_id=$2,last_error=NULL,last_synced_at=now() WHERE id=$1",[row.id,profile.historyId]);
+      return true;
+    }
+    const accessToken=await googleMailboxToken(row.id);
+    const gmailRequest=<T>(path:string)=>gmailRequestWithToken<T>(accessToken,path);
+    const historyItems=new Map<string,{internalDate?:string}>();let pageToken="",latestHistoryId=row.gmail_history_id;
+    for(let page=0;page<20;page++){
+      const params=new URLSearchParams({startHistoryId:row.gmail_history_id,historyTypes:"messageAdded",labelId:row.gmail_label_id});
+      params.append("historyTypes","labelAdded");if(pageToken)params.set("pageToken",pageToken);
+      const result=await gmailRequest<{history?:GmailHistory[];historyId:string;nextPageToken?:string}>(`/history?${params}`);
+      latestHistoryId=result.historyId;
+      for(const event of result.history??[])for(const item of [...(event.messagesAdded??[]),...(event.labelsAdded??[])])historyItems.set(item.message.id,{internalDate:item.message.internalDate});
+      if(!result.nextPageToken)break;
+      pageToken=result.nextPageToken;
+      if(page===19)throw new Error("gmail_history_page_limit_exceeded");
+    }
+    const errors:string[]=[];
+    for(const [messageId] of historyItems){
+      try{
+        const message=await gmailRequest<GmailMessage>(`/messages/${encodeURIComponent(messageId)}?format=raw`);
+        if(!message.labelIds?.includes(row.gmail_label_id))continue;
+        if(!message.raw)throw new Error("gmail_message_raw_missing");
+        const raw=Buffer.from(message.raw,"base64url");
+        const receivedAt=message.internalDate?new Date(Number(message.internalDate)):undefined;
+        await archiveInbound(row,"gmail",0,raw,receivedAt,message.id);
+        await pool.query("INSERT INTO gmail_inbound_receipts(mailbox_id,gmail_message_id) VALUES($1,$2) ON CONFLICT DO NOTHING",[row.id,message.id]);
+      }catch(error){
+        const detail=(error instanceof Error?error.message:String(error)).slice(0,1000);errors.push(detail);
+        await pool.query("INSERT INTO gmail_inbound_receipts(mailbox_id,gmail_message_id,error) VALUES($1,$2,$3) ON CONFLICT(mailbox_id,gmail_message_id) DO UPDATE SET error=$3",[row.id,messageId,detail]);
+      }
+    }
+    if(errors.length)throw new Error(errors[0]);
+    await pool.query("UPDATE account_email_mailboxes SET gmail_history_id=$2,last_error=NULL,last_synced_at=now() WHERE id=$1",[row.id,latestHistoryId]);
+  }catch(error){
+    await pool.query("UPDATE account_email_mailboxes SET last_error=$2,next_sync_at=now()+interval '2 minutes' WHERE id=$1",[row.id,(error instanceof Error?error.message:String(error)).slice(0,1000)]);
+  }finally{
     await pool.query("UPDATE account_email_mailboxes SET claimed_until=NULL WHERE id=$1",[row.id]);
   }
   return true;

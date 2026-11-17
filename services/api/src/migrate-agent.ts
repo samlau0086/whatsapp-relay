@@ -25,6 +25,7 @@ async function migrateAgentSchemaOnce():Promise<void>{
   channelMigrations.push("104_allow_timeline_conversation_delete.sql");
   channelMigrations.push("105_livechat_presence.sql");
   channelMigrations.push("106_conversation_origin_mode.sql");
+  channelMigrations.push("107_google_mailbox_labels.sql");
   const migrations=Boolean(schema.rows[0]?.channel_schema)?channelMigrations:[...legacyMigrations,...channelMigrations];
   for(const migration of migrations){
     const candidates=[join(process.cwd(),"migrations",migration),join(process.cwd(),"..","..","infra","postgres","migrations",migration),join(process.cwd(),"infra","postgres","migrations",migration)];

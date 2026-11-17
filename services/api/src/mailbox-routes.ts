@@ -7,6 +7,8 @@ import { emailShell, escapeHtml, sanitizeEmailHtml } from "./email.js";
 import {resolveEmailProvider,mailboxEmailTransport} from "./email-provider-routing.js";
 import { syncOneMailbox, verifyMailbox } from "./mailboxes.js";
 import { microsoftMailboxToken, registerMailboxOAuth } from "./mailbox-oauth.js";
+import { registerGoogleMailboxOAuth } from "./google-mailbox-oauth.js";
+import { gmailApiRequest } from "./google-mailbox-oauth.js";
 import { conversationEmailSchema, mailboxSettingsSchema } from "./schemas.js";
 import { decryptAtRest, encryptAtRest } from "./security.js";
 
@@ -14,9 +16,10 @@ const updateSchema=mailboxSettingsSchema.omit({imapPassword:true,smtpPassword:tr
 
 export function registerMailboxRoutes(app:FastifyInstance):void{
   registerMailboxOAuth(app);
+  registerGoogleMailboxOAuth(app);
   app.get("/api/v1/mailboxes",{preHandler:authenticate},async(request,reply)=>{
     if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
-    const result=await pool.query("SELECT id,account_id,address,display_name,is_primary,enabled,auth_type,imap_host,imap_port,imap_username,smtp_host,smtp_port,smtp_tls,smtp_username,last_error,last_synced_at,created_at FROM account_email_mailboxes WHERE ($1::uuid[] IS NULL OR account_id=ANY($1)) ORDER BY account_id,is_primary DESC,address",[request.principal.accountIds]);
+    const result=await pool.query("SELECT id,account_id,address,display_name,is_primary,enabled,auth_type,gmail_label_id,imap_host,imap_port,imap_username,smtp_host,smtp_port,smtp_tls,smtp_username,last_error,last_synced_at,created_at FROM account_email_mailboxes WHERE ($1::uuid[] IS NULL OR account_id=ANY($1)) ORDER BY account_id,is_primary DESC,address",[request.principal.accountIds]);
     const senders=await pool.query(`SELECT a.id account_id,p.name,p.config->>'fromEmail' address,p.config->>'fromName' display_name
       FROM channel_accounts a LEFT JOIN account_email_providers binding ON binding.account_id=a.id
       JOIN email_provider_instances p ON p.id=binding.provider_id OR (binding.provider_id IS NULL AND p.is_default)
@@ -38,7 +41,7 @@ export function registerMailboxRoutes(app:FastifyInstance):void{
     if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
     const {id}=request.params as {id:string},parsed=updateSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
     const oauth=await pool.query("SELECT auth_type FROM account_email_mailboxes WHERE id=$1",[id]);
-    if(oauth.rows[0]?.auth_type==='microsoft')return reply.code(409).send({error:"oauth_mailbox_requires_reauthorization",message:"Microsoft 邮箱请使用重新授权更新连接"});
+    if(oauth.rows[0]?.auth_type==='microsoft'||oauth.rows[0]?.auth_type==='google')return reply.code(409).send({error:"oauth_mailbox_requires_reauthorization",message:"OAuth 邮箱请使用重新授权或专用设置更新连接"});
     const current=await pool.query("SELECT imap_secret_encrypted,smtp_secret_encrypted FROM account_email_mailboxes WHERE id=$1",[id]);if(!current.rowCount)return reply.code(404).send({error:"not_found"});
     const value=parsed.data,imapPassword=value.imapPassword||decryptAtRest(current.rows[0].imap_secret_encrypted,config.DATA_ENCRYPTION_KEY),smtpPassword=value.smtpPassword||decryptAtRest(current.rows[0].smtp_secret_encrypted,config.DATA_ENCRYPTION_KEY);
     const account=await pool.query("SELECT 1 FROM channel_accounts WHERE id=$1 AND platform IN ('whatsapp','livechat')",[value.accountId]);if(!account.rowCount)return reply.code(404).send({error:"account_not_found"});
@@ -68,6 +71,10 @@ export function registerMailboxRoutes(app:FastifyInstance):void{
   app.post("/api/v1/admin/mailboxes/:id/test",{preHandler:authenticate},async(request,reply)=>{
     if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
     const {id}=request.params as {id:string};const result=await pool.query("SELECT * FROM account_email_mailboxes WHERE id=$1",[id]);if(!result.rowCount)return reply.code(404).send({error:"not_found"});const row=result.rows[0];
+    if(row.auth_type==='google'){
+      try{await gmailApiRequest(id,"/profile");return {ok:true,labelConfigured:Boolean(row.gmail_label_id)};}
+      catch{return reply.code(400).send({error:"mailbox_connection_failed",message:"无法连接 Gmail API，请重新授权或检查 Google 应用权限。"});}
+    }
     if(row.auth_type==='microsoft'){
       try{const accessToken=await microsoftMailboxToken(id);return await verifyMailbox({accountId:row.account_id,address:row.address,displayName:row.display_name,isPrimary:row.is_primary,enabled:row.enabled,imapHost:row.imap_host,imapPort:row.imap_port,imapUsername:row.imap_username,imapPassword:'',smtpHost:row.smtp_host,smtpPort:row.smtp_port,smtpTls:row.smtp_tls,smtpUsername:row.smtp_username,smtpPassword:''},accessToken);}catch{return reply.code(400).send({error:"mailbox_connection_failed",message:"请重新授权或检查 Microsoft 邮箱 IMAP/SMTP 设置"});}
     }
@@ -105,6 +112,7 @@ export function registerMailboxRoutes(app:FastifyInstance):void{
       resolveEmailProvider(pool,accountId),
     ]);
     if((value.mailboxId&&!mailbox.rowCount)||(!mailbox.rowCount&&!selectedProvider)||!recipient.rowCount)return reply.code(409).send({error:"email_address_unavailable"});
+    if(mailbox.rows[0]?.auth_type==="google"&&!selectedProvider)return reply.code(409).send({error:"email_provider_unavailable",message:"Gmail API 仅用于收件，请先为该渠道配置邮件发送 Provider。"});
     if(media.rowCount!==new Set(value.attachmentIds).size||value.attachmentIds.reduce((sum,id)=>sum+Number(media.rows.find(row=>row.id===id)?.byte_size??0),0)>25*1024*1024||media.rows.some(row=>Number(row.byte_size)>20*1024*1024))return reply.code(413).send({error:"email_attachments_invalid"});
     const mailboxRow=mailbox.rows[0],row=mailboxRow??{id:null}, {provider,config:providerConfig,secret:providerSecret}=mailboxRow?mailboxEmailTransport(mailboxRow,selectedProvider):{provider:selectedProvider!.provider,config:selectedProvider!.config,secret:selectedProvider!.secret_encrypted};
     const result=await transaction(async client=>{

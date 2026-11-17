@@ -28,6 +28,7 @@ export async function queueProactiveEmail(client:PoolClient,input:{jobId:string;
   const row=mailbox.rows[0];
   const selected=await resolveEmailProvider(client,accountId);
   const {provider,config,secret}=mailboxEmailTransport(row,selected,true);
+  if(row.auth_type==="google"&&!selected)throw new Error("mailbox_send_unavailable");
   if(!secret&&row.auth_type!=="microsoft")throw new Error("mailbox_send_unavailable");
   const previous=await client.query(`SELECT d.rfc_message_id,d.references_header,d.subject,d.message_id FROM message_email_details d
     JOIN messages m ON m.id=d.message_id WHERE m.conversation_id=$1 AND d.mailbox_id=$2 AND d.rfc_message_id IS NOT NULL
