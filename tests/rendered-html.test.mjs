@@ -12,7 +12,15 @@ test("会话邮箱映射渠道包含 Live Chat，默认值和编辑选项使用�
   assert.match(panel,/mailboxChannels\.map\(/);
   assert.match(panel,/a\.platform==="livechat"\?"Live Chat":"WhatsApp"/);
   assert.doesNotMatch(panel,/映射 WhatsApp 账号|邮箱归属于 WhatsApp 账号/);
-  assert.match(panel,/disabled=\{Boolean\(editing\.id\)&&editing\.authType==="microsoft"\}/);
+  for(const control of [/<label>映射渠道<select disabled=\{([^}]+)\}/,/<label>邮箱地址<input type="email" disabled=\{([^}]+)\}/]){
+    const condition=panel.match(control)?.[1];
+    assert.ok(condition,"渠道和邮箱地址必须保留 OAuth 编辑保护");
+    const isDisabled=new Function("editing",`return (${condition});`);
+    for(const authType of ["password","microsoft","google"]){
+      assert.equal(isDisabled({id:"mailbox-id",authType}),authType!=="password",`${authType} 已有邮箱的编辑限制`);
+      assert.equal(isDisabled({authType}),false,`${authType} 新增邮箱允许填写渠道和地址`);
+    }
+  }
 });
 
 test("会话发件选项展示渠道 Provider 的名称和实际发件地址",async()=>{
