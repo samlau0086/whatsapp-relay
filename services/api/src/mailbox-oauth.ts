@@ -43,7 +43,7 @@ export function registerMailboxOAuth(app:FastifyInstance):void{
     if(!parsed.success)return reply.code(400).send({error:"invalid_request"});
     const {accountId,address}=parsed.data;
     if(!canAccessAccount(request.principal,accountId))return reply.code(403).send({error:"account_forbidden"});
-    const account=await pool.query("SELECT 1 FROM channel_accounts WHERE id=$1 AND platform='whatsapp'",[accountId]);
+    const account=await pool.query("SELECT 1 FROM channel_accounts WHERE id=$1 AND platform IN ('whatsapp','livechat')",[accountId]);
     if(!account.rowCount)return reply.code(404).send({error:"account_not_found"});
     const state=randomBytes(32).toString("base64url"),verifier=randomBytes(48).toString("base64url");
     await pool.query("DELETE FROM mailbox_oauth_states WHERE expires_at<now()");

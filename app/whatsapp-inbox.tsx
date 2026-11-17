@@ -6087,7 +6087,8 @@ function TaskAgentSettingsPanel({
 
 function MailboxSettingsPanel({token,onToken,onToast,accounts}:{token:string;onToken:(token:string)=>void;onToast:(text:string)=>void;accounts:Account[]}){
   const [items,setItems]=useState<Array<Record<string,unknown>>>([]),[editing,setEditing]=useState<Record<string,unknown>|null>(null),[busy,setBusy]=useState(false),[syncingId,setSyncingId]=useState(""),[error,setError]=useState("");
-  const blank=()=>({accountId:accounts.find(account=>account.platform==="whatsapp")?.id??"",address:"",displayName:"",isPrimary:false,enabled:true,authType:"password",imapHost:"",imapPort:993,imapUsername:"",imapPassword:"",smtpHost:"",smtpPort:465,smtpTls:"tls",smtpUsername:"",smtpPassword:""});
+  const mailboxChannels=accounts.filter(account=>account.platform==="whatsapp"||account.platform==="livechat");
+  const blank=()=>({accountId:mailboxChannels[0]?.id??"",address:"",displayName:"",isPrimary:false,enabled:true,authType:"password",imapHost:"",imapPort:993,imapUsername:"",imapPassword:"",smtpHost:"",smtpPort:465,smtpTls:"tls",smtpUsername:"",smtpPassword:""});
   const load=useCallback(async()=>{const result=await authorizedFetch("/api/v1/mailboxes",token);if(result.token!==token)onToken(result.token);const body=await result.response.json().catch(()=>({})) as {data?:Array<Record<string,unknown>>};if(result.response.ok)setItems(body.data??[]);},[token,onToken]);
   useEffect(()=>{const timer=window.setTimeout(()=>void load(),0);return()=>window.clearTimeout(timer);},[load]);
   async function save(){if(!editing)return;setBusy(true);setError("");const id=editing.id?String(editing.id):"";const result=await authorizedFetch(id?`/api/v1/admin/mailboxes/${id}`:"/api/v1/admin/mailboxes",token,{method:id?"PUT":"POST",headers:{"content-type":"application/json"},body:JSON.stringify(editing)});if(result.token!==token)onToken(result.token);if(!result.response.ok){const body=await result.response.json().catch(()=>({}));setError(String(body.message??body.error??"保存失败"));}else{setEditing(null);onToast("邮箱配置已保存");await load();}setBusy(false);}
@@ -6132,7 +6133,7 @@ function MailboxSettingsPanel({token,onToken,onToast,accounts}:{token:string;onT
       <header>
         <div>
           <h2>会话邮箱配置</h2>
-          <p>邮箱归属于 WhatsApp 账号；收件使用 IMAP，发件使用渠道指定或工作区默认 Provider，未配置时使用邮箱 SMTP。</p>
+          <p>邮箱归属于 WhatsApp 或 Live Chat 渠道；收件使用 IMAP，发件使用渠道指定或工作区默认 Provider，未配置时使用邮箱 SMTP。</p>
         </div>
         <button className="primary-action" onClick={() => setEditing(blank())}><Plus size={14}/>新增邮箱</button>
       </header>
@@ -6156,7 +6157,7 @@ function MailboxSettingsPanel({token,onToken,onToast,accounts}:{token:string;onT
         <div className="provider-form mailbox-editor">
           {!editing.id&&<label>验证方式<select value={String(editing.authType??"password")} onChange={event=>setEditing({...editing,authType:event.target.value})}><option value="password">邮箱密码 / 应用密码</option><option value="microsoft">Microsoft OAuth (Outlook / Live / Hotmail)</option></select></label>}
           <div className="provider-form-grid">
-            <label>映射 WhatsApp 账号<select disabled={Boolean(editing.id)&&editing.authType==="microsoft"} value={String(editing.accountId ?? "")} onChange={e => setEditing({...editing, accountId: e.target.value})}>{accounts.filter(a => a.platform === "whatsapp").map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
+            <label>映射渠道<select disabled={Boolean(editing.id)&&editing.authType==="microsoft"} value={String(editing.accountId ?? "")} onChange={e => setEditing({...editing, accountId: e.target.value})}>{mailboxChannels.map(a => <option key={a.id} value={a.id}>{a.platform==="livechat"?"Live Chat":"WhatsApp"} · {a.name}</option>)}</select></label>
             <label>邮箱地址<input type="email" disabled={Boolean(editing.id)&&editing.authType==="microsoft"} value={String(editing.address ?? "")} onChange={e => setEditing({...editing, address: e.target.value})}/></label>
           </div>
           {editing.authType!=="microsoft"&&<>

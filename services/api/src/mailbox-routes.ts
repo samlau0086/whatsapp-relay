@@ -27,7 +27,7 @@ export function registerMailboxRoutes(app:FastifyInstance):void{
     if(request.principal?.role!=="admin")return reply.code(403).send({error:"admin_required"});
     const parsed=mailboxSettingsSchema.safeParse(request.body);if(!parsed.success)return reply.code(400).send({error:"invalid_request",details:parsed.error.flatten()});
     const value=parsed.data;
-    const account=await pool.query("SELECT 1 FROM channel_accounts WHERE id=$1 AND platform='whatsapp'",[value.accountId]);if(!account.rowCount)return reply.code(404).send({error:"account_not_found"});
+    const account=await pool.query("SELECT 1 FROM channel_accounts WHERE id=$1 AND platform IN ('whatsapp','livechat')",[value.accountId]);if(!account.rowCount)return reply.code(404).send({error:"account_not_found"});
     try{await verifyMailbox(value);}catch(error){return reply.code(400).send({error:"mailbox_connection_failed",message:String(error)});}
     try{const result=await transaction(async client=>{
       if(value.isPrimary)await client.query("UPDATE account_email_mailboxes SET is_primary=false WHERE account_id=$1",[value.accountId]);
@@ -41,7 +41,7 @@ export function registerMailboxRoutes(app:FastifyInstance):void{
     if(oauth.rows[0]?.auth_type==='microsoft')return reply.code(409).send({error:"oauth_mailbox_requires_reauthorization",message:"Microsoft 邮箱请使用重新授权更新连接"});
     const current=await pool.query("SELECT imap_secret_encrypted,smtp_secret_encrypted FROM account_email_mailboxes WHERE id=$1",[id]);if(!current.rowCount)return reply.code(404).send({error:"not_found"});
     const value=parsed.data,imapPassword=value.imapPassword||decryptAtRest(current.rows[0].imap_secret_encrypted,config.DATA_ENCRYPTION_KEY),smtpPassword=value.smtpPassword||decryptAtRest(current.rows[0].smtp_secret_encrypted,config.DATA_ENCRYPTION_KEY);
-    const account=await pool.query("SELECT 1 FROM channel_accounts WHERE id=$1 AND platform='whatsapp'",[value.accountId]);if(!account.rowCount)return reply.code(404).send({error:"account_not_found"});
+    const account=await pool.query("SELECT 1 FROM channel_accounts WHERE id=$1 AND platform IN ('whatsapp','livechat')",[value.accountId]);if(!account.rowCount)return reply.code(404).send({error:"account_not_found"});
     try{await verifyMailbox({...value,imapPassword,smtpPassword});}catch(error){return reply.code(400).send({error:"mailbox_connection_failed",message:String(error)});}
     try{await transaction(async client=>{
       if(value.isPrimary)await client.query("UPDATE account_email_mailboxes SET is_primary=false WHERE account_id=$1 AND id<>$2",[value.accountId,id]);

@@ -3,6 +3,18 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 
+test("会话邮箱映射渠道包含 Live Chat，默认值和编辑选项使用同一渠道集合",async()=>{
+  const source=await readFile(new URL("../app/whatsapp-inbox.tsx",import.meta.url),"utf8");
+  const panel=source.slice(source.indexOf("function MailboxSettingsPanel("),source.indexOf("type ProactiveTemplate="));
+  assert.match(panel,/mailboxChannels=accounts\.filter\(account=>account\.platform==="whatsapp"\|\|account\.platform==="livechat"\)/);
+  assert.match(panel,/accountId:mailboxChannels\[0\]\?\.id\?\?""/);
+  assert.match(panel,/<label>映射渠道<select/);
+  assert.match(panel,/mailboxChannels\.map\(/);
+  assert.match(panel,/a\.platform==="livechat"\?"Live Chat":"WhatsApp"/);
+  assert.doesNotMatch(panel,/映射 WhatsApp 账号|邮箱归属于 WhatsApp 账号/);
+  assert.match(panel,/disabled=\{Boolean\(editing\.id\)&&editing\.authType==="microsoft"\}/);
+});
+
 test("会话发件选项展示渠道 Provider 的名称和实际发件地址",async()=>{
   const inbox=await readFile(new URL("../app/whatsapp-inbox.tsx",import.meta.url),"utf8");
   assert.match(inbox,/body\.senders\?\.find\(item=>item\.account_id===sendingConversation\.accountId\)/);

@@ -2,6 +2,8 @@
 
 ## 多实例邮件 Provider 与渠道配置
 
+“系统设置 → 邮件发送 → 会话邮箱配置”的“映射渠道”支持选择 WhatsApp 或 Live Chat 渠道，密码／应用密码和 Microsoft OAuth 两种验证方式均适用。渠道选项显示类型及名称，仅有 Live Chat 渠道时也可直接新增邮箱。Microsoft OAuth 邮箱编辑时仍不可变更映射渠道或邮箱地址；重新授权沿用原渠道。此调整需要更新工作台和 API，不需要新增数据库迁移。
+
 管理员在“系统设置 → 邮件发送”可分别新增多个 SMTP 和 Resend 实例，每个实例拥有独立名称、发件人、密钥及启用状态。密钥继续加密保存，编辑时留空保留原值；可向测试邮箱发送测试邮件。SMTP 启用保存时会验证连接。可将一个已启用实例设为工作区默认，启用其他实例不会停用它。
 
 在同页“渠道邮件 Provider”中，为每个 WhatsApp、Messenger 或 LiveChat channel 独立选择已保存并启用的实例，再点击该行“保存”。选择“工作区默认”取消独立绑定。会话邮件、订单/产品邮件、主动邮件及 LiveChat 会话记录使用该路由。显式绑定的实例停用或缺少密钥时拒绝新邮件入队，不会静默改用其他实例。
@@ -872,7 +874,7 @@ GitHub Actions 自动部署到 VPS 的准备步骤、Secrets 配置、HTTPS 反�
    - 添加生产环境变量 `MICROSOFT_MAIL_CLIENT_ID`，值为客户端 ID。
    - 添加生产 Secret `MICROSOFT_MAIL_CLIENT_SECRET`，值为客户端密码的“值”。
    - 重新运行部署流程。工作流会把配置写入 API 和邮件 Worker 的服务器环境，不会发送到浏览器。
-8. 部署完成后，在 **系统设置 → 邮件发送 → 会话邮箱配置 → 新增邮箱** 中选择 **Microsoft OAuth (Outlook / Live / Hotmail)**，填写邮箱地址和映射的 WhatsApp 账号，然后点击授权。
+8. 部署完成后，在 **系统设置 → 邮件发送 → 会话邮箱配置 → 新增邮箱** 中选择 **Microsoft OAuth (Outlook / Live / Hotmail)**，填写邮箱地址，并在“映射渠道”选择 WhatsApp 或 Live Chat 渠道，然后点击授权。
 
 如果是手动或本地 Docker 部署，在项目根目录 `.env` 中配置：
 
