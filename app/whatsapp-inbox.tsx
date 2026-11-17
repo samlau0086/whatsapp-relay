@@ -6087,6 +6087,8 @@ function TaskAgentSettingsPanel({
 
 function MailboxSettingsPanel({token,onToken,onToast,accounts}:{token:string;onToken:(token:string)=>void;onToast:(text:string)=>void;accounts:Account[]}){
   const [items,setItems]=useState<Array<Record<string,unknown>>>([]),[editing,setEditing]=useState<Record<string,unknown>|null>(null),[busy,setBusy]=useState(false),[syncingId,setSyncingId]=useState(""),[error,setError]=useState(""),[gmailLabels,setGmailLabels]=useState<Record<string,Array<{id:string;name:string}>>>({});
+  const [gmailLabelErrors,setGmailLabelErrors]=useState<Record<string,string>>({});
+  const googleMailboxIds=JSON.stringify(items.filter(item=>item.auth_type==="google").map(item=>String(item.id)).sort());
   const mailboxChannels=accounts.filter(account=>account.platform==="whatsapp"||account.platform==="livechat");
   const blank=()=>({accountId:mailboxChannels[0]?.id??"",address:"",displayName:"",isPrimary:false,enabled:true,authType:"password",imapHost:"",imapPort:993,imapUsername:"",imapPassword:"",smtpHost:"",smtpPort:465,smtpTls:"tls",smtpUsername:"",smtpPassword:""});
   const load=useCallback(async()=>{const result=await authorizedFetch("/api/v1/mailboxes",token);if(result.token!==token)onToken(result.token);const body=await result.response.json().catch(()=>({})) as {data?:Array<Record<string,unknown>>};if(result.response.ok)setItems(body.data??[]);},[token,onToken]);
@@ -6123,10 +6125,22 @@ function MailboxSettingsPanel({token,onToken,onToast,accounts}:{token:string;onT
     try{const result=await authorizedFetch("/api/v1/admin/mailboxes/google/authorize",token,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accountId,address})});if(result.token!==token)onToken(result.token);const body=await result.response.json() as {url?:string;message?:string};if(!result.response.ok||!body.url)throw new Error(body.message??"无法发起 Google 授权");if(popup)popup.location.href=body.url;else window.location.assign(body.url);}
     catch(error){popup?.close();const message=error instanceof Error?error.message:"授权失败";setError(message);onToast(message);}finally{setBusy(false);}
   }
-  async function loadGoogleLabels(id:string){
-    const result=await authorizedFetch(`/api/v1/admin/mailboxes/${id}/google/labels`,token);if(result.token!==token)onToken(result.token);const body=await result.response.json().catch(()=>({})) as {labels?:Array<{id:string;name:string}>};if(result.response.ok)setGmailLabels(current=>({...current,[id]:(body.labels??[]).filter(item=>!item.id.startsWith("CATEGORY_"))}));
-  }
+  const loadGoogleLabels=useCallback(async(id:string)=>{
+    try{
+      const result=await authorizedFetch(`/api/v1/admin/mailboxes/${id}/google/labels`,token);
+      if(result.token!==token)onToken(result.token);
+      const body=await result.response.json() as {labels?:Array<{id:string;name:string}>;message?:string};
+      if(!result.response.ok)throw new Error(body.message??"无法读取 Gmail 标签，请稍后重试");
+      setGmailLabels(current=>({...current,[id]:body.labels??[]}));
+      setGmailLabelErrors(current=>({...current,[id]:""}));
+    }catch(error){setGmailLabelErrors(current=>({...current,[id]:error instanceof Error?error.message:"无法读取 Gmail 标签，请稍后重试"}));}
+  },[token,onToken]);
+  useEffect(()=>{
+    const ids=JSON.parse(googleMailboxIds) as string[];
+    for(const id of ids)void loadGoogleLabels(id);
+  },[googleMailboxIds,loadGoogleLabels]);
   async function chooseGoogleLabel(id:string,labelId:string){
+    if(!labelId||items.some(item=>String(item.id)===id&&item.gmail_label_id===labelId))return;
     setBusy(true);try{const result=await authorizedFetch(`/api/v1/admin/mailboxes/${id}/google/label`,token,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({labelId})});if(result.token!==token)onToken(result.token);if(!result.response.ok)throw new Error("保存 Gmail 标签失败");await load();onToast("Gmail 收件标签已更新");}catch(error){onToast(error instanceof Error?error.message:"保存标签失败");}finally{setBusy(false);}
   }
   useEffect(()=>{const refresh=()=>void load();window.addEventListener("focus",refresh);return()=>window.removeEventListener("focus",refresh);},[load]);
@@ -6158,7 +6172,7 @@ function MailboxSettingsPanel({token,onToken,onToast,accounts}:{token:string;onT
           <span>
             <button className="secondary-action" onClick={() => void syncNow(String(item.id))} disabled={Boolean(syncingId)||!item.enabled}>{syncingId===String(item.id)?"正在同步…":"立即同步"}</button><button className="secondary-action" onClick={() => void test(String(item.id))}>测试连接</button>
             {item.auth_type==="microsoft"&&<><span>Microsoft OAuth</span><button className="secondary-action" disabled={busy} onClick={()=>void authorizeMicrosoft(String(item.account_id),String(item.address))}>重新授权</button></>}
-            {item.auth_type==="google"&&<><span>Google API</span><select aria-label={`${String(item.address)} Gmail 收件标签`} value={String(item.gmail_label_id??"")} disabled={busy} onFocus={()=>void loadGoogleLabels(String(item.id))} onChange={event=>void chooseGoogleLabel(String(item.id),event.target.value)}><option value="">加载/选择收件标签</option>{(gmailLabels[String(item.id)]??[]).map(label=><option key={label.id} value={label.id}>{label.name}</option>)}</select><button className="secondary-action" disabled={busy} onClick={()=>void authorizeGoogle(String(item.account_id),String(item.address))}>重新授权</button></>}
+            {item.auth_type==="google"&&<><span>Google API</span><select aria-label={`${String(item.address)} Gmail 收件标签`} value={String(item.gmail_label_id??"")} disabled={busy} onFocus={()=>void loadGoogleLabels(String(item.id))} onChange={event=>void chooseGoogleLabel(String(item.id),event.target.value)}><option value="" disabled>选择收件标签</option>{Boolean(item.gmail_label_id)&&!(gmailLabels[String(item.id)]??[]).some(label=>label.id===item.gmail_label_id)&&<option value={String(item.gmail_label_id)}>已保存标签（{String(item.gmail_label_id)}）</option>}{(gmailLabels[String(item.id)]??[]).map(label=><option key={label.id} value={label.id}>{label.name}</option>)}</select>{gmailLabelErrors[String(item.id)]&&<small role="alert" className="login-error">{gmailLabelErrors[String(item.id)]}</small>}<button className="secondary-action" disabled={busy} onClick={()=>void authorizeGoogle(String(item.account_id),String(item.address))}>重新授权</button></>}
             <button className="secondary-action" onClick={() => setEditing({...item, accountId: String(item.account_id),displayName:String(item.display_name??""),isPrimary:Boolean(item.is_primary),smtpUsername:String(item.smtp_username??""), authType:item.auth_type==="microsoft"?"microsoft":item.auth_type==="google"?"google":"password",imapHost: String(item.imap_host ?? ""), imapPort: Number(item.imap_port ?? 993), imapUsername: String(item.imap_username ?? ""), smtpHost: String(item.smtp_host ?? ""), smtpPort: Number(item.smtp_port ?? 465), smtpTls: String(item.smtp_tls ?? "tls")})}>编辑</button>
             <button className="danger-text" onClick={() => void remove(String(item.id))}><Trash2 size={13}/>删除</button>
           </span>
