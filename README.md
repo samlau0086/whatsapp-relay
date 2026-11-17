@@ -1,5 +1,13 @@
 # RelayDesk
 
+## UI 标准与组件验收
+
+UI 治理基线见 [UI 稳定性标准](docs/ui-standards.md)，项目开发约定见 [AGENTS.md](AGENTS.md)。统一组件位于 `app/ui/`，包含按钮、字段、弹窗、抽屉、浮层与异步状态；使用 React、lucide-react 和浏览器原生 dialog/popover，不新增生产依赖。新样式限定为 `rd-` 命名空间，不改变存量业务选择器。
+
+运行 `npm run dev` 后访问 `/ui-lab`，可操作独立的组件验收页；仅使用固定测试数据和模拟保存结果，不读取真实客户或调用业务 API。本轮提供治理底座，旧界面仍需分模块迁移，不代表历史 UI 已全部符合标准。原生浮层需现代浏览器支持。
+
+基础验证：`npm run lint`、`npm test`。组件浏览器回归：`npm run test:ui`，需本机可解析 Playwright 及 Chromium；覆盖桌面、手机与低高度视口，截图输出到 `outputs/ui-lab/`。真实缩放、软键盘和跨浏览器验收要求见标准文档。
+
 网站品牌图使用根目录的 `relaydesk-logo.png`：`public/relaydesk-logo-512.png` 保留完整图案和文字，`public/relaydesk-icon-{32,64,180,192,512}.png` 为从原图裁出的标志，分别用于浏览器图标、页面、Apple 图标及其他图标用途。工作台、公开页面与浏览器标签共用该标志；更新源图后需重新生成这些尺寸并重新构建部署。
 
 ## 多实例邮件 Provider 与渠道配置

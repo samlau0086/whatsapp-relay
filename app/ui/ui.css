@@ -1,0 +1,103 @@
+/* 新组件仅使用 rd- 命名空间，不覆盖存量业务选择器。 */
+:root {
+  --rd-text: #20302b;
+  --rd-muted: #586861;
+  --rd-surface: #ffffff;
+  --rd-subtle: #f4f6f5;
+  --rd-border: #c9d4cf;
+  --rd-primary: #087546;
+  --rd-primary-hover: #075f3a;
+  --rd-danger: #b02d36;
+  --rd-info: #245faa;
+  --rd-warning: #885b10;
+  --rd-radius: 6px;
+  --rd-space-1: 4px;
+  --rd-space-2: 8px;
+  --rd-space-3: 12px;
+  --rd-space-4: 16px;
+  --rd-space-6: 24px;
+  --rd-control: 40px;
+}
+.rd-button {
+  box-sizing: border-box; position: relative; display: inline-flex; align-items: center; justify-content: center;
+  gap: 8px; min-height: var(--rd-control); min-width: 40px; max-width: 100%; padding: 8px 14px;
+  border: 1px solid var(--rd-border); border-radius: var(--rd-radius); background: var(--rd-surface);
+  color: var(--rd-text); font: inherit; font-size: 14px; font-weight: 600; line-height: 20px;
+  letter-spacing: 0; vertical-align: middle; cursor: pointer; text-align: center;
+}
+.rd-button > span { min-width: 0; overflow-wrap: anywhere; }
+.rd-button > svg { flex: 0 0 auto; }
+.rd-button:hover:not(:disabled) { background: #edf2ef; }
+.rd-button--primary { color: #fff; background: var(--rd-primary); border-color: var(--rd-primary); }
+.rd-button--primary:hover:not(:disabled) { background: var(--rd-primary-hover); }
+.rd-button--danger { color: #fff; background: var(--rd-danger); border-color: var(--rd-danger); }
+.rd-button--danger:hover:not(:disabled) { background: #92252d; }
+.rd-button--ghost { background: transparent; border-color: transparent; }
+.rd-button--compact { min-height: 32px; padding: 5px 10px; font-size: 13px; }
+.rd-button:disabled { cursor: not-allowed; opacity: .55; }
+.rd-button[aria-busy="true"] { opacity: .8; }
+.rd-icon-button { width: 40px; height: 40px; padding: 0; flex: 0 0 40px; }
+.rd-icon-button > span:empty { display: none; }
+.rd-button-content-hidden { opacity: 0; }
+.rd-button-icon-hidden { visibility: hidden; }
+.rd-button-spinner { position: absolute; left: calc(50% - 8px); top: calc(50% - 8px); }
+.rd-button:focus-visible, .rd-field :is(input, select, textarea):focus-visible,
+.rd-overlay:focus-visible, .rd-lab a:focus-visible, .rd-lab select:focus-visible {
+  outline: 2px solid var(--rd-info); outline-offset: 3px;
+}
+.rd-field { display: grid; align-content: start; gap: 6px; min-width: 0; font-size: 14px; color: var(--rd-text); }
+.rd-field > label { font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.rd-field > label > span { color: var(--rd-danger); }
+.rd-field :is(input:not([type=checkbox]):not([type=radio]):not([type=color]), select, textarea) {
+  box-sizing: border-box; display: block; width: 100%; min-width: 0; min-height: var(--rd-control);
+  padding: 9px 10px; border: 1px solid var(--rd-border); border-radius: var(--rd-radius);
+  background: var(--rd-surface); color: var(--rd-text); font: inherit; font-size: 14px; line-height: 20px;
+}
+.rd-field textarea { min-height: 100px; resize: vertical; }
+.rd-field :is(input, select, textarea):disabled { background: var(--rd-subtle); color: var(--rd-muted); cursor: not-allowed; }
+.rd-field [aria-invalid=true] { border-color: var(--rd-danger) !important; }
+.rd-field p { margin: 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.rd-field-hint { color: var(--rd-muted); }
+.rd-field-error { color: var(--rd-danger); }
+.rd-overlay {
+  box-sizing: border-box; width: min(580px, calc(100% - 32px)); max-width: none;
+  max-height: calc(100dvh - 32px); padding: 0; margin: auto;
+  border: 1px solid var(--rd-border); border-radius: 8px;
+  color: var(--rd-text); background: var(--rd-surface); overflow: hidden;
+  box-shadow: 0 20px 70px #172c3033; font-size: 14px; line-height: 1.5; letter-spacing: 0;
+}
+.rd-overlay[open] { display: flex; flex-direction: column; }
+.rd-overlay::backdrop { background: #15232266; }
+.rd-overlay-header { display: flex; flex: 0 0 auto; align-items: flex-start; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--rd-border); }
+.rd-overlay-header > div { min-width: 0; flex: 1; }
+.rd-overlay-header h2 { margin: 0; font-size: 18px; font-weight: 650; line-height: 1.5; overflow-wrap: anywhere; }
+.rd-overlay-header p { margin: 6px 0 0; color: var(--rd-muted); font-size: 13px; overflow-wrap: anywhere; }
+.rd-overlay-body { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 20px; }
+.rd-overlay-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
+.rd-overlay-footer { flex: 0 0 auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--rd-border); }
+.rd-overlay--drawer { width: min(460px, calc(100% - 16px)); height: 100dvh; max-height: 100dvh; margin: 0 0 0 auto; border-radius: 0; }
+.rd-popover-anchor { display: inline-block; max-width: 100%; }
+.rd-popover {
+  box-sizing: border-box; position: fixed; inset: auto; margin: 0; width: 260px; max-width: calc(100vw - 24px);
+  padding: 12px; border: 1px solid var(--rd-border); border-radius: var(--rd-radius); overflow: auto;
+  background: var(--rd-surface); color: var(--rd-text); box-shadow: 0 8px 24px #172c3026;
+  font-size: 14px; line-height: 1.5; letter-spacing: 0; overflow-wrap: anywhere;
+}
+.rd-popover > .rd-button { width: 100%; margin-top: 8px; }
+.rd-async { min-width: 0; }
+.rd-async-notice { display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 180px; padding: 16px; gap: 12px; color: var(--rd-muted); font-size: 14px; text-align: center; overflow-wrap: anywhere; }
+.rd-async-notice > svg { flex: 0 0 auto; }
+.rd-async-notice[role=alert] { color: var(--rd-danger); }
+.rd-async-notice--inline { flex-direction: row; justify-content: flex-start; min-height: 56px; text-align: left; padding: 12px; border-bottom: 1px solid var(--rd-border); }
+.rd-async-notice--inline > span { min-width: 0; flex: 1; }
+.rd-spin { animation: rd-spin 1s linear infinite; }
+@keyframes rd-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .rd-spin { animation: none; } }
+@media (max-width: 600px) {
+  .rd-overlay { width: calc(100% - 16px); max-height: calc(100dvh - 16px); }
+  .rd-overlay--drawer { height: 100dvh; max-height: 100dvh; }
+  .rd-overlay-header { padding: 12px; }
+  .rd-overlay-body { padding: 16px 12px; }
+  .rd-overlay-footer { padding: 12px; }
+  .rd-button--compact { min-height: 40px; }
+}
