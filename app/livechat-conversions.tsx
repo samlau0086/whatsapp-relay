@@ -17,7 +17,7 @@ const eventTypes={
 };
 const states:Record<string,string>={
   browser_managed:"由宿主 GTM 处理",queued:"等待回传",sending:"正在回传",sent:"Google 已接收请求",
-  uncertain:"结果不确定，未自动重发",failed:"回传失败",skipped_consent:"未取得分析同意或同意已撤回",
+  uncertain:"结果不确定，未自动重发",failed:"回传失败",skipped_consent:"访客已拒绝或撤回分析同意",
   skipped_config:"渠道未配置或配置已变更",skipped_client_id:"未取得有效 GA4 Client ID",
 };
 type History={id:string;event_name:string;delivery_state:string;created_at:string;order_id:string|null};
@@ -95,7 +95,7 @@ function ConversionForm({conversationId,target,token,onToken,onRecorded,busy,set
   return <AsyncState status={readError?(data?"partial":"error"):data?"ready":"loading"} message={readError||undefined} onRetry={()=>setRevision(v=>v+1)}>
     {data&&<>
       <div className="rd-livechat-conversions-head">
-        <p>{!data.analytics.configured?"未配置 GA4 后台回传，事件只记入工作台。":data.analytics.consent!=="granted"?"未取得访客的分析同意，事件只记入工作台。":!data.analytics.clientIdAvailable?"未取得 GA4 Client ID，事件只记入工作台。":"已取得分析同意及 GA4 Client ID。"}</p>
+        <p>{!data.analytics.configured?"未配置 GA4 后台回传，事件只记入工作台。":data.analytics.consent==="denied"?"访客已拒绝或撤回分析同意，事件只记入工作台。":!data.analytics.clientIdAvailable?data.analytics.consent==="unset"?"尚未取得 CMP 状态；按默认启用策略处理，但缺少 GA4 Client ID，事件只记入工作台。":"未取得 GA4 Client ID，事件只记入工作台。":data.analytics.consent==="unset"?"尚未取得 CMP 状态；按默认启用策略使用 GA4 Client ID 回传事件。":"分析同意有效，已取得 GA4 Client ID。"}</p>
         <Button icon={RefreshCw} size="compact" onClick={()=>setRevision(v=>v+1)}>刷新状态</Button>
       </div>
       {data.canRecord?<form onSubmit={event=>{event.preventDefault();void record();}}>

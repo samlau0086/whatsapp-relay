@@ -117,8 +117,8 @@ LiveChat 与 WhatsApp、Messenger 共用账号权限、统一收件箱、客户�
 ### GTM / GA4 转化追踪
 
 1. 在 **系统设置 → LiveChat → 编辑渠道** 填入宿主网站对应的 GA4 Web 数据流 Measurement ID（`G-…`）。坐席需要回传时，另填同一数据流的 Measurement Protocol API secret。密钥只保存在服务端，不写入网页或 GTM；修改或清空 Measurement ID 会清除旧密钥，同一 ID 且密钥留空则保留。
-2. 在宿主 GTM 创建名为 `generate_lead` 的**自定义事件**触发器，可按 `livechat_channel_id` 筛选渠道。绑定同名 GA4 事件标签，可传入 `lead_source` 和 `livechat_event_id`；只绑定一份标签，并设为仅在 `analytics_storage` 同意后触发。服务端确认首条消息已保存后才推送；打开窗口、校验失败、后续发送或同一访客结束后重开均不计新线索。跨页去重依赖宿主浏览器的本地存储，清理或禁用存储不保证跨页去重。部署前已存在的会话不补报。
-3. 将网站同意管理平台（CMP）和 Google tag 接好，再同步分析同意和实际 Client ID。以下示例中的 `readSiteAnalyticsConsent` 为你的网站函数，返回 `granted`、`denied` 或 `unset`；未初始化时返回 `unset`。不要直接读取 Cookie 或猜测用户同意状态。
+2. 在宿主 GTM 创建名为 `generate_lead` 的**自定义事件**触发器，可按 `livechat_channel_id` 筛选渠道。绑定同名 GA4 事件标签，可传入 `lead_source` 和 `livechat_event_id`；只绑定一份标签。服务端确认首条消息已保存后才推送；打开窗口、校验失败、后续发送或同一访客结束后重开均不计新线索。跨页去重依赖宿主浏览器的本地存储，清理或禁用存储不保证跨页去重。部署前已存在的会话不补报。
+3. 将网站同意管理平台（CMP）和 Google tag 接好，再同步分析状态和实际 Client ID。以下示例中的 `readSiteAnalyticsConsent` 为你的网站函数，返回 `granted`、`denied` 或 `unset`；未初始化时返回 `unset`。**LiveChat 将 `unset` 按默认启用分析处理，只有明确的 `denied` 才会停止后台 GA4 回传；GTM/Google tag 的 Consent Mode 仍由宿主网站控制，必须与此默认策略保持一致。**这意味着 CMP 尚未初始化期间可能按启用状态处理分析，请确认这符合你的网站隐私与同意策略；若要在访客选择前禁用分析，CMP 应在未选择时返回 `denied`。不要直接读取 Cookie 或猜测访客选择。
 
 ```js
 const livechatChannel = "替换为公开渠道 UUID";
@@ -127,13 +127,16 @@ function syncLivechatConsent() {
   const consent = readSiteAnalyticsConsent();
   const livechat = window.RelayDeskLiveChat;
   if (!livechat) return;
-  if (consent !== "granted") {
+  if (consent === "denied") {
     livechat.setAnalytics(livechatChannel, {consent});
     return;
   }
-  if (!window.gtag) return;
+  if (!window.gtag) {
+    livechat.setAnalytics(livechatChannel, {consent});
+    return;
+  }
   window.gtag("get", livechatMeasurementId, "client_id", clientId => {
-    if (readSiteAnalyticsConsent() === "granted") {
+    if (readSiteAnalyticsConsent() === consent) {
       livechat.setAnalytics(livechatChannel, {consent, measurementId: livechatMeasurementId, clientId});
     }
   });

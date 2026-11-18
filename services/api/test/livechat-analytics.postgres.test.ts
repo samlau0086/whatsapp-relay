@@ -11,7 +11,7 @@ import Fastify from "fastify";
 import {pool} from "../src/db.js";
 import {config} from "../src/config.js";
 import {encryptAtRest,signToken} from "../src/security.js";
-import {conversionSchema,processOneLivechatConversion,registerLivechatAnalyticsRoutes,saveVisitorAnalytics} from "../src/livechat-analytics.js";
+import {analyticsSchema,conversionSchema,processOneLivechatConversion,registerLivechatAnalyticsRoutes,saveVisitorAnalytics} from "../src/livechat-analytics.js";
 
 test("禁止手工 generate_lead，购买只能从订单读取金额",()=>{
   const clientEventId=randomUUID();
@@ -19,6 +19,13 @@ test("禁止手工 generate_lead，购买只能从订单读取金额",()=>{
   assert.ok(!conversionSchema.safeParse({clientEventId,eventName:"purchase",orderId:randomUUID(),value:100,currency:"USD"}).success);
   assert.ok(!conversionSchema.safeParse({clientEventId,eventName:"lead_example@example.com"}).success);
   assert.ok(conversionSchema.safeParse({clientEventId,eventName:"qualify_lead"}).success);
+});
+
+test("未设置分析状态时按默认启用策略接受 Measurement ID 和 Client ID，但明确拒绝不能携带标识",()=>{
+  const context={consent:"unset" as const,updatedAt:Date.now(),measurementId:"G-TEST123",clientId:"123.456"};
+  assert.ok(analyticsSchema.safeParse(context).success);
+  assert.ok(analyticsSchema.safeParse({consent:"unset",updatedAt:Date.now()}).success);
+  assert.ok(!analyticsSchema.safeParse({...context,consent:"denied"}).success);
 });
 
 // 临时 PostgreSQL 实例及模拟 Google 请求，不连接业务库或真实 GA4。
@@ -75,9 +82,10 @@ test("PostgreSQL：转化权限、订单归属和并发去重、撤回同意及�
       if(environment)await database.query("INSERT INTO order_payment_requests VALUES($1,$2,$3,45,'USD')",[id,environment,providerStatus]);
     }
     const updatedAt=Date.now();
-    const granted={consent:"granted" as const,clientId:"123.456",measurementId,updatedAt};
-    assert.equal(await saveVisitorAnalytics(database,anotherVisitor,measurementId,{...granted,measurementId:"G-WRONG"}),false);
-    assert.equal(await saveVisitorAnalytics(database,anotherVisitor,measurementId,granted),true);
+    const unsetEnabled={consent:"unset" as const,clientId:"123.456",measurementId,updatedAt};
+    assert.equal(await saveVisitorAnalytics(database,anotherVisitor,measurementId,{...unsetEnabled,measurementId:"G-WRONG"}),false);
+    assert.equal(await saveVisitorAnalytics(database,anotherVisitor,measurementId,unsetEnabled),true);
+    assert.equal((await database.query("SELECT analytics_consent FROM livechat_visitors WHERE id=$1",[anotherVisitor])).rows[0].analytics_consent,"unset","unset 保留 CMP 来源状态");
     t.mock.method(pool,"query",(sql:string,values:unknown[]=[])=>database.query(sql,values));
     t.mock.method(pool,"connect",()=>database.connect());
     await registerLivechatAnalyticsRoutes(app);
@@ -96,6 +104,7 @@ test("PostgreSQL：转化权限、订单归属和并发去重、撤回同意及�
     const concurrent=await Promise.all([post("purchase",order,"agent",purchaseId),post("purchase",order)]);
     assert.deepEqual(concurrent.map(result=>result.statusCode).sort(),[201,409],concurrent.map(result=>result.body).join("\n"));
     const winning=concurrent.find(result=>result.statusCode===201)!;
+    assert.equal(winning.json().deliveryState,"queued","CMP 状态 unset 时按默认启用策略进入 GA4 队列");
     if(concurrent[0]===winning)assert.equal((await post("purchase",order,"agent",purchaseId)).json().deduplicated,true);
     assert.equal((await database.query("SELECT customer_stage FROM conversations WHERE id=$1",[member])).rows[0].customer_stage,"won");
     assert.equal((await database.query("SELECT customer_stage FROM conversations WHERE id=$1",[root])).rows[0].customer_stage,"new");
@@ -115,10 +124,10 @@ test("PostgreSQL：转化权限、订单归属和并发去重、撤回同意及�
     const leadId=randomUUID();
     const lead=await post("qualify_lead",undefined,"agent",leadId);assert.equal(lead.statusCode,201,lead.body);
     await saveVisitorAnalytics(database,anotherVisitor,measurementId,{consent:"denied",updatedAt:updatedAt+1});
-    await saveVisitorAnalytics(database,anotherVisitor,measurementId,granted);
+    await saveVisitorAnalytics(database,anotherVisitor,measurementId,unsetEnabled);
     assert.equal((await post("qualify_lead",undefined,"agent",leadId)).json().deliveryState,"skipped_consent");
     assert.equal(await processOneLivechatConversion(),false);
-    await saveVisitorAnalytics(database,anotherVisitor,measurementId,{...granted,updatedAt:updatedAt+2});
+    await saveVisitorAnalytics(database,anotherVisitor,measurementId,{...unsetEnabled,updatedAt:updatedAt+2});
     const changed=await post("working_lead");assert.equal(changed.json().deliveryState,"queued");
     await database.query("UPDATE livechat_channels SET ga4_api_secret_encrypted=$2 WHERE account_id=$1",[anotherAccount,encryptAtRest("rotated",config.DATA_ENCRYPTION_KEY)]);
     assert.equal(await processOneLivechatConversion(),true);assert.equal(measurementRequests.length,1);

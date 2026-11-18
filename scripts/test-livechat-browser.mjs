@@ -182,7 +182,7 @@ try{
   await assertMessageLayout(frame);
   await page.reload();frame=await frameFor(page);await openChat(frame);
   assert.equal(await page.evaluate(channel=>RelayDeskLiveChat.setAnalytics(channel,{consent:'granted',measurementId:'G-WRONG',clientId:'123.456'}),channel),false);
-  assert.equal(await page.evaluate(channel=>RelayDeskLiveChat.setAnalytics(channel,{consent:'granted',measurementId:'G-TEST123',clientId:'123.456'}),channel),true);
+  assert.equal(await page.evaluate(channel=>RelayDeskLiveChat.setAnalytics(channel,{consent:'unset',measurementId:'G-TEST123',clientId:'123.456'}),channel),true);
   dropFirstSendResponse=true;await frame.getByText('发送失败，点击重试').click();
   await frame.getByText("第一条匿名消息",{exact:true}).waitFor();await frame.locator("#send").waitFor({state:"visible"});
   await page.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(":started")));
@@ -190,6 +190,7 @@ try{
   await page.waitForFunction(()=>dataLayer.filter(item=>item.event==='generate_lead').length===1);
   assert.deepEqual(await page.evaluate(()=>dataLayer.find(item=>item.event==='generate_lead')),{event:'generate_lead',lead_source:'livechat',livechat_channel_id:channel,livechat_event_id:firstSession[0].id});
   assert.equal(profiles[0].context.analytics.clientId,'123.456');
+  assert.equal(profiles[0].context.analytics.consent,'unset','CMP 状态 unset 保留来源，但按默认启用策略传递分析上下文');
   assert.equal(await page.evaluate(()=>Object.values(localStorage).some(value=>value.includes('123.456'))),false,'同意上下文不写入 outbox');
   assert.equal(await page.evaluate(channel=>RelayDeskLiveChat.setAnalytics(channel,{consent:'denied'}),channel),true);
   for(let i=0;i<50&&!analyticsReports.some(item=>item.consent==='denied');i++)await page.waitForTimeout(100);

@@ -28,7 +28,8 @@ globalThis.RelayDeskLiveChat=globalThis.RelayDeskLiveChat||{setAnalytics(publicC
 function pushTrackingEvent(data){try{const layer=globalThis.dataLayer||(globalThis.dataLayer=[]);if(typeof layer.push!=='function')return false;layer.push(data);return true}catch{return false}}
 const reportedLeads=new Set();
 function reportLead(id){
-  if(!analyticsMeasurementId||typeof id!=='string'||!/^[a-f0-9-]{36}$/i.test(id))return;
+  if(typeof id!=='string'||!/^[a-f0-9-]{36}$/i.test(id))return;
+  if(!analyticsMeasurementId||analyticsContext?.consent==='denied')return;
   const marker=key+':lead:'+id;
   const emit=()=>{if(reportedLeads.has(id))return;try{if(localStorage.getItem(marker))return}catch{}
     if(pushTrackingEvent({event:'generate_lead',lead_source:'livechat',livechat_channel_id:channel,livechat_event_id:id})){
@@ -40,9 +41,12 @@ function reportLead(id){
 analyticsControllers.set(channel,value=>{
   if(!analyticsReady||!value||!['granted','denied','unset'].includes(value.consent))return false;
   if(value.consent==='granted'&&(!analyticsMeasurementId||value.measurementId!==analyticsMeasurementId))return false;
+  if(value.measurementId&&value.measurementId!==analyticsMeasurementId)return false;
+  // CMP 尚未给出状态时按默认启用处理；明确拒绝仍然关闭分析。
+  const analyticsEnabled=value.consent!=='denied';
   analyticsRevision=Math.max(Date.now(),analyticsRevision+1);
-  analyticsContext={consent:value.consent,updatedAt:analyticsRevision,...(value.consent==='granted'?{measurementId:analyticsMeasurementId}:{})};
-  if(value.consent==='granted'&&typeof value.clientId==='string'&&/^[0-9]{1,20}\.[0-9]{1,20}$/.test(value.clientId))analyticsContext.clientId=value.clientId;
+  analyticsContext={consent:value.consent,updatedAt:analyticsRevision,...(analyticsEnabled&&analyticsMeasurementId?{measurementId:analyticsMeasurementId}:{})};
+  if(analyticsEnabled&&typeof value.clientId==='string'&&/^[0-9]{1,20}\.[0-9]{1,20}$/.test(value.clientId))analyticsContext.clientId=value.clientId;
   void syncAnalytics();return true;
 });
 async function syncAnalytics(){

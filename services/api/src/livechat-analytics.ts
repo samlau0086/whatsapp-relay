@@ -7,7 +7,7 @@ import {pool,transaction} from "./db.js";
 import {config} from "./config.js";
 import {decryptAtRest} from "./security.js";
 
-export const analyticsSchema=z.object({consent:z.enum(["granted","denied","unset"]),updatedAt:z.number().int().positive().max(Number.MAX_SAFE_INTEGER),measurementId:z.string().max(40).regex(/^G-[A-Z0-9]+$/).optional(),clientId:z.string().regex(/^[0-9]{1,20}\.[0-9]{1,20}$/).optional()}).strict().refine(v=>v.consent==="granted"?Boolean(v.measurementId):!v.measurementId&&!v.clientId);
+export const analyticsSchema=z.object({consent:z.enum(["granted","denied","unset"]),updatedAt:z.number().int().positive().max(Number.MAX_SAFE_INTEGER),measurementId:z.string().max(40).regex(/^G-[A-Z0-9]+$/).optional(),clientId:z.string().regex(/^[0-9]{1,20}\.[0-9]{1,20}$/).optional()}).strict().refine(v=>v.consent==="granted"?Boolean(v.measurementId):v.consent==="denied"?!v.measurementId&&!v.clientId:!v.clientId||Boolean(v.measurementId));
 export type AnalyticsContext=z.infer<typeof analyticsSchema>;
 const reservedEvents=new Set(["generate_lead","ad_activeview","ad_click","ad_exposure","ad_impression","ad_query","ad_reward","adunit_exposure","app_clear_data","app_exception","app_install","app_remove","app_store_refund","app_update","app_upgrade","click","error","file_download","first_open","first_visit","form_start","form_submit","in_app_purchase","notification_dismiss","notification_foreground","notification_open","notification_receive","os_update","page_view","scroll","session_start","user_engagement","video_complete","video_progress","video_start","view_search_results"]);
 export function validConversionEventName(name:string):boolean{return /^[a-z][a-z0-9_]{0,39}$/.test(name)&&!reservedEvents.has(name)&&!name.startsWith("ga_")&&!name.startsWith("google_")&&!name.startsWith("firebase_");}
@@ -27,16 +27,17 @@ const paidOrder=`o.business_status <> 'cancelled' AND (
 function configFingerprint(measurementId:string,encryptedSecret:string){return createHash("sha256").update(measurementId).update(":").update(encryptedSecret).digest("hex");}
 
 export async function saveVisitorAnalytics(client:Pick<PoolClient,"query">,visitorId:string,measurementId:string|null,context:AnalyticsContext):Promise<boolean>{
-  if(context.updatedAt>Date.now()+60_000||(context.consent==="granted"&&context.measurementId!==measurementId))return false;
+  if(context.updatedAt>Date.now()+60_000||((context.consent==="granted"||context.consent==="unset")&&context.measurementId&&context.measurementId!==measurementId))return false;
+  const analyticsEnabled=context.consent!=="denied",clientId=analyticsEnabled?context.clientId??null:null,activeMeasurementId=analyticsEnabled?(context.measurementId??measurementId):null;
   await client.query(`WITH changed AS (
     UPDATE livechat_visitors SET analytics_consent=$2,analytics_client_id=$3,analytics_measurement_id=$4,analytics_revision=$5
     WHERE id=$1 AND (analytics_revision<$5 OR (analytics_revision=$5 AND $2<>'granted'))
     RETURNING account_id,contact_id)
-    UPDATE livechat_conversion_events e SET delivery_state=CASE WHEN $2='granted' THEN 'skipped_client_id' ELSE 'skipped_consent' END,
-      last_error=CASE WHEN $2='granted' THEN 'analytics_context_changed' ELSE 'consent_withdrawn' END,ga4_client_id=NULL
+    UPDATE livechat_conversion_events e SET delivery_state=CASE WHEN $2<>'denied' THEN 'skipped_client_id' ELSE 'skipped_consent' END,
+      last_error=CASE WHEN $2<>'denied' THEN 'analytics_context_changed' ELSE 'consent_withdrawn' END,ga4_client_id=NULL
     FROM changed WHERE e.account_id=changed.account_id AND e.contact_id=changed.contact_id
-      AND e.delivery_state='queued' AND ($2<>'granted' OR e.ga4_client_id IS DISTINCT FROM $3 OR e.ga4_measurement_id IS DISTINCT FROM $4)`,
-  [visitorId,context.consent,context.clientId??null,context.measurementId??null,context.updatedAt]);
+      AND e.delivery_state='queued' AND ($2='denied' OR e.ga4_client_id IS DISTINCT FROM $3 OR e.ga4_measurement_id IS DISTINCT FROM $4)`,
+  [visitorId,context.consent,clientId,activeMeasurementId,context.updatedAt]);
   return true;
 }
 
@@ -107,7 +108,7 @@ export async function registerLivechatAnalyticsRoutes(app:FastifyInstance):Promi
           const value=Math.round(products.reduce((total,item)=>total+item.quantity*item.price,0)*100)/100;
           Object.assign(eventParams,{transaction_id:String(order.id),value,currency:String(order.currency),items:products,...(order.shipping_amount!==null?{shipping:Number(order.shipping_amount)}:{})});
         }else if(data.value!==undefined){eventParams.value=data.value;eventParams.currency=data.currency;}
-        const state=row.analytics_consent!=="granted"?"skipped_consent":!row.ga4_measurement_id||!row.ga4_api_secret_encrypted?"skipped_config":!row.analytics_client_id?"skipped_client_id":"queued";
+        const state=row.analytics_consent==="denied"?"skipped_consent":!row.ga4_measurement_id||!row.ga4_api_secret_encrypted?"skipped_config":!row.analytics_client_id?"skipped_client_id":"queued";
         const inserted=await client.query(`INSERT INTO livechat_conversion_events(account_id,conversation_id,contact_id,actor_user_id,client_event_id,source,event_name,order_id,event_params,analytics_consent,ga4_client_id,delivery_state,ga4_measurement_id,ga4_config_fingerprint)
           VALUES($1,$2,$3,$4,$5,'agent',$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,[row.account_id,targetId,row.contact_id,principal.id,data.clientEventId,data.eventName,data.orderId??null,JSON.stringify(eventParams),row.analytics_consent,state==="queued"?row.analytics_client_id:null,state,state==="queued"?row.ga4_measurement_id:null,state==="queued"?configFingerprint(row.ga4_measurement_id,row.ga4_api_secret_encrypted):null]);
         if(data.eventName==="purchase")await client.query("UPDATE conversations SET customer_stage='won' WHERE id=$1",[targetId]);
@@ -149,7 +150,7 @@ export async function processOneLivechatConversion():Promise<boolean>{
     LEFT JOIN livechat_visitors v ON v.account_id=e.account_id AND v.contact_id=e.contact_id
     WHERE e.id=$1 AND e.delivery_state='sending'`,[id]);
   const row=found.rows[0];if(!row)return true;
-  if(row.current_consent!=="granted")await finish("skipped_consent","consent_withdrawn");
+  if(row.current_consent==="denied")await finish("skipped_consent","consent_withdrawn");
   else if(!row.enabled||row.archived_at||!row.ga4_api_secret_encrypted||row.ga4_measurement_id!==row.current_measurement_id||row.ga4_config_fingerprint!==configFingerprint(row.current_measurement_id,row.ga4_api_secret_encrypted))await finish("skipped_config","channel_config_changed");
   else if(!row.ga4_client_id||row.ga4_client_id!==row.current_client_id||row.current_visitor_measurement_id!==row.ga4_measurement_id)await finish("skipped_client_id","analytics_context_changed");
   else if(Date.now()-new Date(row.created_at).getTime()>71*3600000)await finish("failed","event_expired");
