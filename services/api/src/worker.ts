@@ -9,6 +9,7 @@ import { processOneTaskCycle } from "./task-engine.js";
 import {processOneCloudOutbound,processOneCloudWebhook,syncDueCloudTemplates} from "./whatsapp-cloud.js";
 import {processOneMessengerOutbound,processOneMessengerWebhook} from "./messenger.js";
 import {processOneLivechatOutbound} from "./livechat.js";
+import {processOneLivechatConversion} from "./livechat-analytics.js";
 import {migrateAgentSchema} from "./migrate-agent.js";
 import {processOneStatusCycle,recoverStaleStatusCommands} from "./status-engine.js";
 import {processOneProactiveOutreach} from "./proactive-outreach.js";
@@ -20,6 +21,7 @@ process.on("SIGINT",()=>{stopping=true;});
 
 await migrateAgentSchema();
 const emailLoop=runEmailLoop();
+const conversionLoop=runConversionLoop();
 while(!stopping){
   const agentWork=await processOneAgentJob();
   const mailboxWork=await syncOneMailbox();
@@ -39,7 +41,7 @@ while(!stopping){
   await enforceRetention();
 }
 stopping=true;
-await emailLoop;
+await Promise.all([emailLoop,conversionLoop]);
 await pool.end();
 
 async function runEmailLoop():Promise<void>{
@@ -51,6 +53,13 @@ async function runEmailLoop():Promise<void>{
       console.error("email worker cycle failed",error);
       await sleep(1000);
     }
+  }
+}
+
+async function runConversionLoop():Promise<void>{
+  while(!stopping){
+    try{if(!await processOneLivechatConversion())await sleep(1000);}
+    catch{console.error("livechat conversion worker cycle failed");await sleep(2000);}
   }
 }
 

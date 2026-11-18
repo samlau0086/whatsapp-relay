@@ -27,7 +27,8 @@ test("PostgreSQL：多标签状态、乱序关闭、超时离线及当前页面�
     run("pg_ctl",["-D",directory,"-l",join(directory,"postgres.log"),"-o",`-h 127.0.0.1 -p ${port}`,"-w","start"]);started=true;
     await client.connect();
     await client.query(`CREATE TABLE channel_accounts(id uuid PRIMARY KEY,display_name text);
-      CREATE TABLE livechat_channels(account_id uuid PRIMARY KEY,public_id uuid,enabled boolean,archived_at timestamptz,allowed_origins text[]);
+      CREATE TABLE livechat_channels(account_id uuid PRIMARY KEY,public_id uuid,enabled boolean,archived_at timestamptz,allowed_origins text[],
+        icon_url text,welcome_message text,theme_color text,position text,language text,ga4_measurement_id text);
       CREATE TABLE livechat_visitors(id uuid PRIMARY KEY,account_id uuid,contact_id uuid,credential_hash text,embed_origin text,expires_at timestamptz);
       CREATE TABLE livechat_rate_limits(bucket text,window_start timestamptz,hits int,PRIMARY KEY(bucket,window_start));`);
     const migration=await readFile(new URL("../../../infra/postgres/migrations/105_livechat_presence.sql",import.meta.url),"utf8");
@@ -37,7 +38,7 @@ test("PostgreSQL：多标签状态、乱序关闭、超时离线及当前页面�
     const accountId=randomUUID(),publicId=randomUUID(),visitorId=randomUUID(),contactId=randomUUID(),first=randomUUID(),second=randomUUID();
     const origin="https://shop.example.com",secret="a".repeat(64);
     await client.query("INSERT INTO channel_accounts VALUES($1,'测试网站')",[accountId]);
-    await client.query("INSERT INTO livechat_channels VALUES($1,$2,true,NULL,$3)",[accountId,publicId,[origin]]);
+    await client.query("INSERT INTO livechat_channels(account_id,public_id,enabled,archived_at,allowed_origins) VALUES($1,$2,true,NULL,$3)",[accountId,publicId,[origin]]);
     await client.query("INSERT INTO livechat_visitors VALUES($1,$2,$3,$4,$5,now()+interval '1 day')",[visitorId,accountId,contactId,credentialHash(secret),origin]);
     const send=async(sessionId:string,sequence:number,visible:boolean,connected=true,path="/current")=>{
       const response=await app.inject({method:"POST",url:`/livechat/${publicId}/presence`,headers:{origin,authorization:`Bearer ${secret}`},payload:{sessionId,sequence,visible,connected,pageUrl:origin+path}});

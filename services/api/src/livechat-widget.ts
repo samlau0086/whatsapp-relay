@@ -22,6 +22,39 @@ let chatBoundary=null;try{const saved=JSON.parse(localStorage.getItem(key+':chat
 const messageTime=m=>m.sort_at||(m.visible_at||m.created_at).replace(/\.(\d{3})Z$/,(_match,millis)=>'.'+millis+'000Z');
 let outbox={};try{const saved=JSON.parse(localStorage.getItem(key+':outbox')||'{}');if(saved&&typeof saved==='object'&&!Array.isArray(saved))outbox=saved}catch{}
 function saveOutbox(){try{localStorage.setItem(key+':outbox',JSON.stringify(outbox))}catch{}}
+let analyticsContext,analyticsMeasurementId='',analyticsReady=false,analyticsSynced='',analyticsInFlight=false,analyticsRevision=0;
+const analyticsControllersKey=Symbol.for('relaydesk.livechat.analytics'),analyticsControllers=globalThis[analyticsControllersKey]||(globalThis[analyticsControllersKey]=new Map());
+globalThis.RelayDeskLiveChat=globalThis.RelayDeskLiveChat||{setAnalytics(publicChannel,value){return analyticsControllers.get(publicChannel)?.(value)??false}};
+function pushTrackingEvent(data){try{const layer=globalThis.dataLayer||(globalThis.dataLayer=[]);if(typeof layer.push!=='function')return false;layer.push(data);return true}catch{return false}}
+const reportedLeads=new Set();
+function reportLead(id){
+  if(!analyticsMeasurementId||typeof id!=='string'||!/^[a-f0-9-]{36}$/i.test(id))return;
+  const marker=key+':lead:'+id;
+  const emit=()=>{if(reportedLeads.has(id))return;try{if(localStorage.getItem(marker))return}catch{}
+    if(pushTrackingEvent({event:'generate_lead',lead_source:'livechat',livechat_channel_id:channel,livechat_event_id:id})){
+      reportedLeads.add(id);try{localStorage.setItem(marker,'1')}catch{}
+    }
+  };
+  if(navigator.locks?.request)void navigator.locks.request(marker,emit).catch(emit);else emit();
+}
+analyticsControllers.set(channel,value=>{
+  if(!analyticsReady||!value||!['granted','denied','unset'].includes(value.consent))return false;
+  if(value.consent==='granted'&&(!analyticsMeasurementId||value.measurementId!==analyticsMeasurementId))return false;
+  analyticsRevision=Math.max(Date.now(),analyticsRevision+1);
+  analyticsContext={consent:value.consent,updatedAt:analyticsRevision,...(value.consent==='granted'?{measurementId:analyticsMeasurementId}:{})};
+  if(value.consent==='granted'&&typeof value.clientId==='string'&&/^[0-9]{1,20}\.[0-9]{1,20}$/.test(value.clientId))analyticsContext.clientId=value.clientId;
+  void syncAnalytics();return true;
+});
+async function syncAnalytics(){
+  if(!started||!analyticsContext||analyticsInFlight)return;
+  const context=analyticsContext,body=JSON.stringify(context),credential=secret;
+  if(analyticsSynced===credential+body)return;
+  analyticsInFlight=true;
+  try{
+    const response=await fetch(path+'/analytics',{method:'POST',credentials:'omit',headers:{authorization:'Bearer '+credential,'content-type':'application/json'},body,keepalive:true,referrerPolicy:'origin',signal:AbortSignal.timeout(10000)});
+    if(response.ok)analyticsSynced=credential+body;
+  }catch{}finally{analyticsInFlight=false;if(context!==analyticsContext||credential!==secret)void syncAnalytics()}
+}
 if(!secret||!/^[a-f0-9]{64}$/.test(secret)){secret=Array.from(crypto.getRandomValues(new Uint8Array(32)),n=>n.toString(16).padStart(2,'0')).join('');try{localStorage.setItem(key,secret)}catch{}}
 const presenceSession=crypto.randomUUID();let presenceSequence=0,presenceStopped=false,lastPage=location.origin+location.pathname;
 function reportPresence(connected=true){
@@ -30,7 +63,7 @@ function reportPresence(connected=true){
   // 每个文档独立会话，序号阻止迟到心跳覆盖离开事件。
   void fetch(path+'/presence',{method:'POST',credentials:'omit',headers:{authorization:'Bearer '+secret,'content-type':'application/json'},body:JSON.stringify({sessionId:presenceSession,sequence:++presenceSequence,visible:document.visibilityState==='visible',connected,pageUrl:lastPage}),keepalive:true,referrerPolicy:'origin',signal:AbortSignal.timeout(10000)}).catch(()=>{});
 }
-setInterval(()=>reportPresence(),10000);
+setInterval(()=>{reportPresence();void syncAnalytics()},10000);
 setInterval(()=>{if(lastPage!==location.origin+location.pathname)reportPresence()},500);
 document.addEventListener('visibilitychange',()=>reportPresence());
 addEventListener('pagehide',()=>{reportPresence(false);presenceStopped=true});
@@ -48,7 +81,7 @@ async function api(action,data){
     return {ok:true,reusedIdentity}
   }
 let url=path+'/'+action,options={credentials:'omit',headers:{authorization:'Bearer '+secret}};
-if(action==='send'){if(!Object.hasOwn(outbox,data.clientMessageId)&&Object.keys(outbox).length>=30)throw Error('pending_outbox_limit');let timeZone;try{timeZone=Intl.DateTimeFormat().resolvedOptions().timeZone}catch{}data={...data,context:{browserLanguage:navigator.language,timeZone,pageUrl:location.origin+location.pathname}};outbox[data.clientMessageId]=data;saveOutbox();url=path+'/messages';options.method='POST';options.headers['content-type']='application/json';options.body=JSON.stringify(data)}
+if(action==='send'){if(!Object.hasOwn(outbox,data.clientMessageId)&&Object.keys(outbox).length>=30)throw Error('pending_outbox_limit');let timeZone;try{timeZone=Intl.DateTimeFormat().resolvedOptions().timeZone}catch{}data={...data,context:{browserLanguage:navigator.language,timeZone,pageUrl:location.origin+location.pathname}};outbox[data.clientMessageId]=data;saveOutbox();url=path+'/messages';options.method='POST';options.headers['content-type']='application/json';options.body=JSON.stringify(!started&&analyticsContext?{...data,context:{...data.context,analytics:analyticsContext}}:data)}
 else if(action==='upload'){
   url=path+'/media';options.method='POST';
   const bytes=data?.bytes,name=data?.name,type=data?.type;
@@ -65,14 +98,17 @@ else if(action!=='config')throw Error('invalid_action');
 const response=await fetch(url,{...options,referrerPolicy:'origin',signal:AbortSignal.timeout(30000)});
 if(!response.ok){const body=await response.json().catch(()=>({}));throw Error(response.status===401&&started?'visitor_session_expired':body.error||'HTTP '+response.status)}
 if(action==='send'||action==='history'){const wasStarted=started;started=true;if(!wasStarted)reportPresence();try{localStorage.setItem(key+':started','1')}catch{}}
-  if(action==='send'){delete outbox[data.clientMessageId];saveOutbox();ended=false;endId='';endMode='';endedMode='';try{for(const suffix of [':ended',':endId',':endMode',':endedMode'])localStorage.removeItem(key+suffix)}catch{}}
 if(action==='download')return {blob:await response.blob()};
 const result=await response.json();
+if(action==='send'){if(result.leadMessageId===result.id)reportLead(result.id);delete outbox[data.clientMessageId];saveOutbox();ended=false;endId='';endMode='';endedMode='';try{for(const suffix of [':ended',':endId',':endMode',':endedMode'])localStorage.removeItem(key+suffix)}catch{}}
+if(action==='send'||action==='history')void syncAnalytics();
   if(action==='end'){ended=true;endedMode=endMode;try{localStorage.setItem(key+':ended','1');localStorage.setItem(key+':endedMode',endedMode)}catch{}}
-if(action==='history'){if(chatBoundary){const unfiltered=result.data;result.data=unfiltered.filter(m=>{const time=messageTime(m);return time>chatBoundary.sortAt||(time===chatBoundary.sortAt&&m.id>chatBoundary.id)});if(result.data.length!==unfiltered.length)result.hasMore=false}let changed=false;for(const message of result.data||[]){if(Object.hasOwn(outbox,message.client_message_id)){delete outbox[message.client_message_id];changed=true}}if(changed)saveOutbox()}
+if(action==='history'){if(chatBoundary){const unfiltered=result.data;result.data=unfiltered.filter(m=>{const time=messageTime(m);return time>chatBoundary.sortAt||(time===chatBoundary.sortAt&&m.id>chatBoundary.id)});if(result.data.length!==unfiltered.length)result.hasMore=false}let changed=false;for(const message of result.data||[]){if(Object.hasOwn(outbox,message.client_message_id)){if(message.id===result.leadMessageId)reportLead(message.id);delete outbox[message.client_message_id];changed=true}}if(changed)saveOutbox()}
 return result;
 }
 api('config').then(config=>{
+analyticsMeasurementId=config.ga4MeasurementId||'';analyticsReady=true;
+pushTrackingEvent({event:'relaydesk_livechat_ready',livechat_channel_id:channel,livechat_measurement_id:analyticsMeasurementId});
 const host=document.createElement('div');host.style.setProperty('all','initial','important');document.body.append(host);
 const shadow=host.attachShadow({mode:'closed'}),frame=document.createElement('iframe');
 frame.title=config.name;frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-downloads allow-forms');frame.src=path+'/widget';
@@ -93,7 +129,7 @@ if(!['send','upload','history','download','reset','end'].includes(m.action)||typ
 try{post({namespace:m.namespace,requestId:m.requestId,result:await api(m.action,m.data)})}catch(error){post({namespace:m.namespace,requestId:m.requestId,error:String(error.message||error)})}
 });
 shadow.append(frame);
-}).catch(()=>registry.delete(key));
+}).catch(()=>{registry.delete(key);analyticsControllers.delete(channel)});
 })();`;
 
 export const livechatWidget=String.raw`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>在线客服</title><style>

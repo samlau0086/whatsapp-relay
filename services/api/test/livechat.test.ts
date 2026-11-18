@@ -270,6 +270,8 @@ test("LiveChat 首次匿名消息创建独立客户并进入统一 Agent 流程"
   const response=await app.inject({method:"POST",url:`/livechat/${channelId}/messages`,headers:{origin,authorization,"user-agent":"Test Browser","x-forwarded-for":"203.0.113.88"},payload});
   assert.equal(response.statusCode,201,response.body);
   assert.equal(response.json().id,messageId);
+  assert.equal(response.json().leadMessageId,messageId);
+  assert.equal(calls.filter(call=>call.sql.startsWith("INSERT INTO livechat_conversion_events")).length,1);
   const contact=calls.find(call=>call.sql.startsWith("INSERT INTO contacts"))!;
   assert.equal(contact.values[0],accountId);assert.equal(contact.values[2],"Sam");assert.equal(contact.values[3],"Example Ltd");
   const visitor=calls.find(call=>call.sql.startsWith("INSERT INTO livechat_visitors"))!;

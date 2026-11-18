@@ -9,6 +9,7 @@ import {createWebhookEvent} from "./agent-hub.js";
 import {livechatLoader,livechatWidget} from "./livechat-widget.js";
 import {isValidTimeZone} from "./order-number.js";
 import {queueLivechatTranscript} from "./livechat-transcript.js";
+import {analyticsSchema,recordLivechatLead,saveVisitorAnalytics} from "./livechat-analytics.js";
 
 const s3=new S3Client({region:config.S3_REGION,endpoint:config.S3_ENDPOINT,forcePathStyle:true,credentials:{accessKeyId:config.S3_ACCESS_KEY,secretAccessKey:config.S3_SECRET_KEY}});
 const uuid=z.string().uuid();
@@ -16,7 +17,7 @@ const messageSchema=z.object({
   clientMessageId:uuid,text:z.string().trim().max(10000).default(""),mediaId:uuid.optional(),
   name:z.string().trim().max(80).optional(),email:z.string().trim().email().max(254).optional(),
   company:z.string().trim().max(160).optional(),whatsapp:z.string().trim().max(80).optional(),
-  context:z.object({browserLanguage:z.string().trim().max(80).optional(),timeZone:z.string().max(100).refine(isValidTimeZone).optional(),pageUrl:z.string().url().max(2048).optional()}).optional(),
+  context:z.object({browserLanguage:z.string().trim().max(80).optional(),timeZone:z.string().max(100).refine(isValidTimeZone).optional(),pageUrl:z.string().url().max(2048).optional(),analytics:analyticsSchema.optional()}).optional(),
   quotedMessageId:uuid.optional(),
 }).refine(v=>Boolean(v.text||v.mediaId));
 const endChatSchema=z.object({clientRequestId:uuid,sendTranscript:z.boolean().default(true)});
@@ -54,7 +55,7 @@ async function channel(request:FastifyRequest){
   const {publicId}=request.params as {publicId:string};
   if(!uuid.safeParse(publicId).success)throw fail(404,"livechat_unavailable");
   await rate(`ip:${credentialHash(request.ip)}:${publicId}`,600);
-  const found=await pool.query(`SELECT c.*,a.display_name FROM livechat_channels c JOIN channel_accounts a ON a.id=c.account_id WHERE public_id=$1 AND enabled AND archived_at IS NULL`,[publicId]);
+  const found=await pool.query(`SELECT c.account_id,c.allowed_origins,c.icon_url,c.welcome_message,c.theme_color,c.position,c.language,c.ga4_measurement_id,a.display_name FROM livechat_channels c JOIN channel_accounts a ON a.id=c.account_id WHERE public_id=$1 AND enabled AND archived_at IS NULL`,[publicId]);
   if(!found.rowCount)throw fail(404,"livechat_unavailable");
   const row=found.rows[0];
   livechatOrigin(embedOrigin(request),row.allowed_origins);
@@ -87,7 +88,7 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
   });
   app.get("/livechat/:publicId/config",async(request,reply)=>{
     const c=await channel(request);reply.header("cache-control","no-store");
-    return {name:c.display_name,iconUrl:c.icon_url??"",welcome:c.welcome_message,color:c.theme_color,position:c.position,language:c.language??"en"};
+    return {name:c.display_name,iconUrl:c.icon_url??"",welcome:c.welcome_message,color:c.theme_color,position:c.position,language:c.language??"en",ga4MeasurementId:c.ga4_measurement_id??""};
   });
   app.post("/livechat/:publicId/messages",async(request,reply)=>{
     const c=await channel(request),hash=livechatCredential(request.headers.authorization),parsed=messageSchema.safeParse(request.body);
@@ -98,9 +99,10 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
     const result=await transaction(async client=>{
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[hash]);
       // 锁住渠道，防止归档或停用与首条入站消息并发。
-      const active=await client.query("SELECT 1 FROM livechat_channels WHERE account_id=$1 AND enabled AND archived_at IS NULL FOR SHARE",[c.account_id]);
+      const active=await client.query("SELECT ga4_measurement_id FROM livechat_channels WHERE account_id=$1 AND enabled AND archived_at IS NULL FOR SHARE",[c.account_id]);
       if(!active.rowCount)throw fail(404,"livechat_unavailable");
       let v=(await client.query("SELECT * FROM livechat_visitors WHERE credential_hash=$1",[hash])).rows[0];
+      const firstChat=!v;
       if(v&&(v.account_id!==c.account_id||v.embed_origin!==embedOrigin(request)||new Date(v.expires_at).getTime()<=Date.now()))throw fail(401,"invalid_visitor_credential");
       if(!v){
         if(data.mediaId)throw fail(400,"first_message_must_be_text");
@@ -114,7 +116,7 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
       if(duplicate.rowCount){
         const old=duplicate.rows[0];
         if(old.direction!=="in"||old.sender_contact_id!==v.contact_id||(old.text_content??"")!==data.text||(old.media_id??null)!==(data.mediaId??null))throw fail(409,"client_message_id_conflict");
-        return {id:old.id};
+        return {id:old.id, ...(old.id===v.lead_message_id?{leadMessageId:old.id}:{})};
       }
       if(data.quotedMessageId){
         const quoted=await client.query("SELECT id FROM messages WHERE id=$1 AND account_id=$2 AND conversation_id=(SELECT id FROM conversations WHERE account_id=$2 AND contact_id=$3) AND (direction='in' OR status IN ('sent','delivered','read')) AND NOT EXISTS(SELECT 1 FROM message_email_details WHERE message_id=messages.id)",[data.quotedMessageId,c.account_id,v.contact_id]);
@@ -138,9 +140,20 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
       await client.query("UPDATE livechat_visitors SET last_seen_at=now(),first_ip=COALESCE(first_ip,$2),last_ip=$2,visitor_context=visitor_context||$3::jsonb WHERE id=$1",[v.id,request.ip,JSON.stringify(context)]);
       await createWebhookEvent(client,"message.received",msg.rows[0].id,{platform:"livechat",accountId:c.account_id,conversationId:conv.rows[0].id,direction:"in",kind,text:data.text});
       await enqueueInboundAgentWork(client,conv.rows[0].id,msg.rows[0].id,Boolean(data.text));
-      return {id:msg.rows[0].id};
+      if(firstChat&&data.context?.analytics)await saveVisitorAnalytics(client,v.id,active.rows[0].ga4_measurement_id,data.context.analytics);
+      if(firstChat){
+        await recordLivechatLead(client,{accountId:c.account_id,conversationId:conv.rows[0].id,contactId:v.contact_id,visitorId:v.id,messageId:msg.rows[0].id,clientMessageId:data.clientMessageId});
+      }
+      return {id:msg.rows[0].id,...(firstChat?{leadMessageId:msg.rows[0].id}:{})};
     });
     return reply.code(201).send(result);
+  });
+  app.post("/livechat/:publicId/analytics",async(request,reply)=>{
+    const c=await channel(request),v=await visitor(request,c),parsed=analyticsSchema.safeParse(request.body);
+    if(!parsed.success)throw fail(400,"invalid_analytics_context");
+    await rate(`analytics:${v.id}`,30);
+    if(!await saveVisitorAnalytics(pool,v.id,c.ga4_measurement_id,parsed.data))throw fail(409,"analytics_context_stale");
+    return reply.header("cache-control","no-store").code(204).send();
   });
   app.post("/livechat/:publicId/presence",async(request,reply)=>{
     const c=await channel(request),v=await visitor(request,c);
@@ -223,7 +236,7 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
       FROM visible WHERE ($3::uuid IS NULL OR (visible_at,id) ${after?">":"<"} (SELECT visible_at,id FROM visible WHERE id=$3))
       ORDER BY visible_at ${after?"ASC":"DESC"},id ${after?"ASC":"DESC"} LIMIT 101`,[c.account_id,v.contact_id,query.data.after??query.data.before??null]);
     const data=result.rows.slice(0,100);
-    reply.header("cache-control","no-store");return {data:after?data:data.reverse(),hasMore:result.rows.length>100};
+    reply.header("cache-control","no-store");return {data:after?data:data.reverse(),hasMore:result.rows.length>100,leadMessageId:v.lead_message_id??null};
   });
   app.post("/livechat/:publicId/media",async(request,reply)=>{
     const c=await channel(request),v=await visitor(request,c);

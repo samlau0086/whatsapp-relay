@@ -51,6 +51,7 @@ import {LivechatSettingsPanel} from "./livechat-settings";
 import { replyEmailSubject } from "./email-reply-subject";
 import {defaultTimelineRecipient,TimelineRecipientPicker,type TimelineRecipient} from "./timeline-recipient";
 import {LivechatTranscriptDialog} from "./livechat-transcript-dialog";
+import {LivechatConversionsPanel} from "./livechat-conversions";
 
 const API_URL = (process.env.NEXT_PUBLIC_RELAY_API_URL ?? "").replace(/\/$/, "");
 const REMEMBER_LOGIN_KEY="relayRememberLogin";
@@ -2685,6 +2686,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             <CrmDetailsPanel
               key={active.id}
               active={active}
+              livechatConversionMembers={livechatRecipients.length?livechatRecipients:initialConversationMode(active)==="livechat"?[{id:active.id,name:active.name,contactId:active.contactId,latestIncomingAt:null,latestIncomingId:null}]:[]}
+              livechatConversionRecipientId={replyConversationId}
               token={apiToken}
               user={user}
               role={userRole}
@@ -3336,6 +3339,8 @@ function GroupDetailsPanel({active,accounts,token,onToken,onClose,onToast,onConv
 
 function CrmDetailsPanel({
   active,
+  livechatConversionMembers,
+  livechatConversionRecipientId,
   token,
   user,
   role,
@@ -3352,6 +3357,8 @@ function CrmDetailsPanel({
   onDeleted,
 }: {
   active: Conversation;
+  livechatConversionMembers: TimelineRecipient[];
+  livechatConversionRecipientId: string;
   token: string;
   user: User | null;
   role: string;
@@ -3803,6 +3810,7 @@ function CrmDetailsPanel({
           <div className="contact-profile-actions"><button className="contact-profile-edit" onClick={()=>setContactEditing(true)}><Pencil size={13}/>编辑资料</button><button className="contact-profile-edit" onClick={()=>setAddressEditing(true)}><MapPin size={13}/>收货地址{details?.contact?.addresses.length?` (${details.contact.addresses.length})`:""}</button>{active.platform==="whatsapp"&&active.transport==="web"&&<button className={`contact-profile-edit contact-block-button ${(blockOverride??Boolean(details?.contact?.blockedAt??active.blocked))?"blocked":""}`} disabled={busy} onClick={()=>void toggleContactBlock()}><Ban size={13}/>{(blockOverride??Boolean(details?.contact?.blockedAt??active.blocked))?"解除拉黑":"拉黑"}</button>}</div>
         </div>
         {initialConversationMode(active)==="livechat"&&<LivechatVisitorDetails visitor={details?.contact?.livechatVisitor} companyName={details?.contact?.companyName} presence={active.visitorPresence}/>}
+        {livechatConversionMembers.length>0&&<LivechatConversionsPanel conversationId={active.id} members={livechatConversionMembers} initialRecipientId={livechatConversionRecipientId} token={token} onToken={onToken} onRecorded={purchase=>{if(purchase){void load();void onChanged();}}}/>}
         <AgentMemoryPanel conversationId={active.id} token={token} onToken={onToken} onToast={onToast}/>
         {loading ? (
           <div className="crm-loading">

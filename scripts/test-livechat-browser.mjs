@@ -15,8 +15,9 @@ const secondChannel="22222222-2222-4222-8222-222222222222";
 const sessions=new Map(),uploads=new Map(),origins=new Set(),errors=[],profiles=[],expiredSessions=new Set();
 const transcripts=new Map(),closedChats=new Map(),endRequests=[];
 const presenceReports=[];
+const analyticsReports=[];
 let endError='',dropEndResponse=false;
-let failNext=false,ordinal=0,widgetLanguage,widgetName='网站客服',widgetIcon='';
+let failNext=false,dropFirstSendResponse=false,ordinal=0,widgetLanguage,widgetName='网站客服',widgetIcon='';
 const timestamp=()=>new Date().toISOString().replace(/\.(\d{3})Z$/,(_match,millis)=>`.${millis}${String(++ordinal%1000).padStart(3,'0')}Z`);
 const listen=async handler=>{
   const server=createServer(handler);await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
@@ -30,7 +31,7 @@ const api=await listen(async(req,res)=>{
   if(url.pathname==="/livechat/embed.js"){res.writeHead(200,{"content-type":"application/javascript"});res.end(livechatLoader);return}
   if(url.pathname.endsWith("/widget")){res.writeHead(200,{"content-type":"text/html","content-security-policy":`default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src blob: https:; frame-ancestors ${[...origins].join(" ")}`});res.end(livechatWidget);return}
   if(!origins.has(req.headers.origin)){json(403,{error:"livechat_origin_denied"});return}
-  if(url.pathname.endsWith("/config")){json(200,{name:widgetName,iconUrl:widgetIcon,welcome:widgetLanguage!==undefined?"":"您好，欢迎联系我们。",color:"#146d73",position:url.pathname.includes(secondChannel)?"left":"right",language:widgetLanguage===null?undefined:widgetLanguage||(url.pathname.includes(secondChannel)?"en":"zh-CN")});return}
+  if(url.pathname.endsWith("/config")){json(200,{name:widgetName,iconUrl:widgetIcon,welcome:widgetLanguage!==undefined?"":"您好，欢迎联系我们。",color:"#146d73",position:url.pathname.includes(secondChannel)?"left":"right",language:widgetLanguage===null?undefined:widgetLanguage||(url.pathname.includes(secondChannel)?"en":"zh-CN"),ga4MeasurementId:"G-TEST123"});return}
   const secret=req.headers.authorization,sessionKey=`${url.pathname.split('/')[2]}:${req.headers.origin}:${secret}`;
   if(!/^Bearer [a-f0-9]{64}$/.test(secret||"")){json(401,{error:"invalid_visitor_credential"});return}
   if(expiredSessions.has(sessionKey)){json(401,{error:"visitor_not_found_or_expired"});return}
@@ -44,11 +45,13 @@ const api=await listen(async(req,res)=>{
     const messages=sessions.get(sessionKey)||[];sessions.set(sessionKey,messages);
     let message=messages.find(m=>m.client_message_id===data.clientMessageId);
     if(!message){const upload=uploads.get(data.mediaId);message={id:randomUUID(),client_message_id:data.clientMessageId,direction:"in",text_content:data.text,media_id:data.mediaId,file_name:upload?.name,mime_type:upload?.mime,created_at:timestamp()};messages.push(message)}
-    json(201,{id:message.id});return;
+    if(dropFirstSendResponse&&!messages[1]){dropFirstSendResponse=false;req.socket.destroy();return}
+    json(201,{id:message.id,...(message===messages[0]?{leadMessageId:message.id}:{})});return;
   }
   const messages=sessions.get(sessionKey);
   if(!messages){json(401,{error:"visitor_not_found_or_expired"});return}
   if(url.pathname.endsWith('/presence')){presenceReports.push({...JSON.parse((await body(req)).toString()),sessionKey});json(200,{ok:true});return}
+  if(url.pathname.endsWith('/analytics')){analyticsReports.push(JSON.parse((await body(req)).toString()));res.writeHead(204,cors);res.end();return}
   if(url.pathname.endsWith('/end-chat')&&req.method==='POST'){
     const data=JSON.parse((await body(req)).toString());endRequests.push(data);
     if(endError&&data.sendTranscript!==false){json(409,{error:endError});return}
@@ -62,7 +65,7 @@ const api=await listen(async(req,res)=>{
     const ordered=[...messages].sort((a,b)=>a.created_at.localeCompare(b.created_at)||a.id.localeCompare(b.id));
     const data=after?ordered.slice(ordered.findIndex(m=>m.id===after)+1):before?ordered.slice(0,ordered.findIndex(m=>m.id===before)):ordered;
     const page=before?data.slice(-100):after?data.slice(0,100):data.slice(-100);
-    json(200,{data:page.map(message=>({...message,sort_at:message.created_at,created_at:new Date(message.created_at).toISOString()})),hasMore:data.length>100});return;
+    json(200,{data:page.map(message=>({...message,sort_at:message.created_at,created_at:new Date(message.created_at).toISOString()})),hasMore:data.length>100,leadMessageId:messages[0]?.id});return;
   }
   if(url.pathname.endsWith("/media")&&req.method==="POST"){
     const form=await new Request(url,{method:'POST',headers:{'content-type':req.headers['content-type']},body:await body(req)}).formData(),file=form.get('file'),id=randomUUID();
@@ -175,11 +178,22 @@ try{
   failNext=true;
   await frame.locator('#visitorName').fill('Sam');await frame.locator('#email').fill('sam@example.com');await frame.locator('#company').fill('Example Ltd');await frame.locator('#whatsapp').fill('+12025550123');await frame.locator('#initialMessage').fill('第一条匿名消息');await frame.locator('#start').click();
   await frame.getByText('发送失败，点击重试').waitFor();
+  assert.equal(await page.evaluate(()=>dataLayer.filter(item=>item.event==='generate_lead').length),0,'首条消息失败时不触发转化');
   await assertMessageLayout(frame);
-  await page.reload();frame=await frameFor(page);await openChat(frame);await frame.getByText('发送失败，点击重试').click();
+  await page.reload();frame=await frameFor(page);await openChat(frame);
+  assert.equal(await page.evaluate(channel=>RelayDeskLiveChat.setAnalytics(channel,{consent:'granted',measurementId:'G-WRONG',clientId:'123.456'}),channel),false);
+  assert.equal(await page.evaluate(channel=>RelayDeskLiveChat.setAnalytics(channel,{consent:'granted',measurementId:'G-TEST123',clientId:'123.456'}),channel),true);
+  dropFirstSendResponse=true;await frame.getByText('发送失败，点击重试').click();
   await frame.getByText("第一条匿名消息",{exact:true}).waitFor();await frame.locator("#send").waitFor({state:"visible"});
   await page.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(":started")));
   const firstSession=[...sessions.values()][0];assert.equal(firstSession.length,1);
+  await page.waitForFunction(()=>dataLayer.filter(item=>item.event==='generate_lead').length===1);
+  assert.deepEqual(await page.evaluate(()=>dataLayer.find(item=>item.event==='generate_lead')),{event:'generate_lead',lead_source:'livechat',livechat_channel_id:channel,livechat_event_id:firstSession[0].id});
+  assert.equal(profiles[0].context.analytics.clientId,'123.456');
+  assert.equal(await page.evaluate(()=>Object.values(localStorage).some(value=>value.includes('123.456'))),false,'同意上下文不写入 outbox');
+  assert.equal(await page.evaluate(channel=>RelayDeskLiveChat.setAnalytics(channel,{consent:'denied'}),channel),true);
+  for(let i=0;i<50&&!analyticsReports.some(item=>item.consent==='denied');i++)await page.waitForTimeout(100);
+  assert.ok(analyticsReports.some(item=>item.consent==='denied'&&!item.clientId),'撤回后通知后端且不附 Client ID');
   assert.equal(profiles[0].name,'Sam');assert.equal(profiles[0].email,'sam@example.com');assert.equal(profiles[0].company,'Example Ltd');assert.equal(profiles[0].whatsapp,'+12025550123');
   assert.ok(profiles[0].context.browserLanguage);assert.ok(profiles[0].context.timeZone);assert.equal(profiles[0].context.pageUrl,hosts[0].url+'/contact');
   const waitPresence=async predicate=>{for(let i=0;i<60;i++){if(presenceReports.some(predicate))return;await page.waitForTimeout(100)}assert.fail('未收到预期访客心跳')};
@@ -189,6 +203,7 @@ try{
   await waitPresence(item=>item.pageUrl===hosts[0].url+'/live-products'&&item.connected);
   assert.equal(firstSession.length,1,'更新当前浏览页面无需再发消息');
   await page.goto(hosts[0].url+'/presence-next');frame=await frameFor(page);await openChat(frame);
+  assert.equal(await page.evaluate(()=>dataLayer.filter(item=>item.event==='generate_lead').length),0,'跨页不重复触发');
   await waitPresence(item=>item.sessionId===originalPresence.sessionId&&!item.connected);
   await waitPresence(item=>item.pageUrl===hosts[0].url+'/presence-next'&&item.connected&&item.sessionId!==originalPresence.sessionId);
   incoming(firstSession,"坐席回复已送达");await frame.getByText("坐席回复已送达",{exact:true}).waitFor({timeout:10000});

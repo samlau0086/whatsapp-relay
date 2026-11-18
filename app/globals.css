@@ -1301,3 +1301,20 @@ button { color:inherit; }
 .email-channel-binding small { display:block; color:#64756d; }
 .email-channel-binding select { width:100%; min-width:0; border:1px solid #dce7e1; padding:10px; border-radius:6px; background:white; }
 @media(max-width:640px){.email-instance-settings .settings-section-head{align-items:flex-start;flex-direction:column;gap:12px}.email-channel-binding{grid-template-columns:minmax(0,1fr) auto}.email-channel-binding label{grid-column:1/-1}.email-instance-settings .provider-settings-layout{grid-template-columns:minmax(0,1fr)}.email-instance-settings .provider-form-grid{grid-template-columns:minmax(0,1fr)}.email-instance-settings .provider-form{padding:16px;min-width:0}.email-instance-settings .email-instance-toolbar input{max-width:100%;width:100%}}
+.rd-livechat-conversions {
+  display: grid;
+  gap: var(--rd-space-2);
+  padding: var(--rd-space-3);
+  min-width: 0;
+  border-bottom: 1px solid var(--rd-border);
+  color: var(--rd-text);
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.rd-livechat-conversions > button, .rd-livechat-conversions form > button { justify-self: start; }
+.rd-livechat-conversions form, .rd-livechat-conversions-head { display: grid; gap: var(--rd-space-2); margin-bottom: var(--rd-space-2); }
+.rd-livechat-conversions-head > button { justify-self: start; }
+.rd-livechat-conversions ul { list-style: none; margin: var(--rd-space-2) 0 0; padding: 0; max-height: 240px; overflow-y: auto; }
+.rd-livechat-conversions li { display: grid; gap: var(--rd-space-1); padding: var(--rd-space-2) 0; border-top: 1px solid var(--rd-border); }
+.rd-livechat-conversions li span { color: var(--rd-muted); }
+.rd-livechat-conversions-error { color: var(--rd-danger); }

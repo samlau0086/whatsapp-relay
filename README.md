@@ -114,6 +114,40 @@ LiveChat 与 WhatsApp、Messenger 共用账号权限、统一收件箱、客户�
 - 双向附件限定 PNG、JPEG、WebP、PDF 和纯文本，单文件不超过 10 MB。访客上传还检查文件签名；文件读取要求有效访客凭证及当前会话中的消息引用，不提供公开对象存储地址。未发送附件仍占对象存储空间，运维需监控并安排孤立对象清理；`delete_after` 标记本身不会删除对象。
 - 停用渠道立即阻止公开接入和新消息，重新启用后原凭证仍受有效期约束。归档需要二次确认，归档后不能通过设置界面恢复；保留原账号、历史客户、会话和审计记录，但停止嵌入访问及发送，已有待发消息由 Worker 标为失败。
 
+### GTM / GA4 转化追踪
+
+1. 在 **系统设置 → LiveChat → 编辑渠道** 填入宿主网站对应的 GA4 Web 数据流 Measurement ID（`G-…`）。坐席需要回传时，另填同一数据流的 Measurement Protocol API secret。密钥只保存在服务端，不写入网页或 GTM；修改或清空 Measurement ID 会清除旧密钥，同一 ID 且密钥留空则保留。
+2. 在宿主 GTM 创建名为 `generate_lead` 的**自定义事件**触发器，可按 `livechat_channel_id` 筛选渠道。绑定同名 GA4 事件标签，可传入 `lead_source` 和 `livechat_event_id`；只绑定一份标签，并设为仅在 `analytics_storage` 同意后触发。服务端确认首条消息已保存后才推送；打开窗口、校验失败、后续发送或同一访客结束后重开均不计新线索。跨页去重依赖宿主浏览器的本地存储，清理或禁用存储不保证跨页去重。部署前已存在的会话不补报。
+3. 将网站同意管理平台（CMP）和 Google tag 接好，再同步分析同意和实际 Client ID。以下示例中的 `readSiteAnalyticsConsent` 为你的网站函数，返回 `granted`、`denied` 或 `unset`；未初始化时返回 `unset`。不要直接读取 Cookie 或猜测用户同意状态。
+
+```js
+const livechatChannel = "替换为公开渠道 UUID";
+const livechatMeasurementId = "G-XXXXXXXXXX";
+function syncLivechatConsent() {
+  const consent = readSiteAnalyticsConsent();
+  const livechat = window.RelayDeskLiveChat;
+  if (!livechat) return;
+  if (consent !== "granted") {
+    livechat.setAnalytics(livechatChannel, {consent});
+    return;
+  }
+  if (!window.gtag) return;
+  window.gtag("get", livechatMeasurementId, "client_id", clientId => {
+    if (readSiteAnalyticsConsent() === "granted") {
+      livechat.setAnalytics(livechatChannel, {consent, measurementId: livechatMeasurementId, clientId});
+    }
+  });
+}
+// 通过 GTM 的 relaydesk_livechat_ready 自定义事件执行此函数，
+// 并在 Google tag 初始化完成及 CMP 同意状态变化时再次执行。
+```
+
+在 **收件箱 → LiveChat 会话 → 右侧客户资料 → 转化事件** 可记录合格/不合格线索、跟进、成交/未成交、自定义事件和 `purchase`。合并时间线可以选择原访客；管理员和拥有该渠道读取、发送权限的坐席可操作。购买只能关联同渠道、同原访客的全额付款订单，不计算沙盒、部分付款或待确认付款。同一订单只记录一次，GA4 使用内部订单 ID 和商品小计，运费单独发送。LiveChat 事件载荷不包含姓名、邮箱、消息、IP 或访问页面；不要把个人资料写入自定义事件名称，也不要在宿主 GTM 的标签里把表单内容映射成事件参数。
+
+未取得分析同意、未获得该数据流的 Client ID 或未配置密钥时，坐席事件只保留在工作台，不会在补配置后自动补发。GA4 HTTP 2xx 只表示 Google 接收请求；超时或 Worker 中断会标为结果不确定，不自动重发。升级需同步更新工作台、API 和 Worker（启动自动执行 `111_livechat_ga4_conversions.sql`），并允许 Worker 通过 HTTPS 访问 Google Analytics。发布前使用 GTM Preview 验证首聊和拒绝分析同意场景，用测试 GA4 数据流确认坐席事件、购买指标和关键事件设置。
+
+本地验收：根目录运行 `node scripts/test-livechat-conversions-browser.mjs` 验证工作台、`node scripts/test-livechat-browser.mjs`（先构建 API）验证宿主推送。设置 `LIVECHAT_PG_BIN` 后在 `services/api` 运行 `node --import tsx --test test/livechat-analytics.postgres.test.ts`，使用临时 PostgreSQL 验证权限、购买去重和撤回同意，不使用真实 GA4。
+
 ### 安全与部署
 
 API 和 Worker 启动时执行 `097_livechat_schema.sql`、`098_livechat_language.sql`、`099_livechat_visitor_profile.sql`、`100_livechat_icon.sql` 和 `101_livechat_end_requests.sql`，使用数据库会话锁串行化启动迁移；迁移新增渠道枚举及渠道、访客、限流、幂等结束请求表，并为旧渠道补充默认界面语言、访客环境字段及可选渠道图标，不删除原渠道数据。旧访客仍可直接聊天，环境信息在下次发消息时补充，不追溯历史 IP。新部署仍需执行现有完整数据库初始化流程。生产环境需要可供宿主网站访问的 HTTPS 地址、PostgreSQL、私有 S3/MinIO 存储，以及持续运行的 API 和 Worker。仓库 Nginx 已代理 `/livechat/`，允许 11 MB 请求体以容纳 multipart 开销。

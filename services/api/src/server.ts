@@ -45,6 +45,7 @@ import {registerStatusRoutes} from "./status-routes.js";
 import {registerWhatsAppCloudRoutes} from "./whatsapp-cloud.js";
 import {registerMessengerRoutes} from "./messenger.js";
 import {registerLivechatRoutes} from "./livechat.js";
+import {registerLivechatAnalyticsRoutes} from "./livechat-analytics.js";
 import {livechatCorsOrigin,registerLivechatPublicRoutes} from "./livechat-public.js";
 import {isMessengerReplyWindowClosedError,isTemplateRequiredError,queueChannelCommand,queueGroupCreateCommand,queueWhatsAppBlockCommand} from "./whatsapp-outbound.js";
 import {registerBrowserEvents} from "./browser-events.js";
@@ -58,7 +59,7 @@ import { paypalProfileSetting, registerPaymentMethodRoutes, resolvePaymentProfil
 import { calculatePayPalFee, PAYPAL_FEE_NAME } from "./paypal-fee.js";
 import { calculateShippingQuote, registerShippingRoutes } from "./shipping-routes.js";
 
-const app = Fastify({ trustProxy: config.TRUSTED_PROXY_CIDRS.split(",").map(value=>value.trim()).filter(Boolean), logger: { level: config.NODE_ENV === "production" ? "info" : "debug", redact:["req.headers.authorization","req.body.password","req.body.secret","req.body.apiKey","req.body.clientId","req.body.clientSecret","req.body.sandboxClientId","req.body.sandboxClientSecret","req.body.liveClientId","req.body.liveClientSecret","req.body.accessToken","req.body.pageAccessToken","req.body.appSecret"] }, bodyLimit: 2_000_000 });
+const app = Fastify({ trustProxy: config.TRUSTED_PROXY_CIDRS.split(",").map(value=>value.trim()).filter(Boolean), logger: { level: config.NODE_ENV === "production" ? "info" : "debug", redact:["req.headers.authorization","req.body.password","req.body.secret","req.body.ga4ApiSecret","req.body.context.analytics.clientId","req.body.apiKey","req.body.clientId","req.body.clientSecret","req.body.sandboxClientId","req.body.sandboxClientSecret","req.body.liveClientId","req.body.liveClientSecret","req.body.accessToken","req.body.pageAccessToken","req.body.appSecret"] }, bodyLimit: 2_000_000 });
 app.removeContentTypeParser("application/json");
 app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
   if (!String(body).trim()) return done(null, {});
@@ -104,6 +105,7 @@ await registerStatusRoutes(app);
 await registerWhatsAppCloudRoutes(app);
 await registerMessengerRoutes(app);
 await registerLivechatRoutes(app);
+await registerLivechatAnalyticsRoutes(app);
 await registerLivechatPublicRoutes(app);
 await registerBrowserEvents(app);
 await registerPaymentMethodRoutes(app);
