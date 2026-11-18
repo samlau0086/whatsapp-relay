@@ -116,7 +116,13 @@ LiveChat 与 WhatsApp、Messenger 共用账号权限、统一收件箱、客户�
 
 ### GTM / GA4 转化追踪
 
-1. 在 **系统设置 → LiveChat → 编辑渠道** 填入宿主网站对应的 GA4 Web 数据流 Measurement ID（`G-…`）。坐席需要回传时，另填同一数据流的 Measurement Protocol API secret。密钥只保存在服务端，不写入网页或 GTM；修改或清空 Measurement ID 会清除旧密钥，同一 ID 且密钥留空则保留。
+1. 在 **系统设置 → LiveChat → 编辑渠道** 填入宿主网站对应的 GA4 Web 数据流 Measurement ID（`G-…`）。坐席需要把 `purchase` 等转化事件从服务端回传到 GA4 时，还要填写该**同一个 Web 数据流**的 Measurement Protocol API secret。获取方式：
+   1. 打开 Google Analytics 管理后台，进入 **管理 → 数据收集和修改 → 数据流**（部分界面直接显示 **管理 → 数据流**）。
+   2. 选择 Measurement ID 与渠道中所填 `G-…` 相同的 **Web 数据流**。
+   3. 打开 **Measurement Protocol API secrets**，点击 **Create**，填写便于识别的名称（例如 `RelayDesk LiveChat`）并创建。
+   4. 复制生成的 **Secret value**，粘贴到 LiveChat 渠道的 **GA4 API Secret** 字段并保存。不要把它误当成 Measurement ID、Google Cloud API key 或 OAuth Client Secret。
+
+   这个 API secret 仅用于服务端 Measurement Protocol 回传坐席记录的转化事件；访客首聊的 `generate_lead` 由宿主网站的 GTM/Google tag 处理，不需要把 API secret 配到前端。该密钥具有向对应 GA4 数据流发送数据的能力，只保存在服务端，绝不可写入网页、嵌入代码或 GTM。若怀疑泄漏，应在该 Web 数据流的 **Measurement Protocol API secrets** 页面撤销旧密钥、创建新密钥，并更新 LiveChat 渠道配置。修改或清空 Measurement ID 会清除旧密钥；Measurement ID 不变且 API secret 留空则保留已保存的密钥。
 2. 在宿主 GTM 创建名为 `generate_lead` 的**自定义事件**触发器，可按 `livechat_channel_id` 筛选渠道。绑定同名 GA4 事件标签，可传入 `lead_source` 和 `livechat_event_id`；只绑定一份标签。服务端确认首条消息已保存后才推送；打开窗口、校验失败、后续发送或同一访客结束后重开均不计新线索。跨页去重依赖宿主浏览器的本地存储，清理或禁用存储不保证跨页去重。部署前已存在的会话不补报。
 3. 将网站同意管理平台（CMP）和 Google tag 接好，再同步分析状态和实际 Client ID。以下示例中的 `readSiteAnalyticsConsent` 为你的网站函数，返回 `granted`、`denied` 或 `unset`；未初始化时返回 `unset`。**LiveChat 将 `unset` 按默认启用分析处理，只有明确的 `denied` 才会停止后台 GA4 回传；GTM/Google tag 的 Consent Mode 仍由宿主网站控制，必须与此默认策略保持一致。**这意味着 CMP 尚未初始化期间可能按启用状态处理分析，请确认这符合你的网站隐私与同意策略；若要在访客选择前禁用分析，CMP 应在未选择时返回 `denied`。不要直接读取 Cookie 或猜测访客选择。
 
@@ -147,9 +153,166 @@ function syncLivechatConsent() {
 
 在 **收件箱 → LiveChat 会话 → 右侧客户资料 → 转化事件** 可记录合格/不合格线索、跟进、成交/未成交、自定义事件和 `purchase`。合并时间线可以选择原访客；管理员和拥有该渠道读取、发送权限的坐席可操作。购买只能关联同渠道、同原访客的全额付款订单，不计算沙盒、部分付款或待确认付款。同一订单只记录一次，GA4 使用内部订单 ID 和商品小计，运费单独发送。LiveChat 事件载荷不包含姓名、邮箱、消息、IP 或访问页面；不要把个人资料写入自定义事件名称，也不要在宿主 GTM 的标签里把表单内容映射成事件参数。
 
-未取得分析同意、未获得该数据流的 Client ID 或未配置密钥时，坐席事件只保留在工作台，不会在补配置后自动补发。GA4 HTTP 2xx 只表示 Google 接收请求；超时或 Worker 中断会标为结果不确定，不自动重发。升级需同步更新工作台、API 和 Worker（启动自动执行 `111_livechat_ga4_conversions.sql`），并允许 Worker 通过 HTTPS 访问 Google Analytics。发布前使用 GTM Preview 验证首聊和拒绝分析同意场景，用测试 GA4 数据流确认坐席事件、购买指标和关键事件设置。
+明确拒绝分析同意（`denied`）、未获得该数据流的 Client ID 或未配置密钥时，坐席事件只保留在工作台，不会在补配置后自动补发；`unset` 沿用上述默认启用策略。GA4 HTTP 2xx 只表示 Google 接收请求；超时或 Worker 中断会标为结果不确定，不自动重发。升级需同步更新工作台、API 和 Worker（启动自动执行 `111_livechat_ga4_conversions.sql`），并允许 Worker 通过 HTTPS 访问 Google Analytics。发布前使用 GTM Preview 验证首聊和拒绝分析同意场景，用测试 GA4 数据流确认坐席事件、购买指标和关键事件设置。
 
 本地验收：根目录运行 `node scripts/test-livechat-conversions-browser.mjs` 验证工作台、`node scripts/test-livechat-browser.mjs`（先构建 API）验证宿主推送。设置 `LIVECHAT_PG_BIN` 后在 `services/api` 运行 `node --import tsx --test test/livechat-analytics.postgres.test.ts`，使用临时 PostgreSQL 验证权限、购买去重和撤回同意，不使用真实 GA4。
+
+#### 没有 CMP 时：仅通过 GTM 接入
+
+如果宿主网站已经安装 **GTM 容器（`GTM-...`）**、配置好对应的 **Google tag（`G-...`）**，并已嵌入 LiveChat，则可以只在 GTM 中完成以下配置，无需再修改宿主网站源码。只有 Google tag 不等于已安装 GTM；缺少容器或 LiveChat 嵌入脚本时，仍需先完成安装。不要重复安装已有 Google tag 或 LiveChat 脚本。
+
+Client ID 是宿主网站 Google tag 为每个浏览器访客使用的分析标识，不是 GA4 后台的固定配置，也不是 Measurement ID、API secret 或 Google OAuth Client ID。**不能在渠道里填写一个全站共用的 Client ID**，否则会混淆访客。当前 LiveChat 嵌入脚本提供同步接口，但不会自行读取 Client ID；需要宿主网站或 GTM 调用以下桥接。
+
+此流程适用于没有 CMP、且部署方已确认采用默认启用分析策略的网站，不代表免除隐私或同意要求。`unset` 只影响 LiveChat 的处理策略，不会把 Google Consent Mode 改为 `granted`；若网站其他标签已设置拒绝分析，不能用此流程覆盖或绕过。已有 CMP 的网站应使用上一节真实状态同步方案，并在状态变化时重新同步，不使用固定 `unset`。
+
+1. **核对渠道与 Google tag**：在 LiveChat 渠道中保存与宿主网站相同的 Measurement ID。Google tag 需在读取 Client ID 前完成初始化；保留网站已有触发及同意规则，不额外发送重复的 `page_view`。后台回传坐席事件还需配置同一数据流的 API secret，但该密钥绝不能放入 GTM。
+2. **建立 GTM 变量**：在“变量 → 用户定义变量 → 新建”创建下表变量。数据层变量使用版本 2。
+
+   | GTM 变量名称 | 类型 | 数据层变量名或常量值 |
+   | --- | --- | --- |
+   | `LC Channel ID` | 数据层变量 | `livechat_channel_id` |
+   | `LC Measurement ID` | 数据层变量 | `livechat_measurement_id` |
+   | `LC Analytics Consent` | 常量 | `unset` |
+
+3. **建立就绪触发器**：新建“自定义事件”触发器，事件名称精确填写 `relaydesk_livechat_ready`。LiveChat 配置加载完成后会在宿主 `dataLayer` 推送该事件及对应渠道的公开 UUID、Measurement ID；不是渠道名称，也无需手工填写 UUID。
+4. **建立同步标签**：新建“自定义 HTML”标签，命名为 `LiveChat - Sync Analytics`，粘贴以下代码，并绑定第 3 步的触发器。此标签不要配置为每页只触发一次，以免同页多个渠道只同步第一个。
+
+```html
+<script>
+(function () {
+  var channel = "{{LC Channel ID}}";
+  var measurementId = "{{LC Measurement ID}}";
+  var consent = "{{LC Analytics Consent}}";
+  var livechat = window.RelayDeskLiveChat;
+  if (!livechat || !/^[a-f0-9-]{36}$/i.test(channel) ||
+      !/^G-[A-Z0-9]+$/.test(measurementId) || consent !== "unset") return;
+
+  window.dataLayer = window.dataLayer || [];
+  var googleCommand = window.gtag || function () {
+    window.dataLayer.push(arguments);
+  };
+  googleCommand("get", measurementId, "client_id", function (clientId) {
+    if (typeof clientId !== "string" ||
+        !/^[0-9]{1,20}\.[0-9]{1,20}$/.test(clientId)) return;
+    livechat.setAnalytics(channel, {
+      consent: consent,
+      measurementId: measurementId,
+      clientId: clientId
+    });
+  });
+})();
+</script>
+```
+
+此代码通过现有 Google tag 命令队列读取 Client ID，不会安装新的 Google tag，也不会手工解析 `_ga` Cookie。没有全局 `window.gtag` 时会向默认 `dataLayer` 排入命令，但仍依赖已加载且配置了对应数据流的 Google tag；仅有命令队列不保证取得标识。使用自定义数据层名称的站点需按实际名称调整，不应直接套用默认 `dataLayer` 示例。
+
+5. **建立首聊事件标签**：再创建数据层变量 `LC Lead Source`（`lead_source`）和 `LC Event ID`（`livechat_event_id`）。创建“自定义事件”触发器，名称精确填写 `generate_lead`，并加条件 `LC Lead Source` 等于 `livechat`，避免捕获网站其他来源的同名事件。创建 GA4 事件标签，选择已有 Google tag 对应的数据流（或填写同一 Measurement ID），事件名称为 `generate_lead`，绑定该触发器。事件参数可映射 `lead_source` → `{{LC Lead Source}}`、`livechat_event_id` → `{{LC Event ID}}`、`livechat_channel_id` → `{{LC Channel ID}}`。多渠道使用不同数据流时应按渠道分别筛选并路由，不把全部渠道发到同一数据流。
+6. **避免重复统计**：同一个 LiveChat 首聊事件只绑定一份 GA4 发送标签；若已有通用 `generate_lead` 标签，应调整其条件或复用，避免两份同时触发。不需要额外监听 Start Chat 的按钮点击；LiveChat 已在姓名、邮箱、初始消息校验且首条消息保存成功后推送事件。不要将姓名、邮箱、消息等个人资料添加为事件参数。
+7. **Preview 验收并发布**：连接 GTM Preview 后刷新宿主页面，确认 `relaydesk_livechat_ready` 的两个 ID 正确、同步标签触发且 Google tag 已初始化。用新浏览器身份提交一次首聊，确认后台该访客出现 Client ID、`generate_lead` 的 GA4 标签只触发一次，并在 GA4 DebugView（启用调试时）或实时报告核对接收结果。刷新或同一访客结束后重开不应再产生首聊事件。检查通过后提交并发布 GTM 容器；只保存工作区不会让普通访客使用新配置。
+
+若后台仍显示缺少 Client ID，依次检查：GTM 是否已发布、同步标签是否在就绪事件触发、Google tag 是否初始化且 Measurement ID 与渠道一致、`get` 回调是否返回有效值，以及浏览器拦截或 Google Consent Mode 是否限制分析。标签显示“已触发”不等于回调成功或已同步到后台。配置完成后，旧访客需重新访问网站触发同步；已经只记录在工作台的转化不会自动补发。浏览器首聊 `generate_lead` 与后台 `purchase` 等 Measurement Protocol 回传是两条独立发送路径，应分别验收。
+
+#### 有 CMP 时：宿主网站与 GTM 的配合
+
+以后接入 CMP 时，**替换无 CMP 的固定 `unset` 同步标签，不要让两套标签并行运行**。CMP 同时负责两条独立链路：更新 Google Consent Mode，以及把分析选择同步给 LiveChat。只让 Google tag 获得同意状态，不会自动通知 LiveChat；反过来，`setAnalytics` 也不会更新 Google 的同意状态。
+
+已有 CMP 的官方 GTM 模板、网站插件能够提供状态读取和变更回调时，可通过其集成功能和 GTM 完成桥接，不一定要改网站模板；否则需要在宿主网站接入 CMP SDK 的回调。不同 CMP 的 API、分类名称和事件名称不同，下文的 `SiteAnalyticsConsent`、`site_analytics_consent_changed` 和 `site_google_tag_ready` 是**本文约定的自定义适配接口，不是 CMP 或 RelayDesk 内置功能**，必须实际接好才能工作。
+
+1. **先配置 CMP 与 Google Consent Mode**：使用 CMP 官方支持的 GTM 同意模板，在 Consent Initialization 阶段建立默认状态，并按真实选择更新 `analytics_storage`；广告相关同意类型按网站实际用途独立配置，不能因允许分析就全部授权。使用 GTM 模板时通过 Consent API 管理状态，不用自定义 HTML 标签模拟 Google 的同意初始化。本节自定义 HTML 仅用于 LiveChat 桥接。
+2. **定义分析状态映射**：本节选择“未明确允许前不启用 LiveChat 分析”的部署策略。将 CMP 中的分析类别明确允许映射为 `granted`，拒绝、撤回、尚未选择、读取失败或 CMP 尚未初始化均映射为 `denied`。这不改变 LiveChat 产品对 `unset` 的默认启用逻辑，而是宿主主动传入 `denied`；如果要采用其他默认策略，必须自行确认并与 CMP 和 Google 配置保持一致。
+3. **安装状态适配器**：先安装下面的桥接，再加载 LiveChat。它可以放入 GTM Initialization 标签，但需要通过标签顺序等方式保证先于 LiveChat 加载标签执行，不能依赖两个独立标签恰好按顺序触发。如果 LiveChat 直接写在网站模板中，应把适配器放在它之前，或把 LiveChat 加载统一交给 GTM 管理。桥接本身不能被 `analytics_storage` 拒绝条件阻止执行，否则无法通知 LiveChat 撤回同意。适配器不读取 Cookie、不自动授权，也不会安装 Google tag。
+
+```html
+<script>
+(function () {
+  if (window.SiteAnalyticsConsent) return;
+  var consent = "denied";
+  var revision = 0;
+  var channels = {};
+
+  function sync(channel, measurementId) {
+    var livechat = window.RelayDeskLiveChat;
+    if (!livechat) return;
+    var currentRevision = revision;
+    // 先同步当前状态且不带旧 ID；拒绝时不读取 Client ID。
+    livechat.setAnalytics(channel, {
+      consent: consent,
+      measurementId: measurementId
+    });
+    if (consent !== "granted") return;
+    window.dataLayer = window.dataLayer || [];
+    var command = window.gtag || function () {
+      window.dataLayer.push(arguments);
+    };
+    command("get", measurementId, "client_id", function (clientId) {
+      if (revision !== currentRevision || consent !== "granted") return;
+      if (typeof clientId !== "string" ||
+          !/^[0-9]{1,20}\.[0-9]{1,20}$/.test(clientId)) return;
+      livechat.setAnalytics(channel, {
+        consent: "granted",
+        measurementId: measurementId,
+        clientId: clientId
+      });
+    });
+  }
+  function syncAll() {
+    revision += 1;
+    Object.keys(channels).forEach(function (channel) {
+      sync(channel, channels[channel]);
+    });
+  }
+  window.SiteAnalyticsConsent = {
+    update: function (value) {
+      consent = value === "granted" ? "granted" : "denied";
+      syncAll();
+    },
+    register: function (channel, measurementId) {
+      if (!/^[a-f0-9-]{36}$/i.test(channel) ||
+          !/^G-[A-Z0-9]+$/.test(measurementId)) return;
+      channels[channel] = measurementId;
+      sync(channel, measurementId);
+    }
+  };
+  window.addEventListener("site_analytics_consent_changed", function (event) {
+    window.SiteAnalyticsConsent.update(event.detail);
+  });
+  window.addEventListener("site_google_tag_ready", syncAll);
+})();
+</script>
+```
+
+4. **接入真实 CMP 回调**：在 CMP SDK 就绪时读取当前分析选择（包括上次保存的选择），以及每次允许、拒绝、撤回时，调用 `window.SiteAnalyticsConsent.update("granted")` 或 `.update("denied")`。必须先安装适配器再读取初始状态和注册回调，不要只订阅未来变化而漏掉已保存的同意。若通过统一事件桥接，则派发 `window.dispatchEvent(new CustomEvent("site_analytics_consent_changed", {detail: "granted"}))`；拒绝时 detail 改为 `"denied"`。事件与直接调用二选一，不重复执行。应在 CMP 更新 Google Consent Mode 后再通知桥接；Google tag 真正初始化后再派发 `window.dispatchEvent(new Event("site_google_tag_ready"))`，补一次读取，不能把“脚本开始下载”当作初始化完成。此事件只需更新桥接，不重新配置 Google tag 或重复发送 `page_view`。
+5. **将 LiveChat 就绪事件接入桥接**：复用上一节的 `LC Channel ID`、`LC Measurement ID` 数据层变量，以及 `relaydesk_livechat_ready` 自定义事件触发器；将原 `LiveChat - Sync Analytics` 标签内容替换为以下代码。每个渠道就绪都需要执行，不设置每页只执行一次。标签也不能被分析拒绝条件拦截，因为需要在未允许时同步 `denied`。移除原 `LC Analytics Consent = unset` 常量在同步标签中的使用。
+
+```html
+<script>
+if (window.SiteAnalyticsConsent) {
+  window.SiteAnalyticsConsent.register(
+    "{{LC Channel ID}}", "{{LC Measurement ID}}"
+  );
+}
+</script>
+```
+
+6. **控制首聊事件发送**：继续复用上一节 `generate_lead` 及 `lead_source = livechat` 的筛选，但为该 GA4 事件标签增加“分析明确允许”的限制（例如 Additional Consent Checks 要求 `analytics_storage`）。默认未选和拒绝时不得发送该标签；桥接先同步 `denied`，LiveChat 也会停止推送首聊事件。不要仅依赖 Google tag 内置 Consent Mode 检查来实现“拒绝时完全不发分析请求”，Advanced Consent Mode 在拒绝时仍可能发送无 Cookie 信号。此处限制只针对 LiveChat 首聊标签，其他网站标签遵循自身策略。聊天本身无需分析同意，仍应允许提交姓名、邮箱及消息。
+7. **以后从无 CMP 切换**：在同一次 GTM 发布中停用固定 `unset` 的旧同步代码，启用 CMP 初始化、适配器、就绪注册及真实回调；先用 Preview 核对执行顺序再发布。只改 GTM 不能更新已经打开、尚未重新加载容器的页面，需刷新页面后验收。若宿主网站无法保证桥接在访客可操作 LiveChat 前同步状态，必须调整脚本加载顺序或暂缓加载窗口；否则现有 LiveChat 默认 `unset` 策略可能在同步前按启用处理分析。
+
+桥接在每次选择变化时递增版本，旧的 `client_id` 回调即使在“允许 → 撤回 → 再允许”之后才返回，也不会覆盖最新选择；多渠道分别保留渠道与数据流映射。撤回会通知服务端清除当前分析标识，但仍依赖访客网络和会话授权成功，不能承诺请求失败、访客已离开或在途 Google 请求立即撤销；它不会删除历史工作台事件或已送达 GA4 的数据，也不替代数据删除流程。
+
+发布前至少验证下表，检查 Google 同意状态、宿主网络、LiveChat `/analytics` 请求和后台展示，而不只看标签“已触发”。本节示例是可替换的接入模板，不代表仓库已内置任何特定 CMP。
+
+| 场景 | 预期 |
+| --- | --- |
+| 首次访问，尚未选择或 CMP 未就绪 | LiveChat 注册后同步 `denied`，不调用 `get client_id`，可正常聊天，不发送首聊 GA4 标签 |
+| 已有允许记录，刷新或跨页面 | CMP 初始读取恢复 `granted`，Google tag 就绪后重新取得并同步各渠道 Client ID |
+| 点击允许 | 更新 Google 状态，再同步 LiveChat，取得 ID；之后新访客的首聊只发送一次 |
+| 拒绝或撤回 | 同步 `denied`，不再读 ID，成功同步后后台不得继续用原 ID 发新事件 |
+| 允许后立即撤回，再允许 | 旧回调被丢弃，只接受最新状态对应的 ID；最终拒绝时不允许旧回调重新授权 |
+| Google tag 加载慢或被拦截 | 不伪造 ID，不反复创建 Google tag；真正就绪后可补同步，失败仍可聊天 |
+| 拒绝期间已首聊，随后允许 | 不补报拒绝期间的首聊，也不补发此前只保存在工作台的坐席事件 |
+| 同页多个渠道 | 各自就绪、同步及数据流路由独立，不能串用 Client ID 配置或遗漏第二个渠道 |
+
+官方参考：[网站 Consent Mode](https://developers.google.com/tag-platform/security/guides/consent)、[GTM 同意模板与 Consent API](https://developers.google.com/tag-platform/tag-manager/templates/consent-apis)、[Google tag 的 get 命令](https://developers.google.com/tag-platform/gtagjs/reference#get)。
 
 ### 安全与部署
 
