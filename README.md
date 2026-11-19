@@ -16,6 +16,12 @@ LiveChat 嵌入脚本可采集 `gclid`、`gbraid`、`wbraid`，首次开聊锁�
 
 管理员在“系统设置 → LiveChat → Google Ads”授权并按渠道配置客户 ID 和转化动作 ID；默认关闭，不补发历史。部署需配置 `GOOGLE_ADS_CLIENT_ID`、`GOOGLE_ADS_CLIENT_SECRET`，同步更新工作台、API 和 Worker 并执行启动迁移 `112_google_ads_attribution.sql`。Ads 同意独立于 GA4：未设置按默认启用策略处理，明确拒绝后停止上传并清理点击标识。请求接收、异步处理成功和最终 Ads 归因并非同一状态，未知上传结果不会自动重发。
 
+渠道面板中的启用开关、Ads 客户 ID、可选 MCC 管理账号 ID，以及合格线索／成交线索／购买三个转化动作 ID 的用途、格式示例和保存注意事项，见 [渠道配置项说明](docs/google-ads-attribution.md#渠道配置项说明)。OAuth 已授权不代表渠道回传已启用。
+
+上述标签后的问号图标可通过鼠标悬停、键盘聚焦或手机点击查看用途与获取步骤，支持 Escape 和点击外部关闭；不会提交或修改配置。浏览器回归运行 `node scripts/test-livechat-conversions-browser.mjs`，包含浮层交互和窄屏边界验证，使用模拟 API。
+
+账号 ID 从 Google Ads 的账号菜单获取，动作 ID 从各转化动作详情页获取；具体入口、创建离线动作的步骤及防止 ID 混用的说明，见 [获取客户 ID 和管理账号 ID](docs/google-ads-attribution.md#获取客户-id-和管理账号-id) 和 [获取三个转化动作 ID](docs/google-ads-attribution.md#获取三个转化动作-id)。
+
 Client ID 和 Client Secret 从 Google Cloud 的 **Google Auth Platform → Clients → Create client → Web application** 创建结果中获取，不是 Ads 客户 ID 或 API Key。完整的 Cloud 项目、API 启用、同意屏幕、凭据创建、回调地址和服务器配置步骤，以及 CMP 接口、Email 关联、回传状态、隐私边界与测试方式见 [Google Ads 广告归因与离线转化](docs/google-ads-attribution.md)。真实广告账号联调仍需部署方完成。
 
 ## LiveChat 访客会话失效处理

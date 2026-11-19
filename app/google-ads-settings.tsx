@@ -1,12 +1,60 @@
 "use client";
-import {useCallback,useEffect,useRef,useState} from "react";
-import {Link,RefreshCw,Save,Unplug} from "lucide-react";
+import {useCallback,useEffect,useId,useRef,useState} from "react";
+import {CircleHelp,Link,RefreshCw,Save,Unplug} from "lucide-react";
 import {authorizedFetch} from "./auth-session";
 import {confirmAction} from "./confirmation-ui";
-import {AsyncState,Button,FormField} from "./ui";
+import {AsyncState,Button,IconButton} from "./ui";
 
 type Settings={id:string;display_name:string;enabled:boolean;customerId:string;loginCustomerId:string;qualifyLeadAction:string;closeConvertLeadAction:string;purchaseAction:string;revision:number};
 type Data={connected:boolean;oauthConfigured:boolean;data:Settings[]};
+const actionSource='获取：Google Ads → 目标 → 转化 → 摘要，打开对应动作详情，复制地址栏 ctId= 后的数字。没有动作时先创建离线／点击导入动作（UPLOAD_CLICKS），不是网页标签或 GA4 导入。没有 ctId 时请通过 Google Ads API 查询 conversion_action.id，不要猜测其他参数。';
+const fieldHelp={
+  enabled:['控制当前渠道的 Ads 回传，不影响聊天或 GA4。只有后台明确标记转化才会回传；启用后不补历史。','操作：先完成 OAuth 授权，核对账号及动作 ID，再勾选并保存。配置变更会停止未发送的旧版本事件。'],
+  customerId:['接收转化且拥有下方动作的 Ads 账号 ID，不是 OAuth Client ID。填写 10 位数字，不带横线。','获取：登录 Google Ads，切换到目标账号，点击右上角头像／账号菜单查看客户 ID，例如 123-456-7890 填 1234567890。跨账号转化跟踪时请核对动作所属账号。'],
+  loginCustomerId:['通过管理账号（MCC）访问目标账号时填写；直接授权目标账号通常留空。必须已有访问权限，填写 ID 不会授予权限。','获取：在 Google Ads 切换到管理账号，点击左上角账号名称旁的下拉箭头，查看该管理账号自己的客户 ID。填 10 位数字，不带横线，不要重复填子账号 ID。'],
+  qualifyLeadAction:['对应 qualify_lead：坐席确认客户有真实需求、符合目标客户条件后，人工标记合格线索时回传。',actionSource],
+  closeConvertLeadAction:['对应 close_convert_lead：人工确认线索成交时回传。与购买事件独立，不会自动互相触发。',actionSource],
+  purchaseAction:['对应 purchase：人工标记购买并选择同客户、同渠道的已付款非沙盒订单后，回传商品小计与订单币种。',actionSource],
+} as const;
+
+function AdsHelp({label,field}:{label:string;field:keyof typeof fieldHelp}){
+  const id=useId(),anchor=useRef<HTMLSpanElement>(null),panel=useRef<HTMLDivElement>(null),timer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
+  const [open,setOpen]=useState(false);
+  function cancel(){clearTimeout(timer.current);}
+  function show(){cancel();panel.current?.showPopover();}
+  function leave(){cancel();timer.current=setTimeout(()=>{if(!anchor.current?.querySelector('button:focus-visible'))panel.current?.hidePopover();},180);}
+  useEffect(()=>()=>clearTimeout(timer.current),[]);
+  useEffect(()=>{
+    if(!open)return;
+    const element=panel.current!,trigger=anchor.current!;
+    function position(){
+      const rect=trigger.getBoundingClientRect(),viewport=window.visualViewport;
+      const width=viewport?.width??innerWidth,height=viewport?.height??innerHeight,left=viewport?.offsetLeft??0,top=viewport?.offsetTop??0;
+      const below=Math.max(0,top+height-rect.bottom-16),above=Math.max(0,rect.top-top-16);
+      element.style.maxWidth=`${Math.max(0,width-24)}px`;element.style.maxHeight=`${Math.max(below,above)}px`;
+      element.style.left=`${Math.max(left+12,Math.min(rect.left,left+width-element.offsetWidth-12))}px`;
+      element.style.top=`${below>=element.offsetHeight||below>=above?rect.bottom+8:Math.max(top+8,rect.top-element.offsetHeight-8)}px`;
+    }
+    position();const observer=new ResizeObserver(position);observer.observe(trigger);observer.observe(element);
+    window.addEventListener('scroll',position,true);window.addEventListener('resize',position);
+    window.visualViewport?.addEventListener('resize',position);window.visualViewport?.addEventListener('scroll',position);
+    return()=>{observer.disconnect();window.removeEventListener('scroll',position,true);window.removeEventListener('resize',position);window.visualViewport?.removeEventListener('resize',position);window.visualViewport?.removeEventListener('scroll',position);};
+  },[open]);
+  return <span ref={anchor} className="rd-ads-help" onPointerEnter={e=>{if(e.pointerType!=='touch')show();}} onPointerLeave={leave} onBlur={e=>{if(!e.currentTarget.contains(e.relatedTarget)){cancel();panel.current?.hidePopover();}}}>
+    <IconButton icon={CircleHelp} label={`${label}说明与获取方式`} variant="ghost" className="rd-ads-help-trigger" aria-expanded={open} aria-controls={id} aria-describedby={open?id:undefined} onFocus={show} onClick={show}/>
+    <div ref={panel} id={id} popover="auto" role="tooltip" aria-label={`${label}说明与获取方式`} className="rd-popover rd-ads-help-panel" onToggle={e=>setOpen(e.newState==='open')} onPointerEnter={cancel} onPointerLeave={leave}>
+      <strong>{label}</strong>{fieldHelp[field].map(text=><p key={text}>{text}</p>)}
+      {field.endsWith('Action')&&<p>仅填数字 ID，不是动作名称、AW-…、Conversion label 或整个 URL；三个字段分别使用各自动作的 ID，留空则不回传该类事件。</p>}
+    </div>
+  </span>;
+}
+
+function AdsField({field,label,value,required,disabled,onChange}:{field:Exclude<keyof typeof fieldHelp,'enabled'>;label:string;value:string;required:boolean;disabled:boolean;onChange:(value:string)=>void}){
+  const id=useId();
+  return <div className="rd-field"><div className="rd-ads-label"><label htmlFor={id}>{label}</label><AdsHelp label={label} field={field}/></div>
+    <input id={id} inputMode="numeric" pattern={field==='customerId'||field==='loginCustomerId'?'[0-9]{10}':'[0-9]{1,30}'} required={required} value={value} disabled={disabled} onChange={e=>onChange(e.target.value)}/>
+  </div>;
+}
 export function GoogleAdsSettings({token,onToken}:{token:string;onToken:(value:string)=>void}){
   const [data,setData]=useState<Data>(),[error,setError]=useState(""),[busy,setBusy]=useState(false),[revision,setRevision]=useState(0);
   const locked=useRef(false);
@@ -44,8 +92,8 @@ function ChannelSettings({settings,request,onSaved}:{settings:Settings;request:(
     await request('/channels/'+id,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});setSaved(true);onSaved();
   }catch(e){setError(e instanceof Error?e.message:'保存失败');}finally{lock.current=false;setBusy(false);}}
   return <form className="rd-ads-channel" onSubmit={e=>{e.preventDefault();void save();}}><h3>{settings.display_name}</h3>
-    <label><input type="checkbox" checked={draft.enabled} disabled={busy} onChange={e=>setDraft({...draft,enabled:e.target.checked})}/>启用 Ads 回传</label>
-    <div className="rd-ads-fields">{fields.map(([key,label])=><FormField key={key} label={label}>{p=><input {...p} inputMode="numeric" pattern={key==='customerId'||key==='loginCustomerId'?'[0-9]{10}':'[0-9]{1,30}'} required={draft.enabled&&key==='customerId'} value={draft[key]} disabled={busy} onChange={e=>setDraft({...draft,[key]:e.target.value})}/>}</FormField>)}</div>
+    <div className="rd-ads-label"><label><input type="checkbox" checked={draft.enabled} disabled={busy} onChange={e=>setDraft({...draft,enabled:e.target.checked})}/>启用 Ads 回传</label><AdsHelp label="启用 Ads 回传" field="enabled"/></div>
+    <div className="rd-ads-fields">{fields.map(([key,label])=><AdsField key={key} field={key} label={label} required={draft.enabled&&key==='customerId'} value={draft[key]} disabled={busy} onChange={value=>setDraft({...draft,[key]:value})}/>)}</div>
     <Button icon={Save} type="submit" loading={busy}>保存 Ads 配置</Button>{error&&<p role="alert">{error}</p>}{saved&&<p role="status">已保存</p>}
   </form>;
 }

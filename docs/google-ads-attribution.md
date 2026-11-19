@@ -61,6 +61,82 @@ docker compose up -d --force-recreate api worker
 
 默认不启用，不因配置完成而补传历史事件。修改渠道配置或重连账号会改变版本，尚未发送的旧版本事件停止投递；需要核对事件记录，不能通过反复标记绕过去重。断开授权不会删除既有审计或已记录事件。
 
+#### 渠道配置项说明
+
+每个渠道名称下方的配置决定该 LiveChat 渠道的转化回传到哪个 Google Ads 账号及转化动作。“已授权 · OAuth 已配置”只代表连接已建立，不代表该渠道已经启用回传；还需完成下表配置并保存。
+
+启用开关及五个 ID 字段的标签后提供问号图标，鼠标悬停、键盘聚焦或手机点击时显示用途和操作／获取步骤。鼠标可移入浮层继续阅读，支持 Escape 或点击外部关闭；浮层会按视口边界调整位置和滚动，不改变字段草稿或自动提交配置。
+
+| 界面配置项 | 用途与填写方式 |
+| --- | --- |
+| 启用 Ads 回传 | 当前渠道的回传开关。填写并核对账号与动作后勾选，再点击“保存 Ads 配置”才生效；不影响 LiveChat 聊天或原有 GA4 流程。 |
+| Google Ads 客户 ID | 接收转化、拥有下方转化动作的 Ads 账号 ID，通常是实际投放的广告账号；使用跨账号转化跟踪时需核对动作所属账号。填写不带横线的 10 位数字。例如 `123-456-7890` 填成 `1234567890`。不是 OAuth Client ID。 |
+| 管理账号 ID（可选） | 通过 Google Ads 管理账号（MCC）访问目标广告账号时，填写该管理账号不带横线的 10 位 ID。直接使用目标广告账号授权时通常留空；不是坐席或管理员的用户 ID。 |
+| 合格线索转化动作 ID | 对应 `qualify_lead`，将后台人工标记的合格线索回传到此动作，例如已确认客户有真实需求并符合目标客户条件。填写对应动作的数字 ID。 |
+| 成交线索转化动作 ID | 对应 `close_convert_lead`，将后台人工标记的成交线索回传到此动作。它与购买是独立事件，不会自动互相触发。填写对应动作的数字 ID。 |
+| 购买转化动作 ID | 对应 `purchase`，后台人工标记购买并选择符合条件的已付款订单后，回传商品小计与订单币种。填写对应动作的数字 ID。 |
+
+三个转化动作 ID 都不是动作名称、`AW-…` 标签、转化标签字符串或完整资源路径。动作需支持从点击导入（`UPLOAD_CLICKS`）；某项留空时不回传该类事件。建议三个事件分别对应三个动作，以便区分线索质量和购买结果。
+
+#### 获取客户 ID 和管理账号 ID
+
+这两个值从 Google Ads 获取，不是在 Google Cloud 创建 OAuth 凭据的页面获取。
+
+1. 登录 [Google Ads](https://ads.google.com/)，先切换到接收本渠道转化的账号。
+2. 点击右上角头像／账号菜单，在账号名称下查看客户 ID；界面右上角也可能直接显示该 ID。复制后去掉横线，填写到 RelayDesk 的“Google Ads 客户 ID”。例如界面显示 `123-456-7890`，填写 `1234567890`。
+3. 如果通过管理账号（MCC）访问目标账号，切换到该管理账号，点击左上角管理账号名称旁的下拉箭头，查看管理账号名称附近的客户 ID。去掉横线后填写到“管理账号 ID（可选）”。这里填管理账号自己的 ID，不要再重复填写被管理的广告账号 ID。
+4. 若授权用户直接拥有目标账号访问权限，不经过管理账号访问，可将管理账号 ID 留空。填写管理账号 ID 本身不会授予权限，该管理账号必须确实能够访问目标账号。
+
+使用 MCC 跨账号转化跟踪时，转化动作可能由管理账号而非子账号持有。Data Manager API 要求“Google Ads 客户 ID”对应的账号拥有所填转化动作；不能把子账号 ID 与其他账号创建的动作 ID 随意拼接。此时先确认 Google Ads 中的转化跟踪归属，再配置目标账号及登录管理账号。
+
+官方参考：[查找 Google Ads 客户 ID（含管理账号）](https://support.google.com/google-ads/answer/1704344?hl=zh-Hans)、[Data Manager API 目标账号与动作归属要求](https://developers.google.com/data-manager/api/devguides/events/google-ads/offline/send-events)。
+
+#### 获取三个转化动作 ID
+
+三个 ID 均在 Google Ads 的转化动作详情中获取，分别对应三个独立动作；本系统不会自动替你创建 Google Ads 转化动作。
+
+1. 在拥有转化动作的 Google Ads 账号内，进入 **Goals（目标）→ Conversions（转化）→ Summary（摘要）**。
+2. 如果已有适用于本集成的动作，点击动作名称进入详情；如果尚未创建，点击 **Create conversion action（创建转化动作）**，选择 **Conversions offline（离线转化）**，按页面引导配置离线／CRM 数据来源并创建动作。部分版本入口显示为“导入”“CRM、文件或其他数据源”或“通过 API 或上传手动导入”，应选择从广告点击导入的路径，而非只通过网页标签触发的动作。
+3. 分别创建／选择下表三个动作。名称可以自定义，建议包含渠道和业务阶段以便识别；名称不是要填写到 RelayDesk 的 ID。
+
+| RelayDesk 字段 | 建议动作名称示例 | 业务类别 |
+| --- | --- | --- |
+| 合格线索转化动作 ID | `BelaroPrecision - Qualified lead` | 合格线索（Qualified lead） |
+| 成交线索转化动作 ID | `BelaroPrecision - Converted lead` | 成交线索（Converted lead） |
+| 购买转化动作 ID | `BelaroPrecision - Purchase` | 购买（Purchase），仍须使用离线点击导入动作 |
+
+4. 打开每个动作的**详情页**，查看浏览器地址栏。若地址包含 `ctId=数字`，复制该参数的数字部分，分别填入对应字段。例如：
+
+   ```text
+   https://ads.google.com/aw/conversions/detail?...&ctId=111111111&...
+   ```
+
+   对应的转化动作 ID 为 `111111111`。不要复制 `ocid`、`cid`、整个 URL、`AW-…` 或标签设置中的 Conversion label；三项必须分别取自各自动作的详情页，不能将一个动作的 ID 填入全部三个字段。
+
+5. 核对动作所属账号与上面的“Google Ads 客户 ID”一致，并确认动作支持 `UPLOAD_CLICKS`；Data Manager API 文档将其界面来源称为 **Website (Import from clicks)**。仅有名称或类别相符还不够，网页标签、GA4 导入等其他类型动作不能仅换个名字用于本接口。
+6. 回到 RelayDesk 填入 ID，核对后勾选启用并保存；随后用受控测试事件检查投递状态。Google Ads 页面若仍提示数据来源未完成，应按当前账号向导完成适用的 API／数据来源连接，创建动作或保存 ID 本身不代表已经接收转化。
+
+Google Ads 页面改版可能改变菜单或地址参数；如果详情页没有 `ctId`，不要猜测其他数字的含义。可由有 API 权限的技术人员查询 `conversion_action.id`、`conversion_action.name`、`conversion_action.type` 和 `conversion_action.resource_name`，确认类型与归属后取 ID。资源名如 `customers/1234567890/conversionActions/111111111` 时，本界面只填写最后的 `111111111`；RelayDesk 当前不提供自动列出或创建远端动作的功能。
+
+参考：[Google 官方离线点击转化设置步骤](https://support.google.com/google-ads/answer/7012522?hl=zh-Hans)、[Data Manager API 动作类型要求](https://developers.google.com/data-manager/api/devguides/events/google-ads/offline/send-events)、[Google Ads API conversion_action 字段](https://developers.google.com/google-ads/api/fields/latest/conversion_action)、[Twilio 官方集成文档对详情页 ctId 的说明](https://www.twilio.com/docs/segment/connections/destinations/catalog/actions-google-enhanced-conversions)。菜单与参数说明以实际账号界面为准。
+
+以下仅为填写格式示例，必须替换为实际账号及动作 ID，不可直接使用：
+
+```text
+Google Ads 客户 ID：1234567890
+管理账号 ID：直接授权时留空
+合格线索转化动作 ID：111111111
+成交线索转化动作 ID：222222222
+购买转化动作 ID：333333333
+```
+
+保存前注意：
+
+- 聊天开始、发送 Email、修改客户阶段或订单状态本身不会触发 Ads 回传，必须在后台明确标记转化。
+- 原 LiveChat 内的后续 Email 沟通沿用归因；独立 Email 会话必须先人工确认关联原 LiveChat，不能仅凭邮箱相同自动归因。
+- 启用后不补发历史事件；没有有效广告点击标识或已明确拒绝广告数据使用的记录不会上传。
+- 修改配置会停止尚未发送的旧版本事件，建议核对完成后再启用，避免频繁切换配置；已接收或处理成功也不等于最终广告归因成功。
+
 ## 独立广告同意
 
 Ads 不复用 GA4 的分析同意。宿主 CMP 在嵌入脚本加载完成后调用：

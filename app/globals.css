@@ -1327,3 +1327,10 @@ button { color:inherit; }
  .rd-ads-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:var(--rd-space-3);margin-block:var(--rd-space-3)}
  .rd-ads-fields input,.rd-ads-attribution input{max-width:100%;min-width:0;box-sizing:border-box}
  .rd-ads-actions{display:flex;flex-wrap:wrap;gap:var(--rd-space-2)}
+ .rd-ads-label{display:flex;align-items:center;gap:var(--rd-space-1);min-width:0}
+ .rd-ads-label>label{font-weight:600;line-height:1.5;overflow-wrap:anywhere}
+ .rd-ads-help{display:inline-flex;flex:0 0 auto}
+ .rd-ads-help .rd-ads-help-trigger{width:32px;height:32px;min-width:32px;min-height:32px;flex-basis:32px;padding:0;color:var(--rd-muted)}
+ .rd-ads-help-panel{width:380px;font-weight:400}
+ .rd-ads-help-panel p{margin:var(--rd-space-2) 0 0;font-size:13px;line-height:1.6}
+ @media(max-width:600px){.rd-ads-help .rd-ads-help-trigger{width:40px;height:40px;min-width:40px;min-height:40px;flex-basis:40px}}

@@ -87,13 +87,35 @@ try{
   await page.getByRole('button',{name:'记录事件',exact:true}).click();await page.getByText('已记录：Google 已接收，待处理').waitFor();
   assert.equal(writes.at(-1).targetConversationId,'email');await page.getByText(/Ads：API 已接收，待处理/).waitFor();
   const customer=page.getByLabel('Google Ads 客户 ID',{exact:true});await customer.fill('9876543210');
-  await page.getByLabel('启用 Ads 回传').check();await page.getByRole('button',{name:'保存 Ads 配置',exact:true}).click();
-  await page.getByText('模拟保存失败').waitFor();assert.equal(await customer.inputValue(),'9876543210');assert.equal(await page.getByLabel('启用 Ads 回传').isChecked(),true);
+  await page.getByRole('checkbox',{name:'启用 Ads 回传',exact:true}).check();await page.getByRole('button',{name:'保存 Ads 配置',exact:true}).click();
+  await page.getByText('模拟保存失败').waitFor();assert.equal(await customer.inputValue(),'9876543210');assert.equal(await page.getByRole('checkbox',{name:'启用 Ads 回传',exact:true}).isChecked(),true);
   await page.getByRole('button',{name:'保存 Ads 配置',exact:true}).click();await page.waitForFunction(()=>!document.body.textContent.includes('模拟保存失败'));
   assert.equal(settings.customerId,'9876543210');assert.equal(settings.enabled,true);
-  for(const width of [1440,390,320]){await page.setViewportSize({width,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);}
+  const helpLabels=['启用 Ads 回传','Google Ads 客户 ID','管理账号 ID（可选）','合格线索转化动作 ID','成交线索转化动作 ID','购买转化动作 ID'];
+  for(const width of [1440,390,320]){
+    await page.setViewportSize({width,height:844});
+    for(const label of helpLabels){
+      const help=page.getByRole('button',{name:label+'说明与获取方式',exact:true});
+      await help.hover();const tip=page.getByRole('tooltip',{name:label+'说明与获取方式',exact:true});await tip.waitFor();
+      assert.match(await tip.innerText(),label==='启用 Ads 回传'?/操作：/:/获取：/);
+      const box=await tip.boundingBox();assert.ok(box.x>=0&&box.x+box.width<=width&&box.y>=0&&box.y+box.height<=844,'帮助浮层限制在视口内');
+      await tip.hover();await page.waitForTimeout(220);assert.equal(await tip.isVisible(),true,'鼠标可进入浮层阅读');
+      await page.mouse.move(width-2,2);await tip.waitFor({state:'hidden'});
+      await help.focus();await tip.waitFor();await page.keyboard.press('Escape');await tip.waitFor({state:'hidden'});
+      await page.mouse.click(1,1);
+      await help.click();await tip.waitFor();await page.mouse.click(1,1);await tip.waitFor({state:'hidden'});
+    }
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  }
+  const touch=await browser.newContext({viewport:{width:320,height:568},hasTouch:true,isMobile:true});
+  const touchPage=await touch.newPage();await touchPage.route('**/api/v1/**',route=>route.fulfill({json:{connected:true,oauthConfigured:true,data:[settings]}}));
+  await touchPage.goto(`http://127.0.0.1:${server.address().port}`);
+  await touchPage.getByRole('button',{name:'购买转化动作 ID说明与获取方式',exact:true}).tap();
+  await touchPage.getByRole('tooltip',{name:'购买转化动作 ID说明与获取方式',exact:true}).waitFor();
+  await touchPage.touchscreen.tap(1,1);await touchPage.getByRole('tooltip').waitFor({state:'hidden'});await touch.close();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  await page.getByRole('button',{name:'购买转化动作 ID说明与获取方式',exact:true}).hover();await page.getByRole('tooltip').waitFor();
   await page.screenshot({path:resolve(root,"outputs/livechat-conversions-browser.png"),fullPage:true});
   assert.deepEqual(errors,[]);
-  console.log("转化浏览器验收通过：访客隔离选择、失败保留、幂等重试、purchase 去重显示和窄屏布局（模拟 API）。");
+  console.log("转化浏览器验收通过：访客隔离选择、失败保留、幂等重试、purchase 去重显示、Ads 帮助浮层悬停／焦点／Escape／触屏及窄屏布局（模拟 API）。");
 }finally{await browser.close();await new Promise(done=>server.close(done));}
