@@ -15,6 +15,7 @@ const secondChannel="22222222-2222-4222-8222-222222222222";
 const sessions=new Map(),uploads=new Map(),origins=new Set(),errors=[],profiles=[],expiredSessions=new Set();
 const transcripts=new Map(),closedChats=new Map(),endRequests=[];
 const presenceReports=[];
+let historyRequests=0;
 const analyticsReports=[];
 let endError='',dropEndResponse=false;
 let failNext=false,dropFirstSendResponse=false,ordinal=0,widgetLanguage,widgetName='网站客服',widgetIcon='';
@@ -48,6 +49,7 @@ const api=await listen(async(req,res)=>{
     if(dropFirstSendResponse&&!messages[1]){dropFirstSendResponse=false;req.socket.destroy();return}
     json(201,{id:message.id,...(message===messages[0]?{leadMessageId:message.id}:{})});return;
   }
+  if(req.method==="GET"&&url.pathname.endsWith("/messages"))historyRequests++;
   const messages=sessions.get(sessionKey);
   if(!messages){json(401,{error:"visitor_not_found_or_expired"});return}
   if(url.pathname.endsWith('/presence')){presenceReports.push({...JSON.parse((await body(req)).toString()),sessionKey});json(200,{ok:true});return}
@@ -162,6 +164,8 @@ try{
   await page.goto(hosts[0].url);let frame=await frameFor(page);
   assert.equal(await frame.locator('#panel').isVisible(),false,'首次访问默认收起');
   await openChat(frame);
+  await page.waitForTimeout(500);
+  assert.equal(historyRequests,0,'首次访问未明确开启 LiveChat 时不请求历史消息');
   await assertWindowControls(page,frame,'desktop');
   await page.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(':expanded')&&localStorage.getItem(k)==='1'));
   await page.goto(hosts[0].url+'/products');frame=await frameFor(page);await frame.locator('#panel').waitFor({state:'visible'});
@@ -186,6 +190,7 @@ try{
   dropFirstSendResponse=true;await frame.getByText('发送失败，点击重试').click();
   await frame.getByText("第一条匿名消息",{exact:true}).waitFor();await frame.locator("#send").waitFor({state:"visible"});
   await page.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(":started")));
+  assert.ok(historyRequests>0,'首条消息成功后开启历史消息轮询');
   const firstSession=[...sessions.values()][0];assert.equal(firstSession.length,1);
   await page.waitForFunction(()=>dataLayer.filter(item=>item.event==='generate_lead').length===1);
   assert.deepEqual(await page.evaluate(()=>dataLayer.find(item=>item.event==='generate_lead')),{event:'generate_lead',lead_source:'livechat',livechat_channel_id:channel,livechat_event_id:firstSession[0].id});
