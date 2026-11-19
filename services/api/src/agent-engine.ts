@@ -1734,6 +1734,16 @@ async function finishRun(id: string, decision: AgentDecision) {
 
 export async function applyProactiveReplyTransition(client:PoolClient,conversationId:string,messageId:string,live=true):Promise<void>{
   await client.query("SELECT id FROM conversations WHERE id=$1 FOR UPDATE",[conversationId]);
+  // 按入站消息的实际渠道判断，不能用合并后的主会话类型，也不能误排除同渠道邮件。
+  const livechat=await client.query(
+    `SELECT incoming.id FROM messages incoming
+     JOIN channel_accounts account ON account.id=incoming.account_id
+     WHERE incoming.id=$2 AND incoming.conversation_id=$1 AND incoming.direction='in'
+       AND account.platform='livechat'
+       AND NOT EXISTS (SELECT 1 FROM message_email_details email WHERE email.message_id=incoming.id)`,
+    [conversationId,messageId],
+  );
+  if(livechat.rowCount)return;
   const controlId=await resolveTimelineAgentControl(client,conversationId,true);
   if(!controlId)return;
   const outreach=live?await client.query(

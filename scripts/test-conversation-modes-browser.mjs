@@ -10,17 +10,23 @@ import {chromium} from "playwright";
 
 const require=createRequire(new URL("../services/api/package.json",import.meta.url)),{build}=require("esbuild");
 const root=fileURLToPath(new URL("..",import.meta.url)),source=await readFile(resolve(root,"app/whatsapp-inbox.tsx"),"utf8");
-const tree=ts.createSourceFile("inbox.tsx",source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX),functions={};let bar;
+const tree=ts.createSourceFile("inbox.tsx",source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX),functions={};let bar,agentBar;
 function visit(node){
+  if(ts.isFunctionDeclaration(node)&&node.name?.text==="AgentConversationBar")agentBar=node.getText(tree);
   if(ts.isFunctionDeclaration(node)&&["switchConversationMode","queueTextMessage","sendEmailMessage"].includes(node.name?.text))functions[node.name.text]=node.getText(tree);
   if(ts.isJsxElement(node)&&node.openingElement.attributes.properties.some(attr=>attr.name?.getText(tree)==="className"&&attr.initializer?.text==="conversation-mode-bar"))bar=node.getText(tree);
   ts.forEachChild(node,visit);
 }
-visit(tree);assert.ok(bar&&Object.keys(functions).length===3);
-const entry=`import React,{useState,useRef} from 'react';
+visit(tree);assert.ok(bar&&agentBar&&Object.keys(functions).length===3);
+const entry=`import React,{useState,useRef,useCallback,useEffect} from 'react';
 import {createRoot} from 'react-dom/client';
-import {Mail,MessageCircle} from 'lucide-react';
+import {Mail,MessageCircle,Bot,ShieldCheck,Users,Sparkles} from 'lucide-react';
 import {modeMembers,matchesMessageMode} from './app/conversation-modes';
+const authorizedFetch=async(path,token,init)=>{
+ if(init){const body=JSON.parse(init.body);window.agentWrites.push(body);Object.assign(window.agentState,body.mode?{mode:body.mode}:{proactive_reply_mode:body.proactiveReplyMode});}
+ return{token,response:{ok:true,status:200,json:async()=>({...window.agentState})}};
+};
+${agentBar}
 function App(){
  const active={id:'root',platform:'livechat'},effectiveActiveId='root',apiToken='test';
  const [conversationMode,setConversationMode]=useState('livechat'),[modeBusy,setModeBusy]=useState(false),[draft,setDraft]=useState('');
@@ -35,9 +41,9 @@ function App(){
  const emailMailboxes=[],emailMailboxId='',formatTime=()=>'',formatBytes=()=>'',messageQuote=m=>m,htmlToPlainText=t=>t,replyEmailSubject=t=>t,loadMessages=async()=>{},loadConversations=async()=>{};
  const authorizedFetch=async(path,token,init)=>{window.deliveries.push({path,body:JSON.parse(init.body)});return{token,response:{ok:true}}};
  ${Object.values(functions).join('\n')}
- return <main>${bar}<section aria-label="消息记录">{messages.root.filter(m=>matchesMessageMode(m,conversationMode)).map(m=><p key={m.id}>{m.text}</p>)}</section>{conversationMode==='email'?<section aria-label="Email 发送区"><input aria-label="邮件主题" value={emailSubject} onChange={e=>setEmailSubject(e.target.value)}/><textarea aria-label="邮件正文" value={emailBodyHtml} onChange={e=>setEmailBodyHtml(e.target.value)}/><button onClick={()=>sendEmailMessage()}>发送邮件</button></section>:<section aria-label={conversationMode==='whatsapp'?'WhatsApp 发送区':'Live Chat 发送区'}><textarea aria-label="消息正文" value={draft} onChange={e=>setDraft(e.target.value)}/><button onClick={()=>queueTextMessage(draft)}>发送消息</button></section>}<label><input type="checkbox" checked={emailEnabled} onChange={e=>setEmailEnabled(e.target.checked)}/>客户有邮箱</label><label><input type="checkbox" checked={emailConfigured} onChange={e=>setEmailConfigured(e.target.checked)}/>渠道邮件已配置</label></main>;
+ return <main>${bar}<AgentConversationBar conversationId="root" conversationMode={conversationMode} token="test" translationTargetLanguage="zh" refreshKey="" onToken={noop} onToast={noop} onUseDraft={noop} onSent={noop}/><section aria-label="消息记录">{messages.root.filter(m=>matchesMessageMode(m,conversationMode)).map(m=><p key={m.id}>{m.text}</p>)}</section>{conversationMode==='email'?<section aria-label="Email 发送区"><input aria-label="邮件主题" value={emailSubject} onChange={e=>setEmailSubject(e.target.value)}/><textarea aria-label="邮件正文" value={emailBodyHtml} onChange={e=>setEmailBodyHtml(e.target.value)}/><button onClick={()=>sendEmailMessage()}>发送邮件</button></section>:<section aria-label={conversationMode==='whatsapp'?'WhatsApp 发送区':'Live Chat 发送区'}><textarea aria-label="消息正文" value={draft} onChange={e=>setDraft(e.target.value)}/><button onClick={()=>queueTextMessage(draft)}>发送消息</button></section>}<label><input type="checkbox" checked={emailEnabled} onChange={e=>setEmailEnabled(e.target.checked)}/>客户有邮箱</label><label><input type="checkbox" checked={emailConfigured} onChange={e=>setEmailConfigured(e.target.checked)}/>渠道邮件已配置</label></main>;
 }
-window.deliveries=[];createRoot(document.getElementById('root')).render(<App/>);`;
+window.deliveries=[];window.agentWrites=[];window.agentState={mode:'full',proactive_reply_mode:'human_paused',account_enabled:true,draft:null};createRoot(document.getElementById('root')).render(<App/>);`;
 const bundle=await build({stdin:{contents:entry,resolveDir:root,loader:"tsx"},bundle:true,write:false,format:"iife",platform:"browser",define:{"process.env.NODE_ENV":'"production"'}});
 const css=await readFile(resolve(root,"app/globals.css"),"utf8");
 const server=createServer((request,response)=>{
@@ -51,12 +57,24 @@ try{
     const page=await browser.newPage({viewport}),errors=[];page.on("pageerror",error=>errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.address().port}`);const history=page.getByLabel("消息记录");
     await page.getByRole("tab",{name:"Live Chat",exact:true}).waitFor();assert.equal(await history.textContent(),"网站消息");
+    const choice=page.getByLabel("主动触达回复时切换为");
+    await page.getByRole("button",{name:"完全接管",exact:true}).waitFor();
+    assert.equal(await choice.count(),0);
+    await page.getByRole("button",{name:"谨慎接管",exact:true}).click();
+    await page.waitForFunction(()=>window.agentState.mode==='cautious');
+    await page.getByRole("button",{name:"完全接管",exact:true}).click();
+    await page.waitForFunction(()=>window.agentState.mode==='full');
     await page.getByLabel("消息正文").fill("网站草稿");await page.getByRole("tab",{name:"WhatsApp",exact:true}).click();
+    assert.equal(await choice.inputValue(),"human_paused");await choice.selectOption("cautious");
+    await page.waitForFunction(()=>window.agentState.proactive_reply_mode==='cautious');
     assert.equal(await history.textContent(),"WhatsApp 消息");assert.equal(await page.getByLabel("消息正文").inputValue(),"");
     await page.getByLabel("消息正文").fill("WhatsApp 回复");await page.getByRole("button",{name:"发送消息"}).click();
     await page.getByRole("tab",{name:"Email",exact:true}).click();assert.equal((await history.textContent()).includes("WhatsApp"),false);assert.ok((await history.textContent()).includes("邮件消息"));
+    assert.equal(await choice.inputValue(),"cautious");
     await page.getByLabel("邮件主题").fill("主题");await page.getByLabel("邮件正文").fill("邮件回复");await page.getByRole("button",{name:"发送邮件"}).click();
     await page.getByRole("tab",{name:"Live Chat",exact:true}).click();assert.equal(await page.getByLabel("消息正文").inputValue(),"网站草稿");
+    assert.equal(await choice.count(),0);
+    assert.equal(await page.evaluate(()=>window.agentWrites.filter(body=>'proactiveReplyMode' in body).length),1);
     await page.getByRole("button",{name:"发送消息"}).click();
     const deliveries=await page.evaluate(()=>window.deliveries);assert.equal(deliveries.length,3);
     assert.equal(deliveries[0].body.conversationId,"wa");assert.equal(deliveries[0].body.accountId,"wa-account");

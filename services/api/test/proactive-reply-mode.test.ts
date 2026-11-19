@@ -3,10 +3,11 @@ import {readFile} from "node:fs/promises";
 import test from "node:test";
 import {applyProactiveReplyTransition} from "../src/agent-engine.js";
 
-function inbound(options:{outreach?:boolean;agentMessage?:boolean;mode?:string;choice?:string;live?:boolean}={}){
+function inbound(options:{outreach?:boolean;agentMessage?:boolean;mode?:string;choice?:string;live?:boolean;livechat?:boolean}={}){
   const queries:Array<{sql:string;params:unknown[]|undefined}>=[];
   const client={query:async(sql:string,params?:unknown[])=>{
     queries.push({sql,params});
+    if(sql.includes("SELECT incoming.id FROM messages incoming"))return{rows:options.livechat?[{id:"message-1"}]:[],rowCount:options.livechat?1:0};
     if(sql.startsWith("SELECT root.id"))return{rows:[{id:"conversation-1"}],rowCount:1};
     if(sql.includes("SELECT j.id FROM proactive_outreach_jobs"))return{rows:options.outreach?[{id:"outreach-1"}]:[],rowCount:options.outreach?1:0};
     if(sql.includes("JOIN messages sent ON sent.id=st.last_agent_message_id"))return{rows:options.agentMessage?[{proactive_reply_mode:options.choice??"cautious"}]:[],rowCount:options.agentMessage?1:0};
@@ -18,7 +19,7 @@ function inbound(options:{outreach?:boolean;agentMessage?:boolean;mode?:string;c
 
 test("first reply to full outreach switches to cautious within the conversation lock",async()=>{
   const scenario=inbound({outreach:true});await scenario.run();
-  const statements=scenario.queries.map(query=>query.sql).filter(sql=>!sql.startsWith("SELECT root.id"));
+  const statements=scenario.queries.map(query=>query.sql).filter(sql=>!sql.startsWith("SELECT root.id")&&!sql.includes("SELECT incoming.id FROM messages incoming"));
   assert.match(statements[0],/FOR UPDATE/);
   assert.match(statements[1],/sent_agent_mode='full'.*reply_processed_at IS NULL/s);
   assert.match(statements[1],/sent\.status IN \('sent','delivered','read'\)/);
@@ -61,6 +62,18 @@ test("ordinary and historical replies do not transition",async()=>{
 test("customer replies after a full takeover agent message switch to the configured mode",async()=>{
   const scenario=inbound({agentMessage:true,choice:"cautious"});await scenario.run();
   assert.deepEqual(scenario.queries.find(query=>query.sql.includes("SET mode=$2"))?.params,["conversation-1","cautious",null]);
+});
+
+test("Live Chat 入站不应用主动触达切换，也不修改合并主会话或任务",async()=>{
+  for(const choice of ["full","cautious","human_paused"]){
+    const scenario=inbound({livechat:true,outreach:true,agentMessage:true,choice});await scenario.run();
+    assert.equal(scenario.queries.length,2);
+    const lookup=scenario.queries[1];
+    assert.deepEqual(lookup.params,["conversation-1","message-1"]);
+    assert.match(lookup.sql,/account.platform='livechat'/);
+    assert.match(lookup.sql,/NOT EXISTS .*message_email_details email WHERE email.message_id=incoming.id/);
+    assert.ok(!scenario.queries.some(query=>/^UPDATE|SELECT root.id/.test(query.sql)));
+  }
 });
 
 test("migration, API, and inbox expose a per-conversation default without changing old mode requests",async()=>{
