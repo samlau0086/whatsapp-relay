@@ -1,5 +1,9 @@
 # RelayDesk
 
+## LiveChat 访客会话失效处理
+
+LiveChat 访客凭证过期或被清理后，嵌入窗口会停止历史消息轮询并提示访客开始新会话，避免宿主网站控制台持续出现 `/livechat/:id/messages` 的 `401 Unauthorized`。点击“开始新会话”后会清理本地会话状态并恢复正常轮询。
+
 ## UI 标准与组件验收
 
 UI 治理基线见 [UI 稳定性标准](docs/ui-standards.md)，项目开发约定见 [AGENTS.md](AGENTS.md)。统一组件位于 `app/ui/`，包含按钮、字段、弹窗、抽屉、浮层与异步状态；使用 React、lucide-react 和浏览器原生 dialog/popover，不新增生产依赖。新样式限定为 `rd-` 命名空间，不改变存量业务选择器。
