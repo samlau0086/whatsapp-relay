@@ -16,7 +16,7 @@ LiveChat 嵌入脚本可采集 `gclid`、`gbraid`、`wbraid`，首次开聊锁�
 
 管理员在“系统设置 → LiveChat → Google Ads”授权并按渠道配置客户 ID 和转化动作 ID；默认关闭，不补发历史。部署需配置 `GOOGLE_ADS_CLIENT_ID`、`GOOGLE_ADS_CLIENT_SECRET`，同步更新工作台、API 和 Worker 并执行启动迁移 `112_google_ads_attribution.sql`。Ads 同意独立于 GA4：未设置按默认启用策略处理，明确拒绝后停止上传并清理点击标识。请求接收、异步处理成功和最终 Ads 归因并非同一状态，未知上传结果不会自动重发。
 
-配置、CMP 接口、Email 关联、回传状态、隐私边界与测试方式见 [Google Ads 广告归因与离线转化](docs/google-ads-attribution.md)。真实广告账号联调仍需部署方完成。
+Client ID 和 Client Secret 从 Google Cloud 的 **Google Auth Platform → Clients → Create client → Web application** 创建结果中获取，不是 Ads 客户 ID 或 API Key。完整的 Cloud 项目、API 启用、同意屏幕、凭据创建、回调地址和服务器配置步骤，以及 CMP 接口、Email 关联、回传状态、隐私边界与测试方式见 [Google Ads 广告归因与离线转化](docs/google-ads-attribution.md)。真实广告账号联调仍需部署方完成。
 
 ## LiveChat 访客会话失效处理
 
