@@ -14,6 +14,40 @@ const origin="https://shop.example.com",authorization=`Bearer ${"a".repeat(64)}`
 const row={account_id:accountId,allowed_origins:[origin],display_name:"客服",enabled:true,language:"en"};
 const result=(rows:unknown[]=[])=>({rows,rowCount:rows.length});
 
+test("LiveChat 快捷引导消息按渠道保存、公开读取及兼容旧请求",async t=>{
+  const calls:Array<{sql:string;values:unknown[]}>=[];
+  const query=async(sql:string,values:unknown[]=[])=>{
+    calls.push({sql,values});
+    if(sql.includes("INSERT INTO livechat_rate_limits"))return result([{hits:1}]);
+    if(sql.includes("JOIN channel_accounts"))return result([{...row,starter_messages:["如何选材？","获取报价"]}]);
+    return result([{id:accountId,account_id:accountId,public_id:channelId}]);
+  };
+  t.mock.method(pool,"query",query);t.mock.method(pool,"connect",async()=>({query,release(){}}));
+  const app=Fastify();await registerLivechatRoutes(app);await registerLivechatPublicRoutes(app);t.after(()=>app.close());
+  const headers={authorization:`Bearer ${signToken({sub:contactId,role:"admin"},config.JWT_SECRET,60)}`};
+  const base="/api/v1/admin/livechat/channels",payload={displayName:"客服",allowedOrigins:[origin]};
+  const write=(method:"POST"|"PUT",starterMessages:unknown)=>app.inject({method,url:method==="POST"?base:`${base}/${accountId}`,headers,payload:{...payload,...(starterMessages===undefined?{}:{starterMessages})}});
+  assert.equal((await write("POST",[" 如何选材？ ","获取报价"])).statusCode,201);
+  assert.equal(calls.find(c=>c.sql.startsWith("INSERT INTO livechat_channels"))!.values[10],JSON.stringify(["如何选材？","获取报价"]));
+  for(const items of [["获取报价","如何选材？"],[],undefined]){
+    assert.equal((await write("PUT",items)).statusCode,200);
+    const update=calls.filter(c=>c.sql.startsWith("UPDATE livechat_channels")).at(-1)!;
+    assert.equal(update.values[11],items===undefined?null:JSON.stringify(items));
+    assert.match(update.sql,/starter_messages=COALESCE\(\$12::jsonb,starter_messages\)/);
+  }
+  for(const items of [[""],["   "],["x".repeat(501)],Array(51).fill("问题"),[42],"不是数组",null]){
+    const count=calls.length;
+    for(const method of ["POST","PUT"] as const)assert.equal((await write(method,items)).statusCode,400);
+    assert.equal(calls.length,count);
+  }
+  const publicConfig=await app.inject({url:`/livechat/${channelId}/config`,headers:{origin}});
+  assert.deepEqual(publicConfig.json().starterMessages,["如何选材？","获取报价"]);
+  assert.equal(publicConfig.json().account_id,undefined);
+  const [migration,migrator]=await Promise.all([readFile(new URL("../../../infra/postgres/migrations/113_livechat_starter_messages.sql",import.meta.url),"utf8"),readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8")]);
+  assert.match(migration,/ADD COLUMN IF NOT EXISTS starter_messages jsonb NOT NULL DEFAULT '\[\]'::jsonb/);
+  assert.match(migrator,/113_livechat_starter_messages\.sql/);
+});
+
 test("LiveChat 凭证与来源必须精确匹配",()=>{
   assert.equal(livechatCredential(authorization).length,64);
   for(const header of [undefined,"Bearer public-channel-id",`Bearer ${"A".repeat(64)}`,"Basic abc"])assert.throws(()=>livechatCredential(header));

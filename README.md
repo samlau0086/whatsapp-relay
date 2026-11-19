@@ -1,5 +1,15 @@
 # RelayDesk
 
+## LiveChat 快捷引导消息
+
+管理员在“系统设置 → LiveChat → 新增／编辑渠道”中配置快捷引导消息，支持逐条添加、修改、删除及上下调整顺序。每个渠道最多 50 条，每条最多 500 字，删除全部问题即可关闭，旧渠道默认不显示。
+
+访客首次打开、尚未发送首条消息时，会在欢迎语下看到这些问题。点击后将对应原文作为首条消息发送；沿用现有姓名和有效邮箱必填规则，资料不完整时先提示补全，所选问题保留在消息栏中。发送中／失败待重试、已有会话、已结束或凭证过期时不显示引导，不自动翻译自定义问题。发送与重试沿用现有访客权限、幂等 ID、统一收件箱、AI 和归因流程。
+
+部署需同步更新工作台、API 和 Worker 并重启；启动迁移 `113_livechat_starter_messages.sql` 为渠道新增有序 JSON 配置。旧客户端更新渠道时若不提交 `starterMessages` 则保留原配置，提交空数组则清空。已有网站嵌入代码无需修改，刷新网页后读取配置。
+
+验证：`services/api` 下运行 `npm test`、`npm run build`；根目录运行 `npm run lint`、`npm test`、`node scripts/test-livechat-settings-browser.mjs` 和 `node scripts/test-livechat-browser.mjs`。浏览器脚本使用真实组件／嵌入脚本与模拟 API，不访问真实访客或 Provider。
+
 ## Google Ads 广告归因与转化回传
 
 LiveChat 嵌入脚本可采集 `gclid`、`gbraid`、`wbraid`，首次开聊锁定最近一次广告访问。后台“转化事件”显式标记合格线索、成交线索或已付款订单时，通过独立 Worker 回传 Google Ads；保留原有 GA4 并分别显示状态。原 LiveChat 中的 Email 沟通沿用归因，独立 Email 会话必须由坐席手动确认原 LiveChat 来源，同邮箱仅提供候选、不自动关联。两种入口共用 Ads 去重规则。

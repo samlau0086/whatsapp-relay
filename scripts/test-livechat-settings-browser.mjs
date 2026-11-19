@@ -18,7 +18,7 @@ import {LivechatSettingsPanel} from './app/livechat-settings';
 const noop=()=>{};
 createRoot(document.getElementById('root')).render(<LivechatSettingsPanel token="fixture" onToken={noop} onToast={noop} onAccountsChanged={noop}/>);`;
 const bundle=await build({stdin:{contents:entry,resolveDir:root,loader:"tsx"},bundle:true,write:false,format:"iife",platform:"browser",define:{"process.env.NODE_ENV":'"production"',"process.env.NEXT_PUBLIC_RELAY_API_URL":'""'}});
-const css=(await postcss([tailwindcss()]).process(await readFile(resolve(root,"app/globals.css"),"utf8"),{from:resolve(root,"app/globals.css")})).css;
+const css=(await postcss([tailwindcss()]).process(await readFile(resolve(root,"app/globals.css"),"utf8"),{from:resolve(root,"app/globals.css")})).css+await readFile(resolve(root,"app/ui/ui.css"),"utf8");
 const server=createServer((request,response)=>{
   if(request.url==="/bundle.js"){response.setHeader("content-type","text/javascript");response.end(bundle.outputFiles[0].text);}
   else{response.setHeader("content-type","text/html");response.end(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><div id="root"></div><script src="/bundle.js"></script></html>`);}
@@ -38,9 +38,10 @@ try{
       if(request.method()==="GET")return route.fulfill({json:{data:[channel]}});
       const data=request.postDataJSON();writes.push({method:request.method(),data});
       if(failSave)return route.fulfill({status:400,json:{error:"invalid_origin"}});
-      channel={...channel,display_name:data.displayName,icon_url:data.iconUrl,welcome_message:data.welcomeMessage,theme_color:data.themeColor,position:data.position,language:data.language,allowed_origins:data.allowedOrigins,enabled:data.enabled,ga4_measurement_id:data.ga4MeasurementId,ga4ApiSecretConfigured:Boolean(data.ga4ApiSecret)||channel.ga4ApiSecretConfigured};
+      channel={...channel,display_name:data.displayName,icon_url:data.iconUrl,welcome_message:data.welcomeMessage,starter_messages:data.starterMessages,theme_color:data.themeColor,position:data.position,language:data.language,allowed_origins:data.allowedOrigins,enabled:data.enabled,ga4_measurement_id:data.ga4MeasurementId,ga4ApiSecretConfigured:Boolean(data.ga4ApiSecret)||channel.ga4ApiSecretConfigured};
       await route.fulfill({json:{data:channel}});
     });
+    await page.route("**/api/v1/admin/google-ads",route=>route.fulfill({json:{connected:false,oauthConfigured:false,data:[]}}));
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.getByRole("button",{name:"新增渠道",exact:true}).click();
     const dialog=page.getByRole("dialog"),save=dialog.getByRole("button",{name:"保存渠道",exact:true});
@@ -53,9 +54,18 @@ try{
     await page.getByLabel("访客界面语言",{exact:true}).selectOption("zh-CN");
     await page.getByLabel("入口位置",{exact:true}).selectOption("left");
     await save.click();await dialog.waitFor({state:"detached"});
-    assert.deepEqual(writes[0],{method:"POST",data:{displayName:"新网站客服",iconUrl:"",welcomeMessage:"",themeColor:"#146d73",position:"left",language:"zh-CN",allowedOrigins:["https://example.com","https://shop.example.com"],enabled:true,ga4MeasurementId:""}});
+    assert.deepEqual(writes[0],{method:"POST",data:{displayName:"新网站客服",iconUrl:"",welcomeMessage:"",starterMessages:[],themeColor:"#146d73",position:"left",language:"zh-CN",allowedOrigins:["https://example.com","https://shop.example.com"],enabled:true,ga4MeasurementId:""}});
     await page.getByRole("button",{name:"编辑",exact:true}).click();
     assert.equal(await page.getByLabel("渠道名称",{exact:true}).inputValue(),"新网站客服");
+    const addQuestion=dialog.getByRole('button',{name:'添加问题',exact:true});
+    await addQuestion.click();await save.click();assert.equal(writes.length,1,'空问题阻止保存');
+    await page.getByRole('textbox',{name:'引导问题 1',exact:true}).fill('如何选择材料？');
+    await addQuestion.click();await page.getByRole('textbox',{name:'引导问题 2',exact:true}).fill('我想获取报价');
+    await addQuestion.click();await page.getByRole('textbox',{name:'引导问题 3',exact:true}).fill('待删除的问题');
+    await dialog.getByRole('button',{name:'删除问题 3',exact:true}).click();
+    await dialog.getByRole('button',{name:'上移问题 2',exact:true}).click();
+    assert.equal(await page.getByRole('textbox',{name:'引导问题 1',exact:true}).inputValue(),'我想获取报价');
+    await dialog.getByRole('button',{name:'下移问题 1',exact:true}).click();
     await page.locator("#livechat-welcome").fill("How can I help you?");
     await page.locator("#livechat-color").fill("#000000");
     await page.locator("#livechat-origins").fill("https://belaroprecision.com");
@@ -68,12 +78,18 @@ try{
     await dialog.getByRole("alert").waitFor();assert.equal(await page.getByRole("alert").count(),1);
     assert.equal(await page.locator("#livechat-welcome").inputValue(),"How can I help you?");
     assert.equal(await page.locator("#livechat-ga4-secret").inputValue(),"fixture-secret_123");
+    assert.equal(await page.getByRole('textbox',{name:'引导问题 2',exact:true}).inputValue(),'我想获取报价');
     await assertLayout("error");
     failSave=false;await page.getByLabel("启用渠道",{exact:true}).uncheck();await save.click();await dialog.waitFor({state:"detached"});
     assert.equal(writes.at(-1).method,"PUT");assert.equal(writes.at(-1).data.enabled,false);assert.equal(writes.at(-1).data.themeColor,"#000000");
     assert.equal(writes.at(-1).data.ga4MeasurementId,"G-TEST123");assert.equal(writes.at(-1).data.ga4ApiSecret,"fixture-secret_123");
+    assert.deepEqual(writes.at(-1).data.starterMessages,['如何选择材料？','我想获取报价']);
     await page.getByRole("button",{name:"编辑",exact:true}).click();
     assert.equal(await page.locator("#livechat-ga4-id").inputValue(),"G-TEST123");assert.equal(await page.locator("#livechat-ga4-secret").inputValue(),"");
+    assert.equal(await page.getByRole('textbox',{name:'引导问题 1',exact:true}).inputValue(),'如何选择材料？');
+    await dialog.getByRole('button',{name:'删除问题 2',exact:true}).click();await dialog.getByRole('button',{name:'删除问题 1',exact:true}).click();
+    await save.click();await dialog.waitFor({state:'detached'});assert.deepEqual(writes.at(-1).data.starterMessages,[]);
+    await page.getByRole('button',{name:'编辑',exact:true}).click();assert.equal(await page.getByRole('textbox',{name:'引导问题 1',exact:true}).count(),0);
     await dialog.getByRole("button",{name:"取消",exact:true}).click();await dialog.waitFor({state:"detached"});
     await page.getByRole("button",{name:"新增渠道",exact:true}).click();await page.keyboard.press("Escape");await dialog.waitFor({state:"detached"});
     assert.deepEqual(errors,[]);await page.close();

@@ -1,15 +1,17 @@
 "use client";
 import {useCallback,useEffect,useState} from "react";
-import {Copy,MessageCircle,Pencil,Plus,RefreshCw,Save,Trash2,X} from "lucide-react";
+import {ArrowDown,ArrowUp,Copy,MessageCircle,Pencil,Plus,RefreshCw,Save,Trash2,X} from "lucide-react";
 import {authorizedFetch} from "./auth-session";
 import {confirmAction} from "./confirmation-ui";
 import {GoogleAdsSettings} from "./google-ads-settings";
+import {Button,IconButton} from "./ui/button";
+import {FormField} from "./ui/form-field";
 
 const languages={"zh-CN":"简体中文","zh-TW":"繁體中文",en:"English",ja:"日本語",es:"Español",pt:"Português"};
 type Language=keyof typeof languages;
-type Channel={id:string;display_name:string;public_id:string;welcome_message:string;icon_url?:string;theme_color:string;position:"left"|"right";language:Language;allowed_origins:string[];enabled:boolean;ga4_measurement_id?:string|null;ga4ApiSecretConfigured?:boolean};
-type Form={id?:string;displayName:string;welcomeMessage:string;iconUrl:string;themeColor:string;position:"left"|"right";language:Language;origins:string;enabled:boolean;ga4MeasurementId:string;ga4ApiSecret:string;ga4ApiSecretConfigured?:boolean};
-const blank=():Form=>({displayName:"",iconUrl:"",welcomeMessage:"",themeColor:"#146d73",position:"right",language:"en",origins:"",enabled:true,ga4MeasurementId:"",ga4ApiSecret:""});
+type Channel={id:string;display_name:string;public_id:string;welcome_message:string;starter_messages?:string[];icon_url?:string;theme_color:string;position:"left"|"right";language:Language;allowed_origins:string[];enabled:boolean;ga4_measurement_id?:string|null;ga4ApiSecretConfigured?:boolean};
+type Form={id?:string;displayName:string;welcomeMessage:string;starterMessages:string[];iconUrl:string;themeColor:string;position:"left"|"right";language:Language;origins:string;enabled:boolean;ga4MeasurementId:string;ga4ApiSecret:string;ga4ApiSecretConfigured?:boolean};
+const blank=():Form=>({displayName:"",iconUrl:"",welcomeMessage:"",starterMessages:[],themeColor:"#146d73",position:"right",language:"en",origins:"",enabled:true,ga4MeasurementId:"",ga4ApiSecret:""});
 export function LivechatSettingsPanel({token,onToken,onToast,onAccountsChanged}:{token:string;onToken:(value:string)=>void;onToast:(value:string)=>void;onAccountsChanged:()=>void}){
   const [channels,setChannels]=useState<Channel[]>([]),[editing,setEditing]=useState<Form|null>(null),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState("");
   const fetchChannels=useCallback(async():Promise<Channel[]>=>{
@@ -23,10 +25,11 @@ export function LivechatSettingsPanel({token,onToken,onToast,onAccountsChanged}:
     void fetchChannels().then(data=>{if(active){setChannels(data);setError("");}},reason=>{if(active)setError(reason instanceof Error?reason.message:"读取渠道失败");}).finally(()=>{if(active)setLoading(false);});
     return ()=>{active=false;};
   },[fetchChannels]);
-  const formFor=(c:Channel):Form=>({id:c.id,displayName:c.display_name,iconUrl:c.icon_url??"",welcomeMessage:c.welcome_message,themeColor:c.theme_color,position:c.position,language:c.language??"en",origins:c.allowed_origins.join("\n"),enabled:c.enabled,ga4MeasurementId:c.ga4_measurement_id??"",ga4ApiSecret:"",ga4ApiSecretConfigured:c.ga4ApiSecretConfigured});
+  const formFor=(c:Channel):Form=>({id:c.id,displayName:c.display_name,iconUrl:c.icon_url??"",welcomeMessage:c.welcome_message,starterMessages:c.starter_messages??[],themeColor:c.theme_color,position:c.position,language:c.language??"en",origins:c.allowed_origins.join("\n"),enabled:c.enabled,ga4MeasurementId:c.ga4_measurement_id??"",ga4ApiSecret:"",ga4ApiSecretConfigured:c.ga4ApiSecretConfigured});
+  function moveStarter(index:number,direction:number){if(!editing)return;const items=[...editing.starterMessages];[items[index],items[index+direction]]=[items[index+direction],items[index]];setEditing({...editing,starterMessages:items});}
   async function save(form:Form){
     if(busy)return;setBusy(true);setError("");
-    try{const result=await authorizedFetch(`/api/v1/admin/livechat/channels${form.id?`/${form.id}`:""}`,token,{method:form.id?"PUT":"POST",headers:{"content-type":"application/json"},body:JSON.stringify({displayName:form.displayName,iconUrl:form.iconUrl,welcomeMessage:form.welcomeMessage,themeColor:form.themeColor,position:form.position,language:form.language,allowedOrigins:form.origins.split(/\r?\n/).map(v=>v.trim()).filter(Boolean),enabled:form.enabled,...(editing?{ga4MeasurementId:form.ga4MeasurementId,...(form.ga4ApiSecret?{ga4ApiSecret:form.ga4ApiSecret}:{})}:{})})});if(result.token!==token)onToken(result.token);const body=await result.response.json();if(!result.response.ok)throw Error(body.error==="invalid_origin"?"域名必须为完整 HTTPS origin，不能包含路径或通配符":body.message||body.error||"保存失败");setEditing(null);await load();onAccountsChanged();onToast("LiveChat 渠道已保存");}catch(reason){setError(reason instanceof Error?reason.message:"保存失败");}finally{setBusy(false);}
+    try{const result=await authorizedFetch(`/api/v1/admin/livechat/channels${form.id?`/${form.id}`:""}`,token,{method:form.id?"PUT":"POST",headers:{"content-type":"application/json"},body:JSON.stringify({displayName:form.displayName,iconUrl:form.iconUrl,welcomeMessage:form.welcomeMessage,starterMessages:form.starterMessages.map(value=>value.trim()),themeColor:form.themeColor,position:form.position,language:form.language,allowedOrigins:form.origins.split(/\r?\n/).map(v=>v.trim()).filter(Boolean),enabled:form.enabled,...(editing?{ga4MeasurementId:form.ga4MeasurementId,...(form.ga4ApiSecret?{ga4ApiSecret:form.ga4ApiSecret}:{})}:{})})});if(result.token!==token)onToken(result.token);const body=await result.response.json();if(!result.response.ok)throw Error(body.error==="invalid_origin"?"域名必须为完整 HTTPS origin，不能包含路径或通配符":body.message||body.error||"保存失败");setEditing(null);await load();onAccountsChanged();onToast("LiveChat 渠道已保存");}catch(reason){setError(reason instanceof Error?reason.message:"保存失败");}finally{setBusy(false);}
   }
   async function archive(c:Channel){
     if(!await confirmAction(`归档“${c.display_name}”？嵌入窗口和访客访问将停止，历史消息、客户资料和审计记录会保留。`,{title:"归档 LiveChat 渠道",confirmLabel:"确认归档",tone:"danger"}))return;
@@ -57,6 +60,13 @@ export function LivechatSettingsPanel({token,onToken,onToast,onAccountsChanged}:
             <label htmlFor="livechat-language">访客界面语言<select id="livechat-language" aria-label="访客界面语言" value={editing.language} onChange={e=>setEditing({...editing,language:e.target.value as Language})}>{Object.entries(languages).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
             <label htmlFor="livechat-position">入口位置<select id="livechat-position" aria-label="入口位置" value={editing.position} onChange={e=>setEditing({...editing,position:e.target.value as Form["position"]})}><option value="right">右下角</option><option value="left">左下角</option></select></label>
             <label className="livechat-editor-wide" htmlFor="livechat-welcome">欢迎语<textarea id="livechat-welcome" rows={3} maxLength={1000} value={editing.welcomeMessage} onChange={e=>setEditing({...editing,welcomeMessage:e.target.value})}/></label>
+            <section className="rd-livechat-starter-editor livechat-editor-wide" aria-label="快捷引导消息">
+              <header><h3>快捷引导消息</h3><Button icon={Plus} size="compact" disabled={busy||editing.starterMessages.length>=50} onClick={()=>setEditing({...editing,starterMessages:[...editing.starterMessages,""]})}>添加问题</Button></header>
+              {editing.starterMessages.map((text,index)=><div className="rd-livechat-starter-row" key={index}>
+                <FormField label={`引导问题 ${index+1}`} required>{props=><textarea {...props} rows={2} maxLength={500} value={text} onChange={e=>setEditing({...editing,starterMessages:editing.starterMessages.map((value,i)=>i===index?e.target.value:value)})}/>}</FormField>
+                <div className="rd-livechat-starter-actions"><IconButton icon={ArrowUp} label={`上移问题 ${index+1}`} disabled={busy||index===0} onClick={()=>moveStarter(index,-1)}/><IconButton icon={ArrowDown} label={`下移问题 ${index+1}`} disabled={busy||index===editing.starterMessages.length-1} onClick={()=>moveStarter(index,1)}/><IconButton icon={Trash2} variant="ghost" label={`删除问题 ${index+1}`} disabled={busy} onClick={()=>setEditing({...editing,starterMessages:editing.starterMessages.filter((_,i)=>i!==index)})}/></div>
+              </div>)}
+            </section>
             <label className="livechat-editor-wide" htmlFor="livechat-color">主题色<div className="livechat-editor-color"><input id="livechat-color" aria-label="主题色" type="color" value={editing.themeColor} onChange={e=>setEditing({...editing,themeColor:e.target.value})}/><output htmlFor="livechat-color">{editing.themeColor.toUpperCase()}</output></div></label>
             <label className="livechat-editor-wide" htmlFor="livechat-origins">允许嵌入的域名<textarea id="livechat-origins" required rows={3} value={editing.origins} placeholder={"https://example.com\nhttps://shop.example.com"} onChange={e=>setEditing({...editing,origins:e.target.value})}/></label>
             <label className="livechat-editor-wide" htmlFor="livechat-ga4-id">GA4 Measurement ID（可选）<input id="livechat-ga4-id" pattern="G-[A-Z0-9]+" maxLength={40} placeholder="G-XXXXXXXXXX" value={editing.ga4MeasurementId} onChange={e=>setEditing({...editing,ga4MeasurementId:e.target.value.trim().toUpperCase()})}/></label>

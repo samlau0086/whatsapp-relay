@@ -13,6 +13,7 @@ const {chromium,firefox,webkit}=createRequire(import.meta.url)(process.env.LIVEC
 const channel="11111111-1111-4111-8111-111111111111";
 const testPng=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAHUlEQVR4nGNgaIr6TxFmGDWAYTQM/o+GQdRwCAMAqf3bEFNOlTwAAAAASUVORK5CYII=','base64');
 const secondChannel="22222222-2222-4222-8222-222222222222";
+const starterMessages=['第一条匿名消息','我想了解产品的材料和加工精度，是否可以提供详细报价？','<img src=x onerror=alert(1)>','发送'];
 const sessions=new Map(),uploads=new Map(),origins=new Set(),errors=[],profiles=[],expiredSessions=new Set();
 const transcripts=new Map(),closedChats=new Map(),endRequests=[];
 const presenceReports=[];
@@ -34,7 +35,7 @@ const api=await listen(async(req,res)=>{
   if(url.pathname==="/livechat/embed.js"){res.writeHead(200,{"content-type":"application/javascript"});res.end(livechatLoader);return}
   if(url.pathname.endsWith("/widget")){res.writeHead(200,{"content-type":"text/html","content-security-policy":`default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src blob: https:; frame-ancestors ${[...origins].join(" ")}`});res.end(livechatWidget);return}
   if(!origins.has(req.headers.origin)){json(403,{error:"livechat_origin_denied"});return}
-  if(url.pathname.endsWith("/config")){json(200,{name:widgetName,iconUrl:widgetIcon,welcome:widgetLanguage!==undefined?"":"您好，欢迎联系我们。",color:"#146d73",position:url.pathname.includes(secondChannel)?"left":"right",language:widgetLanguage===null?undefined:widgetLanguage||(url.pathname.includes(secondChannel)?"en":"zh-CN"),ga4MeasurementId:"G-TEST123"});return}
+  if(url.pathname.endsWith("/config")){json(200,{name:widgetName,iconUrl:widgetIcon,welcome:widgetLanguage!==undefined?"":"您好，欢迎联系我们。",starterMessages:url.pathname.includes(secondChannel)?[]:starterMessages,color:"#146d73",position:url.pathname.includes(secondChannel)?"left":"right",language:widgetLanguage===null?undefined:widgetLanguage||(url.pathname.includes(secondChannel)?"en":"zh-CN"),ga4MeasurementId:"G-TEST123"});return}
   const secret=req.headers.authorization,sessionKey=`${url.pathname.split('/')[2]}:${req.headers.origin}:${secret}`;
   if(!/^Bearer [a-f0-9]{64}$/.test(secret||"")){json(401,{error:"invalid_visitor_credential"});return}
   if(expiredSessions.has(sessionKey)){json(401,{error:"visitor_not_found_or_expired"});return}
@@ -184,6 +185,11 @@ try{
   await page.goto(hosts[0].url+'?gclid=click-first&gbraid=braid-first');let frame=await frameFor(page);
   assert.equal(await frame.locator('#panel').isVisible(),false,'首次访问默认收起');
   await openChat(frame);
+  assert.deepEqual(await frame.locator('.rd-livechat-starter').allTextContents(),starterMessages);
+  assert.equal(await frame.locator('.rd-livechat-starters img').count(),0,'问题按纯文本渲染');
+  await frame.getByRole('button',{name:starterMessages[1],exact:true}).click();
+  assert.equal(sessions.size,0,'快捷发送不能绕过必填资料校验');
+  assert.equal(await frame.locator('#initialMessage').inputValue(),starterMessages[1]);
   await page.waitForTimeout(500);
   assert.equal(historyRequests,0,'首次访问未明确开启 LiveChat 时不请求历史消息');
   await assertWindowControls(page,frame,'desktop');
@@ -200,17 +206,19 @@ try{
   assert.equal(await frame.locator('#visitorName').getAttribute('required'),'');
   await page.screenshot({path:`${screenshots}/desktop-prechat.png`});
   failNext=true;
-  await frame.locator('#visitorName').fill('Sam');await frame.locator('#email').fill('sam@example.com');await frame.locator('#company').fill('Example Ltd');await frame.locator('#whatsapp').fill('+12025550123');await frame.locator('#initialMessage').fill('第一条匿名消息');await frame.locator('#start').click();
+  await frame.locator('#visitorName').fill('Sam');await frame.locator('#email').fill('sam@example.com');await frame.locator('#company').fill('Example Ltd');await frame.locator('#whatsapp').fill('+12025550123');await frame.getByRole('button',{name:starterMessages[0],exact:true}).click();
   await frame.getByText('发送失败，点击重试').waitFor();
+  assert.equal(await frame.locator('.rd-livechat-starters').isVisible(),false,'失败使用原消息重试，不重复展示引导');
   assert.equal(await page.evaluate(()=>dataLayer.filter(item=>item.event==='generate_lead').length),0,'首条消息失败时不触发转化');
   await assertMessageLayout(frame);
   await page.goto(hosts[0].url+'/contact?wbraid=later-before-retry');frame=await frameFor(page);await openChat(frame);
   assert.equal(await page.evaluate(channel=>RelayDeskLiveChat.setAnalytics(channel,{consent:'granted',measurementId:'G-WRONG',clientId:'123.456'}),channel),false);
   assert.equal(await page.evaluate(channel=>RelayDeskLiveChat.setAnalytics(channel,{consent:'unset',measurementId:'G-TEST123',clientId:'123.456'}),channel),true);
   dropFirstSendResponse=true;await frame.getByText('发送失败，点击重试').click();
-  await frame.getByText("第一条匿名消息",{exact:true}).waitFor();await frame.locator("#send").waitFor({state:"visible"});
+  await frame.locator('#messages').getByText("第一条匿名消息",{exact:true}).waitFor();await frame.locator("#send").waitFor({state:"visible"});
   await page.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(":started")));
   assert.ok(historyRequests>0,'首条消息成功后开启历史消息轮询');
+  assert.equal(await frame.locator('.rd-livechat-starters').isVisible(),false,'开聊后隐藏引导');
   const firstSession=[...sessions.values()][0];assert.equal(firstSession.length,1);
   await page.waitForFunction(()=>dataLayer.filter(item=>item.event==='generate_lead').length===1);
   assert.deepEqual(await page.evaluate(()=>dataLayer.find(item=>item.event==='generate_lead')),{event:'generate_lead',lead_source:'livechat',livechat_channel_id:channel,livechat_event_id:firstSession[0].id});
@@ -239,7 +247,7 @@ try{
   assert.equal(await page.evaluate(()=>dataLayer.filter(item=>item.event==='generate_lead').length),0,'跨页不重复触发');
   await waitPresence(item=>item.sessionId===originalPresence.sessionId&&!item.connected);
   await waitPresence(item=>item.pageUrl===hosts[0].url+'/presence-next'&&item.connected&&item.sessionId!==originalPresence.sessionId);
-  await frame.getByText('第一条匿名消息',{exact:true}).waitFor();
+  await frame.locator('#messages').getByText('第一条匿名消息',{exact:true}).waitFor();
   await frame.locator('#draft').click();
   incoming(firstSession,"坐席回复已送达");await frame.getByText("坐席回复已送达",{exact:true}).waitFor({timeout:10000});
   await waitAlert(2);
@@ -259,7 +267,8 @@ try{
   await page.waitForLoadState("networkidle");assert.equal(page.frames().filter(f=>f.url().endsWith("/widget")).length,1);
   await page.evaluate(()=>{const key=Object.keys(localStorage).find(k=>k.endsWith(':outbox')),messageId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';localStorage.setItem(key,JSON.stringify({[messageId]:{text:'已接收但确认丢失'}}))});
   firstSession.push({id:randomUUID(),client_message_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',direction:'in',text_content:'已接收但确认丢失',created_at:timestamp()});
-  await page.reload();frame=await frameFor(page);await openChat(frame);await frame.getByText("第一条匿名消息",{exact:true}).waitFor();
+  await page.reload();frame=await frameFor(page);await openChat(frame);await frame.locator('#messages').getByText("第一条匿名消息",{exact:true}).waitFor();
+  assert.equal(await frame.locator('.rd-livechat-starters').isVisible(),false,'恢复会话不显示引导问题');
   await page.waitForFunction(()=>Object.keys(JSON.parse(localStorage.getItem(Object.keys(localStorage).find(k=>k.endsWith(':outbox')))||'{}')).length===0);
   failNext=true;await frame.locator("#draft").fill("刷新后重试");await frame.locator("#send").click();await frame.getByText("发送失败，点击重试").waitFor();
   await page.reload();frame=await frameFor(page);await openChat(frame);await frame.getByText("发送失败，点击重试").click();
@@ -379,7 +388,7 @@ try{
   for(let i=0;i<205;i++)incoming(firstSession,`分页回复 ${i}`);
   await frame.getByText('分页回复 204',{exact:true}).waitFor({timeout:15000});
   await page.reload();frame=await frameFor(page);await openChat(frame);await frame.getByText('分页回复 204',{exact:true}).waitFor();
-  await frame.locator('#older').click();await frame.getByText('分页回复 5',{exact:true}).waitFor();await frame.locator('#older').click();await frame.getByText('第一条匿名消息',{exact:true}).waitFor();
+  await frame.locator('#older').click();await frame.getByText('分页回复 5',{exact:true}).waitFor();await frame.locator('#older').click();await frame.locator('#messages').getByText('第一条匿名消息',{exact:true}).waitFor();
   for(const viewport of [{width:1280,height:850},{width:320,height:460}]){
     await page.setViewportSize(viewport);
     const scrollUp=()=>frame.evaluate(()=>{document.querySelector('#timeline').scrollTop=0});
@@ -423,7 +432,7 @@ try{
     await page.screenshot({path:`${screenshots}/reopened-${viewport.width}.png`});
   }
   await page.setViewportSize({width:1280,height:850});
-  const other=await context.newPage();await other.goto(hosts[1].url);const otherFrame=await frameFor(other);await openChat(otherFrame);assert.equal(await otherFrame.getByText("第一条匿名消息",{exact:true}).count(),0);
+  const other=await context.newPage();await other.goto(hosts[1].url);const otherFrame=await frameFor(other);await openChat(otherFrame);assert.equal(await otherFrame.locator('#messages').getByText("第一条匿名消息",{exact:true}).count(),0);
   await startChat(otherFrame,"第二个网站的访客");await other.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(":started")));assert.equal(sessions.size,2);
   await page.evaluate(({apiUrl,id})=>{const script=document.createElement('script');script.src=apiUrl+'/livechat/embed.js';script.dataset.channel=id;document.body.append(script)},{apiUrl:api.url,id:secondChannel});
   await page.waitForFunction(id=>Boolean(document.querySelector(`script[data-channel="${id}"]`)),secondChannel);
@@ -431,6 +440,7 @@ try{
   await secondFrame.locator('#launcher').waitFor({state:'visible'});assert.equal(await secondFrame.locator('#panel').isVisible(),false,'不同渠道不共享展开状态');
   assert.equal(await secondFrame.locator('#draft').getAttribute('placeholder'),'Type a message...');
   await openChat(secondFrame);assert.equal(await secondFrame.getByText('第一条匿名消息',{exact:true}).count(),0);
+  assert.equal(await secondFrame.locator('.rd-livechat-starters').isVisible(),false,'空配置不显示引导问题');
   await assertWindowControls(page,secondFrame,'left-position');
   assert.equal(await secondFrame.locator('#start').textContent(),'Start chat');
   await startChat(secondFrame,'独立渠道的访客');
@@ -516,6 +526,9 @@ try{
   const mobileContext=await browser.newContext({viewport:{width:375,height:740},...(browserType===firefox?{}:{isMobile:true}),hasTouch:true}),mobile=await mobileContext.newPage();mobile.on("pageerror",error=>errors.push(error.message));
   await mobile.goto(hosts[0].url);const mobileFrame=await frameFor(mobile);await openChat(mobileFrame);
   await assertWindowControls(mobile,mobileFrame,'mobile');
+  await mobileFrame.locator('.rd-livechat-starter').nth(1).click();
+  assert.equal(await mobileFrame.locator('#initialMessage').inputValue(),starterMessages[1]);
+  assert.equal(await mobileFrame.locator('#prechat').isVisible(),true,'手机点击引导不绕过资料必填');
   await mobile.screenshot({path:`${screenshots}/mobile-prechat.png`});
   await mobile.setViewportSize({width:320,height:460});await mobileFrame.locator('#start').scrollIntoViewIfNeeded();await mobile.screenshot({path:`${screenshots}/mobile-compact-prechat.png`});
   await assertWindowControls(mobile,mobileFrame,'mobile-compact');

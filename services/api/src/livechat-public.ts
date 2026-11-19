@@ -64,7 +64,7 @@ async function channel(request:FastifyRequest){
   const {publicId}=request.params as {publicId:string};
   if(!uuid.safeParse(publicId).success)throw fail(404,"livechat_unavailable");
   await rate(`ip:${credentialHash(request.ip)}:${publicId}`,600);
-  const found=await pool.query(`SELECT c.account_id,c.allowed_origins,c.icon_url,c.welcome_message,c.theme_color,c.position,c.language,c.ga4_measurement_id,a.display_name FROM livechat_channels c JOIN channel_accounts a ON a.id=c.account_id WHERE public_id=$1 AND enabled AND archived_at IS NULL`,[publicId]);
+  const found=await pool.query(`SELECT c.account_id,c.allowed_origins,c.icon_url,c.welcome_message,c.starter_messages,c.theme_color,c.position,c.language,c.ga4_measurement_id,a.display_name FROM livechat_channels c JOIN channel_accounts a ON a.id=c.account_id WHERE public_id=$1 AND enabled AND archived_at IS NULL`,[publicId]);
   if(!found.rowCount)throw fail(404,"livechat_unavailable");
   const row=found.rows[0];
   livechatOrigin(embedOrigin(request),row.allowed_origins);
@@ -97,7 +97,7 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
   });
   app.get("/livechat/:publicId/config",async(request,reply)=>{
     const c=await channel(request);reply.header("cache-control","no-store");
-    return {name:c.display_name,iconUrl:c.icon_url??"",welcome:c.welcome_message,color:c.theme_color,position:c.position,language:c.language??"en",ga4MeasurementId:c.ga4_measurement_id??""};
+    return {name:c.display_name,iconUrl:c.icon_url??"",welcome:c.welcome_message,starterMessages:c.starter_messages??[],color:c.theme_color,position:c.position,language:c.language??"en",ga4MeasurementId:c.ga4_measurement_id??""};
   });
   app.post("/livechat/:publicId/messages",async(request,reply)=>{
     const c=await channel(request),hash=livechatCredential(request.headers.authorization),parsed=messageSchema.safeParse(request.body);
