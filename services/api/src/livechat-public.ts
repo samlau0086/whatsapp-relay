@@ -11,6 +11,7 @@ import {livechatAttachmentExtensions,livechatFileExtension,livechatFileMime} fro
 import {isValidTimeZone} from "./order-number.js";
 import {queueLivechatTranscript} from "./livechat-transcript.js";
 import {analyticsSchema,recordLivechatLead,saveVisitorAnalytics} from "./livechat-analytics.js";
+import {adsCaptureSchema,adsConsentSchema,captureAdsAttribution,saveAdsConsent} from "./google-ads-attribution.js";
 
 const s3=new S3Client({region:config.S3_REGION,endpoint:config.S3_ENDPOINT,forcePathStyle:true,credentials:{accessKeyId:config.S3_ACCESS_KEY,secretAccessKey:config.S3_SECRET_KEY}});
 const uuid=z.string().uuid();
@@ -18,7 +19,7 @@ const messageSchema=z.object({
   clientMessageId:uuid,text:z.string().trim().max(10000).default(""),mediaId:uuid.optional(),
   name:z.string().trim().max(80).optional(),email:z.string().trim().email().max(254).optional(),
   company:z.string().trim().max(160).optional(),whatsapp:z.string().trim().max(80).optional(),
-  context:z.object({browserLanguage:z.string().trim().max(80).optional(),timeZone:z.string().max(100).refine(isValidTimeZone).optional(),pageUrl:z.string().url().max(2048).optional(),analytics:analyticsSchema.optional()}).optional(),
+  context:z.object({browserLanguage:z.string().trim().max(80).optional(),timeZone:z.string().max(100).refine(isValidTimeZone).optional(),pageUrl:z.string().url().max(2048).optional(),analytics:analyticsSchema.optional(),ads:adsCaptureSchema.optional()}).optional(),
   quotedMessageId:uuid.optional(),
 }).refine(v=>Boolean(v.text||v.mediaId));
 const endChatSchema=z.object({clientRequestId:uuid,sendTranscript:z.boolean().default(true)});
@@ -152,11 +153,19 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
       await enqueueInboundAgentWork(client,conv.rows[0].id,msg.rows[0].id,Boolean(data.text));
       if(firstChat&&data.context?.analytics)await saveVisitorAnalytics(client,v.id,active.rows[0].ga4_measurement_id,data.context.analytics);
       if(firstChat){
+        await captureAdsAttribution(client,v.id,c.account_id,data.context?.ads);
         await recordLivechatLead(client,{accountId:c.account_id,conversationId:conv.rows[0].id,contactId:v.contact_id,visitorId:v.id,messageId:msg.rows[0].id,clientMessageId:data.clientMessageId});
       }
       return {id:msg.rows[0].id,...(firstChat?{leadMessageId:msg.rows[0].id}:{})};
     });
     return reply.code(201).send(result);
+  });
+  app.post("/livechat/:publicId/ads-consent",async(request,reply)=>{
+    const c=await channel(request),v=await visitor(request,c),parsed=adsConsentSchema.safeParse(request.body);
+    if(!parsed.success)throw fail(400,"invalid_ads_consent");
+    await rate(`ads-consent:${v.id}`,30);
+    await saveAdsConsent(pool,v.id,parsed.data);
+    return reply.header("cache-control","no-store").code(204).send();
   });
   app.post("/livechat/:publicId/analytics",async(request,reply)=>{
     const c=await channel(request),v=await visitor(request,c),parsed=analyticsSchema.safeParse(request.body);

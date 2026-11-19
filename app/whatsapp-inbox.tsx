@@ -2695,7 +2695,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
             <CrmDetailsPanel
               key={active.id}
               active={active}
-              livechatConversionMembers={livechatRecipients.length?livechatRecipients:initialConversationMode(active)==="livechat"?[{id:active.id,name:active.name,contactId:active.contactId,latestIncomingAt:null,latestIncomingId:null}]:[]}
+              livechatConversionMembers={members.length?members.filter(item=>item.mode==="livechat"||item.mode==="email").map(item=>({id:item.id,name:item.name,contactId:item.contactId,conversionMode:item.mode,latestIncomingAt:null,latestIncomingId:null})):['livechat','email'].includes(initialConversationMode(active))?[{id:active.id,name:active.name,contactId:active.contactId,conversionMode:initialConversationMode(active),latestIncomingAt:null,latestIncomingId:null}]:[]}
               livechatConversionRecipientId={replyConversationId}
               token={apiToken}
               user={user}

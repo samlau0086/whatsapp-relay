@@ -10,6 +10,7 @@ import {processOneCloudOutbound,processOneCloudWebhook,syncDueCloudTemplates} fr
 import {processOneMessengerOutbound,processOneMessengerWebhook} from "./messenger.js";
 import {processOneLivechatOutbound} from "./livechat.js";
 import {processOneLivechatConversion} from "./livechat-analytics.js";
+import {processOneGoogleAdsConversion} from "./google-ads-worker.js";
 import {migrateAgentSchema} from "./migrate-agent.js";
 import {processOneStatusCycle,recoverStaleStatusCommands} from "./status-engine.js";
 import {processOneProactiveOutreach} from "./proactive-outreach.js";
@@ -22,6 +23,7 @@ process.on("SIGINT",()=>{stopping=true;});
 await migrateAgentSchema();
 const emailLoop=runEmailLoop();
 const conversionLoop=runConversionLoop();
+const adsLoop=runAdsLoop();
 while(!stopping){
   const agentWork=await processOneAgentJob();
   const mailboxWork=await syncOneMailbox();
@@ -41,7 +43,7 @@ while(!stopping){
   await enforceRetention();
 }
 stopping=true;
-await Promise.all([emailLoop,conversionLoop]);
+await Promise.all([emailLoop,conversionLoop,adsLoop]);
 await pool.end();
 
 async function runEmailLoop():Promise<void>{
@@ -60,6 +62,13 @@ async function runConversionLoop():Promise<void>{
   while(!stopping){
     try{if(!await processOneLivechatConversion())await sleep(1000);}
     catch{console.error("livechat conversion worker cycle failed");await sleep(2000);}
+  }
+}
+
+async function runAdsLoop():Promise<void>{
+  while(!stopping){
+    try{if(!await processOneGoogleAdsConversion())await sleep(1000);}
+    catch{console.error("google ads conversion worker cycle failed");await sleep(2000);}
   }
 }
 

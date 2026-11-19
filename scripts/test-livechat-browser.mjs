@@ -18,6 +18,7 @@ const transcripts=new Map(),closedChats=new Map(),endRequests=[];
 const presenceReports=[];
 let historyRequests=0;
 const analyticsReports=[];
+const adsReports=[];
 let endError='',dropEndResponse=false;
 let failNext=false,dropFirstSendResponse=false,ordinal=0,widgetLanguage,widgetName='网站客服',widgetIcon='';
 const timestamp=()=>new Date().toISOString().replace(/\.(\d{3})Z$/,(_match,millis)=>`.${millis}${String(++ordinal%1000).padStart(3,'0')}Z`);
@@ -55,6 +56,7 @@ const api=await listen(async(req,res)=>{
   if(!messages){json(401,{error:"visitor_not_found_or_expired"});return}
   if(url.pathname.endsWith('/presence')){presenceReports.push({...JSON.parse((await body(req)).toString()),sessionKey});json(200,{ok:true});return}
   if(url.pathname.endsWith('/analytics')){analyticsReports.push(JSON.parse((await body(req)).toString()));res.writeHead(204,cors);res.end();return}
+  if(url.pathname.endsWith('/ads-consent')){adsReports.push(JSON.parse((await body(req)).toString()));res.writeHead(204,cors);res.end();return}
   if(url.pathname.endsWith('/end-chat')&&req.method==='POST'){
     const data=JSON.parse((await body(req)).toString());endRequests.push(data);
     if(endError&&data.sendTranscript!==false){json(409,{error:endError});return}
@@ -179,7 +181,7 @@ try{
   };
   debugPage=page;
   page.on("pageerror",error=>errors.push(error.message));
-  await page.goto(hosts[0].url);let frame=await frameFor(page);
+  await page.goto(hosts[0].url+'?gclid=click-first&gbraid=braid-first');let frame=await frameFor(page);
   assert.equal(await frame.locator('#panel').isVisible(),false,'首次访问默认收起');
   await openChat(frame);
   await page.waitForTimeout(500);
@@ -202,7 +204,7 @@ try{
   await frame.getByText('发送失败，点击重试').waitFor();
   assert.equal(await page.evaluate(()=>dataLayer.filter(item=>item.event==='generate_lead').length),0,'首条消息失败时不触发转化');
   await assertMessageLayout(frame);
-  await page.reload();frame=await frameFor(page);await openChat(frame);
+  await page.goto(hosts[0].url+'/contact?wbraid=later-before-retry');frame=await frameFor(page);await openChat(frame);
   assert.equal(await page.evaluate(channel=>RelayDeskLiveChat.setAnalytics(channel,{consent:'granted',measurementId:'G-WRONG',clientId:'123.456'}),channel),false);
   assert.equal(await page.evaluate(channel=>RelayDeskLiveChat.setAnalytics(channel,{consent:'unset',measurementId:'G-TEST123',clientId:'123.456'}),channel),true);
   dropFirstSendResponse=true;await frame.getByText('发送失败，点击重试').click();
@@ -214,6 +216,13 @@ try{
   assert.deepEqual(await page.evaluate(()=>dataLayer.find(item=>item.event==='generate_lead')),{event:'generate_lead',lead_source:'livechat',livechat_channel_id:channel,livechat_event_id:firstSession[0].id});
   assert.equal(profiles[0].context.analytics.clientId,'123.456');
   assert.equal(profiles[0].context.analytics.consent,'unset','CMP 状态 unset 保留来源，但按默认启用策略传递分析上下文');
+  assert.equal(profiles[0].context.ads.gclid,'click-first','首次尝试冻结最近广告访问，失败跨页重试不覆盖');
+  assert.equal(profiles[0].context.ads.gbraid,'braid-first');assert.equal(profiles[0].context.ads.wbraid,undefined,'不同访问点击标识不能拼接');
+  assert.equal(profiles[0].context.ads.consent,'unset','Ads 同意独立保留 unset');
+  assert.equal(await page.evaluate(channel=>RelayDeskLiveChat.setAdsConsent(channel,{consent:'denied'}),channel),true);
+  for(let i=0;i<50&&!adsReports.some(item=>item.consent==='denied');i++)await page.waitForTimeout(100);
+  assert.ok(adsReports.some(item=>item.consent==='denied'),'Ads 撤回通知后台');
+  assert.equal(await page.evaluate(()=>Object.keys(localStorage).some(k=>k.endsWith(':adsVisit'))),false,'拒绝后清理宿主点击缓存');
   assert.equal(await page.evaluate(()=>Object.values(localStorage).some(value=>value.includes('123.456'))),false,'同意上下文不写入 outbox');
   assert.equal(await page.evaluate(channel=>RelayDeskLiveChat.setAnalytics(channel,{consent:'denied'}),channel),true);
   for(let i=0;i<50&&!analyticsReports.some(item=>item.consent==='denied');i++)await page.waitForTimeout(100);

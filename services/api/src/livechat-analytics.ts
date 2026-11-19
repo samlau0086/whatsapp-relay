@@ -6,6 +6,7 @@ import {authenticate,canAccessAccount,type Principal} from "./auth.js";
 import {pool,transaction} from "./db.js";
 import {config} from "./config.js";
 import {decryptAtRest} from "./security.js";
+import {queueAdsConversion} from "./google-ads-attribution.js";
 
 export const analyticsSchema=z.object({consent:z.enum(["granted","denied","unset"]),updatedAt:z.number().int().positive().max(Number.MAX_SAFE_INTEGER),measurementId:z.string().max(40).regex(/^G-[A-Z0-9]+$/).optional(),clientId:z.string().regex(/^[0-9]{1,20}\.[0-9]{1,20}$/).optional()}).strict().refine(v=>v.consent==="granted"?Boolean(v.measurementId):v.consent==="denied"?!v.measurementId&&!v.clientId:!v.clientId||Boolean(v.measurementId));
 export type AnalyticsContext=z.infer<typeof analyticsSchema>;
@@ -17,7 +18,7 @@ export const conversionSchema=z.object({clientEventId:z.string().uuid(),targetCo
 });
 const fail=(statusCode:number,message:string)=>Object.assign(new Error(message),{statusCode});
 const publicEventColumns="id,conversation_id,event_name,source,order_id,event_params,delivery_state,attempts,last_error,created_at";
-const paidOrder=`o.business_status <> 'cancelled' AND (
+export const paidOrder=`o.business_status <> 'cancelled' AND (
   EXISTS(SELECT 1 FROM order_payment_requests pr WHERE pr.order_id=o.id AND pr.environment='live'
     AND pr.amount=o.amount AND pr.currency=o.currency AND pr.status IN ('PAID','MARKED_AS_PAID','PAID_EXTERNAL'))
   OR ((o.business_status='paid' OR (o.business_status IN ('processing','shipped','completed') AND EXISTS(
@@ -111,10 +112,11 @@ export async function registerLivechatAnalyticsRoutes(app:FastifyInstance):Promi
         const state=row.analytics_consent==="denied"?"skipped_consent":!row.ga4_measurement_id||!row.ga4_api_secret_encrypted?"skipped_config":!row.analytics_client_id?"skipped_client_id":"queued";
         const inserted=await client.query(`INSERT INTO livechat_conversion_events(account_id,conversation_id,contact_id,actor_user_id,client_event_id,source,event_name,order_id,event_params,analytics_consent,ga4_client_id,delivery_state,ga4_measurement_id,ga4_config_fingerprint)
           VALUES($1,$2,$3,$4,$5,'agent',$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,[row.account_id,targetId,row.contact_id,principal.id,data.clientEventId,data.eventName,data.orderId??null,JSON.stringify(eventParams),row.analytics_consent,state==="queued"?row.analytics_client_id:null,state,state==="queued"?row.ga4_measurement_id:null,state==="queued"?configFingerprint(row.ga4_measurement_id,row.ga4_api_secret_encrypted):null]);
+        const ads=await queueAdsConversion(client,{id:inserted.rows[0].id,conversationId:targetId,accountId:row.account_id,actorId:principal.id,clientEventId:data.clientEventId,eventName:data.eventName,orderId:data.orderId,params:eventParams,principal});
         if(data.eventName==="purchase")await client.query("UPDATE conversations SET customer_stage='won' WHERE id=$1",[targetId]);
         await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'livechat.conversion','conversation',$2,$3)",[principal.id,targetId,JSON.stringify({eventId:inserted.rows[0].id,eventName:data.eventName,orderId:data.orderId??null,deliveryState:state})]);
         await client.query("SELECT relay_publish_conversation_change($1,$2)",[targetId,row.account_id]);
-        return {id:inserted.rows[0].id,deduplicated:false,deliveryState:state};
+        return {id:inserted.rows[0].id,deduplicated:false,deliveryState:state,ads};
       });
       return reply.code(201).send(result);
     }catch(error){

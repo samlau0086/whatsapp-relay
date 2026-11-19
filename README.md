@@ -1,5 +1,13 @@
 # RelayDesk
 
+## Google Ads 广告归因与转化回传
+
+LiveChat 嵌入脚本可采集 `gclid`、`gbraid`、`wbraid`，首次开聊锁定最近一次广告访问。后台“转化事件”显式标记合格线索、成交线索或已付款订单时，通过独立 Worker 回传 Google Ads；保留原有 GA4 并分别显示状态。原 LiveChat 中的 Email 沟通沿用归因，独立 Email 会话必须由坐席手动确认原 LiveChat 来源，同邮箱仅提供候选、不自动关联。两种入口共用 Ads 去重规则。
+
+管理员在“系统设置 → LiveChat → Google Ads”授权并按渠道配置客户 ID 和转化动作 ID；默认关闭，不补发历史。部署需配置 `GOOGLE_ADS_CLIENT_ID`、`GOOGLE_ADS_CLIENT_SECRET`，同步更新工作台、API 和 Worker 并执行启动迁移 `112_google_ads_attribution.sql`。Ads 同意独立于 GA4：未设置按默认启用策略处理，明确拒绝后停止上传并清理点击标识。请求接收、异步处理成功和最终 Ads 归因并非同一状态，未知上传结果不会自动重发。
+
+配置、CMP 接口、Email 关联、回传状态、隐私边界与测试方式见 [Google Ads 广告归因与离线转化](docs/google-ads-attribution.md)。真实广告账号联调仍需部署方完成。
+
 ## LiveChat 访客会话失效处理
 
 LiveChat 首次访问且访客尚未明确开启聊天时不会请求历史消息；首条消息成功发送后才开始 `/livechat/:id/messages` 轮询。后续访问会复用已开启的访客身份并继续轮询。访客凭证过期或被清理后，嵌入窗口会停止轮询并提示访客开始新会话，避免宿主网站控制台持续出现 `401 Unauthorized`。点击“开始新会话”后会清理本地会话状态；再次发送首条消息后恢复轮询。

@@ -20,6 +20,8 @@ const schema = z.object({
   MICROSOFT_MAIL_CLIENT_SECRET: z.string().default(""),
   GOOGLE_MAIL_CLIENT_ID: z.string().default(""),
   GOOGLE_MAIL_CLIENT_SECRET: z.string().default(""),
+  GOOGLE_ADS_CLIENT_ID: z.string().default(""),
+  GOOGLE_ADS_CLIENT_SECRET: z.string().default(""),
   META_GRAPH_API_VERSION: z.string().regex(/^v\d+\.\d+$/).optional(),
   STATUS_MAX_RECIPIENTS: z.coerce.number().int().min(1).max(10000).default(1000),
 });

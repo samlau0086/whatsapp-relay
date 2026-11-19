@@ -75,6 +75,41 @@ function saveOutbox(){try{localStorage.setItem(key+':outbox',JSON.stringify(outb
 let analyticsContext,analyticsMeasurementId='',analyticsReady=false,analyticsSynced='',analyticsInFlight=false,analyticsRevision=0;
 const analyticsControllersKey=Symbol.for('relaydesk.livechat.analytics'),analyticsControllers=globalThis[analyticsControllersKey]||(globalThis[analyticsControllersKey]=new Map());
 globalThis.RelayDeskLiveChat=globalThis.RelayDeskLiveChat||{setAnalytics(publicChannel,value){return analyticsControllers.get(publicChannel)?.(value)??false}};
+const adsControllersKey=Symbol.for('relaydesk.livechat.ads'),adsControllers=globalThis[adsControllersKey]||(globalThis[adsControllersKey]=new Map());
+globalThis.RelayDeskLiveChat.setAdsConsent=(publicChannel,value)=>adsControllers.get(publicChannel)?.(value)??false;
+let adsConsent={consent:'unset',updatedAt:Date.now()},adsVisit={},adsSynced='',adsInFlight=false;
+try{const saved=JSON.parse(localStorage.getItem(key+':adsConsent')||'null');if(saved&&['unset','granted','denied'].includes(saved.consent)&&Number.isSafeInteger(saved.updatedAt))adsConsent=saved}catch{}
+function clearAdsVisit(){
+  adsVisit={};try{localStorage.removeItem(key+':adsVisit')}catch{}
+  for(const message of Object.values(outbox)){if(message?.context?.ads)message.context.ads={...adsConsent}}
+  saveOutbox();
+}
+function captureAdsVisit(){
+  if(adsConsent.consent==='denied'){clearAdsVisit();return}
+  const query=new URLSearchParams(location.search),ids={};
+  for(const name of ['gclid','gbraid','wbraid']){const value=query.get(name);if(value&&value.length<=512&&/^[A-Za-z0-9_.~-]+$/.test(value))ids[name]=value}
+  if(Object.keys(ids).length){adsVisit={...ids,capturedAt:Date.now()};try{localStorage.setItem(key+':adsVisit',JSON.stringify(adsVisit))}catch{}}
+  else try{const saved=JSON.parse(localStorage.getItem(key+':adsVisit')||'{}');adsVisit={capturedAt:saved?.capturedAt};for(const name of ['gclid','gbraid','wbraid']){const value=saved?.[name];if(typeof value==='string'&&value.length<=512&&/^[A-Za-z0-9_.~-]+$/.test(value))adsVisit[name]=value}}catch{adsVisit={}}
+  if(!Number.isSafeInteger(adsVisit.capturedAt)||adsVisit.capturedAt>Date.now()+60000||Date.now()-adsVisit.capturedAt>90*86400000){adsVisit={};try{localStorage.removeItem(key+':adsVisit')}catch{}}
+}
+captureAdsVisit();
+adsControllers.set(channel,value=>{
+  if(!value||!['unset','granted','denied'].includes(value.consent))return false;
+  adsConsent={consent:value.consent,updatedAt:Math.max(Date.now(),adsConsent.updatedAt+1)};
+  try{localStorage.setItem(key+':adsConsent',JSON.stringify(adsConsent))}catch{}
+  if(value.consent==='denied')clearAdsVisit();
+  void syncAdsConsent();return true;
+});
+async function syncAdsConsent(){
+  if(!started||adsInFlight)return;
+  const context=adsConsent,credential=secret,body=JSON.stringify(context);
+  if(adsSynced===credential+body)return;adsInFlight=true;
+  try{const response=await fetch(path+'/ads-consent',{method:'POST',credentials:'omit',headers:{authorization:'Bearer '+credential,'content-type':'application/json'},body,keepalive:true,referrerPolicy:'origin',signal:AbortSignal.timeout(10000)});if(response.ok)adsSynced=credential+body}catch{}
+  finally{adsInFlight=false;if(context!==adsConsent||credential!==secret)void syncAdsConsent()}
+}
+addEventListener('storage',event=>{if(event.key===key+':adsConsent'){try{const value=JSON.parse(event.newValue);if(value&&['unset','granted','denied'].includes(value.consent)&&Number.isSafeInteger(value.updatedAt)&&value.updatedAt>=adsConsent.updatedAt){adsConsent=value;if(value.consent==='denied')clearAdsVisit();void syncAdsConsent()}}catch{}}});
+let adsPage=location.href;
+setInterval(()=>{if(adsPage!==location.href){adsPage=location.href;captureAdsVisit()}void syncAdsConsent()},10000);
 function pushTrackingEvent(data){try{const layer=globalThis.dataLayer||(globalThis.dataLayer=[]);if(typeof layer.push!=='function')return false;layer.push(data);return true}catch{return false}}
 const reportedLeads=new Set();
 function reportLead(id){
@@ -135,7 +170,7 @@ async function api(action,data){
     return {ok:true,reusedIdentity}
   }
 let url=path+'/'+action,options={credentials:'omit',headers:{authorization:'Bearer '+secret}};
-if(action==='send'){if(!Object.hasOwn(outbox,data.clientMessageId)&&Object.keys(outbox).length>=30)throw Error('pending_outbox_limit');let timeZone;try{timeZone=Intl.DateTimeFormat().resolvedOptions().timeZone}catch{}data={...data,context:{browserLanguage:navigator.language,timeZone,pageUrl:location.origin+location.pathname}};outbox[data.clientMessageId]=data;saveOutbox();url=path+'/messages';options.method='POST';options.headers['content-type']='application/json';options.body=JSON.stringify(!started&&analyticsContext?{...data,context:{...data.context,analytics:analyticsContext}}:data)}
+if(action==='send'){if(!Object.hasOwn(outbox,data.clientMessageId)&&Object.keys(outbox).length>=30)throw Error('pending_outbox_limit');let timeZone;try{timeZone=Intl.DateTimeFormat().resolvedOptions().timeZone}catch{}const pending=outbox[data.clientMessageId];data={...data,context:pending?.context||{browserLanguage:navigator.language,timeZone,pageUrl:location.origin+location.pathname}};url=path+'/messages';options.method='POST';options.headers['content-type']='application/json';if(!started){if(adsPage!==location.href){adsPage=location.href;captureAdsVisit()}data.context={...data.context,...(analyticsContext?{analytics:analyticsContext}:{}),ads:data.context.ads||{...adsVisit,...adsConsent}}}if(adsConsent.consent==='denied'&&data.context.ads)data.context.ads={...adsConsent};const {analytics:ignoredAnalytics,...storedContext}=data.context;outbox[data.clientMessageId]={...data,context:storedContext};saveOutbox();options.body=JSON.stringify(data)}
 else if(action==='upload'){
   url=path+'/media';options.method='POST';
   const bytes=data?.bytes,name=data?.name,type=data?.type;
@@ -155,7 +190,7 @@ if(action==='send'||action==='history'){const wasStarted=started;started=true;if
 if(action==='download')return {blob:await response.blob()};
 const result=await response.json();
 if(action==='send'){if(result.leadMessageId===result.id)reportLead(result.id);delete outbox[data.clientMessageId];saveOutbox();ended=false;endId='';endMode='';endedMode='';try{for(const suffix of [':ended',':endId',':endMode',':endedMode'])localStorage.removeItem(key+suffix)}catch{}}
-if(action==='send'||action==='history')void syncAnalytics();
+if(action==='send'||action==='history'){void syncAnalytics();void syncAdsConsent()}
   if(action==='end'){ended=true;endedMode=endMode;try{localStorage.setItem(key+':ended','1');localStorage.setItem(key+':endedMode',endedMode)}catch{}}
 if(action==='history'){if(chatBoundary){const unfiltered=result.data;result.data=unfiltered.filter(m=>{const time=messageTime(m);return time>chatBoundary.sortAt||(time===chatBoundary.sortAt&&m.id>chatBoundary.id)});if(result.data.length!==unfiltered.length)result.hasMore=false}let changed=false;for(const message of result.data||[]){if(Object.hasOwn(outbox,message.client_message_id)){if(message.id===result.leadMessageId)reportLead(message.id);delete outbox[message.client_message_id];changed=true}}if(changed)saveOutbox()}
 return result;

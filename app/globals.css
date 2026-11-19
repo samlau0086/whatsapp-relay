@@ -1318,3 +1318,7 @@ button { color:inherit; }
 .rd-livechat-conversions li { display: grid; gap: var(--rd-space-1); padding: var(--rd-space-2) 0; border-top: 1px solid var(--rd-border); }
 .rd-livechat-conversions li span { color: var(--rd-muted); }
 .rd-livechat-conversions-error { color: var(--rd-danger); }
+ .rd-ads-settings,.rd-ads-channel,.rd-ads-attribution{min-width:0;border-top:1px solid var(--rd-border);padding-block:var(--rd-space-4);overflow-wrap:anywhere}
+ .rd-ads-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:var(--rd-space-3);margin-block:var(--rd-space-3)}
+ .rd-ads-fields input,.rd-ads-attribution input{max-width:100%;min-width:0;box-sizing:border-box}
+ .rd-ads-actions{display:flex;flex-wrap:wrap;gap:var(--rd-space-2)}

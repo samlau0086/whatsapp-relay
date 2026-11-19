@@ -3,6 +3,7 @@ import {useCallback,useEffect,useState} from "react";
 import {Copy,MessageCircle,Pencil,Plus,RefreshCw,Save,Trash2,X} from "lucide-react";
 import {authorizedFetch} from "./auth-session";
 import {confirmAction} from "./confirmation-ui";
+import {GoogleAdsSettings} from "./google-ads-settings";
 
 const languages={"zh-CN":"简体中文","zh-TW":"繁體中文",en:"English",ja:"日本語",es:"Español",pt:"Português"};
 type Language=keyof typeof languages;
@@ -35,6 +36,7 @@ export function LivechatSettingsPanel({token,onToken,onToast,onAccountsChanged}:
   return <div className="livechat-settings"><header className="management-head"><h2>LiveChat 渠道</h2><div><button className="secondary-action" onClick={()=>void load()} disabled={busy} title="刷新"><RefreshCw size={14}/>刷新</button><button className="primary-action" onClick={()=>{setError("");setEditing(blank());}} disabled={busy}><Plus size={14}/>新增渠道</button></div></header>
     {error&&!editing&&<p className="login-error" role="alert">{error}</p>}
     {loading?<p>正在读取渠道...</p>:channels.length?<div className="order-table-wrap"><table className="order-table"><thead><tr><th>渠道</th><th>允许的网站</th><th>状态</th><th>操作</th></tr></thead><tbody>{channels.map(c=><tr key={c.id}><td><MessageCircle size={14}/> {c.display_name}</td><td>{c.allowed_origins.map(origin=><div key={origin}>{origin}</div>)}</td><td>{c.enabled?"已启用":"已停用"}</td><td><span className="contact-row-actions"><button onClick={()=>void copy(c)} title="复制 JavaScript 嵌入代码"><Copy size={14}/>嵌入代码</button><button disabled={busy} onClick={()=>setEditing(formFor(c))}><Pencil size={14}/>编辑</button><label><input type="checkbox" checked={c.enabled} disabled={busy} onChange={()=>void save({...formFor(c),enabled:!c.enabled})}/>启用</label><button className="danger" disabled={busy} onClick={()=>void archive(c)}><Trash2 size={14}/>归档</button></span></td></tr>)}</tbody></table></div>:<p className="empty-note">尚未创建 LiveChat 渠道</p>}
+    <GoogleAdsSettings token={token} onToken={onToken}/>
     {editing&&<div className="modal-backdrop livechat-editor-backdrop" role="presentation">
       <form className="livechat-editor" role="dialog" aria-modal="true" aria-labelledby="livechat-settings-title" aria-busy={busy} onSubmit={event=>{event.preventDefault();void save(editing);}} onKeyDown={event=>{
         if(event.key==="Escape"){event.preventDefault();if(!busy)setEditing(null);}

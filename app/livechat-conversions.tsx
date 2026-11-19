@@ -5,6 +5,7 @@ import {BarChart3,RefreshCw} from "lucide-react";
 import {authorizedFetch} from "./auth-session";
 import type {TimelineRecipient} from "./timeline-recipient";
 import {AsyncState,Button,FormField} from "./ui";
+import {GoogleAdsAttribution} from "./google-ads-attribution";
 
 const eventTypes={
   qualify_lead:"合格线索",
@@ -17,7 +18,7 @@ const eventTypes={
 };
 const states:Record<string,string>={
   browser_managed:"由宿主 GTM 处理",queued:"等待回传",sending:"正在回传",sent:"Google 已接收请求",
-  uncertain:"结果不确定，未自动重发",failed:"回传失败",skipped_consent:"访客已拒绝或撤回分析同意",
+  accepted:"Google 已接收，待处理",uncertain:"结果不确定，未自动重发",failed:"回传失败",skipped_consent:"访客已拒绝或撤回同意",skipped_attribution:"无有效广告归因",
   skipped_config:"渠道未配置或配置已变更",skipped_client_id:"未取得有效 GA4 Client ID",
 };
 type History={id:string;event_name:string;delivery_state:string;created_at:string;order_id:string|null};
@@ -32,18 +33,18 @@ export function LivechatConversionsPanel({members,initialRecipientId,...connecti
     <Button icon={BarChart3} size="compact" aria-expanded={open} disabled={busy} onClick={()=>{if(!open&&target)setSelected(target);setOpen(!open);}}>转化事件</Button>
     {open&&target&&<>
       {members.length>1&&<FormField label="记录给访客">{props=><select {...props} value={target} disabled={busy} onChange={event=>setSelected(event.target.value)}>{members.map(member=><option key={member.id} value={member.id}>{member.name}</option>)}</select>}</FormField>}
-      <ConversionForm key={target} {...connection} target={target} busy={busy} setBusy={setBusy}/>
+      <ConversionForm key={target} {...connection} target={target} email={members.find(item=>item.id===target)?.conversionMode==="email"} busy={busy} setBusy={setBusy}/>
     </>}
   </section>;
 }
 
-function ConversionForm({conversationId,target,token,onToken,onRecorded,busy,setBusy}:Connection&{target:string;busy:boolean;setBusy:(busy:boolean)=>void}){
+function ConversionForm({conversationId,target,token,onToken,onRecorded,busy,setBusy,email}:Connection&{target:string;email:boolean;busy:boolean;setBusy:(busy:boolean)=>void}){
   const [data,setData]=useState<ConversionData>(),[readError,setReadError]=useState(""),[revision,setRevision]=useState(0);
   const [kind,setKind]=useState<keyof typeof eventTypes>("qualify_lead"),[custom,setCustom]=useState(""),[order,setOrder]=useState("");
   const [writeError,setWriteError]=useState(""),[success,setSuccess]=useState("");
   const submitting=useRef(false);
   const requestIds=useRef(new Map<string,string>());
-  const endpoint=`/api/v1/conversations/${conversationId}/livechat-conversions`;
+  const endpoint=`/api/v1/conversations/${conversationId}/${email?'ads-conversions':'livechat-conversions'}`;
   const hasPending=data?.data.some(item=>item.delivery_state==="queued"||item.delivery_state==="sending")??false;
   useEffect(()=>{
     const abort=new AbortController();
@@ -94,22 +95,23 @@ function ConversionForm({conversationId,target,token,onToken,onRecorded,busy,set
   const orders=data?.orders.filter(item=>!item.recorded)??[];
   return <AsyncState status={readError?(data?"partial":"error"):data?"ready":"loading"} message={readError||undefined} onRetry={()=>setRevision(v=>v+1)}>
     {data&&<>
-      <div className="rd-livechat-conversions-head">
+      <GoogleAdsAttribution conversationId={conversationId} target={target} token={token} onToken={onToken} revision={revision} busy={busy}/>
+      {!email&&<div className="rd-livechat-conversions-head">
         <p>{!data.analytics.configured?"未配置 GA4 后台回传，事件只记入工作台。":data.analytics.consent==="denied"?"访客已拒绝或撤回分析同意，事件只记入工作台。":!data.analytics.clientIdAvailable?data.analytics.consent==="unset"?"尚未取得 CMP 状态；按默认启用策略处理，但缺少 GA4 Client ID，事件只记入工作台。":"未取得 GA4 Client ID，事件只记入工作台。":data.analytics.consent==="unset"?"尚未取得 CMP 状态；按默认启用策略使用 GA4 Client ID 回传事件。":"分析同意有效，已取得 GA4 Client ID。"}</p>
         <Button icon={RefreshCw} size="compact" onClick={()=>setRevision(v=>v+1)}>刷新状态</Button>
-      </div>
+      </div>}
       {data.canRecord?<form onSubmit={event=>{event.preventDefault();void record();}}>
-        <FormField label="事件类型">{props=><select {...props} value={kind} disabled={busy} onChange={event=>{setKind(event.target.value as keyof typeof eventTypes);setWriteError("");setSuccess("");}}>{Object.entries(eventTypes).map(([value,name])=><option key={value} value={value}>{name}</option>)}</select>}</FormField>
+        <FormField label="事件类型">{props=><select {...props} value={kind} disabled={busy} onChange={event=>{setKind(event.target.value as keyof typeof eventTypes);setWriteError("");setSuccess("");}}>{Object.entries(eventTypes).filter(([value])=>!email||['qualify_lead','close_convert_lead','purchase'].includes(value)).map(([value,name])=><option key={value} value={value}>{name}</option>)}</select>}</FormField>
         {kind==="custom"&&<FormField label="自定义事件名" required hint="小写字母开头，仅限小写字母、数字、下划线，请勿填写个人信息。">{props=><input {...props} maxLength={40} pattern="[a-z][a-z0-9_]{0,39}" value={custom} disabled={busy} onChange={event=>setCustom(event.target.value)} placeholder="quote_requested"/>}</FormField>}
         {kind==="purchase"&&<FormField label="已付款订单" required hint={orders.length?"只显示该访客尚未记录的已付款订单。":"该访客暂无可用的已付款订单。"}>{props=><select {...props} value={order} disabled={busy||!orders.length} onChange={event=>setOrder(event.target.value)}><option value="">选择订单</option>{orders.map(item=><option key={item.id} value={item.id}>{item.display_order_number} · {item.currency} {item.amount}</option>)}</select>}</FormField>}
         <Button type="submit" variant="primary" size="compact" loading={busy} disabled={Boolean(readError)||kind==="purchase"&&!orders.some(item=>item.id===order)}>记录事件</Button>
         {writeError&&<p role="alert" className="rd-livechat-conversions-error">{writeError}</p>}
         {success&&<p role="status">{success}</p>}
       </form>:<p>当前渠道不可记录，或你没有该访客所属渠道的发送权限。</p>}
-      {data.data.length?<ul aria-label="转化历史">{data.data.map(item=><li key={item.id}>
+      {!email&&(data.data.length?<ul aria-label="GA4 转化历史">{data.data.map(item=><li key={item.id}>
         <strong>{item.event_name}</strong>{item.order_id&&<span>订单：{data.orders.find(order=>order.id===item.order_id)?.display_order_number??item.order_id}</span>}
-        <span>{states[item.delivery_state]??item.delivery_state} · {new Date(item.created_at).toLocaleString()}</span>
-      </li>)}</ul>:<p>暂无转化事件。</p>}
+        <span>GA4：{states[item.delivery_state]??item.delivery_state} · {new Date(item.created_at).toLocaleString()}</span>
+      </li>)}</ul>:<p>暂无转化事件。</p>)}
     </>}
   </AsyncState>;
 }

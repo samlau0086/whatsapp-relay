@@ -1,4 +1,4 @@
-export type TimelineRecipient={id:string;contactId:string;accountId?:string;name:string;latestIncomingAt:string|null;latestIncomingId:string|null};
+export type TimelineRecipient={id:string;contactId:string;accountId?:string;conversionMode?:string;name:string;latestIncomingAt:string|null;latestIncomingId:string|null};
 
 export function defaultTimelineRecipient(members:TimelineRecipient[],rootId:string):string{
   const latest=members.filter(item=>item.latestIncomingAt).sort((a,b)=>
