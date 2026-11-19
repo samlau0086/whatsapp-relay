@@ -139,6 +139,8 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
       if(data.context?.pageUrl){const url=new URL(data.context.pageUrl);if(url.origin===embedOrigin(request))context.pageUrl=url.origin+url.pathname;}
       await client.query("UPDATE livechat_visitors SET last_seen_at=now(),first_ip=COALESCE(first_ip,$2),last_ip=$2,visitor_context=visitor_context||$3::jsonb WHERE id=$1",[v.id,request.ip,JSON.stringify(context)]);
       await createWebhookEvent(client,"message.received",msg.rows[0].id,{platform:"livechat",accountId:c.account_id,conversationId:conv.rows[0].id,direction:"in",kind,text:data.text});
+      // 与入站消息同一事务提交；重试命中已有消息时不会重复发送提醒。
+      await client.query("SELECT pg_notify('relay_conversation_changes',$1)",[JSON.stringify({accountId:c.account_id,conversationId:conv.rows[0].id,livechatMessageId:msg.rows[0].id})]);
       await enqueueInboundAgentWork(client,conv.rows[0].id,msg.rows[0].id,Boolean(data.text));
       if(firstChat&&data.context?.analytics)await saveVisitorAnalytics(client,v.id,active.rows[0].ga4_measurement_id,data.context.analytics);
       if(firstChat){

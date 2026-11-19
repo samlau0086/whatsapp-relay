@@ -7,15 +7,17 @@ export function useConversationFeed({
   enabled,
   getWebSocketUrl,
   onConversationIds,
+  onLivechatIncoming,
   onReconcile,
 }:{
   enabled:boolean;
   getWebSocketUrl:()=>Promise<string>;
   onConversationIds:(ids:string[])=>void|Promise<void>;
+  onLivechatIncoming?:(messageId:string,channelName:string)=>void;
   onReconcile:()=>void|Promise<void>;
 }):void{
-  const callbacks=useRef({getWebSocketUrl,onConversationIds,onReconcile});
-  useEffect(()=>{callbacks.current={getWebSocketUrl,onConversationIds,onReconcile};});
+  const callbacks=useRef({getWebSocketUrl,onConversationIds,onLivechatIncoming,onReconcile});
+  useEffect(()=>{callbacks.current={getWebSocketUrl,onConversationIds,onLivechatIncoming,onReconcile};});
   useEffect(()=>{
     if(!enabled)return;
     let stopped=false;
@@ -51,9 +53,14 @@ export function useConversationFeed({
         socket=new WebSocket(url);
         socket.addEventListener("open",()=>{attempt=0;});
         socket.addEventListener("message",event=>{
+          if(stopped)return;
           try{
-            const frame=JSON.parse(String(event.data)) as Partial<Omit<ConversationChangedEvent,"type">>&{type?:string};
+            const frame=JSON.parse(String(event.data)) as Partial<Omit<ConversationChangedEvent,"type">>&{type?:string;messageId?:unknown;channelName?:unknown};
             if(frame.type==="events.ready"){connected=true;void reconcile();return;}
+            if(frame.type==="livechat.incoming"&&typeof frame.messageId==="string"&&frame.messageId&&typeof frame.channelName==="string"){
+              callbacks.current.onLivechatIncoming?.(frame.messageId,frame.channelName);
+              return;
+            }
             if(frame.type!=="conversation.changed"||typeof frame.conversationId!=="string")return;
             pending.add(frame.conversationId);
             if(!batchTimer)batchTimer=window.setTimeout(flush,100);

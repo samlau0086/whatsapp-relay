@@ -43,6 +43,7 @@ import { QUICK_REPLY_VARIABLES, quickReplyCountryName, quickReplyVariableNames, 
 import { confirmAction, ConfirmationHost, promptAction, PromptHost } from "./confirmation-ui";
 import {formatMessageTime,formatMessageTimeTitle} from "./message-time";
 import {useConversationFeed} from "./use-conversation-feed";
+import {useLivechatTabAlert} from "./livechat-tab-alert";
 import {ConversationPanel} from "./conversation-panel";
 import type {ContactMethod,ContactMethodType,Conversation,TagItem} from "./conversation-types";
 import { convertWeight, formatWeight, WEIGHT_UNITS, type WeightUnit } from "./weight";
@@ -584,10 +585,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
 
   const playNotificationSound=useCallback(()=>{
     try{
-      const AudioContextClass=window.AudioContext;
-      const context=notificationAudio.current??new AudioContextClass();
-      notificationAudio.current=context;
-      if(context.state==="suspended")void context.resume();
+      const context=notificationAudio.current;
+      if(context?.state!=="running")return;
       const start=context.currentTime+.01;
       for(const [offset,frequency] of [[0,660],[.13,880]] as const){
         const oscillator=context.createOscillator(),gain=context.createGain();
@@ -598,11 +597,12 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
         oscillator.connect(gain).connect(context.destination);
         oscillator.start(start+offset);oscillator.stop(start+offset+.12);
       }
-    }catch{/* Browsers may block sound until the first user interaction. */}
+    }catch{/* 音频设备不可用时保留其他提醒。 */}
   },[]);
 
-  const notifyIncomingConversation=useCallback((conversation:Conversation)=>{
-    playNotificationSound();
+  const notifyLivechatIncoming=useLivechatTabAlert(Boolean(apiToken),playNotificationSound);
+  const notifyIncomingConversation=useCallback((conversation:Conversation,withSound=true)=>{
+    if(withSound)playNotificationSound();
     if(!("Notification" in window)||Notification.permission!=="granted")return;
     const notification=new Notification(`RelayDesk · ${conversation.name}`,{
       body:conversation.preview||"收到一条新消息",
@@ -632,16 +632,16 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
         const AudioContextClass=window.AudioContext;
         const context=notificationAudio.current??new AudioContextClass();
         notificationAudio.current=context;
-        if(context.state==="suspended")void context.resume();
-      }catch{/* Audio notifications remain unavailable in this browser. */}
-      if("Notification" in window&&Notification.permission==="default")void Notification.requestPermission();
+        if(context.state!=="running")void context.resume().catch(()=>{});
+      }catch{/* 浏览器可能不支持音频提醒。 */}
+      if("Notification" in window&&Notification.permission==="default")void Notification.requestPermission().catch(()=>{});
     };
-    window.addEventListener("pointerdown",enableNotifications,{once:true});
+    window.addEventListener("click",enableNotifications,{once:true});
     window.addEventListener("keydown",enableNotifications,{once:true});
     return()=>{
-      window.removeEventListener("pointerdown",enableNotifications);
+      window.removeEventListener("click",enableNotifications);
       window.removeEventListener("keydown",enableNotifications);
-      void notificationAudio.current?.close();
+      void notificationAudio.current?.close().catch(()=>{});
       notificationAudio.current=null;
     };
   },[]);
@@ -913,6 +913,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   },[loadAccounts,loadConversationCounts]);
 
   const applyConversationEvents=useCallback(async(ids:string[])=>{
+    if(view!=="inbox")return;
     // 当前会话消息不必等待列表摘要和筛选查询完成。
     const messageRefresh=ids.includes(effectiveActiveId)?loadMessages(apiToken,effectiveActiveId):Promise.resolve();
     const updates=new Map<string,{data?:Record<string,unknown>;matches:boolean}>();
@@ -929,16 +930,22 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
         updates.set(id,body);
       }));
     }
+    for(const [id,update] of updates){
+      if(!update.matches||!update.data){notificationBaseline.current.delete(id);continue;}
+      const mapped=mapConversation(update.data,0);
+      const baseline=notificationBaseline.current.get(id);
+      notificationBaseline.current.set(id,{lastMessageAt:mapped.lastMessageAt,unread:mapped.unread});
+      if(baseline&&mapped.lastDirection==="in"&&mapped.lastMessageAt&&mapped.lastMessageAt!==baseline.lastMessageAt){
+        notifyIncomingConversation(mapped,!update.data.last_message_is_livechat_incoming);
+      }
+    }
     setConversations(current=>{
       const byId=new Map(current.map(item=>[item.id,item]));
       for(const id of ids){
         const update=updates.get(id);
         if(!update)continue;
-        if(!update.matches||!update.data){byId.delete(id);notificationBaseline.current.delete(id);continue;}
+        if(!update.matches||!update.data){byId.delete(id);continue;}
         const mapped=mapConversation(update.data,Math.max(0,current.findIndex(item=>item.id===id)));
-        const baseline=notificationBaseline.current.get(id);
-        if(baseline&&mapped.lastDirection==="in"&&mapped.lastMessageAt&&mapped.lastMessageAt!==baseline.lastMessageAt)notifyIncomingConversation(mapped);
-        notificationBaseline.current.set(id,{lastMessageAt:mapped.lastMessageAt,unread:mapped.unread});
         byId.set(id,mapped);
       }
       return[...byId.values()].sort((a,b)=>conversationFilterKey(filter)==="reminders"
@@ -947,16 +954,18 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     });
     await messageRefresh;
     await refreshRealtimeCounts(apiToken);
-  },[apiToken,dateFilter,filter,selectedAccount,debouncedQuery,selectedTags,selectedCustomerStage,selectedLatestOrderStatus,followupFilter,selectedAgentMode,effectiveActiveId,loadMessages,logout,notifyIncomingConversation,refreshRealtimeCounts]);
+  },[view,apiToken,dateFilter,filter,selectedAccount,debouncedQuery,selectedTags,selectedCustomerStage,selectedLatestOrderStatus,followupFilter,selectedAgentMode,effectiveActiveId,loadMessages,logout,notifyIncomingConversation,refreshRealtimeCounts]);
 
   const reconcileConversationFeed=useCallback(async()=>{
+    if(view!=="inbox")return;
     await Promise.all([loadAccounts(apiToken),loadConversations(apiToken,{quiet:true}),loadConversationCounts(apiToken),effectiveActiveId?loadMessages(apiToken,effectiveActiveId):Promise.resolve()]);
-  },[apiToken,effectiveActiveId,loadAccounts,loadConversations,loadConversationCounts,loadMessages]);
+  },[view,apiToken,effectiveActiveId,loadAccounts,loadConversations,loadConversationCounts,loadMessages]);
 
   useConversationFeed({
-    enabled:view==="inbox"&&Boolean(apiToken),
+    enabled:Boolean(apiToken),
     getWebSocketUrl:getConversationEventUrl,
     onConversationIds:applyConversationEvents,
+    onLivechatIncoming:notifyLivechatIncoming,
     onReconcile:reconcileConversationFeed,
   });
 

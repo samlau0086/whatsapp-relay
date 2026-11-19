@@ -711,9 +711,12 @@ app.get("/api/v1/conversations/:id/summary",{preHandler:authenticate},async(requ
     COALESCE((SELECT json_agg(json_build_object('id',method.id,'type',method.type,'label',method.label,'value',method.value) ORDER BY method.position,method.id) FROM contact_methods method WHERE method.contact_id=co.id),'[]'::json) contact_methods,
     a.id account_id,a.display_name account_name,a.status account_status,a.transport,a.platform,mp.page_id,COALESCE(c.last_message_text,m.text_content) last_message,
     COALESCE(c.last_message_kind,m.kind) last_message_kind,COALESCE(c.last_message_direction,m.direction) last_message_direction,COALESCE(c.last_message_status,m.status) last_message_status,
+    EXISTS(SELECT 1 FROM messages latest JOIN channel_accounts source ON source.id=latest.account_id
+      WHERE latest.id=COALESCE(c.last_message_id,m.id) AND latest.direction='in' AND source.platform='livechat'
+      AND NOT EXISTS(SELECT 1 FROM message_email_details WHERE message_id=latest.id)) last_message_is_livechat_incoming,
     COALESCE(tag_list.tags,'[]'::json) tags,reminder_task.due_at remind_at,latest_order.business_status latest_order_status
     FROM conversations c JOIN contacts co ON co.id=c.contact_id JOIN channel_accounts a ON a.id=c.account_id LEFT JOIN messenger_page_accounts mp ON mp.account_id=a.id LEFT JOIN whatsapp_groups wg ON wg.contact_id=co.id
-    LEFT JOIN LATERAL (SELECT text_content,kind,direction,status,occurred_at FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
+    LEFT JOIN LATERAL (SELECT id,text_content,kind,direction,status,occurred_at FROM messages WHERE conversation_id=c.id AND c.summary_updated_at IS NULL ORDER BY occurred_at DESC,id DESC LIMIT 1)m ON true
     LEFT JOIN LATERAL (SELECT json_agg(json_build_object('id',t.id,'name',t.name,'color',t.color) ORDER BY t.name) tags FROM conversation_tags ct JOIN tags t ON t.id=ct.tag_id WHERE ct.conversation_id=c.id)tag_list ON true
     LEFT JOIN LATERAL (SELECT business_status FROM orders WHERE conversation_id=c.id AND deleted_at IS NULL ORDER BY created_at DESC,id DESC LIMIT 1) latest_order ON true
     LEFT JOIN LATERAL (

@@ -458,7 +458,7 @@ test("workspace navigation is URL based", async () => {
   assert.match(component, /useEffect\(\(\)=>\{setWorkspaceView\(routeView\);\},\[routeView\]\)/);
 });
 
-test("task requests stay stable and the realtime feed is scoped to inbox", async () => {
+test("任务请求保持稳定，工作台接收 LiveChat 提醒但仅在收件箱刷新会话", async () => {
   const [component,feed] = await Promise.all([
     readFile(new URL("../app/whatsapp-inbox.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/use-conversation-feed.ts", import.meta.url), "utf8"),
@@ -466,7 +466,9 @@ test("task requests stay stable and the realtime feed is scoped to inbox", async
   assert.match(component, /const taskRequest=useCallback\(\(path:string,init\?:RequestInit\)=>authorizedFetch\(path,apiToken,init\),\[apiToken\]\)/);
   assert.match(component, /<TaskCenter\s+token=\{apiToken\}\s+accounts=\{accounts\}\s+request=\{taskRequest\}/);
   assert.doesNotMatch(component, /<TaskCenter[^>]+request=\{\(path,init\)=>authorizedFetch/);
-  assert.match(component, /enabled:view==="inbox"&&Boolean\(apiToken\)/);
+  assert.match(component, /useConversationFeed\(\{\s*enabled:Boolean\(apiToken\),[\s\S]*?onLivechatIncoming:notifyLivechatIncoming/);
+  assert.match(component, /const applyConversationEvents=useCallback\(async\(ids:string\[\]\)=>\{\s*if\(view!=="inbox"\)return;/);
+  assert.match(component, /const reconcileConversationFeed=useCallback\(async\(\)=>\{\s*if\(view!=="inbox"\)return;/);
   assert.match(feed, /60_000/);
   assert.doesNotMatch(component, /setInterval\(\(\)=>void loadConversations\(apiToken/);
   assert.match(component, /if\(view!=="inbox"\|\|!apiToken\|\|!effectiveActiveId\)return;/);

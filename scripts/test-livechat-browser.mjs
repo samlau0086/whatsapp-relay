@@ -6,9 +6,10 @@ import {mkdir,mkdtemp,writeFile,rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {fileURLToPath} from "node:url";
-import {chromium,firefox,webkit} from "playwright";
+import {createRequire} from "node:module";
 import {livechatLoader,livechatWidget} from "../services/api/dist/livechat-widget.js";
 
+const {chromium,firefox,webkit}=createRequire(import.meta.url)(process.env.LIVECHAT_TEST_PLAYWRIGHT||'playwright');
 const channel="11111111-1111-4111-8111-111111111111";
 const testPng=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAHUlEQVR4nGNgaIr6TxFmGDWAYTQM/o+GQdRwCAMAqf3bEFNOlTwAAAAASUVORK5CYII=','base64');
 const secondChannel="22222222-2222-4222-8222-222222222222";
@@ -159,6 +160,23 @@ const assertReplyLayout=async frame=>{
 let debugPage;
 try{
   const context=await browser.newContext({viewport:{width:1280,height:850}}),page=await context.newPage();
+  await page.addInitScript(()=>{
+    if(window!==window.top)return;
+    window.livechatToneStarts=0;
+    const Audio=window.AudioContext||window.webkitAudioContext;
+    const createOscillator=Audio.prototype.createOscillator;
+    Audio.prototype.createOscillator=function(){
+      const tone=createOscillator.call(this),start=tone.start;
+      tone.start=(...args)=>{start.apply(tone,args);if(this.state==='running')window.livechatToneStarts++};
+      return tone;
+    };
+    window.livechatTitles=[];
+    new MutationObserver(()=>window.livechatTitles.push(document.title)).observe(document,{childList:true,subtree:true,characterData:true});
+  });
+  const title='嵌入网站 1',alertTitle='New message from 网站客服';
+  const waitAlert=async tones=>{
+    await page.waitForFunction(({alertTitle,tones})=>document.title===alertTitle&&window.livechatToneStarts===tones,{alertTitle,tones},{timeout:6000});
+  };
   debugPage=page;
   page.on("pageerror",error=>errors.push(error.message));
   await page.goto(hosts[0].url);let frame=await frameFor(page);
@@ -212,7 +230,16 @@ try{
   assert.equal(await page.evaluate(()=>dataLayer.filter(item=>item.event==='generate_lead').length),0,'跨页不重复触发');
   await waitPresence(item=>item.sessionId===originalPresence.sessionId&&!item.connected);
   await waitPresence(item=>item.pageUrl===hosts[0].url+'/presence-next'&&item.connected&&item.sessionId!==originalPresence.sessionId);
+  await frame.getByText('第一条匿名消息',{exact:true}).waitFor();
+  await frame.locator('#draft').click();
   incoming(firstSession,"坐席回复已送达");await frame.getByText("坐席回复已送达",{exact:true}).waitFor({timeout:10000});
+  await waitAlert(2);
+  await page.waitForFunction(title=>document.title===title,title);
+  await waitAlert(2);
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  assert.equal(await page.title(),title,'宿主收到焦点事件后恢复标题');
+  await page.waitForTimeout(1100);
+  assert.equal(await page.title(),title,'恢复后停止闪动');
   await assertMessageLayout(frame);
   assert.equal(await frame.locator('.support-avatar').first().textContent(),await frame.locator('#avatar').textContent());
   await assertReplyLayout(frame);
@@ -229,7 +256,12 @@ try{
   await page.reload();frame=await frameFor(page);await openChat(frame);await frame.getByText("发送失败，点击重试").click();
   await page.waitForFunction(()=>Object.keys(JSON.parse(localStorage.getItem(Object.keys(localStorage).find(k=>k.endsWith(":outbox")))||"{}")).length===0);
   assert.equal(firstSession.filter(m=>m.text_content==="刷新后重试").length,1);
-  await frame.locator("#close").click();incoming(firstSession,"未读回复");await frame.locator("#badge").waitFor({state:"visible",timeout:10000});await openChat(frame);assert.equal(await frame.locator("#badge").isVisible(),false);
+  await frame.getByText('坐席回复已送达',{exact:true}).waitFor();
+  await frame.getByText('刷新后重试',{exact:true}).waitFor();
+  assert.deepEqual(await page.evaluate(alertTitle=>[window.livechatTitles.includes(alertTitle),window.livechatToneStarts],alertTitle),[false,0],'刷新历史和访客重试发送不提醒');
+  await frame.locator("#close").click();incoming(firstSession,"未读回复");await frame.locator("#badge").waitFor({state:"visible",timeout:10000});
+  await waitAlert(2);
+  await openChat(frame);assert.equal(await frame.locator("#badge").isVisible(),false);
   await context.setOffline(true);incoming(firstSession,"断线期间回复");await page.waitForTimeout(4200);await context.setOffline(false);await frame.getByText("断线期间回复",{exact:true}).waitFor({timeout:12000});
   assert.equal(await frame.locator('#emoji svg,#image svg,#attach svg,#send svg').count(),4);
   // 从真实跨域 iframe 发出无效上传，宿主必须在请求网络前拒绝。

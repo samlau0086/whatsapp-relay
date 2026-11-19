@@ -13,7 +13,7 @@ const TICKET_TTL_SECONDS = 30;
 const HEARTBEAT_MS = 25_000;
 
 type LiveClient = { socket: WebSocket; accountIds?: Set<string>; alive: boolean };
-type ChangeEvent = { conversationId: string; accountId: string; platform?:"whatsapp"|"messenger"|"livechat";pageId?:string|null };
+type ChangeEvent = { conversationId: string; accountId: string; livechatMessageId?:string };
 
 export async function registerBrowserEvents(app: FastifyInstance): Promise<void> {
   const clients = new Set<LiveClient>();
@@ -54,11 +54,11 @@ export async function registerBrowserEvents(app: FastifyInstance): Promise<void>
     socket.send(JSON.stringify({type:"events.ready"}));
   });
 
-  const broadcast=(event:ChangeEvent)=>{
-    const frame=JSON.stringify({type:"conversation.changed",...event});
+  const broadcast=(accountId:string,event:object)=>{
+    const frame=JSON.stringify(event);
     for(const client of clients){
       if(client.socket.readyState!==client.socket.OPEN)continue;
-      if(client.accountIds&&!client.accountIds.has(event.accountId))continue;
+      if(client.accountIds&&!client.accountIds.has(accountId))continue;
       client.socket.send(frame);
     }
   };
@@ -76,8 +76,16 @@ export async function registerBrowserEvents(app: FastifyInstance): Promise<void>
         try{
           const event=JSON.parse(message.payload) as Partial<ChangeEvent>;
           if(typeof event.conversationId==="string"&&typeof event.accountId==="string"){
-            void pool.query("SELECT a.platform,p.page_id FROM channel_accounts a LEFT JOIN messenger_page_accounts p ON p.account_id=a.id WHERE a.id=$1",[event.accountId])
-              .then(result=>broadcast({...event as ChangeEvent,platform:result.rows[0]?.platform??"whatsapp",pageId:result.rows[0]?.page_id??null}))
+            const {accountId,conversationId,livechatMessageId}=event;
+            void pool.query("SELECT a.platform,a.display_name,p.page_id FROM channel_accounts a LEFT JOIN messenger_page_accounts p ON p.account_id=a.id WHERE a.id=$1",[accountId])
+              .then(result=>{
+                const account=result.rows[0];
+                if(typeof livechatMessageId==="string"){
+                  if(account?.platform==="livechat")broadcast(accountId,{type:"livechat.incoming",messageId:livechatMessageId,channelName:account.display_name});
+                  return;
+                }
+                broadcast(accountId,{type:"conversation.changed",conversationId,accountId,platform:account?.platform??"whatsapp",pageId:account?.page_id??null});
+              })
               .catch(error=>app.log.warn({error},"conversation event platform lookup failed"));
           }
         }catch(error){app.log.warn({error},"ignored malformed conversation notification");}

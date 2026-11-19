@@ -16,6 +16,55 @@ const base=new URL(script.src).origin,path=base+'/livechat/'+channel;
 const key='relaydesk.livechat:'+base+':'+channel;
 const registryKey=Symbol.for('relaydesk.livechat.instances'),registry=globalThis[registryKey]||(globalThis[registryKey]=new Set());
 if(registry.has(key))return;registry.add(key);
+// 同一宿主页的多个渠道共享标题和音频，连续提醒不会覆盖原标题。
+const alertsKey=Symbol.for('relaydesk.livechat.alerts'),alerts=globalThis[alertsKey]||(globalThis[alertsKey]=(()=>{
+  let audio,interval,timeout,originalTitle='',alertTitle='';
+  function unlock(){
+    try{
+      const Audio=window.AudioContext||window.webkitAudioContext;
+      if(!Audio)return;
+      audio=audio||new Audio();
+      if(audio.state!=='running')void audio.resume().catch(()=>{});
+    }catch{}
+  }
+  function sound(){
+    if(audio?.state!=='running')return;
+    try{
+      const start=audio.currentTime+.01;
+      for(const [offset,frequency] of [[0,660],[.13,880]]){
+        const tone=audio.createOscillator(),gain=audio.createGain(),at=start+offset;
+        tone.frequency.value=frequency;
+        gain.gain.setValueAtTime(.0001,at);
+        gain.gain.exponentialRampToValueAtTime(.16,at+.015);
+        gain.gain.exponentialRampToValueAtTime(.0001,at+.11);
+        tone.connect(gain).connect(audio.destination);
+        tone.start(at);tone.stop(at+.12);
+      }
+    }catch{}
+  }
+  function restore(){
+    clearInterval(interval);clearTimeout(timeout);
+    if(interval!==undefined&&document.title===alertTitle)document.title=originalTitle;
+    interval=timeout=undefined;
+  }
+  function incoming(name){
+    restore();
+    originalTitle=document.title;alertTitle='New message from '+name;
+    document.title=alertTitle;
+    interval=setInterval(()=>{
+      if(document.title!==originalTitle&&document.title!==alertTitle){restore();return}
+      document.title=document.title===alertTitle?originalTitle:alertTitle;
+    },1000);
+    if(!document.hidden&&document.hasFocus())timeout=setTimeout(restore,8000);
+    sound();
+  }
+  const interact=event=>{if(event.isTrusted&&audio?.state!=='running')unlock()};
+  addEventListener('click',interact,true);addEventListener('keydown',interact,true);
+  addEventListener('focus',restore);addEventListener('pagehide',restore);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)restore()});
+  if(navigator.userActivation?.hasBeenActive)unlock();
+  return {incoming,unlock};
+})());
   let secret,started=false,ended=false,endId='',endMode='',endedMode='';try{secret=localStorage.getItem(key);started=localStorage.getItem(key+':started')==='1';ended=localStorage.getItem(key+':ended')==='1';endId=localStorage.getItem(key+':endId')||'';endMode=localStorage.getItem(key+':endMode')||'';endedMode=localStorage.getItem(key+':endedMode')||''}catch{}
 // 只保存展示分界，不保存姓名邮箱；后台身份与完整消息历史保持不变。
 let chatBoundary=null;try{const saved=JSON.parse(localStorage.getItem(key+':chatBoundary')||'null');if(saved&&typeof saved.id==='string'&&typeof saved.sortAt==='string')chatBoundary=saved}catch{}
@@ -129,6 +178,8 @@ const m=event.data;
 if(m.action==='expand'){expanded=!!m.open;try{localStorage.setItem(key+':expanded',expanded?'1':'0')}catch{}resize();return}
 if(m.action==='maximize'){maximized=!!m.value;resize();post({namespace:m.namespace,scrollSize:{width:frame.clientWidth,height:frame.clientHeight}});return}
 if(m.action==='read'){try{localStorage.setItem(key+':read',String(m.id||''))}catch{}return}
+if(m.action==='interaction'){if(navigator.userActivation?.isActive!==false)alerts.unlock();return}
+if(m.action==='incoming'){alerts.incoming(config.name);return}
 if(!['send','upload','history','download','reset','end'].includes(m.action)||typeof m.requestId!=='string')return;
 try{post({namespace:m.namespace,requestId:m.requestId,result:await api(m.action,m.data)})}catch(error){post({namespace:m.namespace,requestId:m.requestId,error:String(error.message||error)})}
 });
@@ -162,6 +213,8 @@ function confirmAction(text){return new Promise(resolve=>{const dialog=document.
 function localize(locale){language=languages.includes(locale)?locale:'en';document.documentElement.lang=language;document.title=t('在线客服');const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);while(walker.nextNode()){const node=walker.currentNode;if(!['SCRIPT','STYLE'].includes(node.parentElement.tagName))node.textContent=t(node.textContent)}for(const el of document.querySelectorAll('[title],[aria-label],[placeholder]'))for(const attr of ['title','aria-label','placeholder'])if(el.hasAttribute(attr))el.setAttribute(attr,t(el.getAttribute(attr)))}
   let parentOrigin='',open=false,busy=false,uploading=false,initialized=false,lastRead='',latest='',first='',hasMore=false,syncing=false,restarting=false,sessionExpired=false,sessionStarted=false,active=false,ended=false,endedMode='',cursor='',pendingFile=null,pendingPreviewUrl='',sessionGeneration=0;
 const post=(data,transfer=[])=>parent.postMessage({namespace,...data},parentOrigin||'*',transfer);
+const notifyInteraction=event=>{if(initialized&&event.isTrusted)post({action:'interaction'})};
+addEventListener('click',notifyInteraction,true);addEventListener('keydown',notifyInteraction,true);
 function rpc(action,data,transfer=[]){return new Promise((resolve,reject)=>{const requestId=crypto.randomUUID(),timer=setTimeout(()=>{pending.delete(requestId);reject(Error(t('请求超时，请重试')))},35000);pending.set(requestId,{resolve,reject,timer});try{post({action,data,requestId},transfer)}catch(error){clearTimeout(timer);pending.delete(requestId);reject(error)}})}
 addEventListener('message',event=>{
 if(event.source!==parent||!event.data||event.data.namespace!==namespace)return;
@@ -199,7 +252,10 @@ const incoming=sorted.filter(m=>m.direction==='out');latest=incoming.at(-1)?.id|
 }
 function errorText(text){if(!text)return '';const key={'email_provider_not_configured':'邮件服务尚未配置，会话未结束，请联系客服','visitor_email_required':'缺少收件邮箱，会话未结束，请联系客服','pending_outbox_limit':'待重试消息过多，请先处理已有消息','livechat_rate_limited':'请求频繁，请稍后重试','livechat_unavailable':'客服渠道暂不可用','visitor_session_expired':'会话已过期，历史记录仍由客服保留，可开始新会话','visitor_not_found_or_expired':'会话尚未开始或已过期','unsupported_attachment_type':'支持 PNG、JPEG、WebP、PDF 和纯文本文件','file_too_large':'附件不能超过 10 MB','first_message_must_be_text':'请先发送一条消息，再添加附件','Failed to fetch':'连接中断，正在重试...'}[text];return key?t(key):translations[text]||Object.values(translations).some(values=>values.includes(text))?t(text):t('发送失败，请重试')}
 function notice(text){$('notice').textContent=errorText(text==='prechat_details_required'?'请填写姓名、有效邮箱和消息':text)}
-async function sync(){if(!initialized||!sessionStarted||syncing||restarting||sessionExpired)return;const generation=sessionGeneration;syncing=true;try{const incremental=!!cursor;let result=await rpc('history',cursor?{after:cursor}:undefined);if(generation!==sessionGeneration)return;active=!ended;for(const m of result.data)messages.set(m.id,m);if(result.data.length)cursor=result.data.at(-1).id;if(!incremental)hasMore=result.hasMore;$('connection').textContent=t(ended?'会话已结束':'在线客服');$('restart').hidden=!ended;if($('notice').textContent===syncNotice||$('notice').textContent===t('连接中断，正在重试...'))notice('');syncNotice='';render();if(incremental&&result.hasMore)setTimeout(sync,600)}catch(error){if(generation!==sessionGeneration)return;if(error.message==='visitor_session_expired'){sessionExpired=true;active=false;$('restart').hidden=false;notice(error.message);$('connection').textContent=t('会话已过期');render()}else if(error.message!=='visitor_not_found_or_expired'){notice(error.message==='Failed to fetch'?t('连接中断，正在重试...'):error.message);syncNotice=$('notice').textContent;$('connection').textContent=t('正在重新连接')}}finally{syncing=false}}
+async function sync(){if(!initialized||!sessionStarted||syncing||restarting||sessionExpired)return;const generation=sessionGeneration;syncing=true;try{const incremental=!!cursor;const result=await rpc('history',cursor?{after:cursor}:undefined);if(generation!==sessionGeneration)return;active=!ended;
+  // direction 从坐席一侧定义；仅增量页中首次出现的客服回复提醒。
+  const incoming=incremental&&result.data.some(m=>m.direction==='out'&&!messages.has(m.id));
+  for(const m of result.data)messages.set(m.id,m);if(result.data.length)cursor=result.data.at(-1).id;if(!incremental)hasMore=result.hasMore;$('connection').textContent=t(ended?'会话已结束':'在线客服');$('restart').hidden=!ended;if($('notice').textContent===syncNotice||$('notice').textContent===t('连接中断，正在重试...'))notice('');syncNotice='';render();if(incoming)post({action:'incoming'});if(incremental&&result.hasMore)setTimeout(sync,600)}catch(error){if(generation!==sessionGeneration)return;if(error.message==='visitor_session_expired'){sessionExpired=true;active=false;$('restart').hidden=false;notice(error.message);$('connection').textContent=t('会话已过期');render()}else if(error.message!=='visitor_not_found_or_expired'){notice(error.message==='Failed to fetch'?t('连接中断，正在重试...'):error.message);syncNotice=$('notice').textContent;$('connection').textContent=t('正在重新连接')}}finally{syncing=false}}
   $('restart').onclick=async()=>{
     if(busy||restarting||!await confirmAction('开始新会话？当前窗口将不再显示之前的消息，客服仍保留历史记录。'))return;
     if(busy||restarting)return;busy=true;restarting=true;sessionGeneration++;$('restart').disabled=true;
@@ -208,7 +264,7 @@ async function sync(){if(!initialized||!sessionStarted||syncing||restarting||ses
   async function endChat(sendTranscript){if(busy||uploading||local.size||!active)return;const question=sendTranscript?'确认结束会话并发送记录到您的邮箱？':'确认结束当前会话？';if(!await confirmAction(question))return;busy=true;render();notice('');try{await rpc('end',{clientRequestId:crypto.randomUUID(),sendTranscript});active=false;ended=true;endedMode=sendTranscript?'transcript':'close';clearSelectedFile();$('draft').value='';$('emojiPanel').hidden=true;notice(t(sendTranscript?'会话已结束，记录已加入邮件发送队列。':'会话已结束。'));$('connection').textContent=t('会话已结束')}catch(error){notice(error.message)}finally{busy=false;render()}}
   endOnlyButton.onclick=()=>endChat(false);endButton.onclick=()=>endChat(true);
 $('older').onclick=async()=>{if(!first)return;const timeline=$('timeline'),height=timeline.scrollHeight;$('older').disabled=true;try{const result=await rpc('history',{before:first});for(const m of result.data)messages.set(m.id,m);hasMore=result.hasMore;render();timeline.scrollTop=timeline.scrollHeight-height}catch(error){notice(error.message)}finally{$('older').disabled=false}};
-  async function send(p,id){if(busy)return;busy=true;p.error='';local.set(id,p);notice('');render();scrollToLatest();try{const result=await rpc('send',{clientMessageId:id,text:p.text,mediaId:p.mediaId,name:p.name,email:p.email,company:p.company,whatsapp:p.whatsapp,fileName:p.fileName,mimeType:p.mimeType,quotedMessageId:replyTo?.id});sessionStarted=true;active=true;local.delete(id);replyTo=null;updateReplyBar();if(p.previewUrl&&p.mediaId)mediaUrls.set(p.mediaId,p.previewUrl);messages.set(result.id,{id:result.id,client_message_id:id,direction:'in',text_content:p.text,media_id:p.mediaId,file_name:p.fileName,mime_type:p.mimeType,created_at:new Date().toISOString()});render();await sync()}catch(error){p.error=errorText(error.message);notice(error.message)}finally{busy=false;render()}}
+  async function send(p,id){if(busy)return;busy=true;p.error='';local.set(id,p);notice('');render();scrollToLatest();try{const result=await rpc('send',{clientMessageId:id,text:p.text,mediaId:p.mediaId,name:p.name,email:p.email,company:p.company,whatsapp:p.whatsapp,fileName:p.fileName,mimeType:p.mimeType,quotedMessageId:replyTo?.id});if(!sessionStarted)cursor=result.id;sessionStarted=true;active=true;local.delete(id);replyTo=null;updateReplyBar();if(p.previewUrl&&p.mediaId)mediaUrls.set(p.mediaId,p.previewUrl);messages.set(result.id,{id:result.id,client_message_id:id,direction:'in',text_content:p.text,media_id:p.mediaId,file_name:p.fileName,mime_type:p.mimeType,created_at:new Date().toISOString()});render();await sync()}catch(error){p.error=errorText(error.message);notice(error.message)}finally{busy=false;render()}}
 prechat.onsubmit=event=>{event.preventDefault();if(busy||active||local.size)return;for(const id of ['visitorName','initialMessage']){const input=$(id);input.setCustomValidity(input.value.trim()?'':t('请填写姓名、有效邮箱和消息'));if(!input.reportValidity())return}if(!prechat.reportValidity())return;send({text:$('initialMessage').value.trim(),name:$('visitorName').value.trim(),email:$('email').value.trim(),company:$('company').value.trim()||undefined,whatsapp:$('whatsapp').value.trim()||undefined},crypto.randomUUID())};
 for(const id of ['visitorName','initialMessage'])$(id).oninput=()=>$(id).setCustomValidity('');
   $('form').onsubmit=async event=>{
