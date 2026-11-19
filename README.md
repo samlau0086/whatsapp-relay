@@ -120,7 +120,7 @@ LiveChat 与 WhatsApp、Messenger 共用账号权限、统一收件箱、客户�
 - 后台 LiveChat 对话顶部的邮件图标可主动“发送会话记录”，弹窗显示访客和当前主邮箱，发送不会关闭或重新打开会话。管理员及拥有该渠道读取、发送权限的坐席可操作；无需配置会话收信邮箱。沿用渠道绑定的邮件 Provider，未绑定时使用工作区默认，绑定不可用时拒绝入队。合并时间线可在弹窗选择原访客，只导出该原会话的记录，不包含其他访客内容、内部备注或邮件气泡。成功入队后在时间线生成邮件记录，实际发送状态由现有 Worker 更新；入队不代表送达。网络失败可重试，浏览器允许 sessionStorage 时关闭弹窗或刷新后仍沿用原请求 ID，避免重复入队；清理存储、换标签页或换设备不保证复用该 ID。
 - 后台发送接口为 `POST /api/v1/conversations/:id/transcript`，请求包含 UUID `clientSendId` 和可选的 `targetConversationId`（必须为当前时间线中可访问的 Live Chat 成员，可以属于其他 channel），仅接受已登录用户。复用现有邮件表和 Worker，记录及发件配置均来自指定原访客；部署需更新工作台和 API 并重启 API。API 回归在 `services/api` 运行 `node --import tsx --test test/livechat-transcript.test.ts test/livechat.test.ts test/email-provider-routing.test.ts`；浏览器回归运行 `node scripts/test-livechat-transcript-browser.mjs`，使用模拟 API，不向真实邮箱发信。
 - 坐席和 AI 回复都进入持久出站队列，由 API Worker 发布到访客消息流；“已发送”表示已发布，不代表访客已读。访客发新消息会重新打开已关闭会话；LiveChat 没有 WhatsApp/Messenger 的 24 小时回复窗口限制。
-- 双向附件限定 PNG、JPEG、WebP、PDF 和纯文本，单文件不超过 10 MB。访客上传还检查文件签名；文件读取要求有效访客凭证及当前会话中的消息引用，不提供公开对象存储地址。未发送附件仍占对象存储空间，运维需监控并安排孤立对象清理；`delete_after` 标记本身不会删除对象。
+- 访客“添加附件”仅支持 PDF、STEP、STP、IGES、IGS、X_T、DWG、DXF 或 ZIP，扩展名不区分大小写，不再接受 TXT 等其他文件。独立“添加图片”仍支持 PNG、JPEG、WebP，拖放和粘贴也使用相同类型限制。单文件不超过 10 MB。访客上传检查图片、PDF 和 ZIP 的文件签名；CAD 文件按扩展名校验，不依赖浏览器 MIME，也不代表已解析或验证 CAD 内容。坐席媒体库及出站类型限制保持原规则。文件读取要求有效访客凭证及当前会话中的消息引用，不提供公开对象存储地址。未发送附件仍占对象存储空间，运维需监控并安排孤立对象清理；`delete_after` 标记本身不会删除对象。更新需重建并重启 API，访客刷新嵌入页面；无需数据库迁移。
 - 停用渠道立即阻止公开接入和新消息，重新启用后原凭证仍受有效期约束。归档需要二次确认，归档后不能通过设置界面恢复；保留原账号、历史客户、会话和审计记录，但停止嵌入访问及发送，已有待发消息由 Worker 标为失败。
 
 ### GTM / GA4 转化追踪

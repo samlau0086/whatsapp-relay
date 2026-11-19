@@ -46,7 +46,7 @@ export const livechatTranslations:Record<string,string[]>={
   "客服渠道暂不可用":["客服渠道暫不可用","Chat is currently unavailable","チャットは現在利用できません","Chat no disponible por ahora","Chat indisponível no momento"],
   "会话已过期，历史记录仍由客服保留，可开始新会话":["對話已到期，客服仍保留紀錄，可開始新對話","Chat expired. Support retains the history. You can start a new chat","有効期限が切れました。履歴は保存されています。新しいチャットを開始できます","El chat caducó. Soporte conserva el historial. Puedes iniciar otro chat","Conversa expirada. O suporte mantém o histórico. Inicie uma nova conversa"],
   "会话尚未开始或已过期":["對話尚未開始或已到期","Chat not started or expired","チャット未開始または期限切れ","Chat no iniciado o caducado","Conversa não iniciada ou expirada"],
-  "支持 PNG、JPEG、WebP、PDF 和纯文本文件":["支援 PNG、JPEG、WebP、PDF 與純文字檔案","Supported: PNG, JPEG, WebP, PDF and plain text","PNG、JPEG、WebP、PDF、テキストに対応","Se admiten PNG, JPEG, WebP, PDF y texto","Aceitos: PNG, JPEG, WebP, PDF e texto"],
+  "附件仅支持 PDF、STEP、STP、IGES、IGS、X_T、DWG、DXF 或 ZIP；图片请使用图片按钮":["附件僅支援 PDF、STEP、STP、IGES、IGS、X_T、DWG、DXF 或 ZIP；圖片請使用圖片按鈕","Attachments support PDF, STEP, STP, IGES, IGS, X_T, DWG, DXF or ZIP only. Use the image button for images.","添付は PDF、STEP、STP、IGES、IGS、X_T、DWG、DXF、ZIP のみ対応。画像には画像ボタンを使用してください","Solo se admiten PDF, STEP, STP, IGES, IGS, X_T, DWG, DXF o ZIP. Para imágenes, usa el botón de imagen.","Apenas PDF, STEP, STP, IGES, IGS, X_T, DWG, DXF ou ZIP. Para imagens, use o botão de imagem."],
   "连接中断，正在重试...":["連線中斷，正在重試...","Connection lost. Retrying...","接続が切れました。再接続中...","Conexión perdida. Reintentando...","Conexão perdida. Tentando novamente..."],
   "会话已过期":["對話已到期","Chat expired","有効期限切れ","Chat caducado","Conversa expirada"],
   "正在重新连接":["正在重新連線","Reconnecting","再接続中","Reconectando","Reconectando"],

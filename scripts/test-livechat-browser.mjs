@@ -280,10 +280,23 @@ try{
   }
   assert.equal(uploads.size,uploadCount,'无效文件不应上传');
   await page.evaluate(()=>{window.uploadPayloads=[];addEventListener('message',event=>{if(event.data?.namespace==='relaydesk-livechat'&&event.data.action==='upload')window.uploadPayloads.push({bytes:event.data.data.bytes instanceof ArrayBuffer,hasFile:'file' in event.data.data})})});
-  await frame.locator("#file").setInputFiles({name:"remove.txt",mimeType:"text/plain",buffer:Buffer.from("remove")});await frame.locator('#composerPreview').getByText("remove.txt",{exact:true}).waitFor();await frame.locator('#composerPreview').getByRole('button',{name:'移除附件'}).click();await frame.locator('#composerPreview').waitFor({state:'hidden'});
-  await frame.locator("#file").setInputFiles({name:"sample.txt",mimeType:"text/plain",buffer:Buffer.from("test")});await frame.locator('#composerPreview').getByText("sample.txt",{exact:true}).waitFor();
-  await frame.locator('#draft').fill('附件说明');await frame.locator('#send').click();await frame.locator('#composerPreview').waitFor({state:'hidden'});await frame.getByRole('button',{name:'sample.txt',exact:true}).waitFor();
-  const download=page.waitForEvent("download");await frame.getByRole("button",{name:"sample.txt",exact:true}).click();assert.equal((await download).suggestedFilename(),"sample.txt");
+  await frame.locator('#attach').click();
+  assert.equal(await frame.locator('#file').getAttribute('accept'),'.pdf,.step,.stp,.iges,.igs,.x_t,.dwg,.dxf,.zip');
+  for(const extension of ['PDF','STEP','STP','IGES','IGS','X_T','DWG','DXF','ZIP']){
+    const name=`model.${extension}`;
+    await frame.locator('#file').setInputFiles({name,mimeType:'application/octet-stream',buffer:Buffer.from('fixture')});
+    await frame.locator('#composerPreview').getByText(name,{exact:true}).waitFor();
+    await frame.locator('#composerPreview').getByRole('button',{name:'移除附件'}).click();
+  }
+  for(const name of ['note.txt','drawing.step.exe','image.png']){
+    await frame.locator('#file').setInputFiles({name,mimeType:name.endsWith('.png')?'image/png':'text/plain',buffer:testPng});
+    await frame.locator('#notice').filter({hasText:'附件仅支持 PDF'}).waitFor();
+    assert.equal(await frame.locator('#composerPreview').isVisible(),false);
+  }
+  assert.equal(uploads.size,uploadCount,'类型拒绝和附件预览不应上传');
+  await frame.locator("#file").setInputFiles({name:"sample.STP",mimeType:"",buffer:Buffer.from("test")});await frame.locator('#composerPreview').getByText("sample.STP",{exact:true}).waitFor();
+  await frame.locator('#draft').fill('附件说明');await frame.locator('#send').click();await frame.locator('#composerPreview').waitFor({state:'hidden'});await frame.getByRole('button',{name:'sample.STP',exact:true}).waitFor();
+  const download=page.waitForEvent("download");await frame.getByRole("button",{name:"sample.STP",exact:true}).click();assert.equal((await download).suggestedFilename(),"sample.STP");
   const png=testPng;
   const imageFileName='BelaroPrecision_工程卓越徽标.png';
   const imagePath=join(uploadFixtureDir,imageFileName);await writeFile(imagePath,png);
@@ -312,7 +325,7 @@ try{
   await frame.locator('#send').click();const sentImage=frame.locator('.attachment-image img').filter({visible:true});await sentImage.waitFor();await frame.waitForFunction(()=>document.querySelector('.attachment-image img')?.naturalWidth>0);assert.equal(await sentImage.getAttribute('alt'),imageFileName);await sentImage.click();await frame.locator('dialog.image-preview').waitFor();await page.screenshot({path:`${screenshots}/desktop-media-preview.png`});await frame.locator('dialog.image-preview').getByText('取消',{exact:true}).click();
   const uploadedImage=[...uploads.values()].find(file=>file.name===imageFileName);
   assert.equal(uploadedImage.mime,'image/png');assert.deepEqual(uploadedImage.bytes,png,'本地图片上传字节必须完全一致');
-  assert.deepEqual([...uploads.values()].find(file=>file.name==='sample.txt').bytes,Buffer.from('test'));
+  assert.deepEqual([...uploads.values()].find(file=>file.name==='sample.STP').bytes,Buffer.from('test'));
   assert.ok((await page.evaluate(()=>window.uploadPayloads)).every(payload=>payload.bytes&&!payload.hasFile),'跨域上传仅传递 ArrayBuffer，不传递 File');
   // 不可用图片只自动尝试一次，重绘与后续收信不得反复消耗下载额度。
   const failedMedia=new Map();
@@ -372,7 +385,8 @@ try{
     await frame.locator('#send').click();
     await frame.getByText(sentText,{exact:true}).waitFor();await waitForLatest();
     await frame.waitForFunction(()=>!document.querySelector('#send').disabled);
-    await frame.locator('#file').setInputFiles({name:'scroll-test.txt',mimeType:'text/plain',buffer:Buffer.from('scroll test')});
+    await frame.locator('#attach').click();
+    await frame.locator('#file').setInputFiles({name:'scroll-test.stp',mimeType:'application/octet-stream',buffer:Buffer.from('scroll test')});
     await scrollUp();await frame.locator('#send').click();
     await frame.waitForFunction(()=>!document.querySelector('#send').disabled);await waitForLatest();
     failNext=true;await frame.locator('#draft').fill(`失败重试滚动 ${viewport.width}`);await scrollUp();

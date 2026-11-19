@@ -7,6 +7,7 @@ import {config} from "./config.js";
 import {enqueueInboundAgentWork} from "./agent-engine.js";
 import {createWebhookEvent} from "./agent-hub.js";
 import {livechatLoader,livechatWidget} from "./livechat-widget.js";
+import {livechatAttachmentExtensions,livechatFileExtension,livechatFileMime} from "./livechat-files.js";
 import {isValidTimeZone} from "./order-number.js";
 import {queueLivechatTranscript} from "./livechat-transcript.js";
 import {analyticsSchema,recordLivechatLead,saveVisitorAnalytics} from "./livechat-analytics.js";
@@ -39,12 +40,19 @@ function embedOrigin(request:FastifyRequest):string|undefined{
   }
   return undefined;
 }
-export function allowedLivechatFile(mime:string,buffer:Buffer):boolean{
+export function allowedLivechatFile(mime:string,buffer:Buffer,name=""):boolean{
+  if(!buffer.length)return false;
+  const extension=livechatFileExtension(name);
+  if(livechatAttachmentExtensions.includes(extension)){
+    if(extension==="pdf")return buffer.toString("ascii",0,5)==="%PDF-";
+    if(extension==="zip")return ["504b0304","504b0506","504b0708"].includes(buffer.subarray(0,4).toString("hex"));
+    // CAD 格式按扩展名放行，不依赖浏览器 MIME；下载强制作为附件，不在浏览器执行。
+    return true;
+  }
   if(mime==="image/png")return buffer.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
   if(mime==="image/jpeg")return buffer[0]===255&&buffer[1]===216&&buffer[2]===255;
   if(mime==="image/webp")return buffer.toString("ascii",0,4)==="RIFF"&&buffer.toString("ascii",8,12)==="WEBP";
-  if(mime==="application/pdf")return buffer.toString("ascii",0,5)==="%PDF-";
-  return mime==="text/plain"&&!buffer.includes(0);
+  return false;
 }
 async function rate(bucket:string,limit:number,seconds=60){
     const result=await pool.query(`INSERT INTO livechat_rate_limits(bucket,window_start,hits) VALUES($1,to_timestamp(floor(extract(epoch from now())/$2)*$2),1)
@@ -246,10 +254,11 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
     const file=await request.file({limits:{fileSize:10*1024*1024,files:1}});
     if(!file)throw fail(400,"file_required");
     const buffer=await file.toBuffer();if(file.file.truncated)throw fail(413,"file_too_large");
-    if(!buffer.length||!allowedLivechatFile(file.mimetype,buffer))throw fail(415,"unsupported_attachment_type");
+    if(!allowedLivechatFile(file.mimetype,buffer,file.filename))throw fail(415,"unsupported_attachment_type");
+    const mime=livechatFileMime(file.filename,file.mimetype);
     const id=randomUUID(),key=`livechat/${v.id}/${id}`;
-    await s3.send(new PutObjectCommand({Bucket:config.S3_BUCKET,Key:key,Body:buffer,ContentType:file.mimetype}));
-    await pool.query(`INSERT INTO media(id,account_id,object_key,file_name,mime_type,byte_size,sha256,delete_after) VALUES($1,$2,$3,$4,$5,$6,$7,now()+interval '1 day')`,[id,c.account_id,key,file.filename.replace(/[\x00-\x1f/\\]/g,"_").slice(0,200),file.mimetype,buffer.length,createHash("sha256").update(buffer).digest("hex")]);
+    await s3.send(new PutObjectCommand({Bucket:config.S3_BUCKET,Key:key,Body:buffer,ContentType:mime}));
+    await pool.query(`INSERT INTO media(id,account_id,object_key,file_name,mime_type,byte_size,sha256,delete_after) VALUES($1,$2,$3,$4,$5,$6,$7,now()+interval '1 day')`,[id,c.account_id,key,file.filename.replace(/[\x00-\x1f/\\]/g,"_").slice(0,200),mime,buffer.length,createHash("sha256").update(buffer).digest("hex")]);
     return reply.code(201).send({id});
   });
   app.get("/livechat/:publicId/media/:mediaId",async(request,reply)=>{

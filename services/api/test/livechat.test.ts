@@ -23,8 +23,19 @@ test("LiveChat 凭证与来源必须精确匹配",()=>{
 
 test("LiveChat 附件限制验证文件签名而非只信任 MIME",()=>{
   assert.equal(allowedLivechatFile("image/png",Buffer.from([137,80,78,71,13,10,26,10])),true);
-  assert.equal(allowedLivechatFile("application/pdf",Buffer.from("%PDF-1.7")),true);
-  assert.equal(allowedLivechatFile("text/plain",Buffer.from("文字")),true);
+  assert.equal(allowedLivechatFile("application/octet-stream",Buffer.from("%PDF-1.7"),"drawing.PDF"),true);
+  assert.equal(allowedLivechatFile("text/plain",Buffer.from("文字"),"note.txt"),false);
+  for(const extension of ["STEP","STP","IGES","IGS","X_T","DWG","DXF"]){
+    for(const mime of ["","text/plain","application/octet-stream"]){
+      assert.equal(allowedLivechatFile(mime,Buffer.from("CAD data"),`drawing.${extension}`),true);
+    }
+    assert.equal(allowedLivechatFile("",Buffer.alloc(0),`drawing.${extension}`),false);
+  }
+  assert.equal(allowedLivechatFile("application/x-zip-compressed",Buffer.from([80,75,3,4]),"models.zip"),true);
+  assert.equal(allowedLivechatFile("application/zip",Buffer.from("not a zip"),"models.zip"),false);
+  for(const name of ["drawing.pdf","drawing.pdf.exe","drawing","note.docx","drawing.step.txt"]){
+    assert.equal(allowedLivechatFile("application/pdf",Buffer.from("not a pdf"),name),false);
+  }
   for(const mime of ["image/png","image/jpeg","image/webp","application/pdf","text/html","image/svg+xml","audio/ogg"])assert.equal(allowedLivechatFile(mime,Buffer.from("<script>alert(1)</script>")),false);
   assert.equal(allowedLivechatFile("text/plain",Buffer.from([0,1])),false);
 });
