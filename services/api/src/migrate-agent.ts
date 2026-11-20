@@ -40,7 +40,9 @@ async function migrateAgentSchemaOnce():Promise<void>{
     let sql="";
     for(const file of candidates){try{sql=await readFile(file,"utf8");break;}catch{}}
     if(!sql)throw new Error(`agent_schema_migration_missing:${migration}`);
-    await client.query(sql);
+    try{await client.query(sql);}catch(error){
+      throw Object.assign(new Error(`agent_schema_migration_failed:${migration}`,{cause:error}),{code:(error as {code?:unknown}).code});
+    }
   }
   }finally{
     try{await client.query("SELECT pg_advisory_unlock(774129703)");}finally{client.release();}

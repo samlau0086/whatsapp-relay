@@ -1,5 +1,13 @@
 # RelayDesk
 
+## 部署迁移兼容性与故障诊断
+
+启动时会重复执行渠道迁移。`089_conversation_email.sql` 与 `114_livechat_transcript_content_type.sql` 均允许 `livechat_transcript`，避免已有会话记录邮件导致重启时约束校验失败；不删除或改写已有邮件。迁移失败时 API／Worker 错误包含失败文件名、原始 SQLSTATE 和异常原因。
+
+生产部署每次启动失败及回滚前会输出服务状态、API／PostgreSQL 等服务日志和 API 容器健康状态，回滚失败会明确报告。数据库迁移不会自动回退；仍依赖 `whatsapp_accounts` 的旧版本不能用于回滚已升级为 `channel_accounts` 的数据库，不应手动改回表名或删除邮件。此修复需部署新提交；不会自动修复服务器上已经运行的旧镜像。
+
+回归：在 `services/api` 运行 `npm test`、`npm run build`。真实 PostgreSQL 回归需设置 `TRANSCRIPT_PG_BIN` 为本机 PostgreSQL bin 目录，运行 `node --import tsx --test test/transcript-migration.postgres.test.ts`；测试自行创建并清理独立临时数据库，不连接业务数据库，验证旧约束可复现故障、修复后连续迁移保留正文与记录、非法类型仍被拒绝。部署诊断测试以模拟 Docker 验证回滚前日志顺序与退出码；使用系统 Bash，也可通过 `DEPLOY_TEST_BASH` 指定可执行文件。
+
 ## LiveChat 会话记录邮件模板
 
 管理员在“系统设置 → LiveChat → 新增／编辑渠道 → 会话记录邮件模板”中独立配置邮件主题、正文、单条消息格式及客服部门，支持变量插入、固定测试数据预览和恢复默认。后台“发送会话记录”与访客“结束会话并发送记录”使用原访客所属渠道的同一模板，不使用合并后的其他渠道配置。无需修改已有网站嵌入代码。

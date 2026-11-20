@@ -346,15 +346,24 @@ jobs:
             previous=$(readlink -f "$root/current")
           fi
 
+          deployment_diagnostics() {
+            (
+              cd "$release"
+              WEB_PORT="$web_port" docker compose -p relaydesk ps --all || true
+              WEB_PORT="$web_port" docker compose -p relaydesk logs --no-color --tail=200 api postgres worker web gateway minio minio-init || true
+              api_id=$(WEB_PORT="$web_port" docker compose -p relaydesk ps --all --quiet api)
+              if [ -n "$api_id" ]; then
+                docker inspect --format '{{json .State}}' "$api_id" || true
+              fi
+            ) >&2 || true
+          }
+
           rollback() {
             status=$?
             trap - ERR
             if [ -f "$release/compose.yaml" ]; then
-              echo "Recent MinIO initialization logs:" >&2
-              (
-                cd "$release"
-                WEB_PORT="$web_port" docker compose -p relaydesk logs --no-color --tail=100 minio-init
-              ) >&2 || true
+              echo "Production stack diagnostics before rollback:" >&2
+              deployment_diagnostics
             fi
             if [ "$env_changed" -eq 1 ]; then
               if [ "$had_shared_env" -eq 1 ] && [ -f "$env_backup" ]; then
@@ -366,7 +375,10 @@ jobs:
             if [ -n "$previous" ] && [ -f "$previous/compose.yaml" ]; then
               echo "Deployment failed; restoring the previous release."
               cd "$previous"
-              WEB_PORT="$web_port" docker compose -p relaydesk up --detach --build --remove-orphans --wait --wait-timeout 180 || true
+              if ! WEB_PORT="$web_port" docker compose -p relaydesk up --detach --build --remove-orphans --wait --wait-timeout 180; then
+                echo "Rollback failed. Database migrations were not reversed; the previous release may be incompatible with the current schema." >&2
+                WEB_PORT="$web_port" docker compose -p relaydesk logs --no-color --tail=200 api postgres >&2 || true
+              fi
             fi
             exit "$status"
           }
@@ -398,7 +410,7 @@ jobs:
               && WEB_PORT="$web_port" docker compose -p relaydesk up --detach --build --remove-orphans api worker web gateway; then
               break
             fi
-            WEB_PORT="$web_port" docker compose -p relaydesk logs --no-color --tail=100 minio minio-init || true
+            deployment_diagnostics
             if [ "$attempt" -eq 5 ]; then
               echo "Unable to build and start the production stack after $attempt attempts." >&2
               false

@@ -65,7 +65,8 @@ ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS mailbox_id uuid REFERENCES a
 ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS in_reply_to text;
 ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS references_header text;
 ALTER TABLE email_messages DROP CONSTRAINT IF EXISTS email_messages_content_type_check;
-ALTER TABLE email_messages ADD CONSTRAINT email_messages_content_type_check CHECK(content_type IN ('text','order_text','order_image','order_pdf','product_cards'));
+-- 启动会重复执行本迁移，不能收窄后续迁移已允许的邮件类型。
+ALTER TABLE email_messages ADD CONSTRAINT email_messages_content_type_check CHECK(content_type IN ('text','order_text','order_image','order_pdf','product_cards','livechat_transcript'));
 
 -- Preserve existing order/product email history in the shared conversation timeline.
 INSERT INTO messages(conversation_id,account_id,sender_user_id,client_message_id,direction,kind,text_content,status,occurred_at)
