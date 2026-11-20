@@ -464,6 +464,31 @@ try{
   await endFrame.getByText('Chat ended. Your transcript is queued for email delivery.',{exact:true}).waitFor();
   assert.equal(endRequests.at(-1).clientRequestId,retryEndId);assert.equal(endRequests.at(-1).sendTranscript,true);assert.equal(transcripts.size,1);
   assert.equal(await endFrame.locator('#form').isVisible(),false);assert.equal(await endFrame.locator('#prechat').isVisible(),false);
+  const endedViewport=other.viewportSize();
+  for(const viewport of [endedViewport,{width:390,height:844},{width:320,height:568}]){
+    await other.setViewportSize(viewport);
+    await endFrame.waitForFunction(()=>{
+      const button=document.querySelector('#restart'),rect=button.getBoundingClientRect();
+      return rect.width>0&&rect.right<=innerWidth&&rect.bottom<=innerHeight;
+    });
+    const restartLayout=await endFrame.locator('#restart').evaluate(button=>{
+      const rect=button.getBoundingClientRect(),style=getComputedStyle(button),notice=document.querySelector('#notice').getBoundingClientRect(),footer=document.querySelector('#footer').getBoundingClientRect();
+      return {height:rect.height,left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom,background:style.backgroundColor,color:style.color,border:style.borderTopWidth,radius:style.borderRadius,noticeBottom:notice.bottom,footerTop:footer.top,width:innerWidth,overflow:document.documentElement.scrollWidth>innerWidth};
+    });
+    assert.ok(restartLayout.height>=44,'新会话按钮有足够的点击高度');
+    assert.equal(restartLayout.background,'rgb(20, 109, 115)','新会话按钮使用渠道主题色实底');
+    assert.equal(restartLayout.color,'rgb(255, 255, 255)');
+    assert.equal(restartLayout.border,'1px');assert.equal(restartLayout.radius,'6px');
+    assert.ok(restartLayout.left>=12&&restartLayout.right<=restartLayout.width-12,'按钮两侧留白');
+    assert.ok(restartLayout.top>=restartLayout.noticeBottom+12&&restartLayout.bottom<=restartLayout.footerTop,'按钮不与状态提示或页脚重叠');
+    assert.equal(restartLayout.overflow,false);
+    await endFrame.getByRole('button',{name:'Start a new chat',exact:true}).focus();
+    await other.keyboard.press('Enter');await endFrame.locator('#confirmAction').waitFor({state:'visible'});
+    await other.keyboard.press('Escape');await endFrame.locator('#confirmAction').waitFor({state:'detached'});
+    assert.equal(await endFrame.locator('#form').isVisible(),false,'取消重开后保持结束状态');
+    await other.screenshot({path:`${screenshots}/restart-button-${viewport.width}.png`});
+  }
+  await other.setViewportSize(endedViewport);
   await other.reload();endFrame=await frameFor(other);await openChat(endFrame);
   await endFrame.getByText('Still able to send',{exact:true}).waitFor();
   assert.equal(await endFrame.locator('#form').isVisible(),false);assert.equal(await endFrame.locator('#prechat').isVisible(),false);

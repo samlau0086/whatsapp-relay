@@ -26,6 +26,8 @@ Client ID 和 Client Secret 从 Google Cloud 的 **Google Auth Platform → Clie
 
 ## LiveChat 访客会话失效处理
 
+会话结束或凭证过期后，“开始新会话”（Start a new chat）以渠道主题色的实底按钮显示，提供独立留白、至少 44px 点击高度及键盘焦点样式；点击后仍需确认，原有会话重开与历史保留规则不变。浏览器回归 `node scripts/test-livechat-browser.mjs`（先在 `services/api` 运行 `npm run build`）覆盖桌面、390px 和 320px 窄屏的按钮布局、键盘确认与取消，以及原有重开流程。
+
 LiveChat 首次访问且访客尚未明确开启聊天时不会请求历史消息；首条消息成功发送后才开始 `/livechat/:id/messages` 轮询。后续访问会复用已开启的访客身份并继续轮询。访客凭证过期或被清理后，嵌入窗口会停止轮询并提示访客开始新会话，避免宿主网站控制台持续出现 `401 Unauthorized`。点击“开始新会话”后会清理本地会话状态；再次发送首条消息后恢复轮询。
 
 ## UI 标准与组件验收
