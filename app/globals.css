@@ -1217,6 +1217,11 @@ button { color:inherit; }
 .email-html-frame{display:block;width:100%;border:0;background:#fff;min-height:120px}
 .channel-badge.livechat{color:#176c76;background:#e0f2f1;border-color:#a7d8d4}
 .livechat-settings{min-width:0}
+.rd-livechat-hours{min-width:0;display:grid;gap:var(--rd-space-3);padding:var(--rd-space-4) 0;border-top:1px solid var(--rd-border)}
+.rd-livechat-hours h3{margin:0;font-size:16px;color:var(--rd-text)}
+.rd-livechat-hours-toggle{display:flex;align-items:center;gap:var(--rd-space-2)}
+.rd-livechat-hours-times{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--rd-space-3);min-width:0}
+@media(max-width:480px){.rd-livechat-hours-times{grid-template-columns:minmax(0,1fr)}}
 .rd-livechat-starter-editor{min-width:0;display:grid;gap:var(--rd-space-3);padding:var(--rd-space-4) 0;border-top:1px solid var(--rd-border);border-bottom:1px solid var(--rd-border)}
 .rd-livechat-starter-editor>header{display:flex;align-items:center;justify-content:space-between;gap:var(--rd-space-2);flex-wrap:wrap}
 .rd-livechat-starter-editor>header h3{margin:0;font-size:16px;color:var(--rd-text)}

@@ -1,5 +1,13 @@
 # RelayDesk
 
+## LiveChat 时区与工作时段
+
+在“系统设置 → LiveChat → 新增／编辑渠道 → 工作时段”设置 IANA 工作时区及每日开始、结束时间，并勾选“启用工作时段”。默认关闭，旧渠道保持全天服务。时段包含开始、不包含结束；支持跨午夜（例如 22:00 至次日 06:00），启用时开始与结束不能相同。时间按所选时区判断并遵循夏令时，不使用访客设备的本地时区。
+
+非工作时间，访客对话窗口显示“当前不在工作时间（工作时间：09:00 - 18:00 Asia/Shanghai），请留言，我们将尽快通过您提供的联系方式与您联系。”，文案随渠道界面语言切换。姓名、有效邮箱及留言仍按原规则提交，不拦截访客消息、不改变 AI 或邮件发送策略。打开的窗口每 15 秒重新判断工作状态，以公开配置中的服务器时间为基准；后台修改配置后需刷新宿主网页读取新设置。
+
+部署需同步更新工作台、API 和 Worker 并重启，启动迁移 `117_livechat_working_hours.sql` 增加配置字段。管理 API 使用 `workingHours: {enabled, timeZone, start, end}`（时间格式 `HH:mm`）；旧客户端不提交则保留已有设置。无需修改网站嵌入代码。验证：API 的 `npm test`、`npm run build`，根目录 `npm run lint`、`npm test`、`node scripts/test-livechat-settings-browser.mjs`、`node scripts/test-livechat-browser.mjs`；浏览器测试仅使用模拟数据。
+
 ## 部署迁移兼容性与故障诊断
 
 启动时会重复执行渠道迁移。`089_conversation_email.sql` 与 `114_livechat_transcript_content_type.sql` 均允许 `livechat_transcript`，避免已有会话记录邮件导致重启时约束校验失败；不删除或改写已有邮件。迁移失败时 API／Worker 错误包含失败文件名、原始 SQLSTATE 和异常原因。

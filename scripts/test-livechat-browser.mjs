@@ -18,6 +18,7 @@ const sessions=new Map(),uploads=new Map(),origins=new Set(),errors=[],profiles=
 const transcripts=new Map(),closedChats=new Map(),endRequests=[],remoteEnds=new Map();
 const presenceReports=[];
 let historyRequests=0;
+let widgetWorkingHours=null,widgetServerTime;
 const analyticsReports=[];
 const adsReports=[];
 let endError='',dropEndResponse=false;
@@ -35,7 +36,7 @@ const api=await listen(async(req,res)=>{
   if(url.pathname==="/livechat/embed.js"){res.writeHead(200,{"content-type":"application/javascript"});res.end(livechatLoader);return}
   if(url.pathname.endsWith("/widget")){res.writeHead(200,{"content-type":"text/html","content-security-policy":`default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src blob: https:; frame-ancestors ${[...origins].join(" ")}`});res.end(livechatWidget);return}
   if(!origins.has(req.headers.origin)){json(403,{error:"livechat_origin_denied"});return}
-  if(url.pathname.endsWith("/config")){json(200,{name:widgetName,iconUrl:widgetIcon,welcome:widgetLanguage!==undefined?"":"您好，欢迎联系我们。",starterMessages:url.pathname.includes(secondChannel)?[]:starterMessages,color:"#146d73",position:url.pathname.includes(secondChannel)?"left":"right",language:widgetLanguage===null?undefined:widgetLanguage||(url.pathname.includes(secondChannel)?"en":"zh-CN"),ga4MeasurementId:"G-TEST123"});return}
+  if(url.pathname.endsWith("/config")){json(200,{workingHours:widgetWorkingHours,serverTime:widgetServerTime,name:widgetName,iconUrl:widgetIcon,welcome:widgetLanguage!==undefined?"":"您好，欢迎联系我们。",starterMessages:url.pathname.includes(secondChannel)?[]:starterMessages,color:"#146d73",position:url.pathname.includes(secondChannel)?"left":"right",language:widgetLanguage===null?undefined:widgetLanguage||(url.pathname.includes(secondChannel)?"en":"zh-CN"),ga4MeasurementId:"G-TEST123"});return}
   const secret=req.headers.authorization,sessionKey=`${url.pathname.split('/')[2]}:${req.headers.origin}:${secret}`;
   if(!/^Bearer [a-f0-9]{64}$/.test(secret||"")){json(401,{error:"invalid_visitor_credential"});return}
   if(expiredSessions.has(sessionKey)){json(401,{error:"visitor_not_found_or_expired"});return}
@@ -165,6 +166,40 @@ const assertReplyLayout=async frame=>{
 };
 let debugPage;
 try{
+  for(const viewport of [{width:1280,height:850},{width:390,height:844},{width:320,height:568}]){
+    widgetLanguage=undefined;
+    const hoursContext=await browser.newContext({viewport,timezoneId:'America/Los_Angeles'}),hoursPage=await hoursContext.newPage();
+    hoursPage.on('pageerror',error=>errors.push(error.message));
+    await hoursPage.clock.install({time:new Date('2030-01-01T00:00:00Z')});
+    widgetWorkingHours={enabled:true,timeZone:'Asia/Shanghai',start:'09:00',end:'18:00'};
+    widgetServerTime=Date.parse('2026-11-20T00:59:50Z');
+    await hoursPage.goto(hosts[0].url);let hoursFrame=await frameFor(hoursPage);await openChat(hoursFrame);
+    const notice=hoursFrame.locator('.rd-livechat-working-notice');
+    await notice.waitFor({state:'visible'});
+    assert.match(await notice.innerText(),/当前不在工作时间.*09:00 - 18:00 Asia\/Shanghai.*请留言/);
+    assert.equal(await notice.evaluate(el=>el.scrollWidth>el.clientWidth),false);
+    await hoursPage.screenshot({path:join(screenshots,`working-hours-${viewport.width}.png`)});
+    await hoursPage.clock.runFor(16000);await notice.waitFor({state:'hidden'});
+    widgetServerTime=Date.parse('2026-11-20T10:00:00Z');
+    await hoursPage.reload();hoursFrame=await frameFor(hoursPage);await openChat(hoursFrame);
+    await hoursFrame.locator('.rd-livechat-working-notice').waitFor({state:'visible'});
+    await hoursFrame.locator('#visitorName').fill('工作时间测试');await hoursFrame.locator('#email').fill('hours@example.com');await hoursFrame.locator('#initialMessage').fill('非工作时间留言');
+    await hoursFrame.locator('#start').click();await hoursFrame.locator('#messages').getByText('非工作时间留言',{exact:true}).waitFor();
+    assert.equal(await hoursFrame.locator('.rd-livechat-working-notice').isVisible(),true);
+    widgetWorkingHours={...widgetWorkingHours,enabled:false};
+    await hoursPage.reload();hoursFrame=await frameFor(hoursPage);await openChat(hoursFrame);
+    assert.equal(await hoursFrame.locator('.rd-livechat-working-notice').isVisible(),false);
+    widgetWorkingHours={enabled:true,timeZone:'UTC',start:'22:00',end:'06:00'};widgetServerTime=Date.parse('2026-11-20T23:00:00Z');
+    await hoursPage.reload();hoursFrame=await frameFor(hoursPage);await openChat(hoursFrame);
+    assert.equal(await hoursFrame.locator('.rd-livechat-working-notice').isVisible(),false);
+    widgetLanguage='en';widgetServerTime=Date.parse('2026-11-20T12:00:00Z');
+    await hoursPage.reload();hoursFrame=await frameFor(hoursPage);await openChat(hoursFrame);
+    await hoursFrame.locator('.rd-livechat-working-notice').waitFor({state:'visible'});
+    assert.match(await hoursFrame.locator('.rd-livechat-working-notice').innerText(),/outside business hours.*22:00 - 06:00 UTC/);
+    await hoursContext.close();
+  }
+  widgetWorkingHours=null;widgetServerTime=undefined;widgetLanguage=undefined;
+  sessions.clear();profiles.length=0;analyticsReports.length=0;presenceReports.length=0;historyRequests=0;
   const context=await browser.newContext({viewport:{width:1280,height:850}}),page=await context.newPage();
   await page.addInitScript(()=>{
     if(window!==window.top)return;
@@ -204,6 +239,7 @@ try{
   await page.goto(hosts[0].url+'/contact');frame=await frameFor(page);await frame.locator('#launcher').waitFor({state:'visible'});
   assert.equal(await frame.locator('#panel').isVisible(),false,'跨页面保持收起');
   await openChat(frame);
+  await page.waitForFunction(()=>Object.keys(localStorage).some(k=>k.endsWith(':expanded')&&localStorage.getItem(k)==='1'));
   await page.reload();frame=await frameFor(page);await frame.locator('#panel').waitFor({state:'visible'});
   await frame.locator('#start').click();assert.equal(sessions.size,0);
   assert.equal(await frame.locator('#visitorName').getAttribute('required'),'');
@@ -628,6 +664,6 @@ try{
   widgetIcon='';widgetName='<Brand>';await page.reload();brandFrame=await frameFor(page);
   assert.equal(await brandFrame.locator('#avatar').textContent(),'<');assert.equal(await brandFrame.locator('#avatar').locator('*').count(),0);
   widgetName='';await page.reload();brandFrame=await frameFor(page);assert.equal(await brandFrame.locator('#avatar').textContent(),'?');
-  assert.deepEqual(errors,[]);console.log(`已通过：双站点及多渠道隔离、重复嵌入、样式隔离、匿名消息、坐席回复、刷新恢复、失败重试、确认丢失恢复、未读、多页历史与断线补齐、附件预览上传下载、图片内联预览、表情发送、六种界面语言及桌面/移动布局、独立结束会话、结束并发送记录、邮件错误隔离、确认丢失后的幂等重试及结束后刷新恢复。截图：${screenshots}`);
+  assert.deepEqual(errors,[]);console.log(`已通过：工作时段提示、服务器时钟与渠道时区、跨时段自动切换、非工作时间留言、双站点及多渠道隔离、重复嵌入、样式隔离、匿名消息、坐席回复、刷新恢复、失败重试、确认丢失恢复、未读、多页历史与断线补齐、附件预览上传下载、图片内联预览、表情发送、六种界面语言及桌面/移动布局、独立结束会话、结束并发送记录、邮件错误隔离、确认丢失后的幂等重试及结束后刷新恢复。截图：${screenshots}`);
 }catch(error){console.error({errors,sessions:[...sessions.values()]});if(debugPage){const frame=debugPage.frames().find(f=>f.url().endsWith("/widget"));console.error(await frame?.locator("body").innerText());await debugPage.screenshot({path:`${screenshots}/failure.png`})}throw error}
 finally{await browser.close();await rm(uploadFixtureDir,{recursive:true,force:true});await Promise.all([api,...hosts].map(({server})=>new Promise(resolve=>server.close(resolve))))}

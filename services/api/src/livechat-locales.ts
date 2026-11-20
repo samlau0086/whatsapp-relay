@@ -1,6 +1,7 @@
 // 顺序与语言列表一致；简体中文直接使用原文。
 export const livechatLanguages=["zh-CN","zh-TW","en","ja","es","pt"] as const;
 export const livechatTranslations:Record<string,string[]>={
+  "当前不在工作时间（工作时间：{start} - {end} {timeZone}），请留言，我们将尽快通过您提供的联系方式与您联系。":["目前不在工作時間（工作時間：{start} - {end} {timeZone}），請留言，我們將盡快透過您提供的聯絡方式與您聯絡。","We are currently outside business hours (business hours: {start} - {end} {timeZone}). Please leave a message. We will contact you as soon as possible using the contact details you provide.","現在は営業時間外です（営業時間：{start} - {end} {timeZone}）。メッセージをお残しください。ご提供いただいた連絡先へできるだけ早くご連絡いたします。","Estamos fuera del horario de atención (horario: {start} - {end} {timeZone}). Deja un mensaje y te contactaremos lo antes posible mediante los datos que nos facilites.","Estamos fora do horário de atendimento (horário: {start} - {end} {timeZone}). Deixe uma mensagem. Entraremos em contato assim que possível pelos dados fornecidos."],
   "图片加载失败，点击重试":["圖片載入失敗，點擊重試","Image unavailable. Click to retry","画像を読み込めません。クリックして再試行","No se pudo cargar la imagen. Haz clic para reintentar","Falha ao carregar imagem. Clique para tentar novamente"],
   "姓名（必填）":["姓名（必填）","Name (required)","お名前（必須）","Nombre (obligatorio)","Nome (obrigatório)"],
   "邮箱（必填）":["電子郵件（必填）","Email (required)","メール（必須）","Correo (obligatorio)","E-mail (obrigatório)"],

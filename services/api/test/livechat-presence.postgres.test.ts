@@ -28,7 +28,7 @@ test("PostgreSQL：多标签状态、乱序关闭、超时离线及当前页面�
     await client.connect();
     await client.query(`CREATE TABLE channel_accounts(id uuid PRIMARY KEY,display_name text);
       CREATE TABLE livechat_channels(account_id uuid PRIMARY KEY,public_id uuid,enabled boolean,archived_at timestamptz,allowed_origins text[],
-        icon_url text,welcome_message text,theme_color text,position text,language text,ga4_measurement_id text);
+        icon_url text,welcome_message text,starter_messages jsonb,working_hours jsonb,theme_color text,position text,language text,ga4_measurement_id text);
       CREATE TABLE livechat_visitors(id uuid PRIMARY KEY,account_id uuid,contact_id uuid,credential_hash text,embed_origin text,expires_at timestamptz);
       CREATE TABLE livechat_rate_limits(bucket text,window_start timestamptz,hits int,PRIMARY KEY(bucket,window_start));`);
     const migration=await readFile(new URL("../../../infra/postgres/migrations/105_livechat_presence.sql",import.meta.url),"utf8");
