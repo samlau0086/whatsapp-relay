@@ -212,15 +212,18 @@ test("LiveChat 结束会话正确入队邮件、完整记录和事务内去重",
 });
 
 test("LiveChat 结束请求迁移已加入启动序列并约束 transcript 邮件",async()=>{
-  const [migration,migrator]=await Promise.all([
+  const [migration,migrator,transcriptMigration]=await Promise.all([
     readFile(new URL("../../../infra/postgres/migrations/101_livechat_end_requests.sql",import.meta.url),"utf8"),
     readFile(new URL("../src/migrate-agent.ts",import.meta.url),"utf8"),
+    readFile(new URL("../../../infra/postgres/migrations/114_livechat_transcript_content_type.sql",import.meta.url),"utf8"),
   ]);
   assert.match(migration,/request_id uuid PRIMARY KEY/);
   assert.match(migration,/send_transcript boolean NOT NULL/);
   assert.match(migration,/CHECK \(NOT send_transcript OR email_id IS NOT NULL\)/);
   assert.match(migration,/email_id uuid REFERENCES email_messages\(id\) ON DELETE RESTRICT/);
   assert.match(migrator,/101_livechat_end_requests\.sql/);
+  assert.match(migrator,/114_livechat_transcript_content_type\.sql/);
+  assert.match(transcriptMigration,/livechat_transcript/);
 });
 
 test("LiveChat 入站幂等、跨渠道凭证和事务保护",async t=>{
