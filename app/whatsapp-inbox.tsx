@@ -38,7 +38,7 @@ import { TaskCenter } from "./task-center";
 import {StatusCenter} from "./status-center";
 import {LANGUAGES,LanguageFlagIcon,LanguagePicker,languageName,languageShortCode} from "./language-picker";
 import {countryLabel,CountryPicker,RegionPicker} from "./country-picker";
-import { conversationCountsPath, conversationListPath, conversationSummaryPath, type ConversationAgentMode, type ConversationCustomerStage, type ConversationDateFilter, type ConversationFollowupFilter, type ConversationLatestOrderStatus, type ConversationListFilter } from "./conversation-date-filter";
+import { conversationCountsPath, conversationListPath, conversationSummaryPath, matchesConversationDateRange, type ConversationAgentMode, type ConversationCustomerStage, type ConversationDateFilter, type ConversationFollowupFilter, type ConversationLatestOrderStatus, type ConversationListFilter } from "./conversation-date-filter";
 import { QUICK_REPLY_VARIABLES, quickReplyCountryName, quickReplyVariableNames, renderQuickReplyVariables, type QuickReplyVariable, type QuickReplyVariableValues } from "./quick-reply-variables";
 import { confirmAction, ConfirmationHost, promptAction, PromptHost } from "./confirmation-ui";
 import {formatMessageTime,formatMessageTimeTitle} from "./message-time";
@@ -488,7 +488,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const translationLoadSequence=useRef(0);
   const previousTranslationTargetLanguageRef=useRef<string|null>(null);
   const workspaceLoadSequence=useRef(0);
-  const dateFilterRef=useRef<ConversationDateFilter>("all");
+  const dateFilterRef=useRef<ConversationDateFilter>(dateFilter);
   const notifiedReminders=useRef(new Set<string>());
   const notificationBaseline=useRef<Map<string,{lastMessageAt:string|null;unread:number}>>(new Map());
   const notificationBaselineReady=useRef(false);
@@ -509,7 +509,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     return data;
   },[apiToken]);
   const visitorPresence=useLivechatPresence([...conversations.filter(item=>initialConversationMode(item)==="livechat").map(item=>item.contactId),...(selectedConversationRef.current&&initialConversationMode(selectedConversationRef.current)==="livechat"?[selectedConversationRef.current.contactId]:[])],view==="inbox"&&Boolean(apiToken),requestPresence);
-  const visible=useMemo(()=>conversations.map(item=>initialConversationMode(item)==="livechat"?{...item,visitorPresence:visitorPresence[item.contactId]}:item),[conversations,visitorPresence]);
+  const visible=useMemo(()=>conversations.filter(item=>matchesConversationDateRange(item.lastMessageAt,dateFilter,new Date(clock))).map(item=>initialConversationMode(item)==="livechat"?{...item,visitorPresence:visitorPresence[item.contactId]}:item),[conversations,visitorPresence,dateFilter,clock]);
   const effectiveActiveId=activeId||visible[0]?.id||"";
   const selectedActive=visible.find(item=>item.id===effectiveActiveId)??(selectedConversationRef.current?.id===effectiveActiveId?selectedConversationRef.current:null);
   const active=useMemo(()=>selectedActive&&initialConversationMode(selectedActive)==="livechat"?{...selectedActive,visitorPresence:visitorPresence[selectedActive.contactId]}:selectedActive,[selectedActive,visitorPresence]);
@@ -712,6 +712,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
     if(result.response.status===401)return;
     if(result.response.ok){
       const body=await result.response.json() as ConversationCounts&{dueReminders?:Array<{id:string;display_name:string;remind_at:string}>};
+      if(dateFilterRef.current!==dateFilter)return;
       setConversationCounts(body);
       const due=body.dueReminders?.find(item=>!notifiedReminders.current.has(item.id));
       if(due){notifiedReminders.current.add(due.id);setToast(`${due.display_name} 的任务已到期`);}
@@ -733,7 +734,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       if(conversationResult.response.status===401){logout();return;}
       if(!conversationResult.response.ok)throw new Error(`会话 API 响应异常（${conversationResult.response.status}）`);
       const conversationBody=await conversationResult.response.json() as {data:Array<Record<string,unknown>>;nextCursor:string|null;total:null};
-      if(sequence!==workspaceLoadSequence.current)return;
+      if(sequence!==workspaceLoadSequence.current||dateFilterRef.current!==dateFilter)return;
       const mapped=conversationBody.data.map((item,index)=>mapConversation(item,index));
       if(options.notify&&notificationBaselineReady.current){
         for(const conversation of mapped){
@@ -749,7 +750,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
       setConversations(current=>{
         if(append){const ids=new Set(current.map(item=>item.id));return[...current,...mapped.filter(item=>!ids.has(item.id))];}
         if(!quiet)return mapped;
-        const firstIds=new Set(mapped.map(item=>item.id)),merged=[...mapped,...current.filter(item=>!firstIds.has(item.id))];
+        const firstIds=new Set(mapped.map(item=>item.id)),merged=[...mapped,...current.filter(item=>!firstIds.has(item.id)&&matchesConversationDateRange(item.lastMessageAt,dateFilter))];
         return merged.sort((a,b)=>conversationFilterKey(filter)==="reminders"?new Date(a.remindAt??8640000000000000).getTime()-new Date(b.remindAt??8640000000000000).getTime():(new Date(b.lastMessageAt??0).getTime()-new Date(a.lastMessageAt??0).getTime())||b.id.localeCompare(a.id));
       });
       setActiveId(previous=>{
@@ -937,6 +938,8 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
         updates.set(id,body);
       }));
     }
+    // 切换时间筛选后，旧实时请求不得把其他日期的会话重新加入列表。
+    if(dateFilterRef.current!==dateFilter)return;
     for(const [id,update] of updates){
       if(!update.matches||!update.data){notificationBaseline.current.delete(id);continue;}
       const mapped=mapConversation(update.data,0);

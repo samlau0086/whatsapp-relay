@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {readFile} from "node:fs/promises";
 import test from "node:test";
-import {CONVERSATION_DATE_FILTERS,conversationCountsPath,conversationDateRange,conversationListPath,conversationSummaryPath} from "../../../app/conversation-date-filter.js";
+import {CONVERSATION_DATE_FILTERS,conversationCountsPath,conversationDateRange,conversationListPath,conversationSummaryPath,matchesConversationDateRange} from "../../../app/conversation-date-filter.js";
 import {isPostgresUuid} from "../src/conversation-cursor.js";
 
 test("conversation date filters expose the requested tabs and default all range",()=>{
@@ -24,6 +24,28 @@ test("conversation date ranges cross month and year boundaries using calendar ar
   assert.deepEqual(conversationDateRange("day7",new Date(2026,0,3,9)),{from:new Date(2025,11,27).toISOString(),before:new Date(2025,11,28).toISOString()});
   assert.deepEqual(conversationDateRange("day15plus",new Date(2026,0,3,9)),{before:new Date(2025,11,20).toISOString()});
   assert.deepEqual(conversationDateRange("yesterday",new Date(2026,2,1,9)),{from:new Date(2026,1,28).toISOString(),before:new Date(2026,2,1).toISOString()});
+});
+
+test("LiveChat 与其他渠道按最后消息时间使用相同日期筛选边界",()=>{
+  const now=new Date(2026,10,20,18);
+  const items=["livechat","whatsapp","messenger","email"].flatMap(platform=>[
+    {platform,lastMessageAt:new Date(2026,10,20,0).toISOString(),day:"today"},
+    {platform,lastMessageAt:new Date(2026,10,19,23,59,59,999).toISOString(),day:"yesterday"},
+    {platform,lastMessageAt:new Date(2026,10,17,12).toISOString(),day:"day3"},
+    {platform,lastMessageAt:new Date(2026,10,15,12).toISOString(),day:"day5"},
+    {platform,lastMessageAt:new Date(2026,10,13,12).toISOString(),day:"day7"},
+    {platform,lastMessageAt:new Date(2026,10,5,23,59,59,999).toISOString(),day:"day15plus"},
+  ]);
+  for(const {value} of CONVERSATION_DATE_FILTERS){
+    const actual=items.filter(item=>matchesConversationDateRange(item.lastMessageAt,value,now));
+    assert.deepEqual(actual,items.filter(item=>["all","unreplied","sendFailed"].includes(value)||item.day===value));
+  }
+  assert.equal(matchesConversationDateRange(new Date(2026,10,21).toISOString(),"today",now),false);
+  assert.equal(matchesConversationDateRange(new Date(2026,10,6).toISOString(),"day15plus",now),false);
+  for(const invalid of [null,"","invalid"]){
+    assert.equal(matchesConversationDateRange(invalid,"today",now),false);
+    assert.equal(matchesConversationDateRange(invalid,"all",now),true);
+  }
 });
 
 test("conversation list path only adds date parameters for an active date filter",()=>{

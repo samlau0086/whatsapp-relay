@@ -33,6 +33,13 @@ export function conversationDateRange(filter:ConversationDateFilter,now=new Date
   return filter==="day15plus"?{before:before.toISOString()}:{from:from.toISOString(),before:before.toISOString()};
 }
 
+export function matchesConversationDateRange(lastMessageAt:string|null,filter:ConversationDateFilter,now=new Date()):boolean{
+  const range=conversationDateRange(filter,now);
+  if(!range.from&&!range.before)return true;
+  const timestamp=lastMessageAt?Date.parse(lastMessageAt):NaN;
+  return Number.isFinite(timestamp)&&(!range.from||timestamp>=Date.parse(range.from))&&(!range.before||timestamp<Date.parse(range.before));
+}
+
 export function conversationListPath(filter:ConversationDateFilter,now=new Date(),options:ConversationListOptions={}):string{
   const params=new URLSearchParams({limit:String(options.limit??40)});
   if(options.filter)params.set("filter",options.filter);
