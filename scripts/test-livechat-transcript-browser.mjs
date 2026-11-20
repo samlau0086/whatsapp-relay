@@ -14,8 +14,9 @@ const entry=`import React,{useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {LivechatTranscriptDialog} from './app/livechat-transcript-dialog';
 import {LivechatSessionBoundary} from './app/livechat-session-boundary';
+import {LivechatEndDialog} from './app/livechat-end-dialog';
 const noop=()=>{},members=[{id:'sean',contactId:'contact-sean',name:'Sean'},{id:'sam',contactId:'contact-sam',name:'Sam'},{id:'empty',contactId:'contact-empty',name:'无邮箱访客'}];
-function App(){const [open,setOpen]=useState(true),[segment,setSegment]=useState(),[toast,setToast]=useState('');return <main><button onClick={()=>{setSegment(undefined);setOpen(true)}}>打开记录弹窗</button><output>{toast}</output>{['end-1','end-2'].map(id=><LivechatSessionBoundary key={id} id={id} onSend={()=>{setSegment(id);setOpen(true)}}/>)}{open&&<LivechatTranscriptDialog key={segment||'current'} conversationId="root" accountId="channel" members={members} initialRecipientId={segment?'sean':'sam'} endRequestId={segment} token="test" onToken={noop} onClose={()=>setOpen(false)} onSent={setToast}/>}</main>}
+function App(){const [open,setOpen]=useState(true),[endOpen,setEndOpen]=useState(false),[segment,setSegment]=useState(),[toast,setToast]=useState('');return <main><button onClick={()=>{setOpen(false);setEndOpen(true)}}>结束会话</button>{endOpen&&<LivechatEndDialog conversationId="root" members={members} initialRecipientId="sam" token="test" onToken={noop} onClose={()=>setEndOpen(false)} onEnded={()=>setToast('会话已结束')}/>}<button onClick={()=>{setSegment(undefined);setOpen(true)}}>打开记录弹窗</button><output>{toast}</output>{['end-1','end-2'].map(id=><LivechatSessionBoundary key={id} id={id} onSend={()=>{setSegment(id);setOpen(true)}}/>)}{open&&<LivechatTranscriptDialog key={segment||'current'} conversationId="root" accountId="channel" members={members} initialRecipientId={segment?'sean':'sam'} endRequestId={segment} token="test" onToken={noop} onClose={()=>setOpen(false)} onSent={setToast}/>}</main>}
 createRoot(document.getElementById('root')).render(<App/>);`;
 const bundle=await build({stdin:{contents:entry,resolveDir:root,loader:"tsx"},bundle:true,write:false,format:"iife",platform:"browser",jsx:"automatic",define:{"process.env.NODE_ENV":'"production"',"process.env.NEXT_PUBLIC_RELAY_API_URL":'""'}});
 const css=await readFile(resolve(root,"app/globals.css"),"utf8")+await readFile(resolve(root,"app/ui/ui.css"),"utf8");
@@ -86,6 +87,33 @@ try{
     await send.click();await page.waitForFunction(()=>document.querySelector('[aria-label="关闭"]')?.disabled);
     assert.equal(requests.at(-1).endRequestId,'end-2');assert.notEqual(requests.at(-1).clientSendId,firstSegment.clientSendId);
     await held.fulfill({status:202,json:{status:'queued'}});await page.getByRole('dialog').waitFor({state:'detached'});
+    const endRequests=[];let endFail=true,endHeld;
+    await page.route("**/api/v1/conversations/root/end-chat",async route=>{
+      endRequests.push(route.request().postDataJSON());
+      if(endFail)await route.fulfill({status:503,json:{message:"模拟结束失败"}});
+      else endHeld=route;
+    });
+    const endTrigger=page.getByRole('button',{name:'结束会话',exact:true});
+    await endTrigger.click();
+    const endDialog=page.getByRole('dialog',{name:'结束会话',exact:true});
+    assert.equal(await endDialog.getByRole('button',{name:'取消',exact:true}).evaluate(el=>document.activeElement===el),true);
+    const endPicker=endDialog.getByRole('combobox',{name:'结束对象'});
+    assert.equal(await endPicker.inputValue(),'sam');await endPicker.selectOption('sean');
+    await endDialog.getByRole('button',{name:'确认结束',exact:true}).click();
+    await endDialog.getByRole('alert').getByText('模拟结束失败').waitFor();
+    assert.equal(await endPicker.inputValue(),'sean');
+    await page.screenshot({path:resolve(output,`end-dialog-${viewport.width}.png`)});
+    const endBounds=await endDialog.boundingBox();assert.ok(endBounds.x>=0&&endBounds.x+endBounds.width<=viewport.width);
+    await page.keyboard.press('Escape');await endDialog.waitFor({state:'detached'});
+    assert.equal(await endTrigger.evaluate(el=>document.activeElement===el),true);
+    await endTrigger.click();await endDialog.getByRole('combobox',{name:'结束对象'}).selectOption('sean');endFail=false;
+    await endDialog.getByRole('button',{name:'确认结束',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('dialog')?.getAttribute('aria-busy')==='true');
+    assert.equal(await endDialog.getByRole('combobox').isDisabled(),true);
+    await page.keyboard.press('Escape');assert.equal(await endDialog.isVisible(),true);
+    assert.equal(endRequests.length,2);assert.deepEqual(endRequests[1],endRequests[0]);assert.equal(endRequests[0].targetConversationId,'sean');
+    await endHeld.fulfill({json:{ok:true}});await endDialog.waitFor({state:'detached'});
+    assert.equal(await page.locator('output').textContent(),'会话已结束');
     assert.deepEqual(errors,[]);await page.close();
   }
   console.log("桌面、390px 和 320px：访客切换、缺邮箱、失败重试/重开/刷新去重、历史段按钮位置、键盘打开与焦点恢复、历史访客锁定及独立选段请求通过（模拟 API）。");

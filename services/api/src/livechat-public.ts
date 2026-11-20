@@ -263,7 +263,11 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
       FROM visible WHERE ($3::uuid IS NULL OR (visible_at,id) ${after?">":"<"} (SELECT visible_at,id FROM visible WHERE id=$3))
       ORDER BY visible_at ${after?"ASC":"DESC"},id ${after?"ASC":"DESC"} LIMIT 101`,[c.account_id,v.contact_id,query.data.after??query.data.before??null]);
     const data=result.rows.slice(0,100);
-    reply.header("cache-control","no-store");return {data:after?data:data.reverse(),hasMore:result.rows.length>100,leadMessageId:v.lead_message_id??null};
+    const boundary=await pool.query(`SELECT m.id,to_char(m.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') sort_at
+      FROM conversations cv JOIN messages m ON m.conversation_id=cv.id
+      WHERE cv.account_id=$1 AND cv.contact_id=$2 AND cv.status='closed' AND m.livechat_end_request_id IS NOT NULL
+      ORDER BY m.created_at DESC,m.id DESC LIMIT 1`,[c.account_id,v.contact_id]);
+    reply.header("cache-control","no-store");return {data:after?data:data.reverse(),hasMore:result.rows.length>100,leadMessageId:v.lead_message_id??null,endBoundary:boundary.rows[0]??null};
   });
   app.post("/livechat/:publicId/media",async(request,reply)=>{
     const c=await channel(request),v=await visitor(request,c);

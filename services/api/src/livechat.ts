@@ -68,6 +68,54 @@ export async function processOneLivechatOutbound():Promise<boolean>{
 }
 
 export async function registerLivechatRoutes(app:FastifyInstance):Promise<void>{
+  app.post("/api/v1/conversations/:id/end-chat",{preHandler:authenticate},async(request,reply)=>{
+    if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
+    const params=z.object({id:z.string().uuid()}).safeParse(request.params);
+    const parsed=z.object({clientRequestId:z.string().uuid(),targetConversationId:z.string().uuid().optional()}).safeParse(request.body);
+    if(!params.success||!parsed.success)return reply.code(400).send({error:"invalid_request"});
+    const principal=request.principal,rootId=params.data.id,targetId=parsed.data.targetConversationId??rootId;
+    const fail=(statusCode:number,message:string)=>Object.assign(new Error(message),{statusCode});
+    try{
+      const result=await transaction(async client=>{
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[`livechat-end:${parsed.data.clientRequestId}`]);
+        const context=await client.query(`SELECT cv.id conversation_id,cv.account_id,cv.contact_id,cv.status,
+          (SELECT v.id FROM livechat_visitors v WHERE v.account_id=cv.account_id AND v.contact_id=cv.contact_id ORDER BY v.created_at DESC,v.id DESC LIMIT 1) visitor_id
+          FROM conversations root JOIN conversations cv ON cv.id=$2
+          JOIN livechat_channels channel ON channel.account_id=cv.account_id
+          WHERE root.id=$1 AND cv.id IN (SELECT relay_conversation_members(root.id)) AND cv.origin_mode='livechat'
+          AND channel.enabled AND channel.archived_at IS NULL FOR UPDATE OF cv`,[rootId,targetId]);
+        const row=context.rows[0];
+        if(!row?.visitor_id||!canAccessAccount(principal,row.account_id))throw fail(404,"conversation_not_found");
+        if(principal.role!=="admin"){
+          const permission=await client.query("SELECT 1 FROM account_permissions WHERE account_id=$1 AND user_id=$2 AND can_read AND can_send LIMIT 1",[row.account_id,principal.id]);
+          if(!permission.rowCount)throw fail(403,"account_send_forbidden");
+        }
+        const existing=await client.query("SELECT conversation_id,account_id,send_transcript FROM livechat_end_requests WHERE request_id=$1",[parsed.data.clientRequestId]);
+        if(existing.rowCount){
+          const old=existing.rows[0];
+          if(old.conversation_id!==targetId||old.account_id!==row.account_id||old.send_transcript)throw fail(409,"client_request_id_conflict");
+          return {deduplicated:true};
+        }
+        // 重复结束不新增空段；原请求重试即使会话已重开也不会再次关闭。
+        if(row.status==='closed')return {alreadyEnded:true};
+        await client.query("UPDATE conversations SET status='closed',closed_at=clock_timestamp() WHERE id=$1",[targetId]);
+        await client.query(`INSERT INTO livechat_end_requests(request_id,visitor_id,conversation_id,account_id,contact_id,send_transcript,created_at)
+          VALUES($1,$2,$3,$4,$5,false,clock_timestamp())`,[parsed.data.clientRequestId,row.visitor_id,targetId,row.account_id,row.contact_id]);
+        await client.query(`INSERT INTO messages(conversation_id,account_id,client_message_id,direction,kind,text_content,status,occurred_at,created_at,livechat_end_request_id)
+          SELECT conversation_id,account_id,'livechat-end:'||request_id,'out','text','-------Chat Ended-------','sent',created_at,created_at,request_id
+          FROM livechat_end_requests WHERE request_id=$1 ON CONFLICT DO NOTHING`,[parsed.data.clientRequestId]);
+        await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'livechat.end_chat','conversation',$2,$3)",[principal.id,targetId,JSON.stringify({rootConversationId:rootId,endRequestId:parsed.data.clientRequestId,sendTranscript:false})]);
+        await client.query("SELECT pg_notify('relay_conversation_changes',$1)",[JSON.stringify({accountId:row.account_id,conversationId:targetId})]);
+        return {deduplicated:false};
+      });
+      return reply.send({ok:true,...result});
+    }catch(error){
+      const messages:Record<string,string>={account_send_forbidden:"没有该渠道的会话操作权限",conversation_not_found:"会话不存在、无权访问或 LiveChat 渠道已停用",client_request_id_conflict:"结束请求冲突，请重新打开后重试"};
+      const code=error instanceof Error?error.message:"";
+      if(messages[code])return reply.code((error as {statusCode?:number}).statusCode??409).send({error:code,message:messages[code]});
+      throw error;
+    }
+  });
   app.post("/api/v1/conversations/:id/transcript",{preHandler:authenticate},async(request,reply)=>{
     if(request.principal?.kind!=="user")return reply.code(403).send({error:"user_required"});
     const params=z.object({id:z.string().uuid()}).safeParse(request.params);

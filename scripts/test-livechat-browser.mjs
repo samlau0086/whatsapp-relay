@@ -15,7 +15,7 @@ const testPng=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIW
 const secondChannel="22222222-2222-4222-8222-222222222222";
 const starterMessages=['第一条匿名消息','我想了解产品的材料和加工精度，是否可以提供详细报价？','<img src=x onerror=alert(1)>','发送'];
 const sessions=new Map(),uploads=new Map(),origins=new Set(),errors=[],profiles=[],expiredSessions=new Set();
-const transcripts=new Map(),closedChats=new Map(),endRequests=[];
+const transcripts=new Map(),closedChats=new Map(),endRequests=[],remoteEnds=new Map();
 const presenceReports=[];
 let historyRequests=0;
 const analyticsReports=[];
@@ -49,6 +49,7 @@ const api=await listen(async(req,res)=>{
     const messages=sessions.get(sessionKey)||[];sessions.set(sessionKey,messages);
     let message=messages.find(m=>m.client_message_id===data.clientMessageId);
     if(!message){const upload=uploads.get(data.mediaId);message={id:randomUUID(),client_message_id:data.clientMessageId,direction:"in",text_content:data.text,media_id:data.mediaId,file_name:upload?.name,mime_type:upload?.mime,created_at:timestamp()};messages.push(message)}
+    remoteEnds.delete(sessionKey);
     if(dropFirstSendResponse&&!messages[1]){dropFirstSendResponse=false;req.socket.destroy();return}
     json(201,{id:message.id,...(message===messages[0]?{leadMessageId:message.id}:{})});return;
   }
@@ -72,7 +73,7 @@ const api=await listen(async(req,res)=>{
     const ordered=[...messages].sort((a,b)=>a.created_at.localeCompare(b.created_at)||a.id.localeCompare(b.id));
     const data=after?ordered.slice(ordered.findIndex(m=>m.id===after)+1):before?ordered.slice(0,ordered.findIndex(m=>m.id===before)):ordered;
     const page=before?data.slice(-100):after?data.slice(0,100):data.slice(-100);
-    json(200,{data:page.map(message=>({...message,sort_at:message.created_at,created_at:new Date(message.created_at).toISOString()})),hasMore:data.length>100,leadMessageId:messages[0]?.id});return;
+    json(200,{data:page.map(message=>({...message,sort_at:message.created_at,created_at:new Date(message.created_at).toISOString()})),hasMore:data.length>100,leadMessageId:messages[0]?.id,endBoundary:remoteEnds.get(sessionKey)||null});return;
   }
   if(url.pathname.endsWith("/media")&&req.method==="POST"){
     const form=await new Request(url,{method:'POST',headers:{'content-type':req.headers['content-type']},body:await body(req)}).formData(),file=form.get('file'),id=randomUUID();
@@ -544,6 +545,20 @@ try{
   await endFrame.getByText('Support in latest chat',{exact:true}).waitFor();
   assert.equal(await endFrame.getByText('New chat after transcript',{exact:true}).count(),0);
   assert.equal(profiles.length,profileCount);
+  const remoteMarker={id:randomUUID(),direction:'out',text_content:'-------Chat Ended-------',livechat_end_request_id:randomUUID(),created_at:timestamp()};
+  originalMessages.push(remoteMarker);remoteEnds.set(originalSession,{id:remoteMarker.id,sort_at:remoteMarker.created_at});
+  await endFrame.locator('#form').waitFor({state:'hidden'});await endFrame.locator('#restart').waitFor({state:'visible'});
+  await endFrame.getByText('Chat ended.',{exact:true}).waitFor();
+  assert.equal(await endFrame.getByRole('separator').textContent(),'-------Chat Ended-------','后台结束后显示系统分隔符');
+  await other.reload();endFrame=await frameFor(other);await openChat(endFrame);
+  await endFrame.locator('#restart').waitFor({state:'visible'});
+  await endFrame.locator('#restart').click();await endFrame.locator('#confirmAction').click();await endFrame.locator('#form').waitFor({state:'visible'});
+  await other.reload();endFrame=await frameFor(other);await openChat(endFrame);
+  await endFrame.locator('#form').waitFor({state:'visible'});await other.waitForLoadState('networkidle');
+  assert.equal(await endFrame.locator('.message').count(),0,'后台结束后重开并刷新不恢复旧段');
+  await endFrame.locator('#draft').fill('New chat after staff ended');await endFrame.locator('#send').click();
+  await endFrame.getByText('New chat after staff ended',{exact:true}).waitFor();
+  assert.equal(profiles.length,profileCount,'后台结束后重开仍复用访客身份');
   expiredSessions.add(originalSession);
   await endFrame.getByText('Chat expired. Support retains the history. You can start a new chat',{exact:true}).waitFor();
   await endFrame.locator('#restart').click();await endFrame.locator('#confirmAction').click();await endFrame.locator('#prechat').waitFor({state:'visible'});

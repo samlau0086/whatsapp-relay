@@ -1,12 +1,13 @@
 "use client";
 
-import { Check, Ellipsis, PanelRight, Pencil, Save, ShieldCheck, Trash2 } from "lucide-react";
+import { Check, CircleStop, Ellipsis, PanelRight, Pencil, Save, ShieldCheck, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { LivechatSessionBoundary } from "../livechat-session-boundary";
 import { AsyncState, Button, Dialog, Drawer, FormField, IconButton, Popover, type AsyncStatus } from "../ui";
 
 export function UiLab() {
   const [editor, setEditor] = useState(false);
+  const [endPreview, setEndPreview] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [discard, setDiscard] = useState(false);
   const [name, setName] = useState("网站客服");
@@ -84,6 +85,7 @@ export function UiLab() {
       </section>
       <section className="rd-lab-section" aria-labelledby="boundary-title">
         <h2 id="boundary-title">会话结束</h2>
+        <Button icon={CircleStop} onClick={() => setEndPreview(true)}>结束会话</Button>
         <LivechatSessionBoundary id="lab-ended-session" onSend={() => setNotice("已选择示例历史段，未发送邮件")} />
       </section>
       <section className="rd-lab-section" aria-labelledby="async-title">
@@ -109,6 +111,7 @@ export function UiLab() {
         <div className="rd-lab-history"><h3>变更记录</h3>{Array.from({ length: 8 }, (_, index) => <p key={index}>2026-11-{String(18 - index).padStart(2, "0")} · 运营团队更新渠道配置</p>)}</div>
       </form>
     </Dialog>
+    <Dialog open={endPreview} title="结束会话" onRequestClose={() => setEndPreview(false)} footer={<><Button onClick={() => setEndPreview(false)}>取消</Button><Button icon={CircleStop} variant="danger" onClick={() => { setNotice("示例会话已结束，未发送邮件"); setEndPreview(false); }}>确认结束</Button></>}><p>确认结束示例访客的 LiveChat 会话？聊天记录将保留，本次不会发送邮件。</p></Dialog>
     <Dialog open={discard} title="放弃未保存的修改？" role="alertdialog" initialFocus={keepEditing}
       onRequestClose={() => setDiscard(false)} footer={<>
         <button ref={keepEditing} type="button" className="rd-button" onClick={() => setDiscard(false)}>继续编辑</button>

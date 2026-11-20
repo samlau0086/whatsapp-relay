@@ -53,6 +53,9 @@ import { replyEmailSubject } from "./email-reply-subject";
 import {defaultTimelineRecipient,TimelineRecipientPicker,type TimelineRecipient} from "./timeline-recipient";
 import {LivechatTranscriptDialog} from "./livechat-transcript-dialog";
 import {LivechatSessionBoundary} from "./livechat-session-boundary";
+import {LivechatEndDialog} from "./livechat-end-dialog";
+import {IconButton} from "./ui";
+import {CircleStop} from "lucide-react";
 import {LivechatConversionsPanel} from "./livechat-conversions";
 
 const API_URL = (process.env.NEXT_PUBLIC_RELAY_API_URL ?? "").replace(/\/$/, "");
@@ -348,6 +351,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const [messages,setMessages]=useState<Record<string,ChatMessage[]>>({});
   const [timelineRecipients,setTimelineRecipients]=useState<Record<string,TimelineRecipient[]>>({});
   const [transcriptConversationId,setTranscriptConversationId]=useState("");
+  const [endChatConversationId,setEndChatConversationId]=useState("");
   const [transcriptBoundary,setTranscriptBoundary]=useState<{endRequestId:string;targetId:string}|null>(null);
   const [replyRecipients,setReplyRecipients]=useState<Record<string,string>>({});
   const manualReplyRecipients=useRef(new Set<string>());
@@ -549,7 +553,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
   const currentEmailActivities=useMemo(()=>active?emailActivities[active.id]??[]:[],[active,emailActivities]);
   useEffect(()=>{if(!apiToken||!sendingConversation?.accountId)return;setEmailMailboxes([]);setEmailMailboxId("");setEmailProviderSender(null);let cancelled=false;void authorizedFetch("/api/v1/mailboxes",apiToken).then(async result=>{if(result.token!==apiToken)setApiToken(result.token);if(!result.response.ok)return;const body=await result.response.json().catch(()=>({})) as {data?:Array<Record<string,unknown>>;senders?:Array<{account_id:string;name:string;address:string}>};if(cancelled)return;const sender=body.senders?.find(item=>item.account_id===sendingConversation.accountId)??null;setEmailProviderSender(sender);const items=(body.data??[]).filter(item=>String(item.account_id)===sendingConversation.accountId).map(item=>({id:String(item.id),account_id:String(item.account_id),address:String(item.address),display_name:String(item.display_name??""),is_primary:Boolean(item.is_primary),enabled:Boolean(item.send_enabled??item.enabled)}));setEmailMailboxes(items);setEmailMailboxId(current=>sender?"":current&&items.some(item=>item.id===current)?current:(items.find(item=>item.is_primary&&item.enabled)?.id??items.find(item=>item.enabled)?.id??""));}).catch(()=>{});return()=>{cancelled=true};},[apiToken,sendingConversation?.accountId]);
   const latestMessageId=currentMessages.at(-1)?.id??"";
-  useEffect(()=>{setTranscriptConversationId("");setTranscriptBoundary(null);},[effectiveActiveId]);
+  useEffect(()=>{setTranscriptConversationId("");setTranscriptBoundary(null);setEndChatConversationId("");},[effectiveActiveId]);
   const selectConversation=useCallback((conversationId:string,shiftKey=false)=>{
     const item=visible.find(value=>value.id===conversationId);
     if(shiftKey||selectedConversations.size){
@@ -2116,6 +2120,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                   </div>
                   <div className="chat-actions">
                     {livechatAvailable&&<button type="button" className="icon-button" aria-label="发送会话记录" title="发送会话记录" disabled={!livechatRecipients.length} onClick={()=>{setTranscriptBoundary(null);setTranscriptConversationId(active.id);}}><Mail size={17}/></button>}
+                    {livechatAvailable&&<IconButton icon={CircleStop} label="结束会话" size="compact" disabled={!livechatRecipients.length} onClick={()=>setEndChatConversationId(active.id)}/>}
                     {failedMessageCount > 0 && (
                       <button
                         onClick={() => void clearFailedMessages()}
@@ -2170,6 +2175,7 @@ export function WhatsAppInbox({initialView="inbox"}:{initialView?:WorkspaceView}
                   </div>
                 </header>
                 {transcriptConversationId===active.id&&livechatAvailable&&<LivechatTranscriptDialog key={active.id} conversationId={active.id} accountId={sendingConversation?.accountId??active.accountId} members={livechatRecipients} initialRecipientId={transcriptBoundary?.targetId??replyConversationId} endRequestId={transcriptBoundary?.endRequestId} token={apiToken} onToken={setApiToken} onClose={()=>setTranscriptConversationId("")} onSent={text=>{setToast(text);void loadMessages(apiToken,active.id);void loadConversations(apiToken);}}/>}
+                {endChatConversationId===active.id&&livechatAvailable&&<LivechatEndDialog key={active.id} conversationId={active.id} members={livechatRecipients} initialRecipientId={replyConversationId} token={apiToken} onToken={setApiToken} onClose={()=>setEndChatConversationId("")} onEnded={()=>{setToast("会话已结束");void loadMessages(apiToken,active.id);void loadConversations(apiToken);}}/>}
                 {active.conversationType!=="group"&&<AgentConversationBar
                   conversationId={active.id}
                   conversationMode={conversationMode}

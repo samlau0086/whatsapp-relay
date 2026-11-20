@@ -78,6 +78,7 @@ test("LiveChat 公开接口安全边界",async t=>{
   let enabled=true,hits=1,visitorFound=true,attachmentLimited=false,historyLimited=false;
   let language:string|undefined=row.language,iconUrl="";
   const attachment=false;
+  let endBoundary:{id:string;sort_at:string}|null=null;
   const calls:Array<{sql:string;values:unknown[]}>=[];
   t.mock.method(pool,"query",async(sql:string,values:unknown[]=[])=>{
     calls.push({sql,values});
@@ -86,6 +87,7 @@ test("LiveChat 公开接口安全边界",async t=>{
     if(sql.includes("FROM livechat_channels"))return result(enabled?[{...row,language,icon_url:iconUrl}]:[]);
     if(sql.includes("FROM livechat_visitors"))return result(visitorFound?[{id:contactId,contact_id:contactId}]:[]);
     if(sql.startsWith("WITH visible"))return result([]);
+    if(sql.startsWith("SELECT m.id,to_char"))return result(endBoundary?[endBoundary]:[]);
     if(sql.startsWith("SELECT md.*"))return result(attachment?[{}]:[]);
     throw Error(`未预期 SQL: ${sql}`);
   });
@@ -127,6 +129,18 @@ test("LiveChat 公开接口安全边界",async t=>{
     visitorFound=false;assert.equal((await get("messages")).statusCode,401);visitorFound=true;
     const query=calls.filter(c=>c.sql.includes("FROM livechat_visitors")).at(-1)!;
     assert.match(query.sql,/account_id=\$1 AND credential_hash=\$2 AND embed_origin=\$3 AND expires_at>now\(\)/);assert.equal(query.values[2],origin);
+  });
+  await t.test("后台结束状态独立于历史游标且仅属于当前渠道访客",async()=>{
+    try{
+      assert.equal((await get('messages')).json().endBoundary,null);
+      endBoundary={id:messageId,sort_at:'2026-11-20T00:00:00.123456Z'};
+      assert.deepEqual((await get(`messages?after=${messageId}`)).json().endBoundary,endBoundary);
+      const query=calls.filter(call=>call.sql.startsWith('SELECT m.id,to_char')).at(-1)!;
+      assert.deepEqual(query.values,[accountId,contactId]);
+      assert.match(query.sql,/cv.account_id=\$1 AND cv.contact_id=\$2 AND cv.status='closed'/);
+      assert.match(query.sql,/m.livechat_end_request_id IS NOT NULL/);
+      assert.doesNotMatch(query.sql,/\$3|relay_conversation_members/);
+    }finally{endBoundary=null;}
   });
   await t.test("附件读取要求消息引用授权",async()=>{
     assert.equal((await get(`media/${messageId}`)).statusCode,404);

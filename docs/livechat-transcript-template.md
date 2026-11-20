@@ -46,6 +46,8 @@
 
 ## API 与部署
 
+后台主动结束使用 `POST /api/v1/conversations/:id/end-chat`，提交 UUID `clientRequestId` 和可选 `targetConversationId`。需要所选原访客渠道的读取及发送权限，仅结束该成员并生成系统分隔符，不自动发送邮件，不依赖邮件 Provider。相同请求重试不重复结束，已关闭的会话不新增空段；复用迁移 116。访客历史接口的 `endBoundary` 独立于分页游标返回当前关闭会话的结束边界，窗口轮询后切换为已结束，重新开聊仍沿用原访客身份。
+
 管理员现有渠道 POST／PUT 接口新增可选 `transcriptTemplate` 对象：
 
 ```json

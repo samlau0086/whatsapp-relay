@@ -49,6 +49,9 @@ try {
     assert.equal(await boundary.getByRole("separator").textContent(), "-------Chat Ended-------");
     await boundary.getByRole("button", { name: "发送 transcript" }).click();
     assert.equal(await page.getByRole("status").textContent(), "已选择示例历史段，未发送邮件");
+    await page.getByRole("button", { name: "结束会话", exact: true }).click();
+    await page.getByRole("dialog", { name: "结束会话", exact: true }).getByRole("button", { name: "确认结束" }).click();
+    assert.equal(await page.getByRole("status").textContent(), "示例会话已结束，未发送邮件");
     assert.equal(await page.locator(".rd-lab").evaluate(el => el.scrollWidth > el.clientWidth), false);
     assert.equal(await page.locator("img").evaluate(el => el.complete && el.naturalWidth > 0), true);
     const loadingButton = page.getByRole("button", { name: "保存配置", exact: true });

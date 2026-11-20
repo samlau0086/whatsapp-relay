@@ -12,6 +12,8 @@
 
 访客执行 End Chat（含结束并发送记录）后，访客窗口与后台时间线显示 `-------Chat Ended-------`。重新开聊后，访客下次发送 transcript 仅包含上一分隔符之后的本段消息，不包含旧段、分隔符或邮件气泡。后台每个分隔符下的“发送 transcript”发送该分隔符结束的那一段，固定原访客；顶部“发送会话记录”保留，进行中导出当前段，已结束导出最近结束段。发送仍使用客户当前主邮箱及渠道现有邮件模板和 Provider。
 
+后台对话顶部提供“结束会话”操作，确认后仅结束所选 LiveChat 原访客，不关闭合并时间线的其他成员、不自动发送邮件，也不依赖邮件 Provider。需要该渠道的读取及发送权限；重复结束不新增分隔符，失败重试沿用请求 ID。访客窗口通过历史轮询接收结束状态，可点击“开始新会话”继续聊天；新段 transcript 仍只包含上一结束边界之后的消息。接口为 `POST /api/v1/conversations/:id/end-chat`，提交 UUID `clientRequestId` 和可选 `targetConversationId`；复用迁移 116，无新增迁移。
+
 本功能需同步部署工作台、API 和 Worker 并重启，启动迁移 `116_livechat_session_boundaries.sql` 保存系统分隔记录及邮件选段信息。仅按已有 End Chat 请求补齐历史分隔符，没有结束请求的历史不自动拆分；不补发或改写历史邮件。系统分隔符不能作为普通消息删除。分段与界面回归使用独立测试数据库和模拟 API，不接入客户数据。
 
 验收：`/ui-lab` 提供分隔符和按钮示例，点击仅显示模拟反馈。`npm run test:ui` 验证该示例；`node scripts/test-livechat-transcript-browser.mjs` 验证历史选段、原访客锁定和重试；`node scripts/test-livechat-browser.mjs` 验证访客结束流程。上述 PostgreSQL 回归也验证迁移 116 重复执行、当前段和历史段的实际 SQL 筛选。
