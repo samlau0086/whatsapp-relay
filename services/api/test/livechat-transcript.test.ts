@@ -11,6 +11,7 @@ const result=(rows:unknown[]=[])=>({rows,rowCount:rows.length});
 
 test("后台 transcript：授权、访客隔离、Provider 快照、去重及事务回滚",async t=>{
   let found=true,permission=true,recipient:string|null="visitor@example.com",provider=true,boundUnavailable=false,existing:Record<string,unknown>|undefined,failBubble=false;
+  const boundaryId="77777777-7777-4777-8777-777777777777";
   const calls:Array<{sql:string;values:unknown[]}>=[];
   const query=async(sql:string,values:unknown[]=[])=>{
     calls.push({sql,values});
@@ -36,7 +37,7 @@ test("后台 transcript：授权、访客隔离、Provider 快照、去重及事
   assert.match(context.sql,/cv.origin_mode='livechat'/);
   assert.match(context.sql,/EXISTS\(SELECT 1 FROM livechat_visitors v WHERE v.account_id=cv.account_id AND v.contact_id=cv.contact_id\)/);
   const history=calls.find(c=>c.sql.includes("FROM messages m"))!;
-  assert.deepEqual(history.values,[targetId]);assert.match(history.sql,/m.conversation_id=\$1/);assert.match(history.sql,/NOT EXISTS\(SELECT 1 FROM message_email_details/);assert.match(history.sql,/m.status IN \('sent','delivered','read'\)/);assert.match(history.sql,/ORDER BY m.occurred_at,m.id/);
+  assert.deepEqual(history.values,[targetId,null,null]);assert.match(history.sql,/m.conversation_id=\$1/);assert.match(history.sql,/NOT EXISTS\(SELECT 1 FROM message_email_details/);assert.match(history.sql,/m.status IN \('sent','delivered','read'\)/);assert.match(history.sql,/ORDER BY m.occurred_at,m.id/);
   const job=calls.find(c=>c.sql.startsWith("INSERT INTO email_messages"))!;
   assert.deepEqual(job.values.slice(0,8),[sendId,targetId,targetId,"resend",'{"fromEmail":"bound@example.com"}',"bound-secret",'[{"email":"visitor@example.com","label":"LiveChat visitor"}]',"Your LiveChat transcript"]);
   assert.equal(job.values[10],userId);assert.ok(String(job.values[8]).length>6000);assert.match(String(job.values[8]),/Attachment: report.pdf/);assert.match(String(job.values[9]),/&lt;script&gt;/);assert.doesNotMatch(String(job.values[9]),/<script>/);
@@ -47,6 +48,14 @@ test("后台 transcript：授权、访客隔离、Provider 快照、去重及事
   const duplicate=await send();assert.equal(duplicate.statusCode,202);assert.equal(duplicate.json().deduplicated,true);assert.equal(duplicate.json().status,"accepted");assert.ok(!calls.some(c=>c.sql.startsWith("INSERT")));
   for(const field of ["conversation_id","sender_user_id","content_type"]){const previous=existing[field];existing[field]="other";assert.equal((await send()).statusCode,409);existing[field]=previous;}
   existing=undefined;
+  calls.length=0;
+  const missing=await send("admin",{clientSendId:sendId,targetConversationId:targetId,endRequestId:boundaryId});
+  // 缺邮箱仍优先按已有前置条件拒绝，且不产生邮件。
+  assert.equal(missing.json().error,"visitor_email_required");
+  provider=true;recipient="visitor@example.com";calls.length=0;
+  assert.equal((await send("admin",{clientSendId:sendId,targetConversationId:targetId,endRequestId:boundaryId})).statusCode,404);
+  assert.ok(!calls.some(c=>c.sql.startsWith("INSERT INTO email_messages")));
+  provider=false;recipient=null;
   assert.equal((await send()).json().error,"visitor_email_required");
   recipient="visitor@example.com";assert.equal((await send()).json().error,"email_provider_not_configured");
   boundUnavailable=true;assert.equal((await send()).json().error,"channel_email_provider_unavailable");boundUnavailable=false;provider=true;
@@ -54,7 +63,7 @@ test("后台 transcript：授权、访客隔离、Provider 快照、去重及事
   permission=true;assert.equal((await send("agent")).statusCode,202);
   calls.length=0;assert.equal((await send("admin",{clientSendId:sendId})).statusCode,202);
   assert.deepEqual(calls.find(c=>c.sql.includes("FROM conversations root"))?.values,[rootId,rootId]);
-  assert.deepEqual(calls.find(c=>c.sql.includes("FROM messages m"))?.values,[rootId]);
+  assert.deepEqual(calls.find(c=>c.sql.includes("FROM messages m"))?.values,[rootId,null,null]);
   found=false;calls.length=0;assert.equal((await send()).statusCode,404);assert.ok(!calls.some(c=>c.sql.startsWith("INSERT")));found=true;
   failBubble=true;calls.length=0;assert.equal((await send()).statusCode,500);assert.equal(calls.at(-1)?.sql,"ROLLBACK");
 });

@@ -88,6 +88,7 @@ test('入队使用原渠道模板和认领客服，结束时间区分导出与�
   const query=async(sql:string,values:unknown[]=[])=>{
     if(sql.includes('JOIN email_provider_instances'))return result([{provider:'smtp',config:{fromEmail:'support@example.com'},secret_encrypted:'secret'}]);
     if(sql.includes('SELECT cv.created_at'))return result([{created_at:startedAt,closed_at:'2026-11-20T10:35:00Z',status,visitor_name:'John',agent_name:'Assigned Alex',channel_name:'Original channel',icon_url:'',snapshot_at:'2026-11-20T10:36:00Z',transcript_template:{...defaultTranscriptTemplate,subject:'{{channel.name}} {{agent.name}}',body:'{{department.name}} {{conversation.startedAt}} | {{conversation.endedAt}} | {{conversation.duration}}\n{{messages}}',departmentName:'Sales'}}]);
+    if(sql.includes('FROM livechat_end_requests'))return result();
     if(sql.includes('FROM messages m'))return result([{direction:'out',sender_name:'Actual Sam',text_content:'Reply',occurred_at:'2026-11-20T10:33:00Z'}]);
     if(sql.startsWith('INSERT INTO email_messages')){jobs.push(values);return result([{id:accountId,status:'queued'}]);}
     return result([{id:accountId}]);

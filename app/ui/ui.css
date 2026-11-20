@@ -84,6 +84,8 @@
   font-size: 14px; line-height: 1.5; letter-spacing: 0; overflow-wrap: anywhere;
 }
 .rd-popover > .rd-button { width: 100%; margin-top: 8px; }
+.rd-livechat-boundary { display: flex; flex-direction: column; align-items: center; gap: 8px; margin: 16px 0; width: 100%; min-width: 0; color: var(--rd-muted); font-size: 13px; letter-spacing: 0; }
+.rd-livechat-boundary > [role=separator] { max-width: 100%; overflow-wrap: anywhere; text-align: center; }
 .rd-async { min-width: 0; }
 .rd-async-notice { display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 180px; padding: 16px; gap: 12px; color: var(--rd-muted); font-size: 14px; text-align: center; overflow-wrap: anywhere; }
 .rd-async-notice > svg { flex: 0 0 auto; }

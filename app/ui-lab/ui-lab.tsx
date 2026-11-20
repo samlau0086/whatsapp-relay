@@ -2,6 +2,7 @@
 
 import { Check, Ellipsis, PanelRight, Pencil, Save, ShieldCheck, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { LivechatSessionBoundary } from "../livechat-session-boundary";
 import { AsyncState, Button, Dialog, Drawer, FormField, IconButton, Popover, type AsyncStatus } from "../ui";
 
 export function UiLab() {
@@ -80,6 +81,10 @@ export function UiLab() {
           <FormField label="所属渠道">{props => <select {...props} defaultValue="livechat"><option value="livechat">Live Chat</option><option value="email">Email</option><option value="whatsapp">WhatsApp</option></select>}</FormField>
           <FormField label="只读编号">{props => <input {...props} disabled value="RD-2026-001" readOnly />}</FormField>
         </div>
+      </section>
+      <section className="rd-lab-section" aria-labelledby="boundary-title">
+        <h2 id="boundary-title">会话结束</h2>
+        <LivechatSessionBoundary id="lab-ended-session" onSend={() => setNotice("已选择示例历史段，未发送邮件")} />
       </section>
       <section className="rd-lab-section" aria-labelledby="async-title">
         <div className="rd-lab-section-head"><h2 id="async-title">记录状态</h2>

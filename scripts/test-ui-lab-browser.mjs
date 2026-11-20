@@ -45,6 +45,10 @@ try {
     page.on("request", request => { if (request.url().includes("/api/")) apiCalls.push(request.url()); });
     await page.goto(`http://127.0.0.1:${server.address().port}/ui-lab`);
     await page.getByRole("heading", { name: "组件验收" }).waitFor();
+    const boundary = page.getByRole("region", { name: "会话已结束" });
+    assert.equal(await boundary.getByRole("separator").textContent(), "-------Chat Ended-------");
+    await boundary.getByRole("button", { name: "发送 transcript" }).click();
+    assert.equal(await page.getByRole("status").textContent(), "已选择示例历史段，未发送邮件");
     assert.equal(await page.locator(".rd-lab").evaluate(el => el.scrollWidth > el.clientWidth), false);
     assert.equal(await page.locator("img").evaluate(el => el.complete && el.naturalWidth > 0), true);
     const loadingButton = page.getByRole("button", { name: "保存配置", exact: true });

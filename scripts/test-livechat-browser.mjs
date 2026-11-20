@@ -63,6 +63,7 @@ const api=await listen(async(req,res)=>{
     if(endError&&data.sendTranscript!==false){json(409,{error:endError});return}
     if(data.sendTranscript===false){if(!closedChats.has(data.clientRequestId))closedChats.set(data.clientRequestId,sessionKey)}
     else if(!transcripts.has(data.clientRequestId))transcripts.set(data.clientRequestId,sessionKey);
+    if(!messages.some(m=>m.livechat_end_request_id===data.clientRequestId))messages.push({id:randomUUID(),client_message_id:'livechat-end:'+data.clientRequestId,direction:'out',text_content:'-------Chat Ended-------',livechat_end_request_id:data.clientRequestId,created_at:timestamp()});
     if(dropEndResponse){dropEndResponse=false;json(503,{error:'response_lost'});return}
     json(202,{ok:true,queued:data.sendTranscript!==false,closed:true,sendTranscript:data.sendTranscript!==false});return;
   }
@@ -463,6 +464,8 @@ try{
   await endFrame.locator('#confirmAction').click();
   await endFrame.getByText('Chat ended. Your transcript is queued for email delivery.',{exact:true}).waitFor();
   assert.equal(endRequests.at(-1).clientRequestId,retryEndId);assert.equal(endRequests.at(-1).sendTranscript,true);assert.equal(transcripts.size,1);
+  await endFrame.getByRole('separator').waitFor();assert.equal(await endFrame.getByRole('separator').textContent(),'-------Chat Ended-------');
+  assert.equal(await endFrame.getByRole('separator').locator('button,.bubble,.message-avatar').count(),0);
   assert.equal(await endFrame.locator('#form').isVisible(),false);assert.equal(await endFrame.locator('#prechat').isVisible(),false);
   const endedViewport=other.viewportSize();
   for(const viewport of [endedViewport,{width:390,height:844},{width:320,height:568}]){
@@ -534,6 +537,7 @@ try{
   await other.screenshot({path:`${screenshots}/restarted-existing-visitor.png`});
   await endFrame.locator('#endOnly').click();await endFrame.locator('#confirmAction').click();await endFrame.getByText('Chat ended.',{exact:true}).waitFor();
   assert.equal(endRequests.at(-1).sendTranscript,false);assert.equal(closedChats.size,1);assert.equal(transcripts.size,1);
+  await endFrame.getByRole('separator').waitFor();assert.equal(await endFrame.getByRole('separator').textContent(),'-------Chat Ended-------');
   await endFrame.locator('#restart').click();await endFrame.locator('#confirmAction').click();await endFrame.locator('#form').waitFor({state:'visible'});
   assert.equal(await endFrame.locator('.message').count(),0,'普通 End chat 后同样开始空白新聊天');
   incoming(originalMessages,'Support in latest chat');

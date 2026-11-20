@@ -13,11 +13,12 @@ const root=fileURLToPath(new URL("..",import.meta.url));
 const entry=`import React,{useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {LivechatTranscriptDialog} from './app/livechat-transcript-dialog';
+import {LivechatSessionBoundary} from './app/livechat-session-boundary';
 const noop=()=>{},members=[{id:'sean',contactId:'contact-sean',name:'Sean'},{id:'sam',contactId:'contact-sam',name:'Sam'},{id:'empty',contactId:'contact-empty',name:'无邮箱访客'}];
-function App(){const [open,setOpen]=useState(true),[toast,setToast]=useState('');return <main><button onClick={()=>setOpen(true)}>打开记录弹窗</button><output>{toast}</output>{open&&<LivechatTranscriptDialog conversationId="root" accountId="channel" members={members} initialRecipientId="sam" token="test" onToken={noop} onClose={()=>setOpen(false)} onSent={setToast}/>}</main>}
+function App(){const [open,setOpen]=useState(true),[segment,setSegment]=useState(),[toast,setToast]=useState('');return <main><button onClick={()=>{setSegment(undefined);setOpen(true)}}>打开记录弹窗</button><output>{toast}</output>{['end-1','end-2'].map(id=><LivechatSessionBoundary key={id} id={id} onSend={()=>{setSegment(id);setOpen(true)}}/>)}{open&&<LivechatTranscriptDialog key={segment||'current'} conversationId="root" accountId="channel" members={members} initialRecipientId={segment?'sean':'sam'} endRequestId={segment} token="test" onToken={noop} onClose={()=>setOpen(false)} onSent={setToast}/>}</main>}
 createRoot(document.getElementById('root')).render(<App/>);`;
 const bundle=await build({stdin:{contents:entry,resolveDir:root,loader:"tsx"},bundle:true,write:false,format:"iife",platform:"browser",jsx:"automatic",define:{"process.env.NODE_ENV":'"production"',"process.env.NEXT_PUBLIC_RELAY_API_URL":'""'}});
-const css=await readFile(resolve(root,"app/globals.css"),"utf8");
+const css=await readFile(resolve(root,"app/globals.css"),"utf8")+await readFile(resolve(root,"app/ui/ui.css"),"utf8");
 const server=createServer((request,response)=>{
   if(request.url==="/bundle.js"){response.setHeader("content-type","text/javascript");response.end(bundle.outputFiles[0].text);}
   else{response.setHeader("content-type","text/html");response.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><div id="root"></div><script src="/bundle.js"></script>`);}
@@ -26,7 +27,7 @@ await new Promise(done=>server.listen(0,"127.0.0.1",done));
 const browser=await chromium.launch({headless:true});
 try{
   const output=resolve(root,"outputs/livechat-transcript");await mkdir(output,{recursive:true});
-  for(const viewport of [{width:1440,height:1000},{width:390,height:844}]){
+  for(const viewport of [{width:1440,height:1000},{width:390,height:844},{width:320,height:568}]){
     const page=await browser.newPage({viewport}),errors=[],requests=[];
     let fail=true,held;
     page.on("pageerror",error=>errors.push(error.message));
@@ -65,7 +66,27 @@ try{
     await send.click();await page.waitForFunction(()=>document.querySelector('select')?.disabled===true);
     assert.notEqual(requests[4].clientSendId,requests[0].clientSendId);await held.fulfill({status:202,json:{ok:true,status:"accepted"}});
     await page.getByRole("dialog").waitFor({state:"detached"});assert.match(await page.locator("output").textContent(),/已提交邮件服务商/);
+    const boundaries=page.locator('.rd-livechat-boundary');assert.equal(await boundaries.count(),2);
+    assert.equal(await boundaries.first().getByRole('separator').textContent(),'-------Chat Ended-------');
+    await page.screenshot({path:resolve(output,`boundaries-${viewport.width}.png`)});
+    for(const boundary of await boundaries.all()){
+      const label=await boundary.getByRole('separator').boundingBox(),button=await boundary.getByRole('button').boundingBox();
+      assert.ok(button.y>=label.y+label.height&&button.x>=0&&button.x+button.width<=viewport.width);
+    }
+    fail=true;await boundaries.first().getByRole('button').focus();await page.keyboard.press('Enter');
+    await page.waitForFunction(()=>document.querySelector('input')?.value==='sean@example.com');assert.ok(await picker.isDisabled());
+    await send.click();await page.getByRole('alert').waitFor();const firstSegment=requests.at(-1);
+    assert.equal(firstSegment.endRequestId,'end-1');assert.equal(firstSegment.targetConversationId,'sean');
+    await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'detached'});
+    assert.ok(await boundaries.first().getByRole('button').evaluate(el=>document.activeElement===el));
+    await boundaries.first().getByRole('button').click();await page.waitForFunction(()=>document.querySelector('input')?.value==='sean@example.com');
+    fail=false;await send.click();await page.waitForFunction(()=>document.querySelector('select')?.disabled&&document.querySelector('[aria-label="关闭"]')?.disabled);
+    assert.equal(requests.at(-1).clientSendId,firstSegment.clientSendId);await held.fulfill({status:202,json:{status:'queued'}});await page.getByRole('dialog').waitFor({state:'detached'});
+    await boundaries.nth(1).getByRole('button').click();await page.waitForFunction(()=>document.querySelector('input')?.value==='sean@example.com');
+    await send.click();await page.waitForFunction(()=>document.querySelector('[aria-label="关闭"]')?.disabled);
+    assert.equal(requests.at(-1).endRequestId,'end-2');assert.notEqual(requests.at(-1).clientSendId,firstSegment.clientSendId);
+    await held.fulfill({status:202,json:{status:'queued'}});await page.getByRole('dialog').waitFor({state:'detached'});
     assert.deepEqual(errors,[]);await page.close();
   }
-  console.log("桌面和手机：访客邮箱切换、缺邮箱阻止发送、失败重试/重开/刷新去重、发送中锁定、成功后新请求及布局检查通过（模拟 API）。");
+  console.log("桌面、390px 和 320px：访客切换、缺邮箱、失败重试/重开/刷新去重、历史段按钮位置、键盘打开与焦点恢复、历史访客锁定及独立选段请求通过（模拟 API）。");
 }finally{await browser.close();await new Promise(done=>server.close(done));}

@@ -138,8 +138,8 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
         kind=String(media.rows[0].mime_type).startsWith("image/")?"image":"document";
       }
       const conv=await client.query(`INSERT INTO conversations(account_id,contact_id,unread_count) VALUES($1,$2,1) ON CONFLICT(account_id,contact_id) DO UPDATE SET unread_count=conversations.unread_count+1,status='open',closed_at=NULL RETURNING id`,[c.account_id,v.contact_id]);
-      const msg=await client.query(`INSERT INTO messages(conversation_id,account_id,sender_contact_id,provider_message_id,client_message_id,direction,kind,text_content,media_id,quoted_message_id,status,occurred_at)
-        VALUES($1,$2,$3,$4,$4,'in',$5,$6,$7,$8,'received',now()) RETURNING id`,[conv.rows[0].id,c.account_id,v.contact_id,data.clientMessageId,kind,data.text||null,data.mediaId??null,data.quotedMessageId??null]);
+      const msg=await client.query(`INSERT INTO messages(conversation_id,account_id,sender_contact_id,provider_message_id,client_message_id,direction,kind,text_content,media_id,quoted_message_id,status,occurred_at,created_at)
+        VALUES($1,$2,$3,$4,$4,'in',$5,$6,$7,$8,'received',clock_timestamp(),clock_timestamp()) RETURNING id`,[conv.rows[0].id,c.account_id,v.contact_id,data.clientMessageId,kind,data.text||null,data.mediaId??null,data.quotedMessageId??null]);
       if(data.mediaId)await client.query("UPDATE media SET delete_after=NULL WHERE id=$1",[data.mediaId]);
       // 页面地址只保留同源路径，避免查询参数、片段或 URL 账号泄露。
       const context:Record<string,string>={userAgent:(request.headers["user-agent"]||"").slice(0,512)};
@@ -216,17 +216,25 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
         FROM conversations cv WHERE cv.account_id=$1 AND cv.contact_id=$2 FOR UPDATE`,[c.account_id,v.contact_id]);
       if(!context.rowCount)throw fail(404,"conversation_not_found");
       const row=context.rows[0];
+      if(row.status==='closed')throw fail(409,"conversation_already_closed");
+      const recordBoundary=async()=>{
+        await client.query(`INSERT INTO messages(conversation_id,account_id,client_message_id,direction,kind,text_content,status,occurred_at,created_at,livechat_end_request_id)
+          SELECT conversation_id,account_id,'livechat-end:'||request_id,'out','text','-------Chat Ended-------','sent',created_at,created_at,request_id
+          FROM livechat_end_requests WHERE request_id=$1 ON CONFLICT DO NOTHING`,[parsed.data.clientRequestId]);
+      };
       if(!parsed.data.sendTranscript){
-        await client.query("UPDATE conversations SET status='closed',closed_at=now() WHERE id=$1",[row.conversation_id]);
-        await client.query(`INSERT INTO livechat_end_requests(request_id,visitor_id,conversation_id,account_id,contact_id,send_transcript)
-          VALUES($1,$2,$3,$4,$5,false)`,[parsed.data.clientRequestId,v.id,row.conversation_id,row.account_id,row.contact_id]);
+        await client.query("UPDATE conversations SET status='closed',closed_at=clock_timestamp() WHERE id=$1",[row.conversation_id]);
+        await client.query(`INSERT INTO livechat_end_requests(request_id,visitor_id,conversation_id,account_id,contact_id,send_transcript,created_at)
+          VALUES($1,$2,$3,$4,$5,false,clock_timestamp())`,[parsed.data.clientRequestId,v.id,row.conversation_id,row.account_id,row.contact_id]);
+        await recordBoundary();
         await client.query("INSERT INTO audit_log(actor_type,action,target_type,target_id,metadata) VALUES('visitor','livechat.end_chat','conversation',$1,$2)",[row.conversation_id,JSON.stringify({sendTranscript:false})]);
         return {sendTranscript:false};
       }
       const {emailId,status,recipient}=await queueLivechatTranscript(client,row,parsed.data.clientRequestId,null,true);
-      await client.query("UPDATE conversations SET status='closed',closed_at=now() WHERE id=$1",[row.conversation_id]);
-      await client.query(`INSERT INTO livechat_end_requests(request_id,visitor_id,conversation_id,account_id,contact_id,send_transcript,email_id)
-        VALUES($1,$2,$3,$4,$5,true,$6)`,[parsed.data.clientRequestId,v.id,row.conversation_id,row.account_id,row.contact_id,emailId]);
+      await client.query("UPDATE conversations SET status='closed',closed_at=clock_timestamp() WHERE id=$1",[row.conversation_id]);
+      await client.query(`INSERT INTO livechat_end_requests(request_id,visitor_id,conversation_id,account_id,contact_id,send_transcript,email_id,created_at)
+        VALUES($1,$2,$3,$4,$5,true,$6,clock_timestamp())`,[parsed.data.clientRequestId,v.id,row.conversation_id,row.account_id,row.contact_id,emailId]);
+      await recordBoundary();
       await client.query("INSERT INTO audit_log(actor_type,action,target_type,target_id,metadata) VALUES('visitor','livechat.end_chat','conversation',$1,$2)",[row.conversation_id,JSON.stringify({emailId,recipient,sendTranscript:true})]);
       return {emailId,status,sendTranscript:true};
     });
@@ -239,7 +247,7 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
     // 出站消息按实际送入访客队列的时间排序，避免长时间排队的旧消息被增量游标漏掉。
     const after=Boolean(query.data.after);
     const result=await pool.query(`WITH visible AS (
-      SELECT m.id,m.client_message_id,m.direction,m.kind,m.text_content,m.media_id,m.status,m.created_at,m.quoted_message_id,media.file_name,media.mime_type,
+      SELECT m.id,m.client_message_id,m.direction,m.kind,m.text_content,m.media_id,m.status,m.created_at,m.livechat_end_request_id,m.quoted_message_id,media.file_name,media.mime_type,
         quoted.direction quoted_direction,quoted.kind quoted_kind,quoted.text_content quoted_text_content,
         quoted_media.file_name quoted_file_name,quoted_media.mime_type quoted_mime_type,
         COALESCE(receipt.occurred_at,m.created_at) visible_at

@@ -156,7 +156,7 @@ test("LiveChat 公开接口安全边界",async t=>{
 });
 
 test("LiveChat 结束会话正确入队邮件、完整记录和事务内去重",async t=>{
-  let providerConfigured=true,active=true,existing:Record<string,unknown>|undefined,requestExisting:Record<string,unknown>|undefined;
+  let providerConfigured=true,active=true,closed=false,existing:Record<string,unknown>|undefined,requestExisting:Record<string,unknown>|undefined;
   const calls:Array<{sql:string;values:unknown[]}>=[];
   const query=async(sql:string,values:unknown[]=[])=>{
     calls.push({sql,values});
@@ -167,7 +167,7 @@ test("LiveChat 结束会话正确入队邮件、完整记录和事务内去重",
     if(sql.includes("FROM livechat_channels")&&sql.includes("FOR SHARE"))return result(active?[{}]:[]);
     if(sql.includes("FROM livechat_end_requests r"))return result(requestExisting&&values[0]===channelId?[requestExisting]:[]);
     if(sql.includes("FROM email_messages e"))return result(existing?[existing]:[]);
-    if(sql.includes("SELECT cv.id conversation_id"))return result([{conversation_id:contactId,account_id:accountId,contact_id:contactId,recipient_email:"sam@example.com"}]);
+    if(sql.includes("SELECT cv.id conversation_id"))return result([{conversation_id:contactId,status:closed?'closed':'open',account_id:accountId,contact_id:contactId,recipient_email:"sam@example.com"}]);
     if(sql.includes("JOIN email_provider_instances"))return result(providerConfigured?[{provider:"smtp",config:{fromEmail:"support@example.com"},secret_encrypted:"encrypted"}]:[]);
     if(sql.includes("FROM messages m"))return result([{direction:"in",text_content:"<script>"+"x".repeat(6000),file_name:"quote.pdf",occurred_at:new Date("2026-11-15T00:00:00Z")}]);
     if(sql.startsWith("INSERT INTO email_messages"))return result([{id:messageId,status:"queued"}]);
@@ -180,10 +180,12 @@ test("LiveChat 结束会话正确入队邮件、完整记录和事务内去重",
   providerConfigured=false;calls.length=0;
   const closeOnly=await end(false,channelId);assert.equal(closeOnly.statusCode,202,closeOnly.body);assert.equal(closeOnly.json().queued,false);assert.equal(closeOnly.json().closed,true);
   assert.ok(calls.some(c=>c.sql.startsWith("INSERT INTO livechat_end_requests")&&c.sql.includes("false")));
+  assert.ok(calls.some(c=>c.sql.startsWith("INSERT INTO messages")&&c.sql.includes("-------Chat Ended-------")&&c.values[0]===channelId));
   assert.ok(!calls.some(c=>c.sql.includes("JOIN email_provider_instances")||c.sql.startsWith("INSERT INTO email_messages")));
   assert.match(String(calls.find(c=>c.sql.startsWith("INSERT INTO audit_log"))?.values[1]),/"sendTranscript":false/);
   requestExisting={visitor_id:channelId,account_id:accountId,contact_id:contactId,send_transcript:false,email_id:null,status:null};
   assert.equal((await end(false,channelId)).json().deduplicated,true);
+  calls.length=0;await end(false,channelId);assert.ok(!calls.some(c=>c.sql.startsWith("INSERT INTO messages")));
   assert.equal((await end(true,channelId)).statusCode,409);
   requestExisting=undefined;
   calls.length=0;
@@ -208,7 +210,8 @@ test("LiveChat 结束会话正确入队邮件、完整记录和事务内去重",
   assert.ok(!calls.some(c=>c.sql.startsWith("INSERT INTO email_messages")));
   existing={...existing,contact_id:accountId};assert.equal((await end()).statusCode,409);
   existing={...existing,contact_id:contactId,account_id:contactId};assert.equal((await end()).statusCode,409);
-  existing=undefined;active=false;assert.equal((await end()).statusCode,404);
+  existing=undefined;closed=true;calls.length=0;assert.equal((await end()).statusCode,409);assert.ok(!calls.some(c=>/^INSERT INTO (messages|email_messages|livechat_end_requests)/.test(c.sql)));closed=false;
+  active=false;assert.equal((await end()).statusCode,404);
 });
 
 test("LiveChat 结束请求迁移已加入启动序列并约束 transcript 邮件",async()=>{
