@@ -7,6 +7,7 @@ import {recordProactiveOutreachDelivery} from "./proactive-outreach.js";
 import {queueLivechatTranscript} from "./livechat-transcript.js";
 import {encryptAtRest} from "./security.js";
 import {config} from "./config.js";
+import {transcriptTemplateError} from "./livechat-transcript-template.js";
 
 export function normalizeLivechatOrigins(values:string[]):string[]{
   return [...new Set(values.map(value=>{
@@ -17,7 +18,12 @@ export function normalizeLivechatOrigins(values:string[]):string[]{
   }))];
 }
 
+const transcriptTemplateSchema=z.object({
+  subject:z.string().trim().min(1).max(200),body:z.string().min(1).max(20000),
+  message:z.string().min(1).max(5000),departmentName:z.string().trim().max(100).default(""),
+}).superRefine((value,ctx)=>{const error=transcriptTemplateError(value);if(error)ctx.addIssue({code:z.ZodIssueCode.custom,message:error});});
 const channelSchema=z.object({
+  transcriptTemplate:transcriptTemplateSchema.nullable().optional(),
   displayName:z.string().trim().min(1).max(80),
   iconUrl:z.string().trim().max(2048).refine(value=>{
     if(!value)return true;
@@ -120,7 +126,7 @@ export async function registerLivechatRoutes(app:FastifyInstance):Promise<void>{
   });
   app.get("/api/v1/admin/livechat/channels",{preHandler:authenticate},async(request,reply)=>{
     if(request.principal?.kind!=="user"||request.principal.role!=="admin")return reply.code(403).send({error:"admin_required"});
-    const result=await pool.query(`SELECT a.id,a.display_name,c.public_id,c.welcome_message,c.starter_messages,c.theme_color,c.position,c.language,c.icon_url,c.allowed_origins,c.enabled,c.created_at,c.updated_at,c.ga4_measurement_id,(c.ga4_api_secret_encrypted IS NOT NULL) "ga4ApiSecretConfigured"
+    const result=await pool.query(`SELECT a.id,a.display_name,c.public_id,c.welcome_message,c.starter_messages,c.transcript_template,c.theme_color,c.position,c.language,c.icon_url,c.allowed_origins,c.enabled,c.created_at,c.updated_at,c.ga4_measurement_id,(c.ga4_api_secret_encrypted IS NOT NULL) "ga4ApiSecretConfigured"
       FROM livechat_channels c JOIN channel_accounts a ON a.id=c.account_id WHERE c.archived_at IS NULL ORDER BY a.display_name,a.id`);
     return reply.header("cache-control","no-store").send({data:result.rows});
   });
@@ -133,7 +139,7 @@ export async function registerLivechatRoutes(app:FastifyInstance):Promise<void>{
     if(data.ga4ApiSecret&&!data.ga4MeasurementId)return reply.code(400).send({error:"ga4_measurement_id_required",message:"填写 API secret 时必须提供 Measurement ID"});
     const result=await transaction(async client=>{
       const account=await client.query("INSERT INTO channel_accounts(display_name,status,transport,platform) VALUES($1,$2,'cloud','livechat') RETURNING id",[data.displayName,data.enabled?"online":"offline"]);
-      const channel=await client.query("INSERT INTO livechat_channels(account_id,welcome_message,theme_color,position,allowed_origins,enabled,language,icon_url,ga4_measurement_id,ga4_api_secret_encrypted,starter_messages) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb) RETURNING public_id",[account.rows[0].id,data.welcomeMessage,data.themeColor,data.position,origins,data.enabled,data.language,data.iconUrl,data.ga4MeasurementId||null,data.ga4ApiSecret?encryptAtRest(data.ga4ApiSecret,config.DATA_ENCRYPTION_KEY):null,JSON.stringify(data.starterMessages??[])]);
+      const channel=await client.query("INSERT INTO livechat_channels(account_id,welcome_message,theme_color,position,allowed_origins,enabled,language,icon_url,ga4_measurement_id,ga4_api_secret_encrypted,starter_messages,transcript_template) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb) RETURNING public_id",[account.rows[0].id,data.welcomeMessage,data.themeColor,data.position,origins,data.enabled,data.language,data.iconUrl,data.ga4MeasurementId||null,data.ga4ApiSecret?encryptAtRest(data.ga4ApiSecret,config.DATA_ENCRYPTION_KEY):null,JSON.stringify(data.starterMessages??[]),data.transcriptTemplate?JSON.stringify(data.transcriptTemplate):null]);
       await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'livechat.create','channel_account',$2,$3)",[request.principal!.id,account.rows[0].id,JSON.stringify({allowedOrigins:origins})]);
       return {id:account.rows[0].id,publicId:channel.rows[0].public_id};
     });
@@ -152,7 +158,8 @@ export async function registerLivechatRoutes(app:FastifyInstance):Promise<void>{
         ga4_measurement_id=CASE WHEN $9 THEN NULLIF($10,'') ELSE ga4_measurement_id END,
         ga4_api_secret_encrypted=CASE WHEN $11::text IS NOT NULL THEN $11 WHEN $9 AND (NULLIF($10,'') IS DISTINCT FROM ga4_measurement_id OR $10='') THEN NULL ELSE ga4_api_secret_encrypted END,
         starter_messages=COALESCE($12::jsonb,starter_messages),
-        updated_at=now() WHERE account_id=$1 AND archived_at IS NULL RETURNING account_id`,[id,data.welcomeMessage,data.themeColor,data.position,origins,data.enabled,data.language,Object.hasOwn(request.body as object,"iconUrl")?data.iconUrl:null,data.ga4MeasurementId!==undefined,data.ga4MeasurementId??null,secret,data.starterMessages===undefined?null:JSON.stringify(data.starterMessages)]);
+        transcript_template=CASE WHEN $13 THEN $14::jsonb ELSE transcript_template END,
+        updated_at=now() WHERE account_id=$1 AND archived_at IS NULL RETURNING account_id`,[id,data.welcomeMessage,data.themeColor,data.position,origins,data.enabled,data.language,Object.hasOwn(request.body as object,"iconUrl")?data.iconUrl:null,data.ga4MeasurementId!==undefined,data.ga4MeasurementId??null,secret,data.starterMessages===undefined?null:JSON.stringify(data.starterMessages),data.transcriptTemplate!==undefined,data.transcriptTemplate?JSON.stringify(data.transcriptTemplate):null]);
       if(!channel.rowCount)return false;
       await client.query("UPDATE channel_accounts SET display_name=$2,status=$3,status_reason=$4 WHERE id=$1",[id,data.displayName,data.enabled?"online":"offline",data.enabled?null:"livechat_disabled"]);
       await client.query("INSERT INTO audit_log(actor_type,actor_id,action,target_type,target_id,metadata) VALUES('user',$1,'livechat.update','channel_account',$2,$3)",[request.principal!.id,id,JSON.stringify({enabled:data.enabled,allowedOrigins:origins})]);

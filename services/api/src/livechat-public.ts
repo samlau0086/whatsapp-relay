@@ -223,7 +223,7 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
         await client.query("INSERT INTO audit_log(actor_type,action,target_type,target_id,metadata) VALUES('visitor','livechat.end_chat','conversation',$1,$2)",[row.conversation_id,JSON.stringify({sendTranscript:false})]);
         return {sendTranscript:false};
       }
-      const {emailId,status,recipient}=await queueLivechatTranscript(client,row,parsed.data.clientRequestId);
+      const {emailId,status,recipient}=await queueLivechatTranscript(client,row,parsed.data.clientRequestId,null,true);
       await client.query("UPDATE conversations SET status='closed',closed_at=now() WHERE id=$1",[row.conversation_id]);
       await client.query(`INSERT INTO livechat_end_requests(request_id,visitor_id,conversation_id,account_id,contact_id,send_transcript,email_id)
         VALUES($1,$2,$3,$4,$5,true,$6)`,[parsed.data.clientRequestId,v.id,row.conversation_id,row.account_id,row.contact_id,emailId]);

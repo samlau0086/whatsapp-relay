@@ -33,6 +33,7 @@ async function migrateAgentSchemaOnce():Promise<void>{
   channelMigrations.push("112_google_ads_attribution.sql");
   channelMigrations.push("113_livechat_starter_messages.sql");
   channelMigrations.push("114_livechat_transcript_content_type.sql");
+  channelMigrations.push("115_livechat_transcript_template.sql");
   const migrations=Boolean(schema.rows[0]?.channel_schema)?channelMigrations:[...legacyMigrations,...channelMigrations];
   for(const migration of migrations){
     const candidates=[join(process.cwd(),"migrations",migration),join(process.cwd(),"..","..","infra","postgres","migrations",migration),join(process.cwd(),"infra","postgres","migrations",migration)];

@@ -1222,6 +1222,14 @@ button { color:inherit; }
 .rd-livechat-starter-editor>header h3{margin:0;font-size:16px;color:var(--rd-text)}
 .rd-livechat-starter-row{min-width:0;display:grid;gap:var(--rd-space-2)}
 .rd-livechat-starter-actions{display:flex;justify-content:flex-end;gap:var(--rd-space-2)}
+.rd-transcript-editor{min-width:0;display:grid;gap:var(--rd-space-3);padding:var(--rd-space-4) 0;border-bottom:1px solid var(--rd-border)}
+.rd-transcript-editor>header{display:flex;align-items:center;justify-content:space-between;gap:var(--rd-space-2);flex-wrap:wrap}
+.rd-transcript-editor h3{margin:0;font-size:16px;color:var(--rd-text)}
+.rd-transcript-editor details{min-width:0}
+.rd-transcript-editor summary{cursor:pointer;color:var(--rd-text);padding:var(--rd-space-2) 0}
+.rd-transcript-editor iframe{display:block;width:100%;height:480px;border:1px solid var(--rd-border);background:var(--rd-surface);margin-top:var(--rd-space-2)}
+.rd-transcript-subject{display:block;overflow-wrap:anywhere;font-size:14px;color:var(--rd-text)}
+.rd-transcript-error{margin:0;color:var(--rd-danger);overflow-wrap:anywhere}
 .livechat-settings .management-head{gap:12px;flex-wrap:wrap}
 .livechat-settings .management-head>div{display:flex;gap:8px}
 .livechat-settings td{overflow-wrap:anywhere}

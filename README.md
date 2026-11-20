@@ -1,5 +1,15 @@
 # RelayDesk
 
+## LiveChat 会话记录邮件模板
+
+管理员在“系统设置 → LiveChat → 新增／编辑渠道 → 会话记录邮件模板”中独立配置邮件主题、正文、单条消息格式及客服部门，支持变量插入、固定测试数据预览和恢复默认。后台“发送会话记录”与访客“结束会话并发送记录”使用原访客所属渠道的同一模板，不使用合并后的其他渠道配置。无需修改已有网站嵌入代码。
+
+正文使用 `{{messages}}` 按时间顺序生成聊天记录，客户消息左对齐、客服消息右对齐并使用浅色气泡；每条记录上方显示姓名与时间。模板输入为纯文本，保留换行，不接受自定义 HTML；变量和消息内容统一转义。完整变量、取值规则及 API 配置见 [LiveChat 邮件模板说明](docs/livechat-transcript-template.md)。
+
+部署需同步更新工作台、API 和 Worker 并重启。启动迁移 `115_livechat_transcript_template.sql` 新增渠道模板 JSON 字段，旧渠道自动使用默认模板；旧客户端不提交模板时保留已有配置。主题、正文与渠道 Provider 在入队时保存快照，修改模板不会改变已经排队的邮件。
+
+验证：在 `services/api` 下运行 `npm test`、`npm run build`；根目录运行 `npm run lint`、`npm test`、`node scripts/test-livechat-settings-browser.mjs` 和 `node scripts/test-livechat-transcript-browser.mjs`。浏览器回归使用固定测试数据与模拟 API，不向真实客户发信。上线前仍需在真实 SMTP／Resend 及目标邮件客户端验收。
+
 ## LiveChat 快捷引导消息
 
 管理员在“系统设置 → LiveChat → 新增／编辑渠道”中配置快捷引导消息，支持逐条添加、修改、删除及上下调整顺序。每个渠道最多 50 条，每条最多 500 字，删除全部问题即可关闭，旧渠道默认不显示。
