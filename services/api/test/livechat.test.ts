@@ -122,6 +122,7 @@ test("LiveChat 公开接口安全边界",async t=>{
     assert.deepEqual(query.values,[accountId,contactId,messageId]);assert.match(query.sql,/receipt.status='sent'/);assert.match(query.sql,/visible_at,id\) >/);
     assert.match(query.sql,/SS.US/);assert.match(query.sql,/sort_at/);
     assert.match(query.sql,/NOT EXISTS\(SELECT 1 FROM message_email_details/);
+    assert.match(query.sql,/m.livechat_end_request_id IS NULL/);
     assert.doesNotMatch(query.sql,/m\.kind\s*<>\s*'email'/);
     assert.equal((await get(`messages?before=${messageId}&after=${messageId}`)).statusCode,400);
   });

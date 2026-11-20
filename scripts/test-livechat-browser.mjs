@@ -65,12 +65,13 @@ const api=await listen(async(req,res)=>{
     if(data.sendTranscript===false){if(!closedChats.has(data.clientRequestId))closedChats.set(data.clientRequestId,sessionKey)}
     else if(!transcripts.has(data.clientRequestId))transcripts.set(data.clientRequestId,sessionKey);
     if(!messages.some(m=>m.livechat_end_request_id===data.clientRequestId))messages.push({id:randomUUID(),client_message_id:'livechat-end:'+data.clientRequestId,direction:'out',text_content:'-------Chat Ended-------',livechat_end_request_id:data.clientRequestId,created_at:timestamp()});
+    const marker=messages.find(m=>m.livechat_end_request_id===data.clientRequestId);remoteEnds.set(sessionKey,{id:marker.id,sort_at:marker.created_at});
     if(dropEndResponse){dropEndResponse=false;json(503,{error:'response_lost'});return}
     json(202,{ok:true,queued:data.sendTranscript!==false,closed:true,sendTranscript:data.sendTranscript!==false});return;
   }
   if(url.pathname.endsWith("/messages")){
     const after=url.searchParams.get("after"),before=url.searchParams.get("before");
-    const ordered=[...messages].sort((a,b)=>a.created_at.localeCompare(b.created_at)||a.id.localeCompare(b.id));
+    const ordered=messages.filter(message=>!message.livechat_end_request_id).sort((a,b)=>a.created_at.localeCompare(b.created_at)||a.id.localeCompare(b.id));
     const data=after?ordered.slice(ordered.findIndex(m=>m.id===after)+1):before?ordered.slice(0,ordered.findIndex(m=>m.id===before)):ordered;
     const page=before?data.slice(-100):after?data.slice(0,100):data.slice(-100);
     json(200,{data:page.map(message=>({...message,sort_at:message.created_at,created_at:new Date(message.created_at).toISOString()})),hasMore:data.length>100,leadMessageId:messages[0]?.id,endBoundary:remoteEnds.get(sessionKey)||null});return;
@@ -461,12 +462,10 @@ try{
   await endFrame.getByText('Could not send. Please retry',{exact:true}).waitFor();
   const retryEndId=endRequests.at(-1).clientRequestId;
   await other.reload();endFrame=await frameFor(other);await openChat(endFrame);
-  await endFrame.locator('#end').click();
-  await endFrame.locator('#confirmAction').click();
-  await endFrame.getByText('Chat ended. Your transcript is queued for email delivery.',{exact:true}).waitFor();
+  await endFrame.getByText('Chat ended.',{exact:true}).waitFor();
+  assert.equal(endRequests.length,2,'结束请求已提交但响应丢失时，刷新通过结束状态恢复而不重复提交');
   assert.equal(endRequests.at(-1).clientRequestId,retryEndId);assert.equal(endRequests.at(-1).sendTranscript,true);assert.equal(transcripts.size,1);
-  await endFrame.getByRole('separator').waitFor();assert.equal(await endFrame.getByRole('separator').textContent(),'-------Chat Ended-------');
-  assert.equal(await endFrame.getByRole('separator').locator('button,.bubble,.message-avatar').count(),0);
+  assert.equal(await endFrame.getByRole('separator').count(),0,'访客主动结束后不把系统边界显示为消息');
   assert.equal(await endFrame.locator('#form').isVisible(),false);assert.equal(await endFrame.locator('#prechat').isVisible(),false);
   const endedViewport=other.viewportSize();
   for(const viewport of [endedViewport,{width:390,height:844},{width:320,height:568}]){
@@ -538,7 +537,7 @@ try{
   await other.screenshot({path:`${screenshots}/restarted-existing-visitor.png`});
   await endFrame.locator('#endOnly').click();await endFrame.locator('#confirmAction').click();await endFrame.getByText('Chat ended.',{exact:true}).waitFor();
   assert.equal(endRequests.at(-1).sendTranscript,false);assert.equal(closedChats.size,1);assert.equal(transcripts.size,1);
-  await endFrame.getByRole('separator').waitFor();assert.equal(await endFrame.getByRole('separator').textContent(),'-------Chat Ended-------');
+  assert.equal(await endFrame.getByRole('separator').count(),0,'普通结束后不把系统边界显示为消息');
   await endFrame.locator('#restart').click();await endFrame.locator('#confirmAction').click();await endFrame.locator('#form').waitFor({state:'visible'});
   assert.equal(await endFrame.locator('.message').count(),0,'普通 End chat 后同样开始空白新聊天');
   incoming(originalMessages,'Support in latest chat');
@@ -549,7 +548,7 @@ try{
   originalMessages.push(remoteMarker);remoteEnds.set(originalSession,{id:remoteMarker.id,sort_at:remoteMarker.created_at});
   await endFrame.locator('#form').waitFor({state:'hidden'});await endFrame.locator('#restart').waitFor({state:'visible'});
   await endFrame.getByText('Chat ended.',{exact:true}).waitFor();
-  assert.equal(await endFrame.getByRole('separator').textContent(),'-------Chat Ended-------','后台结束后显示系统分隔符');
+  assert.equal(await endFrame.getByRole('separator').count(),0,'后台结束只切换结束状态，不发送 Chat Ended 消息');
   await other.reload();endFrame=await frameFor(other);await openChat(endFrame);
   await endFrame.locator('#restart').waitFor({state:'visible'});
   await endFrame.locator('#restart').click();await endFrame.locator('#confirmAction').click();await endFrame.locator('#form').waitFor({state:'visible'});

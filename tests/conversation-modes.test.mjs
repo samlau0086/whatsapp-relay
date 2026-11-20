@@ -4,6 +4,7 @@ import test from "node:test";
 import ts from "typescript";
 
 const source=await readFile(new URL("../app/conversation-modes.ts",import.meta.url),"utf8");
+const inboxSource=await readFile(new URL("../app/whatsapp-inbox.tsx",import.meta.url),"utf8");
 const javascript=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext}}).outputText;
 const {initialConversationMode,modeMembers,matchesMessageMode}=await import(`data:text/javascript,${encodeURIComponent(javascript)}`);
 
@@ -36,4 +37,10 @@ test("Live Chat 映射的邮件仅启用 Email，合并真实访客后才可回�
   assert.deepEqual(modeMembers([member],"email").map(item=>item.id),["mail"]);
   const visitor={id:"visitor",mode:"livechat",platform:"livechat"};
   assert.deepEqual(modeMembers([member,visitor],"livechat").map(item=>item.id),["visitor"]);
+});
+
+test("结束会话入口和弹窗仅在 Live Chat 标签中可用",()=>{
+  assert.match(inboxSource,/conversationMode==="livechat"&&livechatAvailable&&<IconButton icon=\{CircleStop\} label="结束会话"/);
+  assert.match(inboxSource,/endChatConversationId===active\.id&&conversationMode==="livechat"&&livechatAvailable&&<LivechatEndDialog/);
+  assert.match(inboxSource,/if\(conversationMode!=="livechat"\)setEndChatConversationId\(""\)/);
 });

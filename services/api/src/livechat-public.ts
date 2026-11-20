@@ -258,7 +258,8 @@ export async function registerLivechatPublicRoutes(app:FastifyInstance){
       LEFT JOIN media quoted_media ON quoted_media.id=quoted.media_id
       JOIN conversations cv ON cv.id=m.conversation_id
       LEFT JOIN message_receipts receipt ON receipt.message_id=m.id AND receipt.status='sent'
-      WHERE cv.account_id=$1 AND cv.contact_id=$2 AND NOT EXISTS(SELECT 1 FROM message_email_details d WHERE d.message_id=m.id) AND (m.direction='in' OR m.status IN ('sent','delivered','read'))
+      WHERE cv.account_id=$1 AND cv.contact_id=$2 AND m.livechat_end_request_id IS NULL
+        AND NOT EXISTS(SELECT 1 FROM message_email_details d WHERE d.message_id=m.id) AND (m.direction='in' OR m.status IN ('sent','delivered','read'))
     ) SELECT *,to_char(visible_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') sort_at
       FROM visible WHERE ($3::uuid IS NULL OR (visible_at,id) ${after?">":"<"} (SELECT visible_at,id FROM visible WHERE id=$3))
       ORDER BY visible_at ${after?"ASC":"DESC"},id ${after?"ASC":"DESC"} LIMIT 101`,[c.account_id,v.contact_id,query.data.after??query.data.before??null]);
