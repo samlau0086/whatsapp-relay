@@ -182,6 +182,13 @@ test("conversation deletion is privileged and blocks unsafe cascading deletes",a
   assert.match(deletion,/DELETE FROM conversation_timeline_merges WHERE source_id=\$1 OR target_id=\$1/);
   assert.ok(deletion.indexOf("pg_advisory_xact_lock")<deletion.indexOf("FOR UPDATE OF c"));
   assert.ok(deletion.indexOf("DELETE FROM conversation_timeline_merges")<deletion.indexOf("DELETE FROM conversations"));
+  const clearEnds=deletion.indexOf("DELETE FROM livechat_end_requests WHERE conversation_id=$1");
+  assert.ok(clearEnds>deletion.indexOf('if(pendingEmail.rowCount)return"email_pending"'));
+  for(const table of ["messages","email_messages"]){
+    const detach=deletion.indexOf(`UPDATE ${table} SET livechat_end_request_id=NULL WHERE livechat_end_request_id IN (SELECT request_id FROM livechat_end_requests WHERE conversation_id=$1)`);
+    assert.ok(detach>=0&&detach<clearEnds);
+  }
+  assert.ok(clearEnds<deletion.indexOf("DELETE FROM conversations"));
   assert.match(server,/conversation\.delete/);
   assert.match(inbox,/永久删除会话/);
   assert.match(inbox,/method:"DELETE"/);

@@ -43,6 +43,9 @@ test("PostgreSQL：合并保留全部消息、稳定分页、连续合并、入�
       CREATE TABLE order_payment_requests(order_id uuid,is_current boolean);
       CREATE TABLE outbound_commands(message_id uuid,state text);
       CREATE TABLE email_messages(conversation_id uuid,status text);
+      ALTER TABLE messages ADD COLUMN livechat_end_request_id uuid;
+      ALTER TABLE email_messages ADD COLUMN livechat_end_request_id uuid;
+      CREATE TABLE livechat_end_requests(request_id uuid PRIMARY KEY,conversation_id uuid REFERENCES conversations(id) ON DELETE RESTRICT);
       CREATE TABLE media(id uuid PRIMARY KEY,object_key text);
       CREATE TABLE conversation_merge_links(source_conversation_id uuid,target_conversation_id uuid);
       CREATE TABLE audit_log(actor_type text,actor_id uuid,action text,target_type text,target_id uuid,metadata jsonb);

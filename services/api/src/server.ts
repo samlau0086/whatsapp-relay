@@ -1070,6 +1070,10 @@ app.delete("/api/v1/conversations/:id", { preHandler:authenticate }, async (requ
     if(outbound.rowCount)return"outbound_pending" as const;
     const pendingEmail=await client.query("SELECT 1 FROM email_messages WHERE conversation_id=$1 AND status IN ('queued','sending','retrying') LIMIT 1",[id]);
     if(pendingEmail.rowCount)return"email_pending" as const;
+    // 结束记录存在双向外键；先解除引用，保留共享邮件，再随原会话清理结束记录。
+    await client.query("UPDATE messages SET livechat_end_request_id=NULL WHERE livechat_end_request_id IN (SELECT request_id FROM livechat_end_requests WHERE conversation_id=$1)",[id]);
+    await client.query("UPDATE email_messages SET livechat_end_request_id=NULL WHERE livechat_end_request_id IN (SELECT request_id FROM livechat_end_requests WHERE conversation_id=$1)",[id]);
+    await client.query("DELETE FROM livechat_end_requests WHERE conversation_id=$1",[id]);
     const conversationMedia=await client.query("SELECT DISTINCT m.id,m.object_key FROM messages msg JOIN media m ON m.id=msg.media_id WHERE msg.conversation_id=$1",[id]);
     const timelineLinks=await client.query<{source_id:string;target_id:string}>("DELETE FROM conversation_timeline_merges WHERE source_id=$1 OR target_id=$1 RETURNING source_id,target_id",[id]);
     // 只删除指定的原会话；其余成员恢复独立展示，摘要不再引用被删除成员。
